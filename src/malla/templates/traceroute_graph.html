@@ -62,12 +62,51 @@
 
         {{ search_section("nodeSearch", "clearSearch", "searchResults") }}
 
+        <!-- Auto-Refresh Control -->
+        <div class="sidebar-section">
+            <h6><i class="bi bi-lightning-charge"></i> Live Updates</h6>
+            <div class="mb-3">
+                <div class="form-check form-switch">
+                    <input class="form-check-input" type="checkbox" id="autoRefreshToggle" checked>
+                    <label class="form-check-label" for="autoRefreshToggle">
+                        Auto-refresh
+                    </label>
+                </div>
+                <small class="text-muted d-block mt-1">
+                    Refreshes: <strong id="autoRefreshStatus">every 30s</strong>
+                </small>
+                <div id="autoRefreshTimer" class="small text-muted mt-2" style="display: none;">
+                    Next update in <span id="refreshCountdown">30</span>s
+                </div>
+            </div>
+            <div class="mb-3">
+                <label for="autoRefreshInterval" class="form-label">Interval</label>
+                <select class="form-select form-select-sm" id="autoRefreshInterval">
+                    <option value="10">Every 10 seconds</option>
+                    <option value="15">Every 15 seconds</option>
+                    <option value="30" selected>Every 30 seconds</option>
+                    <option value="60">Every minute</option>
+                </select>
+            </div>
+        </div>
+
         {% set graph_controls = [
             {"class": "btn-outline-secondary", "onclick": "centerGraph()", "icon": "bi bi-arrows-move", "text": "Center Graph"},
             {"class": "btn-outline-secondary", "onclick": "resetZoom()", "icon": "bi bi-zoom-out", "text": "Reset Zoom"},
-            {"class": "btn-outline-primary", "onclick": "refreshGraph()", "icon": "bi bi-arrow-clockwise", "text": "Refresh"}
+            {"class": "btn-outline-primary", "onclick": "refreshGraph()", "icon": "bi bi-arrow-clockwise", "text": "Refresh Now"}
         ] %}
         {{ controls_section(graph_controls) }}
+
+        <!-- Activity Feed -->
+        <div class="sidebar-section">
+            <div class="d-flex justify-content-between align-items-center mb-2">
+                <h6 class="mb-0"><i class="bi bi-activity"></i> Recent Activity</h6>
+                <button id="clearActivityFeed" class="btn btn-sm btn-link p-0" style="font-size: 0.8rem;">Clear</button>
+            </div>
+            <div id="activityFeed" class="activity-feed">
+                <small class="text-muted">Waiting for activity...</small>
+            </div>
+        </div>
 
         <!-- Filters -->
         <div class="sidebar-section">
@@ -199,6 +238,15 @@
     text-shadow: 1px 1px 2px rgba(255,255,255,0.8);
 }
 
+.node-label-subtitle {
+    font-size: 10px;
+    fill: #666;
+    text-anchor: middle;
+    pointer-events: none;
+    text-shadow: 1px 1px 1px rgba(255,255,255,0.8);
+    font-style: italic;
+}
+
 .node-label.highlighted {
     font-size: 14px;
     fill: #007bff;
@@ -218,6 +266,92 @@
 .link.selected {
     stroke: #007bff !important;
     stroke-width: 4 !important;
+}
+
+/* Activity Feed Styling */
+.activity-feed {
+    max-height: 250px;
+    overflow-y: auto;
+    border: 1px solid #dee2e6;
+    border-radius: 0.25rem;
+    padding: 0.5rem;
+    background-color: rgba(0, 0, 0, 0.02);
+}
+
+.activity-item {
+    padding: 0.5rem;
+    border-left: 3px solid #0dcaf0;
+    background: rgba(13, 202, 240, 0.05);
+    border-radius: 0.25rem;
+    margin-bottom: 0.5rem;
+    font-size: 0.85rem;
+    animation: slideIn 0.3s ease-out;
+}
+
+.activity-item.recent {
+    border-left-color: #0dcaf0;
+    background: rgba(13, 202, 240, 0.1);
+    font-weight: 500;
+}
+
+.activity-item-time {
+    font-size: 0.75rem;
+    color: #6c757d;
+    display: block;
+}
+
+.activity-item-node {
+    font-weight: 600;
+    color: #495057;
+}
+
+.activity-item-detail {
+    color: #6c757d;
+    font-size: 0.8rem;
+}
+
+@keyframes slideIn {
+    from {
+        opacity: 0;
+        transform: translateX(-10px);
+    }
+    to {
+        opacity: 1;
+        transform: translateX(0);
+    }
+}
+
+/* Node Activity Badges */
+.node-activity-badge {
+    font-size: 9px;
+    background: #0dcaf0;
+    color: white;
+    padding: 1px 3px;
+    border-radius: 50%;
+    font-weight: bold;
+    pointer-events: none;
+}
+
+/* Live indicator pulse */
+@keyframes livePulse {
+    0% {
+        opacity: 1;
+    }
+    50% {
+        opacity: 0.6;
+    }
+    100% {
+        opacity: 1;
+    }
+}
+
+.live-indicator {
+    display: inline-block;
+    width: 8px;
+    height: 8px;
+    background: #28a745;
+    border-radius: 50%;
+    animation: livePulse 1.5s infinite;
 }
 
 /* Packet activity animations */
@@ -274,6 +408,13 @@ let comparisonNode = null; // Second node for path comparison
 let pathComparisonMode = false;
 let activityPollInterval = null;
 let lastActivityTimestamp = Math.floor(Date.now() / 1000);
+let autoRefreshInterval = null;
+let autoRefreshEnabled = true;
+let autoRefreshIntervalSeconds = 30;
+let refreshCountdownInterval = null;
+let nextRefreshCountdown = 30;
+let recentActivities = []; // Track recent activity
+let maxActivityItems = 20; // Max items in activity feed
 
 // Make currentGraph globally accessible for debugging
 window.currentGraph = null;
@@ -303,7 +444,10 @@ function initializeInterface() {
     // Start real-time activity polling
     startActivityPolling();
 
-    // Handle sidebar toggle
+    // Set up auto-refresh controls
+    setupAutoRefresh();
+
+    // Handle auto-refresh toggle
     $('#toggleSidebar').on('click', function() {
         const sidebar = document.getElementById('sidebar');
         const icon = this.querySelector('i');
@@ -366,6 +510,35 @@ function initializeInterface() {
     // Handle clear selection button
     $('#clearSelection').on('click', function() {
         clearSelection();
+    });
+
+    // Handle auto-refresh toggle
+    $('#autoRefreshToggle').on('change', function() {
+        autoRefreshEnabled = this.checked;
+        if (autoRefreshEnabled) {
+            startAutoRefresh();
+            document.getElementById('autoRefreshTimer').style.display = 'block';
+        } else {
+            stopAutoRefresh();
+            document.getElementById('autoRefreshTimer').style.display = 'none';
+        }
+    });
+
+    // Handle auto-refresh interval change
+    $('#autoRefreshInterval').on('change', function() {
+        autoRefreshIntervalSeconds = parseInt(this.value);
+        updateAutoRefreshStatus();
+
+        if (autoRefreshEnabled) {
+            stopAutoRefresh();
+            startAutoRefresh();
+        }
+    });
+
+    // Handle activity feed clear button
+    $('#clearActivityFeed').on('click', function() {
+        recentActivities = [];
+        displayActivityFeed();
     });
 
     // Handle hop filter controls
@@ -771,12 +944,49 @@ function renderGraph(data) {
 
         console.log('Added circles to nodes');
 
-        // Add labels - show complete names
-        node.append('text')
-            .attr('class', 'node-label')
-            .text(d => d.name)
-            .attr('dy', d => d.size + 15)
-            .style('font-size', '12px');
+        // Create a group for each node's text labels
+        node.append('g')
+            .attr('class', 'node-labels')
+            .each(function(d) {
+                const labelGroup = d3.select(this);
+
+                // Add main label (node name)
+                labelGroup.append('text')
+                    .attr('class', 'node-label')
+                    .text(d.name)
+                    .attr('dy', d => d.size + 15)
+                    .style('font-size', '12px')
+                    .style('font-weight', 'bold')
+                    .style('text-anchor', 'middle')
+                    .style('pointer-events', 'none');
+
+                // Add "last heard" subtitle
+                const lastHeardTime = new Date(d.last_seen * 1000);
+                const now = new Date();
+                const diffMinutes = Math.floor((now - lastHeardTime) / 60000);
+
+                let lastHeardText = '';
+                if (diffMinutes < 1) {
+                    lastHeardText = 'now';
+                } else if (diffMinutes < 60) {
+                    lastHeardText = `${diffMinutes}m ago`;
+                } else if (diffMinutes < 1440) {
+                    const hours = Math.floor(diffMinutes / 60);
+                    lastHeardText = `${hours}h ago`;
+                } else {
+                    const days = Math.floor(diffMinutes / 1440);
+                    lastHeardText = `${days}d ago`;
+                }
+
+                labelGroup.append('text')
+                    .attr('class', 'node-label-subtitle')
+                    .text(`(${lastHeardText})`)
+                    .attr('dy', d => d.size + 28)
+                    .style('font-size', '10px')
+                    .style('fill', '#666')
+                    .style('text-anchor', 'middle')
+                    .style('pointer-events', 'none');
+            });
 
         console.log('Added labels to nodes');
 
@@ -1648,10 +1858,13 @@ function showError(message) {
 }
 
 function updateStats(stats) {
+    const now = new Date().toLocaleTimeString();
     const statsContent = `
+        <div><strong>Nodes:</strong> ${currentGraph && currentGraph.nodes ? currentGraph.nodes.length : 0}</div>
         <div><strong>Links:</strong> ${stats.links_found}</div>
         <div><strong>Packets:</strong> ${stats.packets_with_rf_hops}</div>
         <div><strong>RF Hops:</strong> ${stats.total_rf_hops}</div>
+        <div><strong>Updated:</strong> <small>${now}</small></div>
     `;
     document.getElementById('graphStats').innerHTML = statsContent;
 }
@@ -1966,11 +2179,21 @@ async function pollPacketActivity() {
         if (data.activities && data.activities.length > 0) {
             const nodeIds = new Set();
 
-            // Collect all active node IDs
+            // Collect all active node IDs and record activities
             data.activities.forEach(activity => {
                 nodeIds.add(activity.from_node_id);
                 if (activity.to_node_id) {
                     nodeIds.add(activity.to_node_id);
+
+                    // Get node names from current graph
+                    if (currentGraph && currentGraph.nodes) {
+                        const fromNode = currentGraph.nodes.find(n => n.id === activity.from_node_id);
+                        const toNode = currentGraph.nodes.find(n => n.id === activity.to_node_id);
+
+                        if (fromNode && toNode) {
+                            addActivity(fromNode.name, toNode.name, activity.packet_type || 'DATA');
+                        }
+                    }
                 }
             });
 
@@ -2012,7 +2235,154 @@ function animateActiveNodes(nodeIds) {
 // Clean up on page unload
 window.addEventListener('beforeunload', () => {
     stopActivityPolling();
+    stopAutoRefresh();
 });
+
+// ============= AUTO-REFRESH FUNCTIONALITY =============
+
+function setupAutoRefresh() {
+    autoRefreshEnabled = document.getElementById('autoRefreshToggle').checked;
+    autoRefreshIntervalSeconds = parseInt(document.getElementById('autoRefreshInterval').value);
+    updateAutoRefreshStatus();
+
+    if (autoRefreshEnabled) {
+        startAutoRefresh();
+        document.getElementById('autoRefreshTimer').style.display = 'block';
+    }
+}
+
+function startAutoRefresh() {
+    stopAutoRefresh(); // Clear any existing intervals
+    nextRefreshCountdown = autoRefreshIntervalSeconds;
+
+    // Start the countdown timer
+    refreshCountdownInterval = setInterval(updateCountdown, 1000);
+
+    // Start the refresh interval
+    autoRefreshInterval = setInterval(() => {
+        if (autoRefreshEnabled) {
+            loadGraph();
+            nextRefreshCountdown = autoRefreshIntervalSeconds;
+        }
+    }, autoRefreshIntervalSeconds * 1000);
+}
+
+function stopAutoRefresh() {
+    if (autoRefreshInterval) {
+        clearInterval(autoRefreshInterval);
+        autoRefreshInterval = null;
+    }
+    if (refreshCountdownInterval) {
+        clearInterval(refreshCountdownInterval);
+        refreshCountdownInterval = null;
+    }
+}
+
+function updateCountdown() {
+    if (nextRefreshCountdown > 0) {
+        nextRefreshCountdown--;
+        document.getElementById('refreshCountdown').textContent = nextRefreshCountdown;
+    }
+}
+
+function updateAutoRefreshStatus() {
+    const statusText = autoRefreshIntervalSeconds < 60
+        ? `every ${autoRefreshIntervalSeconds}s`
+        : `every ${Math.floor(autoRefreshIntervalSeconds / 60)}m`;
+    document.getElementById('autoRefreshStatus').textContent = statusText;
+}
+
+// ============= ACTIVITY FEED FUNCTIONALITY =============
+
+function addActivity(fromNode, toNode, packetType) {
+    const activity = {
+        timestamp: Date.now(),
+        fromNode: fromNode,
+        toNode: toNode,
+        type: packetType || 'DATA'
+    };
+
+    recentActivities.unshift(activity);
+    if (recentActivities.length > maxActivityItems) {
+        recentActivities.pop();
+    }
+
+    displayActivityFeed();
+}
+
+function displayActivityFeed() {
+    const feedContainer = document.getElementById('activityFeed');
+
+    if (recentActivities.length === 0) {
+        feedContainer.innerHTML = '<small class="text-muted">No recent activity</small>';
+        return;
+    }
+
+    const now = Date.now();
+    const feedHTML = recentActivities.map((activity, index) => {
+        const elapsed = now - activity.timestamp;
+        const elapsedSeconds = Math.floor(elapsed / 1000);
+        let timeStr;
+
+        if (elapsedSeconds < 60) {
+            timeStr = `${elapsedSeconds}s ago`;
+        } else if (elapsedSeconds < 3600) {
+            timeStr = `${Math.floor(elapsedSeconds / 60)}m ago`;
+        } else {
+            timeStr = `${Math.floor(elapsedSeconds / 3600)}h ago`;
+        }
+
+        const isRecent = index === 0 && elapsed < 5000;
+        const className = isRecent ? 'activity-item recent' : 'activity-item';
+
+        return `
+            <div class="${className}">
+                <span class="activity-item-time">${timeStr}</span>
+                <span class="activity-item-node">${activity.fromNode}</span>
+                <span class="activity-item-detail">→ ${activity.toNode}</span>
+                <span class="badge bg-info" style="font-size: 0.7rem;">${activity.type}</span>
+            </div>
+        `;
+    }).join('');
+
+    feedContainer.innerHTML = feedHTML;
+}
+
+// ============= UPDATE LAST HEARD TIMES IN REAL-TIME =============
+
+function updateNodeLastHeardTimes() {
+    if (!window.graphNodes) return;
+
+    const now = Date.now();
+
+    window.graphNodes.each(function(d) {
+        const labelGroup = d3.select(this).select('.node-labels');
+        if (!labelGroup.empty()) {
+            const lastHeardTime = new Date(d.last_seen * 1000);
+            const diffMinutes = Math.floor((now - lastHeardTime) / 60000);
+
+            let lastHeardText = '';
+            if (diffMinutes < 1) {
+                lastHeardText = 'now';
+            } else if (diffMinutes < 60) {
+                lastHeardText = `${diffMinutes}m ago`;
+            } else if (diffMinutes < 1440) {
+                const hours = Math.floor(diffMinutes / 60);
+                lastHeardText = `${hours}h ago`;
+            } else {
+                const days = Math.floor(diffMinutes / 1440);
+                lastHeardText = `${days}d ago`;
+            }
+
+            labelGroup.select('.node-label-subtitle')
+                .text(`(${lastHeardText})`);
+        }
+    });
+}
+
+// Update "last heard" times every 30 seconds
+setInterval(updateNodeLastHeardTimes, 30000);
+
 </script>
 
 <!-- Re-open the container for the footer (which we're hiding anyway) -->
