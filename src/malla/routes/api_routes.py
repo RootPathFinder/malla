@@ -2021,6 +2021,89 @@ def api_channels():
         return jsonify({"error": str(e), "channels": []}), 500
 
 
+@api_bp.route("/health/node/<node_id>")
+def api_node_health(node_id):
+    """API endpoint for individual node health analysis."""
+    logger.info(f"API node health endpoint accessed for node {node_id}")
+    try:
+        from ..services.node_health_service import NodeHealthService
+
+        # Convert node_id to int
+        node_id_int = convert_node_id(node_id)
+
+        # Get analysis period from query params
+        hours = request.args.get("hours", 24, type=int)
+
+        # Analyze node health
+        health_data = NodeHealthService.analyze_node_health(node_id_int, hours)
+
+        if not health_data:
+            return jsonify({"error": "Node not found or no data available"}), 404
+
+        return safe_jsonify(health_data)
+    except ValueError as e:
+        return jsonify({"error": str(e)}), 400
+    except Exception as e:
+        logger.error(f"Error in API node health: {e}")
+        return jsonify({"error": str(e)}), 500
+
+
+@api_bp.route("/health/problematic-nodes")
+def api_problematic_nodes():
+    """API endpoint for identifying problematic nodes in the network."""
+    logger.info("API problematic nodes endpoint accessed")
+    try:
+        from ..services.node_health_service import NodeHealthService
+
+        # Get query parameters
+        hours = request.args.get("hours", 24, type=int)
+        min_health_score = request.args.get("min_health_score", 70, type=int)
+        limit = request.args.get("limit", 50, type=int)
+
+        # Get problematic nodes
+        problematic_nodes = NodeHealthService.get_problematic_nodes(
+            hours=hours, min_health_score=min_health_score, limit=limit
+        )
+
+        return safe_jsonify(
+            {
+                "problematic_nodes": problematic_nodes,
+                "total_count": len(problematic_nodes),
+                "filters": {
+                    "hours": hours,
+                    "min_health_score": min_health_score,
+                    "limit": limit,
+                },
+            }
+        )
+    except Exception as e:
+        logger.error(f"Error in API problematic nodes: {e}")
+        return jsonify({"error": str(e)}), 500
+
+
+@api_bp.route("/health/network-summary")
+@cache_response(ttl_seconds=60)  # Cache for 60 seconds
+def api_network_health_summary():
+    """API endpoint for overall network health summary."""
+    logger.info("API network health summary endpoint accessed")
+    try:
+        from ..services.node_health_service import NodeHealthService
+
+        # Get analysis period from query params
+        hours = request.args.get("hours", 24, type=int)
+
+        # Get network health summary
+        summary = NodeHealthService.get_network_health_summary(hours)
+
+        response = safe_jsonify(summary)
+        # Add cache headers for client-side caching
+        response.headers["Cache-Control"] = "public, max-age=60"
+        return response
+    except Exception as e:
+        logger.error(f"Error in API network health summary: {e}")
+        return jsonify({"error": str(e)}), 500
+
+
 def safe_jsonify(data, *args, **kwargs):
     """
     A drop-in replacement for Flask's jsonify() that sanitizes NaN/Inf values.
