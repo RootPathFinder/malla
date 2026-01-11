@@ -2330,6 +2330,8 @@ async function pollPacketActivity() {
         const response = await fetch('/api/packets/activity?seconds=5');
         const data = await response.json();
 
+        console.log('pollPacketActivity: received', data.count || 0, 'activities');
+
         if (data.error) {
             console.error('Error fetching packet activity:', data.error);
             return;
@@ -2360,10 +2362,11 @@ async function pollPacketActivity() {
                             recentNodeTimestamps[activity.from_node_id] = now;
                             recentNodeTimestamps[activity.to_node_id] = now;
 
-                            addActivity(fromNode.name, toNode.name, activity.packet_type || 'DATA');
+                            const packetType = activity.portnum_name || activity.packet_type || 'DATA';
+                            addActivity(fromNode.name, toNode.name, packetType);
 
-                            // Track link activity if highlighting is enabled
-                            if (enableLinkHighlight && activity.packet_type === 'TRACEROUTE') {
+                            // Track link activity if highlighting is enabled (any packet type with to_node_id)
+                            if (enableLinkHighlight && activity.to_node_id) {
                                 // Create a link key (sorted tuple for bidirectional matching)
                                 const linkKey = [activity.from_node_id, activity.to_node_id].sort().join('-');
                                 recentLinkActivity[linkKey] = {
@@ -2419,44 +2422,54 @@ function animateActiveNodes(nodeIds) {
 }
 
 function highlightLink(fromId, toId) {
+    console.log('highlightLink called:', fromId, '->', toId);
+
     if (!window.graphLinks) {
-        return;
+        console.warn('graphLinks not found');
+        return false;
     }
 
-    // Find the link matching these node IDs (links can be bidirectional)
     let highlightedAny = false;
-    window.graphLinks.each(function(d) {
-        if ((d.source.id === fromId && d.target.id === toId) ||
-            (d.source.id === toId && d.target.id === fromId)) {
 
-            const linkElement = d3.select(this);
+    // Select all line elements in BOTH direct and indirect links groups
+    d3.selectAll('g.links line, g.indirect-links line').each(function(d) {
+        const isMatch = (d.source.id === fromId && d.target.id === toId) ||
+                       (d.source.id === toId && d.target.id === fromId);
 
-            // Clear any existing fade timeout for this link
-            if (d.fadeTimeout) {
-                clearTimeout(d.fadeTimeout);
-            }
+        if (isMatch) {
+            console.log('Link match found! Highlighting:', d.source.id, '->', d.target.id);
+            const el = d3.select(this);
 
-            // Remove existing classes and restart animation
-            linkElement.classed('active-recent', false);
-            linkElement.classed('link-fading', false);
+            // Stop any previous timeout
+            if (d.fadeTimeout) clearTimeout(d.fadeTimeout);
 
-            // Force a reflow to restart the animation
-            void this.offsetWidth;
+            // Store original values
+            const origStroke = el.attr('data-original-stroke') || el.attr('stroke');
+            const origWidth = el.attr('data-original-width') || el.attr('stroke-width');
 
-            // Add the active-recent class to show highlight
-            linkElement.classed('active-recent', true);
-            linkElement.classed('link-fading', true);
+            // Apply strong yellow highlight immediately
+            el.style('stroke', '#FFD700')
+              .style('stroke-width', '5px')
+              .style('filter', 'drop-shadow(0 0 10px #FFD700)');
 
-            // Set timeout to remove the highlighting after configured decay time
+            console.log('Applied highlight to link, original stroke:', origStroke);
+
+            // Fade out after decay time
             d.fadeTimeout = setTimeout(() => {
-                linkElement.classed('active-recent', false);
-                linkElement.classed('link-fading', false);
+                el.style('stroke', origStroke)
+                  .style('stroke-width', origWidth + 'px')
+                  .style('filter', 'none');
+                console.log('Faded out link highlight');
             }, linkDecayTimeSeconds * 1000);
 
             highlightedAny = true;
         }
     });
 
+    if (!highlightedAny) {
+        console.warn('No matching link found. Total direct links:', d3.selectAll('g.links line').size(), 'indirect:', d3.selectAll('g.indirect-links line').size());
+    }
+    console.log('highlightLink result:', highlightedAny);
     return highlightedAny;
 }
 
