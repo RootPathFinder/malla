@@ -11,7 +11,7 @@ class TestNodeHealthAPIEndpoints:
     """Test suite for node health API endpoints."""
 
     @pytest.fixture
-    def db_with_health_data(self, test_db, flask_client):
+    def db_with_health_data(self, client):
         """Create database with test data for health endpoints."""
         from malla.database import get_db_connection
 
@@ -66,8 +66,12 @@ class TestNodeHealthAPIEndpoints:
         conn.commit()
         conn.close()
 
-        yield flask_client
+        yield client
 
+    @pytest.mark.integration
+    @pytest.mark.api
+    @pytest.mark.integration
+    @pytest.mark.api
     def test_api_node_health(self, db_with_health_data):
         """Test /api/health/node/<node_id> endpoint."""
         response = db_with_health_data.get("/api/health/node/2001")
@@ -90,6 +94,8 @@ class TestNodeHealthAPIEndpoints:
         assert "avg_snr" in metrics
         assert "unique_gateways" in metrics
 
+    @pytest.mark.integration
+    @pytest.mark.api
     def test_api_node_health_with_hours_param(self, db_with_health_data):
         """Test node health endpoint with custom hours parameter."""
         response = db_with_health_data.get("/api/health/node/2001?hours=12")
@@ -98,6 +104,8 @@ class TestNodeHealthAPIEndpoints:
         data = response.get_json()
         assert data["analyzed_hours"] == 12
 
+    @pytest.mark.integration
+    @pytest.mark.api
     def test_api_node_health_nonexistent(self, db_with_health_data):
         """Test node health endpoint for non-existent node."""
         response = db_with_health_data.get("/api/health/node/9999")
@@ -106,6 +114,8 @@ class TestNodeHealthAPIEndpoints:
         data = response.get_json()
         assert "error" in data
 
+    @pytest.mark.integration
+    @pytest.mark.api
     def test_api_node_health_hex_id(self, db_with_health_data):
         """Test node health endpoint with hex ID."""
         response = db_with_health_data.get("/api/health/node/!000007d1")
@@ -114,6 +124,8 @@ class TestNodeHealthAPIEndpoints:
         data = response.get_json()
         assert data["node_id"] == 2001
 
+    @pytest.mark.integration
+    @pytest.mark.api
     def test_api_problematic_nodes(self, db_with_health_data):
         """Test /api/health/problematic-nodes endpoint."""
         response = db_with_health_data.get("/api/health/problematic-nodes")
@@ -130,6 +142,8 @@ class TestNodeHealthAPIEndpoints:
         assert data["filters"]["min_health_score"] == 70  # Default
         assert data["filters"]["limit"] == 50  # Default
 
+    @pytest.mark.integration
+    @pytest.mark.api
     def test_api_problematic_nodes_with_params(self, db_with_health_data):
         """Test problematic nodes endpoint with custom parameters."""
         response = db_with_health_data.get(
@@ -146,6 +160,8 @@ class TestNodeHealthAPIEndpoints:
         for node in data["problematic_nodes"]:
             assert node["health_score"] < 80
 
+    @pytest.mark.integration
+    @pytest.mark.api
     def test_api_network_health_summary(self, db_with_health_data):
         """Test /api/health/network-summary endpoint."""
         response = db_with_health_data.get("/api/health/network-summary")
@@ -175,6 +191,8 @@ class TestNodeHealthAPIEndpoints:
         assert "poor_signal_nodes" in metrics
         assert "isolated_nodes" in metrics
 
+    @pytest.mark.integration
+    @pytest.mark.api
     def test_api_network_health_summary_caching(self, db_with_health_data):
         """Test that network health summary endpoint returns cache headers."""
         response = db_with_health_data.get("/api/health/network-summary")
@@ -183,6 +201,8 @@ class TestNodeHealthAPIEndpoints:
         # Check for cache headers
         assert "Cache-Control" in response.headers
 
+    @pytest.mark.integration
+    @pytest.mark.api
     def test_api_network_health_summary_with_hours(self, db_with_health_data):
         """Test network health summary with custom hours parameter."""
         response = db_with_health_data.get("/api/health/network-summary?hours=6")
@@ -191,12 +211,16 @@ class TestNodeHealthAPIEndpoints:
         data = response.get_json()
         assert data["analyzed_hours"] == 6
 
+    @pytest.mark.integration
+    @pytest.mark.api
     def test_node_health_route(self, db_with_health_data):
         """Test that the /node-health route is accessible."""
         response = db_with_health_data.get("/node-health")
         assert response.status_code == 200
         assert b"Node Health" in response.data
 
+    @pytest.mark.integration
+    @pytest.mark.api
     def test_health_data_structure_consistency(self, db_with_health_data):
         """Test that all health-related endpoints return consistent data structures."""
         # Get individual node health

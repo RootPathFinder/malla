@@ -2,6 +2,7 @@
 Unit tests for node health service
 """
 
+import os
 import time
 from datetime import datetime, timedelta
 
@@ -12,8 +13,11 @@ from malla.services.node_health_service import NodeHealthService
 
 
 @pytest.fixture
-def db_with_test_data(test_db):
+def db_with_test_data(temp_database, monkeypatch):
     """Create a database with test data for health analysis."""
+    # Set the database path environment variable
+    monkeypatch.setenv("MALLA_DATABASE_FILE", temp_database)
+    
     conn = get_db_connection()
     cursor = conn.cursor()
 
@@ -153,9 +157,9 @@ def db_with_test_data(test_db):
     conn.commit()
     conn.close()
 
-    yield test_db
+    yield temp_database
 
-    # Cleanup is handled by test_db fixture
+    # Cleanup is handled by temp_database fixture
 
 
 class TestNodeHealthService:
