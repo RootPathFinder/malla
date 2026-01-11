@@ -1876,7 +1876,7 @@ function softRefreshGraph() {
                             node.packet_count = newData.packet_count;
                             node.connections = newData.connections;
                             node.avg_snr = newData.avg_snr;
-                            
+
                             // For last_seen: use the more recent of activity-detected time or API data
                             if (recentNodeTimestamps[node.id]) {
                                 // Use the more recent timestamp
@@ -2282,7 +2282,7 @@ async function pollPacketActivity() {
                             // Update last_seen timestamps to now for real-time display
                             fromNode.last_seen = now;
                             toNode.last_seen = now;
-                            
+
                             // Also track these timestamps separately so they don't get overwritten by soft refresh
                             recentNodeTimestamps[activity.from_node_id] = now;
                             recentNodeTimestamps[activity.to_node_id] = now;
@@ -2368,7 +2368,7 @@ function startAutoRefresh() {
                     delete recentNodeTimestamps[nodeId];
                 }
             });
-            
+
             softRefreshGraph();
             nextRefreshCountdown = autoRefreshIntervalSeconds;
         }
