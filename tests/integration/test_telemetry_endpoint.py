@@ -3,7 +3,6 @@ Integration tests for node telemetry API endpoint.
 """
 
 import json
-import sqlite3
 import time
 
 import pytest
@@ -49,8 +48,8 @@ class TestTelemetryEndpoint:
         # Insert telemetry packet
         cursor.execute(
             """
-            INSERT INTO packet_history 
-            (timestamp, topic, from_node_id, to_node_id, portnum, portnum_name, gateway_id, 
+            INSERT INTO packet_history
+            (timestamp, topic, from_node_id, to_node_id, portnum, portnum_name, gateway_id,
              processed_successfully, raw_payload, payload_length)
             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
@@ -153,8 +152,8 @@ class TestTelemetryEndpoint:
 
         cursor.execute(
             """
-            INSERT INTO packet_history 
-            (timestamp, topic, from_node_id, to_node_id, portnum, portnum_name, gateway_id, 
+            INSERT INTO packet_history
+            (timestamp, topic, from_node_id, to_node_id, portnum, portnum_name, gateway_id,
              processed_successfully, raw_payload, payload_length)
             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
@@ -215,8 +214,8 @@ class TestTelemetryEndpoint:
 
         cursor.execute(
             """
-            INSERT INTO packet_history 
-            (timestamp, topic, from_node_id, to_node_id, portnum, portnum_name, gateway_id, 
+            INSERT INTO packet_history
+            (timestamp, topic, from_node_id, to_node_id, portnum, portnum_name, gateway_id,
              processed_successfully, raw_payload, payload_length)
             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
@@ -272,8 +271,8 @@ class TestTelemetryEndpoint:
         old_telemetry.device_metrics.battery_level = 30
         cursor.execute(
             """
-            INSERT INTO packet_history 
-            (timestamp, topic, from_node_id, to_node_id, portnum, portnum_name, gateway_id, 
+            INSERT INTO packet_history
+            (timestamp, topic, from_node_id, to_node_id, portnum, portnum_name, gateway_id,
              processed_successfully, raw_payload, payload_length)
             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
@@ -296,8 +295,8 @@ class TestTelemetryEndpoint:
         new_telemetry.device_metrics.battery_level = 90
         cursor.execute(
             """
-            INSERT INTO packet_history 
-            (timestamp, topic, from_node_id, to_node_id, portnum, portnum_name, gateway_id, 
+            INSERT INTO packet_history
+            (timestamp, topic, from_node_id, to_node_id, portnum, portnum_name, gateway_id,
              processed_successfully, raw_payload, payload_length)
             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
