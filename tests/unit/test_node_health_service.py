@@ -186,10 +186,15 @@ class TestNodeHealthService:
 
         assert health_data is not None
         assert health_data["node_id"] == 1002
-        assert health_data["health_score"] < 80  # Should be degraded or worse
-        # Should have signal-related issues
+        # With new scoring: RSSI/SNR don't affect health, so node should be healthy
+        # since it has good activity (50 packets) and gateway connectivity
+        assert health_data["health_score"] >= 80  # Should be healthy
+        # Should still have signal-related issues (informational)
         signal_issues = [i for i in health_data["issues"] if i["category"] == "signal"]
         assert len(signal_issues) > 0
+        # Signal issues should be informational only
+        for issue in signal_issues:
+            assert issue["severity"] == "info"
 
     def test_analyze_inactive_node(self, db_with_test_data):
         """Test analysis of an inactive node."""
@@ -252,14 +257,23 @@ class TestNodeHealthService:
     def test_health_score_calculation(self, db_with_test_data):
         """Test that health scores are calculated correctly."""
         healthy_node = NodeHealthService.analyze_node_health(1001, hours=24)
-        poor_node = NodeHealthService.analyze_node_health(1002, hours=24)
+        poor_signal_node = NodeHealthService.analyze_node_health(1002, hours=24)
+        inactive_node = NodeHealthService.analyze_node_health(1003, hours=24)
 
-        # Healthy node should have better score than poor signal node
-        assert healthy_node["health_score"] > poor_node["health_score"]
+        # With new scoring: RSSI/SNR don't affect health scores
+        # Nodes 1001 and 1002 have similar activity, so should have similar scores
+        # Both should be healthy since they have good packet activity
+        assert healthy_node["health_score"] >= 80
+        assert poor_signal_node["health_score"] >= 80
+        
+        # Inactive node should have worse score due to low activity
+        assert inactive_node["health_score"] < healthy_node["health_score"]
+        assert inactive_node["health_score"] < poor_signal_node["health_score"]
 
         # Health scores should be between 0 and 100
         assert 0 <= healthy_node["health_score"] <= 100
-        assert 0 <= poor_node["health_score"] <= 100
+        assert 0 <= poor_signal_node["health_score"] <= 100
+        assert 0 <= inactive_node["health_score"] <= 100
 
     def test_different_time_periods(self, db_with_test_data):
         """Test analysis with different time periods."""

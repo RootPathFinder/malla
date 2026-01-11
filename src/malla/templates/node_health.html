@@ -61,32 +61,52 @@
                         <div class="row">
                             <div class="col-md-3 text-center">
                                 <div class="metric-card">
-                                    <div class="metric-label">Network Health Score</div>
+                                    <div class="metric-label">
+                                        Network Health Score
+                                        <i class="bi bi-info-circle" data-bs-toggle="tooltip" data-bs-placement="top" 
+                                           title="Overall network health (0-100) based on node reliability metrics: activity patterns, gateway connectivity, and outages. Does NOT include signal strength to avoid distance bias."></i>
+                                    </div>
                                     <div class="metric-value" id="network-health-score">--</div>
                                 </div>
                             </div>
                             <div class="col-md-3 text-center">
                                 <div class="metric-card">
-                                    <div class="metric-label">Active Nodes</div>
+                                    <div class="metric-label">
+                                        Active Nodes
+                                        <i class="bi bi-info-circle" data-bs-toggle="tooltip" data-bs-placement="top" 
+                                           title="Number of nodes that have transmitted at least one packet during the selected time period."></i>
+                                    </div>
                                     <div class="metric-value" id="active-nodes-count">--</div>
                                 </div>
                             </div>
                             <div class="col-md-3 text-center">
                                 <div class="metric-card">
-                                    <div class="metric-label">Average RSSI</div>
+                                    <div class="metric-label">
+                                        Average RSSI
+                                        <i class="bi bi-info-circle" data-bs-toggle="tooltip" data-bs-placement="top" 
+                                           title="Received Signal Strength Indicator in dBm. Higher values (closer to 0) indicate stronger signal. INFORMATIONAL ONLY - distance-dependent, does not affect health scores."></i>
+                                    </div>
                                     <div class="metric-value" id="avg-rssi">--</div>
                                 </div>
                             </div>
                             <div class="col-md-3 text-center">
                                 <div class="metric-card">
-                                    <div class="metric-label">Average SNR</div>
+                                    <div class="metric-label">
+                                        Average SNR
+                                        <i class="bi bi-info-circle" data-bs-toggle="tooltip" data-bs-placement="top" 
+                                           title="Signal-to-Noise Ratio in dB. Higher values indicate clearer signal above background noise. INFORMATIONAL ONLY - distance-dependent, does not affect health scores."></i>
+                                    </div>
                                     <div class="metric-value" id="avg-snr">--</div>
                                 </div>
                             </div>
                         </div>
                         <div class="row mt-3">
                             <div class="col-12">
-                                <h6>Health Distribution</h6>
+                                <h6>
+                                    Health Distribution
+                                    <i class="bi bi-info-circle" data-bs-toggle="tooltip" data-bs-placement="top" 
+                                       title="Distribution of node health statuses: Healthy (80-100), Degraded (60-79), Poor (40-59), Critical (0-39). Based on reliability metrics, not signal strength."></i>
+                                </h6>
                                 <div class="progress" style="height: 30px;">
                                     <div class="progress-bar bg-success" role="progressbar" id="healthy-bar" style="width: 0%">
                                         <span id="healthy-count">0</span> Healthy
@@ -168,13 +188,41 @@
                                 <thead>
                                     <tr>
                                         <th>Node</th>
-                                        <th>Health Score</th>
-                                        <th>Status</th>
-                                        <th>Issues</th>
-                                        <th>Packets</th>
-                                        <th>Avg RSSI</th>
-                                        <th>Avg SNR</th>
-                                        <th>Gateways</th>
+                                        <th>
+                                            Health Score
+                                            <i class="bi bi-info-circle" data-bs-toggle="tooltip" data-bs-placement="top" 
+                                               title="Node health score (0-100) based on activity, connectivity, and reliability. Higher is better."></i>
+                                        </th>
+                                        <th>
+                                            Status
+                                            <i class="bi bi-info-circle" data-bs-toggle="tooltip" data-bs-placement="top" 
+                                               title="Health status: Healthy (80-100), Degraded (60-79), Poor (40-59), Critical (0-39)."></i>
+                                        </th>
+                                        <th>
+                                            Issues
+                                            <i class="bi bi-info-circle" data-bs-toggle="tooltip" data-bs-placement="top" 
+                                               title="Detected issues categorized by type: activity, connectivity, reliability, or signal (informational only)."></i>
+                                        </th>
+                                        <th>
+                                            Packets
+                                            <i class="bi bi-info-circle" data-bs-toggle="tooltip" data-bs-placement="top" 
+                                               title="Total number of packets transmitted by this node during the analysis period."></i>
+                                        </th>
+                                        <th>
+                                            Avg RSSI
+                                            <i class="bi bi-info-circle" data-bs-toggle="tooltip" data-bs-placement="top" 
+                                               title="Average Received Signal Strength in dBm. INFORMATIONAL ONLY - varies with distance, does not affect health."></i>
+                                        </th>
+                                        <th>
+                                            Avg SNR
+                                            <i class="bi bi-info-circle" data-bs-toggle="tooltip" data-bs-placement="top" 
+                                               title="Average Signal-to-Noise Ratio in dB. INFORMATIONAL ONLY - varies with distance, does not affect health."></i>
+                                        </th>
+                                        <th>
+                                            Gateways
+                                            <i class="bi bi-info-circle" data-bs-toggle="tooltip" data-bs-placement="top" 
+                                               title="Number of unique gateways that heard this node. More gateways = better redundancy and reliability."></i>
+                                        </th>
                                         <th>Details</th>
                                     </tr>
                                 </thead>
@@ -213,6 +261,14 @@ let currentFilters = {
     minHealthScore: 70,
     limit: 50
 };
+
+// Initialize Bootstrap tooltips
+function initializeTooltips() {
+    const tooltipTriggerList = [].slice.call(document.querySelectorAll('[data-bs-toggle="tooltip"]'));
+    tooltipTriggerList.map(function (tooltipTriggerEl) {
+        return new bootstrap.Tooltip(tooltipTriggerEl);
+    });
+}
 
 // Load network health summary
 async function loadNetworkSummary() {
@@ -259,6 +315,9 @@ async function loadNetworkSummary() {
         document.getElementById('network-summary-loading').style.display = 'none';
         document.getElementById('network-summary-content').style.display = 'block';
         
+        // Initialize tooltips after content is loaded
+        initializeTooltips();
+        
     } catch (error) {
         console.error('Error loading network summary:', error);
     }
@@ -300,6 +359,9 @@ async function loadProblematicNodes() {
         
         document.getElementById('problematic-nodes-loading').style.display = 'none';
         document.getElementById('problematic-nodes-content').style.display = 'block';
+        
+        // Initialize tooltips after table content is loaded
+        initializeTooltips();
         
     } catch (error) {
         console.error('Error loading problematic nodes:', error);
@@ -434,5 +496,8 @@ document.getElementById('problematic-nodes-tbody').addEventListener('click', (e)
 // Initial load
 loadNetworkSummary();
 loadProblematicNodes();
+
+// Initialize tooltips on page load
+document.addEventListener('DOMContentLoaded', initializeTooltips);
 </script>
 {% endblock %}
