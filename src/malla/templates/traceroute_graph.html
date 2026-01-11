@@ -108,6 +108,27 @@
             </div>
         </div>
 
+        <!-- Link Activity Highlighting -->
+        <div class="sidebar-section">
+            <h6><i class="bi bi-diagram-2"></i> Link Activity</h6>
+            <div class="mb-3">
+                <div class="form-check form-switch">
+                    <input class="form-check-input" type="checkbox" id="enableLinkHighlight" checked>
+                    <label class="form-check-label" for="enableLinkHighlight">
+                        Show recent links
+                    </label>
+                </div>
+            </div>
+            <div class="mb-3">
+                <label for="linkDecayTime" class="form-label">Highlight Duration</label>
+                <div class="d-flex align-items-center gap-2">
+                    <input type="range" class="form-range" id="linkDecayTime" min="5" max="120" value="15" step="5">
+                    <span class="badge bg-secondary" id="linkDecayTimeValue">15s</span>
+                </div>
+                <small class="text-muted d-block mt-1">Links fade after this duration</small>
+            </div>
+        </div>
+
         <!-- Filters -->
         <div class="sidebar-section">
             <h6><i class="bi bi-funnel"></i> Filters</h6>
@@ -268,6 +289,38 @@
     stroke-width: 4 !important;
 }
 
+/* Link Activity Highlighting */
+.link.active-recent {
+    stroke: #ffc107 !important;
+    stroke-width: 3 !important;
+    filter: drop-shadow(0 0 4px rgba(255, 193, 7, 0.6));
+}
+
+.indirect-links line.active-recent {
+    stroke: #ff9800 !important;
+    stroke-width: 2.5 !important;
+    filter: drop-shadow(0 0 3px rgba(255, 152, 0, 0.5));
+}
+
+@keyframes linkFade {
+    0% {
+        stroke-width: 3;
+        filter: drop-shadow(0 0 6px rgba(255, 193, 7, 0.8));
+    }
+    100% {
+        stroke-width: 1;
+        filter: drop-shadow(0 0 0px rgba(255, 193, 7, 0));
+    }
+}
+
+.link.link-fading {
+    animation: linkFade linear forwards;
+}
+
+.indirect-links line.link-fading {
+    animation: linkFade linear forwards;
+}
+
 /* Activity Feed Styling */
 .activity-feed {
     max-height: 250px;
@@ -416,6 +469,9 @@ let nextRefreshCountdown = 30;
 let recentActivities = []; // Track recent activity
 let maxActivityItems = 20; // Max items in activity feed
 let recentNodeTimestamps = {}; // Track real-time node timestamps from activity polling
+let enableLinkHighlight = true; // Toggle for link highlighting
+let linkDecayTimeSeconds = 15; // How long links remain highlighted (seconds)
+let recentLinkActivity = {}; // Map of linkKey -> timestamp of last activity
 
 // Make currentGraph globally accessible for debugging
 window.currentGraph = null;
@@ -540,6 +596,23 @@ function initializeInterface() {
     $('#clearActivityFeed').on('click', function() {
         recentActivities = [];
         displayActivityFeed();
+    });
+
+    // Handle link highlight toggle
+    $('#enableLinkHighlight').on('change', function() {
+        enableLinkHighlight = this.checked;
+        if (!enableLinkHighlight) {
+            // Clear all link highlights
+            d3.selectAll('.link').classed('active-recent', false).classed('link-fading', false);
+            d3.selectAll('.indirect-links line').classed('active-recent', false).classed('link-fading', false);
+            recentLinkActivity = {};
+        }
+    });
+
+    // Handle link decay time slider
+    $('#linkDecayTime').on('input', function() {
+        linkDecayTimeSeconds = parseInt(this.value);
+        $('#linkDecayTimeValue').text(linkDecayTimeSeconds + 's');
     });
 
     // Handle hop filter controls
@@ -2288,6 +2361,20 @@ async function pollPacketActivity() {
                             recentNodeTimestamps[activity.to_node_id] = now;
 
                             addActivity(fromNode.name, toNode.name, activity.packet_type || 'DATA');
+
+                            // Track link activity if highlighting is enabled
+                            if (enableLinkHighlight && activity.packet_type === 'TRACEROUTE') {
+                                // Create a link key (sorted tuple for bidirectional matching)
+                                const linkKey = [activity.from_node_id, activity.to_node_id].sort().join('-');
+                                recentLinkActivity[linkKey] = {
+                                    timestamp: Date.now(),
+                                    fromId: activity.from_node_id,
+                                    toId: activity.to_node_id
+                                };
+
+                                // Highlight the link with fade animation
+                                highlightLink(activity.from_node_id, activity.to_node_id);
+                            }
                         }
                     }
                 }
@@ -2331,6 +2418,48 @@ function animateActiveNodes(nodeIds) {
     });
 }
 
+function highlightLink(fromId, toId) {
+    if (!window.graphLinks) {
+        return;
+    }
+
+    // Find the link matching these node IDs (links can be bidirectional)
+    let highlightedAny = false;
+    window.graphLinks.each(function(d) {
+        if ((d.source.id === fromId && d.target.id === toId) ||
+            (d.source.id === toId && d.target.id === fromId)) {
+
+            const linkElement = d3.select(this);
+
+            // Clear any existing fade timeout for this link
+            if (d.fadeTimeout) {
+                clearTimeout(d.fadeTimeout);
+            }
+
+            // Remove existing classes and restart animation
+            linkElement.classed('active-recent', false);
+            linkElement.classed('link-fading', false);
+
+            // Force a reflow to restart the animation
+            void this.offsetWidth;
+
+            // Add the active-recent class to show highlight
+            linkElement.classed('active-recent', true);
+            linkElement.classed('link-fading', true);
+
+            // Set timeout to remove the highlighting after configured decay time
+            d.fadeTimeout = setTimeout(() => {
+                linkElement.classed('active-recent', false);
+                linkElement.classed('link-fading', false);
+            }, linkDecayTimeSeconds * 1000);
+
+            highlightedAny = true;
+        }
+    });
+
+    return highlightedAny;
+}
+
 // Clean up on page unload
 window.addEventListener('beforeunload', () => {
     stopActivityPolling();
@@ -2362,10 +2491,20 @@ function startAutoRefresh() {
         if (autoRefreshEnabled) {
             // Clean up old timestamps before soft refresh (older than 5 minutes)
             const now = Math.floor(Date.now() / 1000);
+            const nowMs = Date.now();
             const fiveMinutesAgo = now - (5 * 60);
+            const decayMs = linkDecayTimeSeconds * 1000;
+
             Object.keys(recentNodeTimestamps).forEach(nodeId => {
                 if (recentNodeTimestamps[nodeId] < fiveMinutesAgo) {
                     delete recentNodeTimestamps[nodeId];
+                }
+            });
+
+            // Clean up old link activity (older than decay time)
+            Object.keys(recentLinkActivity).forEach(linkKey => {
+                if (recentLinkActivity[linkKey].timestamp < nowMs - decayMs) {
+                    delete recentLinkActivity[linkKey];
                 }
             });
 

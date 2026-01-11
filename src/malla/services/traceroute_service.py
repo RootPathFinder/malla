@@ -1302,3 +1302,8 @@ class TracerouteService:
                 last_seen_map[node_id] = last_seen
 
             conn.close()
+            return last_seen_map
+
+        except Exception as e:
+            logger.error(f"Error getting node last_seen times: {e}")
+            return {}
