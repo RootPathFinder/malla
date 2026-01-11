@@ -196,6 +196,59 @@ def api_packets():
         return jsonify({"error": str(e)}), 500
 
 
+@api_bp.route("/packets/activity")
+def api_packets_activity():
+    """API endpoint for recent packet activity (used for real-time graph animations)."""
+    logger.info("API packets activity endpoint accessed")
+    try:
+        # Get packets from the last N seconds
+        seconds = request.args.get("seconds", 10, type=int)
+
+        conn = get_db_connection()
+        cursor = conn.cursor()
+
+        cutoff_time = int(time.time()) - seconds
+
+        query = """
+        SELECT
+            from_node_id,
+            to_node_id,
+            timestamp,
+            portnum_name,
+            hop_limit,
+            hop_start
+        FROM packet_history
+        WHERE timestamp >= ?
+        ORDER BY timestamp DESC
+        LIMIT 500
+        """
+
+        cursor.execute(query, (cutoff_time,))
+        rows = cursor.fetchall()
+        conn.close()
+
+        # Build activity data
+        activities = []
+        for row in rows:
+            activities.append({
+                "from_node_id": row["from_node_id"],
+                "to_node_id": row["to_node_id"],
+                "timestamp": row["timestamp"],
+                "portnum_name": row["portnum_name"],
+                "hop_limit": row["hop_limit"],
+                "hop_start": row["hop_start"]
+            })
+
+        return jsonify({
+            "activities": activities,
+            "seconds": seconds,
+            "count": len(activities)
+        })
+    except Exception as e:
+        logger.error(f"Error in API packets activity: {e}")
+        return jsonify({"error": str(e)}), 500
+
+
 @api_bp.route("/nodes")
 def api_nodes():
     """API endpoint for node data (with optional search)."""

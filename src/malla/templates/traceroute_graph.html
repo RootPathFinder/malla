@@ -220,6 +220,29 @@
     stroke-width: 4 !important;
 }
 
+/* Packet activity animations */
+@keyframes node-pulse {
+    0% {
+        stroke: #00ff00;
+        stroke-width: 6;
+        filter: drop-shadow(0 0 8px #00ff00);
+    }
+    50% {
+        stroke: #00ff00;
+        stroke-width: 8;
+        filter: drop-shadow(0 0 16px #00ff00);
+    }
+    100% {
+        stroke: #fff;
+        stroke-width: 2;
+        filter: none;
+    }
+}
+
+.node.active circle {
+    animation: node-pulse 1s ease-out;
+}
+
 /* Additional mobile adjustments specific to graph */
 @media (max-width: 768px) {
     .graph-container {
@@ -249,6 +272,8 @@ let visibleNodeIds = null;
 let nodeDistances = null;
 let comparisonNode = null; // Second node for path comparison
 let pathComparisonMode = false;
+let activityPollInterval = null;
+let lastActivityTimestamp = Math.floor(Date.now() / 1000);
 
 // Make currentGraph globally accessible for debugging
 window.currentGraph = null;
@@ -274,6 +299,9 @@ function initializeInterface() {
         e.preventDefault();
         loadGraph();
     });
+
+    // Start real-time activity polling
+    startActivityPolling();
 
     // Handle sidebar toggle
     $('#toggleSidebar').on('click', function() {
@@ -1907,6 +1935,84 @@ async function loadPrimaryChannels() {
         console.error('Error loading channels:', err);
     }
 }
+
+// Real-time packet activity monitoring
+function startActivityPolling() {
+    // Poll every 3 seconds
+    activityPollInterval = setInterval(pollPacketActivity, 3000);
+    // Do an initial poll
+    pollPacketActivity();
+}
+
+function stopActivityPolling() {
+    if (activityPollInterval) {
+        clearInterval(activityPollInterval);
+        activityPollInterval = null;
+    }
+}
+
+async function pollPacketActivity() {
+    try {
+        // Get packets from the last 5 seconds
+        const response = await fetch('/api/packets/activity?seconds=5');
+        const data = await response.json();
+
+        if (data.error) {
+            console.error('Error fetching packet activity:', data.error);
+            return;
+        }
+
+        // Process activities and animate nodes
+        if (data.activities && data.activities.length > 0) {
+            const nodeIds = new Set();
+
+            // Collect all active node IDs
+            data.activities.forEach(activity => {
+                nodeIds.add(activity.from_node_id);
+                if (activity.to_node_id) {
+                    nodeIds.add(activity.to_node_id);
+                }
+            });
+
+            // Animate the active nodes
+            animateActiveNodes(nodeIds);
+        }
+    } catch (err) {
+        console.error('Error polling packet activity:', err);
+    }
+}
+
+function animateActiveNodes(nodeIds) {
+    if (!window.graphNodes) {
+        return;
+    }
+
+    // Select nodes that match the active node IDs
+    window.graphNodes.each(function(d) {
+        if (nodeIds.has(d.id)) {
+            const nodeElement = d3.select(this);
+
+            // Remove existing animation class
+            nodeElement.classed('active', false);
+
+            // Force a reflow to restart the animation
+            void this.offsetWidth;
+
+            // Add animation class
+            nodeElement.classed('active', true);
+
+            // Remove the class after animation completes (1 second)
+            setTimeout(() => {
+                nodeElement.classed('active', false);
+            }, 1000);
+        }
+    });
+}
+
+// Clean up on page unload
+window.addEventListener('beforeunload', () => {
+    stopActivityPolling();
+});
 </script>
 
 <!-- Re-open the container for the footer (which we're hiding anyway) -->
