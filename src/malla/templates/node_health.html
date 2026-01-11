@@ -1,0 +1,438 @@
+{% extends "base.html" %}
+
+{% block title %}Node Health - {{ APP_NAME }}{% endblock %}
+
+{% block extra_css %}
+<style>
+    .health-score-badge {
+        font-size: 1.5rem;
+        font-weight: bold;
+        padding: 0.5rem 1rem;
+    }
+    .health-healthy { background-color: #198754; }
+    .health-degraded { background-color: #ffc107; color: #000; }
+    .health-poor { background-color: #fd7e14; }
+    .health-critical { background-color: #dc3545; }
+    
+    .issue-badge {
+        font-size: 0.875rem;
+        padding: 0.25rem 0.5rem;
+        margin-right: 0.25rem;
+    }
+    .issue-critical { background-color: #dc3545; }
+    .issue-warning { background-color: #ffc107; color: #000; }
+    .issue-info { background-color: #0dcaf0; color: #000; }
+    
+    .metric-card {
+        border-left: 4px solid #0d6efd;
+        padding: 1rem;
+        margin-bottom: 1rem;
+    }
+    
+    .activity-chart {
+        height: 200px;
+    }
+</style>
+{% endblock %}
+
+{% block content %}
+<div class="container-fluid">
+    <div class="row mb-4">
+        <div class="col">
+            <h1><i class="bi bi-activity"></i> Node Health Monitoring</h1>
+            <p class="text-muted">Identify and analyze problematic nodes in the mesh network</p>
+        </div>
+    </div>
+
+    <!-- Network Health Summary -->
+    <div class="row mb-4">
+        <div class="col-12">
+            <div class="card">
+                <div class="card-header">
+                    <h5 class="mb-0"><i class="bi bi-shield-check"></i> Network Health Summary</h5>
+                </div>
+                <div class="card-body">
+                    <div id="network-summary-loading" class="text-center p-3">
+                        <div class="spinner-border text-primary" role="status">
+                            <span class="visually-hidden">Loading network health...</span>
+                        </div>
+                    </div>
+                    <div id="network-summary-content" style="display: none;">
+                        <div class="row">
+                            <div class="col-md-3 text-center">
+                                <div class="metric-card">
+                                    <div class="metric-label">Network Health Score</div>
+                                    <div class="metric-value" id="network-health-score">--</div>
+                                </div>
+                            </div>
+                            <div class="col-md-3 text-center">
+                                <div class="metric-card">
+                                    <div class="metric-label">Active Nodes</div>
+                                    <div class="metric-value" id="active-nodes-count">--</div>
+                                </div>
+                            </div>
+                            <div class="col-md-3 text-center">
+                                <div class="metric-card">
+                                    <div class="metric-label">Average RSSI</div>
+                                    <div class="metric-value" id="avg-rssi">--</div>
+                                </div>
+                            </div>
+                            <div class="col-md-3 text-center">
+                                <div class="metric-card">
+                                    <div class="metric-label">Average SNR</div>
+                                    <div class="metric-value" id="avg-snr">--</div>
+                                </div>
+                            </div>
+                        </div>
+                        <div class="row mt-3">
+                            <div class="col-12">
+                                <h6>Health Distribution</h6>
+                                <div class="progress" style="height: 30px;">
+                                    <div class="progress-bar bg-success" role="progressbar" id="healthy-bar" style="width: 0%">
+                                        <span id="healthy-count">0</span> Healthy
+                                    </div>
+                                    <div class="progress-bar bg-warning" role="progressbar" id="degraded-bar" style="width: 0%">
+                                        <span id="degraded-count">0</span> Degraded
+                                    </div>
+                                    <div class="progress-bar bg-danger" role="progressbar" id="poor-bar" style="width: 0%">
+                                        <span id="poor-count">0</span> Poor
+                                    </div>
+                                    <div class="progress-bar bg-dark" role="progressbar" id="critical-bar" style="width: 0%">
+                                        <span id="critical-count">0</span> Critical
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Filters -->
+    <div class="row mb-3">
+        <div class="col-md-4">
+            <label for="hours-filter" class="form-label">Analysis Period</label>
+            <select class="form-select" id="hours-filter">
+                <option value="6">Last 6 hours</option>
+                <option value="12">Last 12 hours</option>
+                <option value="24" selected>Last 24 hours</option>
+                <option value="48">Last 48 hours</option>
+                <option value="72">Last 72 hours</option>
+                <option value="168">Last 7 days</option>
+            </select>
+        </div>
+        <div class="col-md-4">
+            <label for="min-health-score" class="form-label">Max Health Score</label>
+            <select class="form-select" id="min-health-score">
+                <option value="100">Show All</option>
+                <option value="80">Below 80 (Degraded+)</option>
+                <option value="70" selected>Below 70 (Poor+)</option>
+                <option value="60">Below 60</option>
+                <option value="40">Below 40 (Critical)</option>
+            </select>
+        </div>
+        <div class="col-md-4">
+            <label for="limit-filter" class="form-label">Results Limit</label>
+            <select class="form-select" id="limit-filter">
+                <option value="10">10 nodes</option>
+                <option value="25">25 nodes</option>
+                <option value="50" selected>50 nodes</option>
+                <option value="100">100 nodes</option>
+            </select>
+        </div>
+    </div>
+
+    <!-- Problematic Nodes Table -->
+    <div class="row">
+        <div class="col-12">
+            <div class="card">
+                <div class="card-header d-flex justify-content-between align-items-center">
+                    <h5 class="mb-0"><i class="bi bi-exclamation-triangle"></i> Problematic Nodes</h5>
+                    <button class="btn btn-sm btn-primary" id="refresh-btn">
+                        <i class="bi bi-arrow-clockwise"></i> Refresh
+                    </button>
+                </div>
+                <div class="card-body">
+                    <div id="problematic-nodes-loading" class="text-center p-3">
+                        <div class="spinner-border text-primary" role="status">
+                            <span class="visually-hidden">Loading problematic nodes...</span>
+                        </div>
+                    </div>
+                    <div id="problematic-nodes-content" style="display: none;">
+                        <div id="no-issues" class="alert alert-success" style="display: none;">
+                            <i class="bi bi-check-circle"></i> No problematic nodes found! All nodes are healthy.
+                        </div>
+                        <div class="table-responsive">
+                            <table class="table table-striped table-hover" id="problematic-nodes-table">
+                                <thead>
+                                    <tr>
+                                        <th>Node</th>
+                                        <th>Health Score</th>
+                                        <th>Status</th>
+                                        <th>Issues</th>
+                                        <th>Packets</th>
+                                        <th>Avg RSSI</th>
+                                        <th>Avg SNR</th>
+                                        <th>Gateways</th>
+                                        <th>Details</th>
+                                    </tr>
+                                </thead>
+                                <tbody id="problematic-nodes-tbody">
+                                    <!-- Populated by JavaScript -->
+                                </tbody>
+                            </table>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Node Detail Modal -->
+    <div class="modal fade" id="nodeDetailModal" tabindex="-1">
+        <div class="modal-dialog modal-xl">
+            <div class="modal-content">
+                <div class="modal-header">
+                    <h5 class="modal-title" id="nodeDetailModalTitle">Node Health Details</h5>
+                    <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+                </div>
+                <div class="modal-body" id="nodeDetailModalBody">
+                    <!-- Populated by JavaScript -->
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+{% endblock %}
+
+{% block extra_js %}
+<script>
+let currentFilters = {
+    hours: 24,
+    minHealthScore: 70,
+    limit: 50
+};
+
+// Load network health summary
+async function loadNetworkSummary() {
+    const hours = currentFilters.hours;
+    
+    try {
+        const response = await fetch(`/api/health/network-summary?hours=${hours}`);
+        const data = await response.json();
+        
+        if (data.error) {
+            console.error('Error loading network summary:', data.error);
+            return;
+        }
+        
+        // Update summary metrics
+        document.getElementById('network-health-score').textContent = Math.round(data.network_health_score);
+        document.getElementById('active-nodes-count').textContent = data.active_nodes;
+        document.getElementById('avg-rssi').textContent = data.network_metrics.avg_rssi ? 
+            data.network_metrics.avg_rssi.toFixed(1) + ' dBm' : 'N/A';
+        document.getElementById('avg-snr').textContent = data.network_metrics.avg_snr ? 
+            data.network_metrics.avg_snr.toFixed(1) + ' dB' : 'N/A';
+        
+        // Update health distribution
+        const dist = data.health_distribution;
+        const total = dist.healthy + dist.degraded + dist.poor + dist.critical;
+        
+        if (total > 0) {
+            const healthyPct = (dist.healthy / total * 100).toFixed(1);
+            const degradedPct = (dist.degraded / total * 100).toFixed(1);
+            const poorPct = (dist.poor / total * 100).toFixed(1);
+            const criticalPct = (dist.critical / total * 100).toFixed(1);
+            
+            document.getElementById('healthy-bar').style.width = healthyPct + '%';
+            document.getElementById('degraded-bar').style.width = degradedPct + '%';
+            document.getElementById('poor-bar').style.width = poorPct + '%';
+            document.getElementById('critical-bar').style.width = criticalPct + '%';
+            
+            document.getElementById('healthy-count').textContent = dist.healthy;
+            document.getElementById('degraded-count').textContent = dist.degraded;
+            document.getElementById('poor-count').textContent = dist.poor;
+            document.getElementById('critical-count').textContent = dist.critical;
+        }
+        
+        document.getElementById('network-summary-loading').style.display = 'none';
+        document.getElementById('network-summary-content').style.display = 'block';
+        
+    } catch (error) {
+        console.error('Error loading network summary:', error);
+    }
+}
+
+// Load problematic nodes
+async function loadProblematicNodes() {
+    const { hours, minHealthScore, limit } = currentFilters;
+    
+    document.getElementById('problematic-nodes-loading').style.display = 'block';
+    document.getElementById('problematic-nodes-content').style.display = 'none';
+    
+    try {
+        const response = await fetch(
+            `/api/health/problematic-nodes?hours=${hours}&min_health_score=${minHealthScore}&limit=${limit}`
+        );
+        const data = await response.json();
+        
+        if (data.error) {
+            console.error('Error loading problematic nodes:', data.error);
+            return;
+        }
+        
+        const tbody = document.getElementById('problematic-nodes-tbody');
+        tbody.innerHTML = '';
+        
+        if (data.problematic_nodes.length === 0) {
+            document.getElementById('no-issues').style.display = 'block';
+            document.getElementById('problematic-nodes-table').style.display = 'none';
+        } else {
+            document.getElementById('no-issues').style.display = 'none';
+            document.getElementById('problematic-nodes-table').style.display = 'table';
+            
+            data.problematic_nodes.forEach(node => {
+                const row = createNodeRow(node);
+                tbody.appendChild(row);
+            });
+        }
+        
+        document.getElementById('problematic-nodes-loading').style.display = 'none';
+        document.getElementById('problematic-nodes-content').style.display = 'block';
+        
+    } catch (error) {
+        console.error('Error loading problematic nodes:', error);
+    }
+}
+
+// Create table row for a node
+function createNodeRow(node) {
+    const tr = document.createElement('tr');
+    
+    const nodeName = node.node_info.long_name || node.node_info.short_name || `!${node.node_id.toString(16).padStart(8, '0')}`;
+    const healthClass = `health-${node.health_status}`;
+    
+    // Issues summary
+    const issuesHtml = node.issues.map(issue => {
+        const badgeClass = `issue-${issue.severity}`;
+        return `<span class="badge ${badgeClass}">${issue.category}</span>`;
+    }).join(' ');
+    
+    tr.innerHTML = `
+        <td><a href="/node/${node.node_id}">${nodeName}</a></td>
+        <td><span class="badge health-score-badge ${healthClass}">${node.health_score}</span></td>
+        <td><span class="badge ${healthClass}">${node.health_status}</span></td>
+        <td>${issuesHtml}</td>
+        <td>${node.metrics.total_packets}</td>
+        <td>${node.metrics.avg_rssi ? node.metrics.avg_rssi.toFixed(1) : 'N/A'}</td>
+        <td>${node.metrics.avg_snr ? node.metrics.avg_snr.toFixed(1) : 'N/A'}</td>
+        <td>${node.metrics.unique_gateways}</td>
+        <td><button class="btn btn-sm btn-outline-primary view-details-btn" data-node-id="${node.node_id}">
+            <i class="bi bi-info-circle"></i> View
+        </button></td>
+    `;
+    
+    return tr;
+}
+
+// Show node details modal
+async function showNodeDetails(nodeId) {
+    const modal = new bootstrap.Modal(document.getElementById('nodeDetailModal'));
+    const modalTitle = document.getElementById('nodeDetailModalTitle');
+    const modalBody = document.getElementById('nodeDetailModalBody');
+    
+    modalBody.innerHTML = '<div class="text-center p-3"><div class="spinner-border text-primary"></div></div>';
+    modal.show();
+    
+    try {
+        const response = await fetch(`/api/health/node/${nodeId}?hours=${currentFilters.hours}`);
+        const data = await response.json();
+        
+        if (data.error) {
+            modalBody.innerHTML = `<div class="alert alert-danger">${data.error}</div>`;
+            return;
+        }
+        
+        const nodeName = data.node_info.long_name || data.node_info.short_name || 
+                        `!${data.node_id.toString(16).padStart(8, '0')}`;
+        modalTitle.textContent = `Health Details: ${nodeName}`;
+        
+        // Build detailed view
+        let detailsHtml = `
+            <div class="row mb-3">
+                <div class="col-md-6">
+                    <h6>Health Overview</h6>
+                    <p><strong>Health Score:</strong> <span class="badge health-score-badge health-${data.health_status}">${data.health_score}</span></p>
+                    <p><strong>Status:</strong> <span class="badge health-${data.health_status}">${data.health_status}</span></p>
+                    <p><strong>Hardware:</strong> ${data.node_info.hw_model || 'Unknown'}</p>
+                    <p><strong>Role:</strong> ${data.node_info.role || 'Unknown'}</p>
+                </div>
+                <div class="col-md-6">
+                    <h6>Metrics (${data.analyzed_hours}h)</h6>
+                    <p><strong>Total Packets:</strong> ${data.metrics.total_packets}</p>
+                    <p><strong>Avg RSSI:</strong> ${data.metrics.avg_rssi ? data.metrics.avg_rssi.toFixed(1) + ' dBm' : 'N/A'}</p>
+                    <p><strong>Avg SNR:</strong> ${data.metrics.avg_snr ? data.metrics.avg_snr.toFixed(1) + ' dB' : 'N/A'}</p>
+                    <p><strong>Unique Gateways:</strong> ${data.metrics.unique_gateways}</p>
+                    <p><strong>Activity Gaps:</strong> ${data.metrics.activity_gaps}</p>
+                </div>
+            </div>
+        `;
+        
+        if (data.issues.length > 0) {
+            detailsHtml += '<h6>Issues Detected</h6><ul class="list-group mb-3">';
+            data.issues.forEach(issue => {
+                const badgeClass = `issue-${issue.severity}`;
+                detailsHtml += `
+                    <li class="list-group-item">
+                        <span class="badge ${badgeClass}">${issue.severity}</span>
+                        <strong>${issue.category}:</strong> ${issue.message}
+                    </li>
+                `;
+            });
+            detailsHtml += '</ul>';
+        }
+        
+        modalBody.innerHTML = detailsHtml;
+        
+    } catch (error) {
+        console.error('Error loading node details:', error);
+        modalBody.innerHTML = `<div class="alert alert-danger">Error loading node details</div>`;
+    }
+}
+
+// Event listeners
+document.getElementById('hours-filter').addEventListener('change', (e) => {
+    currentFilters.hours = parseInt(e.target.value);
+    loadNetworkSummary();
+    loadProblematicNodes();
+});
+
+document.getElementById('min-health-score').addEventListener('change', (e) => {
+    currentFilters.minHealthScore = parseInt(e.target.value);
+    loadProblematicNodes();
+});
+
+document.getElementById('limit-filter').addEventListener('change', (e) => {
+    currentFilters.limit = parseInt(e.target.value);
+    loadProblematicNodes();
+});
+
+document.getElementById('refresh-btn').addEventListener('click', () => {
+    loadNetworkSummary();
+    loadProblematicNodes();
+});
+
+// Delegated event listener for view details buttons
+document.getElementById('problematic-nodes-tbody').addEventListener('click', (e) => {
+    if (e.target.closest('.view-details-btn')) {
+        const nodeId = e.target.closest('.view-details-btn').dataset.nodeId;
+        showNodeDetails(nodeId);
+    }
+});
+
+// Initial load
+loadNetworkSummary();
+loadProblematicNodes();
+</script>
+{% endblock %}

@@ -168,11 +168,17 @@
 
                     <!-- Tools dropdown -->
                     <li class="nav-item dropdown">
-                        {% set tools_active = request.endpoint in ['traceroute.traceroute_hops', 'gateway.gateway_compare', 'main.longest_links', 'main.line_of_sight'] %}
+                        {% set tools_active = request.endpoint in ['traceroute.traceroute_hops', 'gateway.gateway_compare', 'main.longest_links', 'main.line_of_sight', 'main.node_health'] %}
                         <a class="nav-link dropdown-toggle {{ 'active' if tools_active }}" href="#" id="toolsDropdown" role="button" data-bs-toggle="dropdown">
                             <i class="bi bi-tools"></i> Tools
                         </a>
                         <ul class="dropdown-menu">
+                            <li>
+                                <a class="dropdown-item" href="{{ url_for('main.node_health') }}">
+                                    <i class="bi bi-activity"></i> Node Health
+                                </a>
+                            </li>
+                            <li><hr class="dropdown-divider"></li>
                             <li>
                                 <a class="dropdown-item" href="{{ url_for('traceroute.traceroute_hops') }}">
                                     <i class="bi bi-graph-up"></i> Hop Analysis
