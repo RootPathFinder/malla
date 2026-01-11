@@ -137,46 +137,44 @@ class NodeHealthService:
         issues = []
         health_score = 100  # Start with perfect score
 
-        # Check signal quality
+        # Note: RSSI and SNR are informational only and do NOT affect health score
+        # These metrics are distance-dependent and would bias against remote nodes
+        # Signal quality is tracked but not penalized to ensure fair health assessment
         if packet_stats["avg_rssi"] is not None:
             if packet_stats["avg_rssi"] < -120:
                 issues.append(
                     {
-                        "severity": "critical",
+                        "severity": "info",
                         "category": "signal",
-                        "message": f"Very poor average RSSI: {packet_stats['avg_rssi']:.1f} dBm",
+                        "message": f"Average RSSI: {packet_stats['avg_rssi']:.1f} dBm (informational, distance-dependent)",
                     }
                 )
-                health_score -= 30
             elif packet_stats["avg_rssi"] < -110:
                 issues.append(
                     {
-                        "severity": "warning",
+                        "severity": "info",
                         "category": "signal",
-                        "message": f"Poor average RSSI: {packet_stats['avg_rssi']:.1f} dBm",
+                        "message": f"Average RSSI: {packet_stats['avg_rssi']:.1f} dBm (informational, distance-dependent)",
                     }
                 )
-                health_score -= 15
 
         if packet_stats["avg_snr"] is not None:
             if packet_stats["avg_snr"] < -10:
                 issues.append(
                     {
-                        "severity": "critical",
+                        "severity": "info",
                         "category": "signal",
-                        "message": f"Very poor average SNR: {packet_stats['avg_snr']:.1f} dB",
+                        "message": f"Average SNR: {packet_stats['avg_snr']:.1f} dB (informational, distance-dependent)",
                     }
                 )
-                health_score -= 25
             elif packet_stats["avg_snr"] < -5:
                 issues.append(
                     {
-                        "severity": "warning",
+                        "severity": "info",
                         "category": "signal",
-                        "message": f"Poor average SNR: {packet_stats['avg_snr']:.1f} dB",
+                        "message": f"Average SNR: {packet_stats['avg_snr']:.1f} dB (informational, distance-dependent)",
                     }
                 )
-                health_score -= 10
 
         # Check packet activity
         if packet_stats["total_packets"] == 0:
