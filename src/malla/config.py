@@ -50,6 +50,12 @@ class AppConfig:
     # Number of hours after which to delete old data (0 = never delete)
     data_retention_hours: int = 0
 
+    # Battery alert settings
+    battery_alerts_enabled: bool = True
+    battery_critical_voltage: float = 3.2
+    battery_warning_voltage: float = 3.4
+    battery_check_interval_minutes: int = 15
+
     # OpenTelemetry settings
     otlp_endpoint: str | None = None
 

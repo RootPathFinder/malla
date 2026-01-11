@@ -93,7 +93,11 @@ node_cache: dict[
     int, dict[str, Any]
 ] = {}  # In-memory cache: {node_id_numeric: {'hex_id': '!abc123', 'long_name': 'Name', 'short_name': 'Short', 'last_updated': timestamp}}
 cleanup_thread: threading.Thread | None = None  # Background thread for data cleanup
+power_analysis_thread: threading.Thread | None = (
+    None  # Background thread for power analysis
+)
 stop_cleanup = threading.Event()  # Event to signal cleanup thread to stop
+stop_power_analysis = threading.Event()  # Event to signal power analysis thread to stop
 
 
 # --- Decryption Functions ---
@@ -416,6 +420,64 @@ def init_database() -> None:
     # Index for faster channel filtering
     cursor.execute(
         "CREATE INDEX IF NOT EXISTS idx_node_primary_channel ON node_info(primary_channel)"
+    )
+
+    # Add power monitoring columns to node_info table
+    power_columns = [
+        ("power_type", "TEXT DEFAULT 'unknown'"),
+        ("battery_health_score", "INTEGER"),
+        ("last_battery_voltage", "REAL"),
+    ]
+
+    for column_name, column_type in power_columns:
+        try:
+            cursor.execute(
+                f"ALTER TABLE node_info ADD COLUMN {column_name} {column_type}"
+            )
+            logging.info(f"Added {column_name} column to node_info table")
+        except sqlite3.OperationalError as e:
+            if "duplicate column name" in str(e).lower():
+                logging.debug(f"{column_name} column already exists")
+            else:
+                logging.warning(f"Could not add {column_name} column: {e}")
+
+    # Table for device telemetry data (voltage, battery, etc.)
+    cursor.execute("""
+        CREATE TABLE IF NOT EXISTS telemetry_data (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            timestamp REAL NOT NULL,
+            node_id INTEGER NOT NULL,
+            battery_level INTEGER,
+            voltage REAL,
+            channel_utilization REAL,
+            air_util_tx REAL,
+            uptime_seconds INTEGER,
+            FOREIGN KEY (node_id) REFERENCES node_info(node_id)
+        )
+    """)
+
+    # Table for battery alerts history
+    cursor.execute("""
+        CREATE TABLE IF NOT EXISTS battery_alerts (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            timestamp REAL NOT NULL,
+            node_id INTEGER NOT NULL,
+            alert_type TEXT NOT NULL,
+            voltage REAL,
+            message TEXT,
+            FOREIGN KEY (node_id) REFERENCES node_info(node_id)
+        )
+    """)
+
+    # Indexes for telemetry queries
+    cursor.execute(
+        "CREATE INDEX IF NOT EXISTS idx_telemetry_node_time ON telemetry_data(node_id, timestamp DESC)"
+    )
+    cursor.execute(
+        "CREATE INDEX IF NOT EXISTS idx_telemetry_timestamp ON telemetry_data(timestamp)"
+    )
+    cursor.execute(
+        "CREATE INDEX IF NOT EXISTS idx_battery_alerts_node_time ON battery_alerts(node_id, timestamp DESC)"
     )
 
     # Backfill primary_channel using last NODEINFO packets if missing
@@ -929,6 +991,89 @@ def cleanup_worker() -> None:
     logging.info("Cleanup worker thread stopped")
 
 
+def power_analysis_worker() -> None:
+    """Worker function that runs power analysis periodically in a background thread."""
+    from .power_analysis import check_battery_alerts, update_power_analysis_for_node
+
+    logging.info("Power analysis worker thread started")
+
+    # Wait a bit before first run to allow some telemetry data to collect
+    time.sleep(60)
+
+    while not stop_power_analysis.wait(3600):  # Run every hour
+        try:
+            logging.info("Running power analysis update...")
+
+            with db_lock:
+                conn = sqlite3.connect(DATABASE_FILE, timeout=30.0)
+                conn.row_factory = sqlite3.Row
+                cursor = conn.cursor()
+
+                # Get all nodes that have telemetry data
+                cursor.execute(
+                    """
+                    SELECT DISTINCT node_id
+                    FROM telemetry_data
+                    WHERE voltage IS NOT NULL
+                """
+                )
+                nodes = cursor.fetchall()
+
+                # Update power analysis for each node
+                for row in nodes:
+                    node_id = row["node_id"]
+                    try:
+                        update_power_analysis_for_node(node_id, conn)
+                    except Exception as e:
+                        logging.error(
+                            f"Error updating power analysis for node {node_id}: {e}"
+                        )
+
+                # Check for battery alerts if enabled
+                if _cfg.battery_alerts_enabled:
+                    alerts = check_battery_alerts(
+                        conn,
+                        critical_voltage=_cfg.battery_critical_voltage,
+                        warning_voltage=_cfg.battery_warning_voltage,
+                    )
+
+                    # Log alerts and store in database
+                    for alert in alerts:
+                        alert_msg = (
+                            f"⚠️ {alert['alert_type'].upper()} battery alert for "
+                            f"{alert['name']}: {alert['voltage']:.2f}V"
+                        )
+                        logging.warning(alert_msg)
+
+                        # Store alert in database
+                        cursor.execute(
+                            """
+                            INSERT INTO battery_alerts
+                            (timestamp, node_id, alert_type, voltage, message)
+                            VALUES (?, ?, ?, ?, ?)
+                        """,
+                            (
+                                time.time(),
+                                alert["node_id"],
+                                alert["alert_type"],
+                                alert["voltage"],
+                                alert_msg,
+                            ),
+                        )
+
+                conn.commit()
+                conn.close()
+
+                logging.info(
+                    f"Power analysis update complete. Analyzed {len(nodes)} nodes, {len(alerts)} alerts."
+                )
+
+        except Exception as e:
+            logging.error(f"Error in power analysis worker: {e}")
+
+    logging.info("Power analysis worker thread stopped")
+
+
 def get_node_statistics() -> dict[str, Any]:
     """Get statistics about known nodes."""
     with db_lock:
@@ -1214,18 +1359,69 @@ def on_message(client: mqtt.Client, userdata: Any, msg: mqtt.MQTTMessage) -> Non
 
             if telemetry_data.HasField("device_metrics"):
                 metrics = telemetry_data.device_metrics
-                battery = (
-                    f"{metrics.battery_level}%"
-                    if metrics.HasField("battery_level")
-                    else "N/A"
+                battery_level = (
+                    metrics.battery_level if metrics.HasField("battery_level") else None
                 )
-                voltage = (
-                    f"{metrics.voltage / 1000.0:.2f}V"
-                    if metrics.HasField("voltage")
-                    else "N/A"
+                voltage_raw = metrics.voltage if metrics.HasField("voltage") else None
+                voltage = voltage_raw / 1000.0 if voltage_raw else None
+                channel_util = (
+                    metrics.channel_utilization
+                    if metrics.HasField("channel_utilization")
+                    else None
                 )
+                air_util_tx = (
+                    metrics.air_util_tx if metrics.HasField("air_util_tx") else None
+                )
+                uptime = (
+                    metrics.uptime_seconds
+                    if metrics.HasField("uptime_seconds")
+                    else None
+                )
+
+                # Store telemetry data in database
+                with db_lock:
+                    conn = sqlite3.connect(DATABASE_FILE, timeout=30.0)
+                    conn.row_factory = sqlite3.Row
+                    cursor = conn.cursor()
+                    current_time = time.time()
+                    cursor.execute(
+                        """
+                        INSERT INTO telemetry_data (
+                            timestamp, node_id, battery_level, voltage,
+                            channel_utilization, air_util_tx, uptime_seconds
+                        ) VALUES (?, ?, ?, ?, ?, ?, ?)
+                    """,
+                        (
+                            current_time,
+                            from_node_id_numeric,
+                            battery_level,
+                            voltage,
+                            channel_util,
+                            air_util_tx,
+                            uptime,
+                        ),
+                    )
+
+                    # Update last_battery_voltage in node_info if we have voltage data
+                    if voltage is not None:
+                        cursor.execute(
+                            """
+                            UPDATE node_info
+                            SET last_battery_voltage = ?
+                            WHERE node_id = ?
+                        """,
+                            (voltage, from_node_id_numeric),
+                        )
+
+                    conn.commit()
+                    conn.close()
+
+                battery_str = (
+                    f"{battery_level}%" if battery_level is not None else "N/A"
+                )
+                voltage_str = f"{voltage:.2f}V" if voltage is not None else "N/A"
                 logging.info(
-                    f"📊 Device telemetry from {from_node_display}{via_mqtt_str}: Battery {battery}, Voltage {voltage}"
+                    f"📊 Device telemetry from {from_node_display}{via_mqtt_str}: Battery {battery_str}, Voltage {voltage_str}"
                 )
             elif telemetry_data.HasField("environment_metrics"):
                 metrics = telemetry_data.environment_metrics
@@ -1419,11 +1615,17 @@ def main() -> None:
     )
 
     # Start the cleanup thread
-    global cleanup_thread
+    global cleanup_thread, power_analysis_thread
     stop_cleanup.clear()
     cleanup_thread = threading.Thread(target=cleanup_worker, daemon=True)
     cleanup_thread.start()
     logging.info("Data cleanup thread started.")
+
+    # Start the power analysis thread
+    stop_power_analysis.clear()
+    power_analysis_thread = threading.Thread(target=power_analysis_worker, daemon=True)
+    power_analysis_thread.start()
+    logging.info("Power analysis thread started.")
 
     try:
         # Keep the main thread alive
@@ -1436,8 +1638,9 @@ def main() -> None:
     except KeyboardInterrupt:
         logging.info("Script interrupted by user. Shutting down...")
     finally:
-        # Signal cleanup thread to stop
+        # Signal threads to stop
         stop_cleanup.set()
+        stop_power_analysis.set()
 
         # Wait for cleanup thread to finish (with timeout)
         if cleanup_thread and cleanup_thread.is_alive():
@@ -1445,6 +1648,13 @@ def main() -> None:
             cleanup_thread.join(timeout=5)
             if cleanup_thread.is_alive():
                 logging.warning("Cleanup thread did not finish gracefully")
+
+        # Wait for power analysis thread to finish (with timeout)
+        if power_analysis_thread and power_analysis_thread.is_alive():
+            logging.info("Waiting for power analysis thread to finish...")
+            power_analysis_thread.join(timeout=5)
+            if power_analysis_thread.is_alive():
+                logging.warning("Power analysis thread did not finish gracefully")
 
         logging.info("Stopping MQTT client loop...")
         mqtt_client.loop_stop()

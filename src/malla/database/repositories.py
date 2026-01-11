@@ -3998,3 +3998,239 @@ class LocationRepository:
         except Exception as e:
             logger.error(f"Error getting node location at timestamp: {e}")
             raise
+
+
+class BatteryAnalyticsRepository:
+    """Repository for battery and power monitoring analytics."""
+
+    @staticmethod
+    def get_power_source_summary() -> dict[str, int]:
+        """Get summary of nodes by power source type.
+
+        Returns:
+            Dictionary with counts for each power type
+        """
+        try:
+            conn = get_db_connection()
+            cursor = conn.cursor()
+
+            cursor.execute(
+                """
+                SELECT
+                    COALESCE(power_type, 'unknown') as power_type,
+                    COUNT(*) as count
+                FROM node_info
+                GROUP BY power_type
+            """
+            )
+
+            results = cursor.fetchall()
+            conn.close()
+
+            # Initialize with zeros
+            summary = {
+                "solar": 0,
+                "battery": 0,
+                "mains": 0,
+                "unknown": 0,
+            }
+
+            # Update with actual counts
+            for row in results:
+                power_type = row["power_type"]
+                if power_type in summary:
+                    summary[power_type] = row["count"]
+
+            return summary
+
+        except Exception as e:
+            logger.error(f"Error getting power source summary: {e}")
+            return {"solar": 0, "battery": 0, "mains": 0, "unknown": 0}
+
+    @staticmethod
+    def get_battery_health_overview() -> list[dict[str, Any]]:
+        """Get overview of all nodes with battery health information.
+
+        Returns:
+            List of dictionaries with node battery health data
+        """
+        try:
+            conn = get_db_connection()
+            cursor = conn.cursor()
+
+            # Get nodes with power info and their latest telemetry
+            cursor.execute(
+                """
+                SELECT
+                    ni.node_id,
+                    ni.hex_id,
+                    ni.long_name,
+                    ni.short_name,
+                    ni.power_type,
+                    ni.battery_health_score,
+                    ni.last_battery_voltage,
+                    ni.last_updated,
+                    td.battery_level,
+                    td.timestamp as last_telemetry
+                FROM node_info ni
+                LEFT JOIN (
+                    SELECT node_id, battery_level, voltage, timestamp,
+                           ROW_NUMBER() OVER (PARTITION BY node_id ORDER BY timestamp DESC) as rn
+                    FROM telemetry_data
+                    WHERE timestamp > ?
+                ) td ON ni.node_id = td.node_id AND td.rn = 1
+                WHERE ni.power_type IN ('solar', 'battery')
+                ORDER BY
+                    CASE
+                        WHEN ni.last_battery_voltage IS NOT NULL AND ni.last_battery_voltage < 3.3 THEN 0
+                        WHEN ni.battery_health_score IS NOT NULL AND ni.battery_health_score < 40 THEN 1
+                        ELSE 2
+                    END,
+                    ni.last_battery_voltage ASC NULLS LAST
+            """,
+                (time.time() - (7 * 24 * 3600),),  # Last 7 days
+            )
+
+            results = []
+            for row in cursor.fetchall():
+                node_name = row["long_name"] or row["short_name"] or row["hex_id"]
+
+                # Determine health status color
+                voltage = row["last_battery_voltage"]
+                health_score = row["battery_health_score"]
+
+                if voltage is not None and voltage < 3.3:
+                    status_class = "danger"
+                elif health_score is not None and health_score < 40:
+                    status_class = "danger"
+                elif voltage is not None and voltage < 3.6:
+                    status_class = "warning"
+                elif health_score is not None and health_score < 80:
+                    status_class = "warning"
+                else:
+                    status_class = "success"
+
+                results.append(
+                    {
+                        "node_id": row["node_id"],
+                        "hex_id": row["hex_id"],
+                        "name": node_name,
+                        "power_type": row["power_type"],
+                        "battery_level": row["battery_level"],
+                        "voltage": voltage,
+                        "health_score": health_score,
+                        "last_seen": format_time_ago(row["last_updated"]),
+                        "last_telemetry": (
+                            format_time_ago(row["last_telemetry"])
+                            if row["last_telemetry"]
+                            else "Never"
+                        ),
+                        "status_class": status_class,
+                    }
+                )
+
+            conn.close()
+            return results
+
+        except Exception as e:
+            logger.error(f"Error getting battery health overview: {e}")
+            return []
+
+    @staticmethod
+    def get_critical_batteries() -> list[dict[str, Any]]:
+        """Get nodes with critical battery levels.
+
+        Returns:
+            List of nodes with voltage < 3.3V or health score < 40
+        """
+        try:
+            conn = get_db_connection()
+            cursor = conn.cursor()
+
+            cursor.execute(
+                """
+                SELECT
+                    ni.node_id,
+                    ni.hex_id,
+                    ni.long_name,
+                    ni.short_name,
+                    ni.power_type,
+                    ni.last_battery_voltage,
+                    ni.battery_health_score,
+                    ni.last_updated
+                FROM node_info ni
+                WHERE ni.power_type IN ('solar', 'battery')
+                  AND (
+                      ni.last_battery_voltage < 3.3
+                      OR ni.battery_health_score < 40
+                  )
+                ORDER BY ni.last_battery_voltage ASC NULLS LAST
+                LIMIT 10
+            """
+            )
+
+            results = []
+            for row in cursor.fetchall():
+                node_name = row["long_name"] or row["short_name"] or row["hex_id"]
+                results.append(
+                    {
+                        "node_id": row["node_id"],
+                        "hex_id": row["hex_id"],
+                        "name": node_name,
+                        "power_type": row["power_type"],
+                        "voltage": row["last_battery_voltage"],
+                        "health_score": row["battery_health_score"],
+                        "last_seen": format_time_ago(row["last_updated"]),
+                    }
+                )
+
+            conn.close()
+            return results
+
+        except Exception as e:
+            logger.error(f"Error getting critical batteries: {e}")
+            return []
+
+    @staticmethod
+    def get_voltage_history(node_id: int, days: int = 7) -> list[dict[str, Any]]:
+        """Get voltage history for a specific node.
+
+        Args:
+            node_id: The node ID to get history for
+            days: Number of days of history to retrieve
+
+        Returns:
+            List of voltage data points with timestamps
+        """
+        try:
+            conn = get_db_connection()
+            cursor = conn.cursor()
+
+            cutoff_time = time.time() - (days * 24 * 3600)
+
+            cursor.execute(
+                """
+                SELECT timestamp, voltage, battery_level
+                FROM telemetry_data
+                WHERE node_id = ? AND voltage IS NOT NULL AND timestamp > ?
+                ORDER BY timestamp ASC
+            """,
+                (node_id, cutoff_time),
+            )
+
+            results = []
+            for row in cursor.fetchall():
+                results.append(
+                    {
+                        "timestamp": row["timestamp"],
+                        "voltage": row["voltage"],
+                        "battery_level": row["battery_level"],
+                    }
+                )
+
+            conn.close()
+            return results
+
+        except Exception as e:
+            logger.error(f"Error getting voltage history for node {node_id}: {e}")
+            return []

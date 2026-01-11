@@ -25,6 +25,8 @@ Check out some instances with running data from community MQTT servers:
 
 • **Network graph** – Force-directed graph visualising multi-hop links and RF distances between nodes / gateways.
 
+• **Battery & Power monitoring** – Track solar panels, batteries and mains-powered nodes with automated detection, health scores and low-battery alerts.
+
 • **Toolbox** – Hop-analysis tables, gateway-compare matrix and "longest links" explorer for deep dives.
 
 • **Analytics charts** – 7-day trends, RSSI distribution, top talkers, hop distribution and more (Plotly powered).
@@ -300,8 +302,45 @@ The following keys are recognised:
 | `mqtt_topic_suffix` | str | `"/+/+/+/#"`                           | MQTT topic suffix pattern.                     | `MALLA_MQTT_TOPIC_SUFFIX` |
 | `default_channel_key` | str | `"1PG7OiApB1nwvP+rz05pAQ=="`         | Default channel key(s) for decryption (base64). Supports comma-separated list of keys - each will be tried in order until successful. | `MALLA_DEFAULT_CHANNEL_KEY` |
 | `data_retention_hours` | int | `0`                                     | Number of hours after which to delete old data (0 = never delete). Automatically cleans up packet_history and node_info records older than specified hours. | `MALLA_DATA_RETENTION_HOURS` |
+| `battery_alerts_enabled` | bool | `true`                              | Enable battery monitoring and low battery alerts.    | `MALLA_BATTERY_ALERTS_ENABLED` |
+| `battery_critical_voltage` | float | `3.2`                            | Critical voltage threshold (V) - nodes may shut down. | `MALLA_BATTERY_CRITICAL_VOLTAGE` |
+| `battery_warning_voltage` | float | `3.4`                             | Warning voltage threshold (V) - battery is getting low. | `MALLA_BATTERY_WARNING_VOLTAGE` |
+| `battery_check_interval_minutes` | int | `15`                         | How often to check battery levels (minutes).        | `MALLA_BATTERY_CHECK_INTERVAL_MINUTES` |
 
 Environment variables **always override** values coming from YAML file.
+
+### Battery & Power Monitoring
+
+Malla includes automated battery and power monitoring capabilities to help track battery-powered and solar nodes:
+
+**Features:**
+- **Automatic power source detection**: Analyzes voltage patterns to classify nodes as solar, battery-only, or mains-powered
+- **Battery health scoring**: Calculates health scores (0-100) based on voltage stability and discharge patterns
+- **Low battery alerts**: Automatically logs warnings when nodes drop below voltage thresholds
+- **Telemetry tracking**: Stores voltage, battery level, and other device metrics over time
+- **Solar node identification**: Detects daily charging cycles to identify solar-powered nodes
+
+**Configuration:**
+Enable battery monitoring in your `config.yaml`:
+
+```yaml
+battery_alerts_enabled: true
+battery_critical_voltage: 3.2  # Volts - node may shut down soon
+battery_warning_voltage: 3.4   # Volts - battery getting low
+battery_check_interval_minutes: 15
+```
+
+The power analysis background thread runs every hour to:
+1. Update power type classifications for all nodes
+2. Recalculate battery health scores
+3. Check for low battery conditions and log alerts
+4. Store historical telemetry data
+
+Access the battery analytics dashboard at `/battery-analytics` to view:
+- Power source distribution (solar/battery/mains/unknown)
+- Battery health overview with color-coded status indicators
+- Critical battery alerts for nodes requiring attention
+- Historical voltage trends (when sufficient data is available)
 
 ### Data Cleanup
 

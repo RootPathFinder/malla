@@ -52,6 +52,21 @@ debug: false
 # Number of hours after which to delete old data (0 = never delete)
 # data_retention_hours: 0
 
+# ---------------------------------------------------------------------------
+# Battery / Power monitoring settings (used by malla-capture)
+# ---------------------------------------------------------------------------
+
+# Enable battery monitoring and low battery alerts
+# battery_alerts_enabled: true
+
+# Voltage thresholds for battery alerts (in volts)
+# battery_critical_voltage: 3.2  # Critical: node may shut down soon
+# battery_warning_voltage: 3.4   # Warning: battery is getting low
+
+# How often to check battery levels (in minutes)
+# battery_check_interval_minutes: 15
+
+# ---------------------------------------------------------------------------
 # OpenTelemetry settings
 # Endpoint for sending traces (e.g. "http://localhost:4317")
 # otlp_endpoint: ""
