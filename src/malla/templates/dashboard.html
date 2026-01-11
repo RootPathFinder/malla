@@ -4,6 +4,15 @@
 
 {% block content %}
 <div class="container-fluid">
+    {# Display error message if data failed to load #}
+    {% if error_message %}
+    <div class="alert alert-warning alert-dismissible fade show" role="alert">
+        <i class="bi bi-exclamation-triangle"></i>
+        <strong>Notice:</strong> {{ error_message }}
+        <button type="button" class="btn-close" data-bs-dismiss="alert" aria-label="Close"></button>
+    </div>
+    {% endif %}
+
     {# Optional Markdown content defined in config.yaml #}
     {% if APP_CONFIG.home_markdown %}
     <div class="row mb-4">
@@ -93,11 +102,9 @@
                     <h5 class="card-title mb-0"><i class="bi bi-graph-up-arrow"></i> Network Activity Trends (7 Days)</h5>
                 </div>
                 <div class="card-body">
-                    <div id="timeSeriesChartLoading" class="text-center py-4">
-                        <div class="spinner-border text-primary" role="status">
-                            <span class="visually-hidden">Loading...</span>
-                        </div>
-                        <p class="mt-2 text-muted">Loading chart data...</p>
+                    <div id="timeSeriesChartLoading" class="loading-container">
+                        <!-- Skeleton loader for better UX -->
+                        <div class="skeleton skeleton-chart"></div>
                     </div>
                     <canvas id="timeSeriesChart" style="height: 300px; display: none;"></canvas>
                 </div>
@@ -174,10 +181,8 @@
                     <h5 class="card-title mb-0"><i class="bi bi-people"></i> Node Activity Distribution</h5>
                 </div>
                 <div class="card-body">
-                    <div id="nodeActivityChartLoading" class="text-center py-4">
-                        <div class="spinner-border text-primary" role="status">
-                            <span class="visually-hidden">Loading...</span>
-                        </div>
+                    <div id="nodeActivityChartLoading" class="loading-container">
+                        <div class="skeleton skeleton-chart"></div>
                     </div>
                     <canvas id="nodeActivityChart" style="height: 300px; display: none;"></canvas>
                 </div>
@@ -191,10 +196,8 @@
                     <h5 class="card-title mb-0"><i class="bi bi-router-fill"></i> Gateway Activity Distribution</h5>
                 </div>
                 <div class="card-body">
-                    <div id="gatewayActivityChartLoading" class="text-center py-4">
-                        <div class="spinner-border text-primary" role="status">
-                            <span class="visually-hidden">Loading...</span>
-                        </div>
+                    <div id="gatewayActivityChartLoading" class="loading-container">
+                        <div class="skeleton skeleton-chart"></div>
                     </div>
                     <canvas id="gatewayActivityChart" style="height: 300px; display: none;"></canvas>
                 </div>
@@ -208,10 +211,8 @@
                     <h5 class="card-title mb-0"><i class="bi bi-reception-4"></i> Signal Quality Distribution</h5>
                 </div>
                 <div class="card-body">
-                    <div id="signalDistributionChartLoading" class="text-center py-4">
-                        <div class="spinner-border text-primary" role="status">
-                            <span class="visually-hidden">Loading...</span>
-                        </div>
+                    <div id="signalDistributionChartLoading" class="loading-container">
+                        <div class="skeleton skeleton-chart"></div>
                     </div>
                     <canvas id="signalDistributionChart" style="height: 300px; display: none;"></canvas>
                 </div>
@@ -228,10 +229,8 @@
                     <h5 class="card-title mb-0"><i class="bi bi-router"></i> Message Routing Patterns</h5>
                 </div>
                 <div class="card-body">
-                    <div id="hopDistributionChartLoading" class="text-center py-4">
-                        <div class="spinner-border text-primary" role="status">
-                            <span class="visually-hidden">Loading...</span>
-                        </div>
+                    <div id="hopDistributionChartLoading" class="loading-container">
+                        <div class="skeleton skeleton-chart"></div>
                     </div>
                     <canvas id="hopDistributionChart" style="height: 300px; display: none;"></canvas>
                 </div>
@@ -246,16 +245,15 @@
                 </div>
                 <div class="card-body">
                     {% if stats.packet_types %}
-                    <div id="packetTypesChartLoading" class="text-center py-4">
-                        <div class="spinner-border text-primary" role="status">
-                            <span class="visually-hidden">Loading...</span>
-                        </div>
+                    <div id="packetTypesChartLoading" class="loading-container">
+                        <div class="skeleton skeleton-chart"></div>
                     </div>
                     <canvas id="packetTypesChart" style="height: 300px; display: none;"></canvas>
                     {% else %}
-                    <div class="text-center text-muted py-4">
-                        <i class="bi bi-inbox" style="font-size: 3rem;"></i>
-                        <p class="mt-2">No packet data available</p>
+                    <div class="empty-state">
+                        <div class="empty-state-icon"><i class="bi bi-inbox"></i></div>
+                        <div class="empty-state-title">No packet data available</div>
+                        <p class="empty-state-description">Start capturing packets to see protocol usage statistics</p>
                     </div>
                     {% endif %}
                 </div>
@@ -271,10 +269,12 @@
                     <h5 class="card-title mb-0"><i class="bi bi-trophy"></i> Most Active Nodes</h5>
                 </div>
                 <div class="card-body">
-                    <div id="topNodesLoading" class="text-center py-4">
-                        <div class="spinner-border text-primary" role="status">
-                            <span class="visually-hidden">Loading...</span>
-                        </div>
+                    <div id="topNodesLoading" class="loading-container">
+                        <div class="skeleton skeleton-table-row"></div>
+                        <div class="skeleton skeleton-table-row"></div>
+                        <div class="skeleton skeleton-table-row"></div>
+                        <div class="skeleton skeleton-table-row"></div>
+                        <div class="skeleton skeleton-table-row"></div>
                     </div>
                     <div class="table-responsive" style="display: none;" id="topNodesTableContainer">
                         <table class="table table-sm" id="topNodesTable">
@@ -516,9 +516,31 @@ async function loadAnalyticsData() {
 
     } catch (error) {
         console.error('Error loading analytics data:', error);
-        // Hide loading spinners and show error message
-        hideAllLoadingSpinners();
-        showErrorMessage('Failed to load chart data. Please refresh the page.');
+        // Hide loading spinners and show error state
+        showErrorState('Failed to load analytics data. Please check your connection and try refreshing the page.');
+    }
+}
+
+function showErrorState(message) {
+    // Hide all loading containers
+    hideAllLoadingSpinners();
+    
+    // Show error message in the first chart area as an example
+    const container = document.getElementById('timeSeriesChartLoading');
+    if (container) {
+        container.innerHTML = `
+            <div class="error-state">
+                <div class="error-state-icon"><i class="bi bi-exclamation-triangle"></i></div>
+                <div class="error-state-title">Unable to Load Data</div>
+                <div class="error-state-description">${message}</div>
+                <div class="error-state-action">
+                    <button class="btn btn-primary btn-sm" onclick="location.reload()">
+                        <i class="bi bi-arrow-clockwise"></i> Retry
+                    </button>
+                </div>
+            </div>
+        `;
+        container.style.display = 'block';
     }
 }
 

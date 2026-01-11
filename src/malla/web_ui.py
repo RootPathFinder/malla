@@ -85,6 +85,17 @@ def create_app(cfg: AppConfig | None = None):  # noqa: D401
     )
 
     # ---------------------------------------------------------------------
+    # Enable response compression for better performance
+    # ---------------------------------------------------------------------
+    try:
+        from flask_compress import Compress
+
+        Compress(app)
+        logger.info("Response compression enabled")
+    except ImportError:
+        logger.warning("flask-compress not installed - response compression disabled")
+
+    # ---------------------------------------------------------------------
     # Load application configuration (YAML + environment overrides)
     # ---------------------------------------------------------------------
 
