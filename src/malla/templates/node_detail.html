@@ -1000,15 +1000,21 @@ async function loadTelemetryData() {
     const telemetryContent = document.getElementById('telemetry-content');
 
     try {
-        // Fetch telemetry data
-        const response = await fetch(`/api/node/${nodeId}/telemetry`);
-        const data = await response.json();
+        // Fetch both current telemetry and history data
+        const [telemetryResponse, historyResponse] = await Promise.all([
+            fetch(`/api/node/${nodeId}/telemetry`),
+            fetch(`/api/node/${nodeId}/telemetry/history`)
+        ]);
+
+        const data = await telemetryResponse.json();
+        const historyData = await historyResponse.json();
 
         if (data.error) {
             throw new Error(data.error);
         }
 
         const telemetry = data.telemetry;
+        const history = historyData.history || {};
 
         if (!telemetry) {
             // No telemetry data available, hide the card
@@ -1040,16 +1046,20 @@ async function loadTelemetryData() {
 
             if (dm.battery_level !== undefined) {
                 const batteryClass = dm.battery_level > 80 ? 'text-success' : dm.battery_level > 20 ? 'text-warning' : 'text-danger';
-                html += '<tr><th>Battery Level:</th><td><span class="' + batteryClass + '">' + dm.battery_level + '%</span></td></tr>';
+                html += '<tr><th>Battery Level:</th><td><span class="' + batteryClass + '">' + dm.battery_level + '%</span>';
+                html += '<span id="spark-battery_level" style="margin-left:10px"></span></td></tr>';
             }
-            if (dm.voltage !== undefined) {
-                html += '<tr><th>Voltage:</th><td>' + dm.voltage.toFixed(2) + ' V</td></tr>';
+            if (dm.voltage !== undefined && dm.voltage > 0) {
+                html += '<tr><th>Voltage:</th><td>' + dm.voltage.toFixed(2) + ' V';
+                html += '<span id="spark-voltage" style="margin-left:10px"></span></td></tr>';
             }
             if (dm.channel_utilization !== undefined) {
-                html += '<tr><th>Channel Utilization:</th><td>' + dm.channel_utilization.toFixed(1) + '%</td></tr>';
+                html += '<tr><th>Channel Utilization:</th><td>' + dm.channel_utilization.toFixed(1) + '%';
+                html += '<span id="spark-channel_utilization" style="margin-left:10px"></span></td></tr>';
             }
             if (dm.air_util_tx !== undefined) {
-                html += '<tr><th>Air Utilization TX:</th><td>' + dm.air_util_tx.toFixed(1) + '%</td></tr>';
+                html += '<tr><th>Air Utilization TX:</th><td>' + dm.air_util_tx.toFixed(1) + '%';
+                html += '<span id="spark-air_util_tx" style="margin-left:10px"></span></td></tr>';
             }
             if (dm.uptime_seconds !== undefined) {
                 const uptime = formatUptime(dm.uptime_seconds);
@@ -1068,13 +1078,16 @@ async function loadTelemetryData() {
             html += '<table class="table table-sm">';
 
             if (em.temperature !== undefined) {
-                html += '<tr><th>Temperature:</th><td>' + em.temperature.toFixed(1) + ' °C</td></tr>';
+                html += '<tr><th>Temperature:</th><td>' + em.temperature.toFixed(1) + ' °C';
+                html += '<span id="spark-temperature" style="margin-left:10px"></span></td></tr>';
             }
             if (em.relative_humidity !== undefined) {
-                html += '<tr><th>Humidity:</th><td>' + em.relative_humidity.toFixed(1) + '%</td></tr>';
+                html += '<tr><th>Humidity:</th><td>' + em.relative_humidity.toFixed(1) + '%';
+                html += '<span id="spark-relative_humidity" style="margin-left:10px"></span></td></tr>';
             }
             if (em.barometric_pressure !== undefined) {
-                html += '<tr><th>Pressure:</th><td>' + em.barometric_pressure.toFixed(1) + ' hPa</td></tr>';
+                html += '<tr><th>Pressure:</th><td>' + em.barometric_pressure.toFixed(1) + ' hPa';
+                html += '<span id="spark-barometric_pressure" style="margin-left:10px"></span></td></tr>';
             }
             if (em.gas_resistance !== undefined) {
                 html += '<tr><th>Gas Resistance:</th><td>' + em.gas_resistance.toFixed(0) + ' Ω</td></tr>';
@@ -1146,6 +1159,9 @@ async function loadTelemetryData() {
         // Update content
         telemetryContent.innerHTML = html;
 
+        // Render sparklines for metrics with history data
+        renderSparklines(history);
+
         // Update timestamps if the function is available
         if (typeof updateAllTimestamps === 'function') {
             updateAllTimestamps();
@@ -1163,6 +1179,65 @@ async function loadTelemetryData() {
             </div>
         `;
     }
+}
+
+function renderSparklines(history) {
+    // Define sparkline configurations for each metric
+    const sparklineConfigs = {
+        'battery_level': { color: '#28a745', suffix: '%', min: 0, max: 100 },
+        'voltage': { color: '#ffc107', suffix: 'V', min: 0 },
+        'channel_utilization': { color: '#17a2b8', suffix: '%', min: 0, max: 100 },
+        'air_util_tx': { color: '#6c757d', suffix: '%', min: 0, max: 100 },
+        'temperature': { color: '#dc3545', suffix: '°C' },
+        'relative_humidity': { color: '#007bff', suffix: '%', min: 0, max: 100 },
+        'barometric_pressure': { color: '#6610f2', suffix: 'hPa' }
+    };
+
+    // Render each sparkline
+    Object.keys(sparklineConfigs).forEach(metricName => {
+        const container = document.getElementById(`spark-${metricName}`);
+        if (container && history[metricName] && history[metricName].length > 1) {
+            const config = sparklineConfigs[metricName];
+            renderSparkline(container, history[metricName], config);
+        }
+    });
+}
+
+function renderSparkline(container, data, config) {
+    const width = 100;
+    const height = 20;
+    const color = config.color || '#007bff';
+
+    // Extract y values
+    const values = data.map(d => d.y);
+    const minVal = config.min !== undefined ? config.min : Math.min(...values);
+    const maxVal = config.max !== undefined ? config.max : Math.max(...values);
+    const range = maxVal - minVal || 1;
+
+    // Create SVG points for the line
+    const points = data.map((d, i) => {
+        const x = (i / (data.length - 1)) * width;
+        const y = height - ((d.y - minVal) / range) * height;
+        return `${x},${y}`;
+    }).join(' ');
+
+    // Create tooltip with trend info
+    const lastValue = values[values.length - 1];
+    const firstValue = values[0];
+    const trend = lastValue > firstValue ? '↗' : lastValue < firstValue ? '↘' : '→';
+    const trendColor = lastValue > firstValue ? '#28a745' : lastValue < firstValue ? '#dc3545' : '#6c757d';
+
+    container.innerHTML = `
+        <svg width="${width}" height="${height}" style="vertical-align: middle;">
+            <polyline
+                fill="none"
+                stroke="${color}"
+                stroke-width="1.5"
+                points="${points}"
+            />
+        </svg>
+        <span style="color: ${trendColor}; font-size: 12px; margin-left: 4px;" title="24h trend">${trend}</span>
+    `;
 }
 
 function formatUptime(seconds) {

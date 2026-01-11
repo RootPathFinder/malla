@@ -2012,6 +2012,112 @@ class NodeRepository:
             return None
 
     @staticmethod
+    def get_telemetry_history(
+        node_id: int, hours: int = 24
+    ) -> dict[str, list[dict[str, Any]]]:
+        """Get telemetry history for a node over the specified time period.
+
+        Args:
+            node_id: The node ID to get telemetry for
+            hours: Number of hours of history to retrieve (default: 24)
+
+        Returns:
+            Dictionary with metric names as keys and lists of {timestamp, value} as values
+        """
+        try:
+            from meshtastic import telemetry_pb2
+
+            conn = get_db_connection()
+            cursor = conn.cursor()
+
+            # Get telemetry packets from the last N hours
+            cutoff_time = int(time.time()) - (hours * 3600)
+            query = """
+            SELECT raw_payload, timestamp
+            FROM packet_history
+            WHERE from_node_id = ?
+            AND portnum_name = 'TELEMETRY_APP'
+            AND raw_payload IS NOT NULL
+            AND timestamp >= ?
+            ORDER BY timestamp ASC
+            """
+
+            cursor.execute(query, (node_id, cutoff_time))
+            results = cursor.fetchall()
+            conn.close()
+
+            # Initialize metric containers
+            metrics_history = {
+                "battery_level": [],
+                "voltage": [],
+                "channel_utilization": [],
+                "air_util_tx": [],
+                "temperature": [],
+                "relative_humidity": [],
+                "barometric_pressure": [],
+            }
+
+            # Process each telemetry packet
+            for result in results:
+                try:
+                    telemetry_data = telemetry_pb2.Telemetry()
+                    telemetry_data.ParseFromString(result["raw_payload"])
+                    ts = result["timestamp"] * 1000  # Convert to milliseconds for JS
+
+                    # Extract device metrics
+                    if telemetry_data.HasField("device_metrics"):
+                        metrics = telemetry_data.device_metrics
+
+                        if metrics.HasField("battery_level"):
+                            metrics_history["battery_level"].append(
+                                {"x": ts, "y": metrics.battery_level}
+                            )
+                        if metrics.HasField("voltage") and metrics.voltage > 0:
+                            metrics_history["voltage"].append(
+                                {"x": ts, "y": metrics.voltage / 1000.0}
+                            )
+                        if metrics.HasField("channel_utilization"):
+                            metrics_history["channel_utilization"].append(
+                                {"x": ts, "y": metrics.channel_utilization}
+                            )
+                        if metrics.HasField("air_util_tx"):
+                            metrics_history["air_util_tx"].append(
+                                {"x": ts, "y": metrics.air_util_tx}
+                            )
+
+                    # Extract environment metrics
+                    if telemetry_data.HasField("environment_metrics"):
+                        metrics = telemetry_data.environment_metrics
+
+                        if metrics.HasField("temperature"):
+                            metrics_history["temperature"].append(
+                                {"x": ts, "y": metrics.temperature}
+                            )
+                        if metrics.HasField("relative_humidity"):
+                            metrics_history["relative_humidity"].append(
+                                {"x": ts, "y": metrics.relative_humidity}
+                            )
+                        if metrics.HasField("barometric_pressure"):
+                            metrics_history["barometric_pressure"].append(
+                                {"x": ts, "y": metrics.barometric_pressure}
+                            )
+
+                except Exception as e:
+                    logger.debug(f"Error decoding telemetry packet: {e}")
+                    continue
+
+            # Remove empty metrics
+            metrics_history = {
+                k: v for k, v in metrics_history.items() if len(v) > 0
+            }
+
+            return metrics_history
+
+        except Exception as e:
+            logger.error(f"Error getting telemetry history for node {node_id}: {e}")
+            return {}
+
+    @staticmethod
     def get_relay_node_candidates(
         gateway_node_ids: list[int], relay_last_bytes: list[int], cursor=None
     ) -> dict[int, dict[int, list[dict[str, Any]]]]:

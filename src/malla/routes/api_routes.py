@@ -898,6 +898,25 @@ def api_node_telemetry(node_id):
         return jsonify({"error": str(e)}), 500
 
 
+@api_bp.route("/node/<node_id>/telemetry/history")
+def api_node_telemetry_history(node_id):
+    """API endpoint for node telemetry history over last 24 hours."""
+    logger.info(f"API node telemetry history endpoint accessed for node {node_id}")
+    try:
+        # Convert node_id to int
+        node_id_int = convert_node_id(node_id)
+
+        # Get telemetry history using repository
+        history = NodeRepository.get_telemetry_history(node_id_int, hours=24)
+
+        return safe_jsonify({"history": history})
+    except ValueError as e:
+        return jsonify({"error": str(e)}), 400
+    except Exception as e:
+        logger.error(f"Error in API node telemetry history: {e}")
+        return jsonify({"error": str(e)}), 500
+
+
 @api_bp.route("/longest-links")
 def api_longest_links():
     """API endpoint for longest links analysis."""
