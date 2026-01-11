@@ -472,6 +472,7 @@ let recentNodeTimestamps = {}; // Track real-time node timestamps from activity 
 let enableLinkHighlight = true; // Toggle for link highlighting
 let linkDecayTimeSeconds = 15; // How long links remain highlighted (seconds)
 let recentLinkActivity = {}; // Map of linkKey -> timestamp of last activity
+let nodeActivityCount = {}; // Track packet count per node for activity heatmap
 
 // Make currentGraph globally accessible for debugging
 window.currentGraph = null;
@@ -1008,6 +1009,18 @@ function renderGraph(data) {
             });
 
         console.log('Created node groups');
+
+        // Add activity halo circles for each node (for heatmap visualization)
+        node.append('circle')
+            .attr('class', 'node-halo')
+            .attr('r', d => d.size + 2)
+            .attr('fill', 'none')
+            .attr('stroke', '#ff6b35')
+            .attr('stroke-width', 0)
+            .attr('stroke-opacity', 0)
+            .attr('data-base-radius', d => d.size + 2);
+
+        console.log('Added activity halos to nodes');
 
         // Add circles for nodes
         node.append('circle')
@@ -2345,8 +2358,13 @@ async function pollPacketActivity() {
             // Collect all active node IDs and record activities
             data.activities.forEach(activity => {
                 nodeIds.add(activity.from_node_id);
+
+                // Track activity count for heatmap
+                nodeActivityCount[activity.from_node_id] = (nodeActivityCount[activity.from_node_id] || 0) + 1;
+
                 if (activity.to_node_id) {
                     nodeIds.add(activity.to_node_id);
+                    nodeActivityCount[activity.to_node_id] = (nodeActivityCount[activity.to_node_id] || 0) + 1;
 
                     // Get node names from current graph and update last_seen
                     if (currentGraph && currentGraph.nodes) {
@@ -2376,6 +2394,7 @@ async function pollPacketActivity() {
                                 };
 
                                 // Highlight the link with fade animation
+                                console.log('Calling highlightLink for', activity.from_node_id, 'to', activity.to_node_id);
                                 highlightLink(activity.from_node_id, activity.to_node_id);
                             }
                         }
@@ -2385,6 +2404,9 @@ async function pollPacketActivity() {
 
             // Update the display of last_heard times for active nodes immediately
             updateNodeLastHeardTimes();
+
+            // Update node activity heatmap visualization
+            updateNodeActivityHalo();
 
             // Animate the active nodes
             animateActiveNodes(nodeIds);
@@ -2421,6 +2443,35 @@ function animateActiveNodes(nodeIds) {
     });
 }
 
+function updateNodeActivityHalo() {
+    if (!window.graphNodes) {
+        return;
+    }
+
+    // Find the max activity count to scale the halos
+    const maxActivity = Math.max(...Object.values(nodeActivityCount), 1);
+
+    // Update each node's halo based on activity
+    window.graphNodes.each(function(d) {
+        const haloCircle = d3.select(this).select('circle.node-halo');
+        const activityCount = nodeActivityCount[d.id] || 0;
+
+        // Scale the halo radius from base size up to 3x based on activity
+        const baseRadius = parseFloat(haloCircle.attr('data-base-radius')) || d.size + 2;
+        const scaleFactor = 1 + (activityCount / maxActivity) * 2; // Scale from 1x to 3x
+        const newRadius = baseRadius * scaleFactor;
+
+        // Scale the stroke width proportionally
+        const strokeWidth = 1 + (activityCount / maxActivity) * 3; // 1 to 4
+
+        // Update halo visualization
+        haloCircle
+            .attr('r', newRadius)
+            .attr('stroke-width', strokeWidth)
+            .attr('stroke-opacity', Math.min(0.3 + (activityCount / maxActivity) * 0.7, 1)); // 0.3 to 1.0
+    });
+}
+
 function highlightLink(fromId, toId) {
     console.log('highlightLink called:', fromId, '->', toId);
 
@@ -2439,25 +2490,35 @@ function highlightLink(fromId, toId) {
         if (isMatch) {
             console.log('Link match found! Highlighting:', d.source.id, '->', d.target.id);
             const el = d3.select(this);
+            const element = this;
 
             // Stop any previous timeout
             if (d.fadeTimeout) clearTimeout(d.fadeTimeout);
 
-            // Store original values
-            const origStroke = el.attr('data-original-stroke') || el.attr('stroke');
-            const origWidth = el.attr('data-original-width') || el.attr('stroke-width');
+            // Store original values using both attr and style getters
+            const origStroke = element.getAttribute('data-original-stroke') || element.getAttribute('stroke') || '#999';
+            const origWidth = element.getAttribute('data-original-width') || element.getAttribute('stroke-width') || '1';
+            const origOpacity = element.getAttribute('stroke-opacity') || '0.8';
 
-            // Apply strong yellow highlight immediately
-            el.style('stroke', '#FFD700')
-              .style('stroke-width', '5px')
-              .style('filter', 'drop-shadow(0 0 10px #FFD700)');
+            console.log('Original stroke:', origStroke, 'width:', origWidth, 'opacity:', origOpacity);
 
-            console.log('Applied highlight to link, original stroke:', origStroke);
+            // Move this element to the end of its parent so it renders on top
+            element.parentNode.appendChild(element);
+
+            // Apply strong yellow highlight using attributes (more reliable than styles in SVG)
+            el.attr('stroke', '#FFD700')
+              .attr('stroke-width', '5')
+              .attr('stroke-opacity', '1')
+              .style('filter', 'drop-shadow(0 0 10px #FFD700) drop-shadow(0 0 5px #FFA500)')
+              .style('pointer-events', 'auto');
+
+            console.log('Applied highlight to link');
 
             // Fade out after decay time
             d.fadeTimeout = setTimeout(() => {
-                el.style('stroke', origStroke)
-                  .style('stroke-width', origWidth + 'px')
+                el.attr('stroke', origStroke)
+                  .attr('stroke-width', origWidth)
+                  .attr('stroke-opacity', origOpacity)
                   .style('filter', 'none');
                 console.log('Faded out link highlight');
             }, linkDecayTimeSeconds * 1000);
@@ -2520,6 +2581,11 @@ function startAutoRefresh() {
                     delete recentLinkActivity[linkKey];
                 }
             });
+
+            // Reset node activity count every 30 seconds for fresh heatmap data
+            if (Math.floor(nextRefreshCountdown) % 30 === 0) {
+                nodeActivityCount = {};
+            }
 
             softRefreshGraph();
             nextRefreshCountdown = autoRefreshIntervalSeconds;
