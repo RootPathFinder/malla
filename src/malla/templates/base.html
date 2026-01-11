@@ -166,6 +166,13 @@
                         </a>
                     </li>
 
+                    <!-- Battery Analytics -->
+                    <li class="nav-item">
+                        <a class="nav-link {{ 'active' if request.endpoint == 'battery.battery_analytics' }}" href="{{ url_for('battery.battery_analytics') }}">
+                            <i class="bi bi-battery-charging"></i> Power
+                        </a>
+                    </li>
+
                     <!-- Tools dropdown -->
                     <li class="nav-item dropdown">
                         {% set tools_active = request.endpoint in ['traceroute.traceroute_hops', 'gateway.gateway_compare', 'main.longest_links', 'main.line_of_sight', 'main.node_health'] %}

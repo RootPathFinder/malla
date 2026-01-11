@@ -287,9 +287,7 @@ def test_calculate_battery_health_score_degraded(db_with_telemetry):
     # Test health score
     health_score = calculate_battery_health_score(node_id, db_with_telemetry)
     assert health_score is not None
-    assert (
-        health_score <= 70
-    ), f"Expected degraded score <= 70 but got {health_score}"
+    assert health_score <= 70, f"Expected degraded score <= 70 but got {health_score}"
 
 
 def test_predict_battery_runtime(db_with_telemetry):

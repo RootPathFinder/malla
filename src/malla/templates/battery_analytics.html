@@ -1,0 +1,226 @@
+{% extends "base.html" %}
+
+{% block title %}Battery Analytics - {{ APP_NAME }}{% endblock %}
+
+{% block content %}
+<div class="container-fluid">
+    {% if error_message %}
+    <div class="alert alert-warning alert-dismissible fade show" role="alert">
+        <i class="bi bi-exclamation-triangle"></i>
+        <strong>Notice:</strong> {{ error_message }}
+        <button type="button" class="btn-close" data-bs-dismiss="alert" aria-label="Close"></button>
+    </div>
+    {% endif %}
+
+    <div class="row mb-4">
+        <div class="col">
+            <h1 class="h2">
+                <i class="bi bi-battery-charging"></i> Battery &amp; Power Analytics
+            </h1>
+        </div>
+    </div>
+
+    <!-- Power Source Summary Cards -->
+    <div class="row mb-4">
+        <div class="col-md-3">
+            <div class="card h-100">
+                <div class="card-body card-metric">
+                    <div class="metric-value text-warning">{{ power_summary.solar }}</div>
+                    <div class="metric-label">
+                        <i class="bi bi-sun-fill"></i> Solar Nodes
+                    </div>
+                    <small class="text-muted">Renewable powered</small>
+                </div>
+            </div>
+        </div>
+        <div class="col-md-3">
+            <div class="card h-100">
+                <div class="card-body card-metric">
+                    <div class="metric-value text-info">{{ power_summary.battery }}</div>
+                    <div class="metric-label">
+                        <i class="bi bi-battery-half"></i> Battery Nodes
+                    </div>
+                    <small class="text-muted">Battery only</small>
+                </div>
+            </div>
+        </div>
+        <div class="col-md-3">
+            <div class="card h-100">
+                <div class="card-body card-metric">
+                    <div class="metric-value text-success">{{ power_summary.mains }}</div>
+                    <div class="metric-label">
+                        <i class="bi bi-plug-fill"></i> Mains Powered
+                    </div>
+                    <small class="text-muted">Constant power</small>
+                </div>
+            </div>
+        </div>
+        <div class="col-md-3">
+            <div class="card h-100">
+                <div class="card-body card-metric">
+                    <div class="metric-value text-secondary">{{ power_summary.unknown }}</div>
+                    <div class="metric-label">
+                        <i class="bi bi-question-circle"></i> Unknown
+                    </div>
+                    <small class="text-muted">Insufficient data</small>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Critical Batteries Alert -->
+    {% if critical_batteries %}
+    <div class="row mb-4">
+        <div class="col">
+            <div class="alert alert-danger" role="alert">
+                <h5 class="alert-heading"><i class="bi bi-exclamation-triangle-fill"></i> Critical Battery Alert</h5>
+                <p>The following nodes have critical battery levels and may go offline soon:</p>
+                <ul class="mb-0">
+                    {% for node in critical_batteries %}
+                    <li>
+                        <strong>{{ node.name }}</strong> ({{ node.hex_id }}) - 
+                        {% if node.voltage %}
+                            Voltage: {{ "%.2f"|format(node.voltage) }}V
+                        {% else %}
+                            Health Score: {{ node.health_score }}
+                        {% endif %}
+                        - Last seen: {{ node.last_seen }}
+                    </li>
+                    {% endfor %}
+                </ul>
+            </div>
+        </div>
+    </div>
+    {% endif %}
+
+    <!-- Battery Health Overview Table -->
+    <div class="row mb-4">
+        <div class="col">
+            <div class="card">
+                <div class="card-header">
+                    <h5 class="card-title mb-0"><i class="bi bi-list-check"></i> Battery Health Overview</h5>
+                </div>
+                <div class="card-body">
+                    {% if battery_health %}
+                    <div class="table-responsive">
+                        <table class="table table-hover table-sm" id="battery-health-table">
+                            <thead>
+                                <tr>
+                                    <th>Node</th>
+                                    <th>Power Type</th>
+                                    <th>Battery %</th>
+                                    <th>Voltage</th>
+                                    <th>Health Score</th>
+                                    <th>Status</th>
+                                    <th>Last Telemetry</th>
+                                </tr>
+                            </thead>
+                            <tbody>
+                                {% for node in battery_health %}
+                                <tr class="table-{{ node.status_class }}">
+                                    <td>
+                                        <a href="/nodes/{{ node.hex_id }}" class="text-decoration-none">
+                                            {{ node.name }}
+                                        </a>
+                                        <small class="text-muted d-block">{{ node.hex_id }}</small>
+                                    </td>
+                                    <td>
+                                        {% if node.power_type == 'solar' %}
+                                            <i class="bi bi-sun-fill text-warning"></i> Solar
+                                        {% elif node.power_type == 'battery' %}
+                                            <i class="bi bi-battery-half text-info"></i> Battery
+                                        {% else %}
+                                            {{ node.power_type }}
+                                        {% endif %}
+                                    </td>
+                                    <td>
+                                        {% if node.battery_level %}
+                                            {{ node.battery_level }}%
+                                            <div class="progress" style="height: 4px; width: 50px;">
+                                                <div class="progress-bar" role="progressbar" 
+                                                     style="width: {{ node.battery_level }}%"></div>
+                                            </div>
+                                        {% else %}
+                                            <span class="text-muted">N/A</span>
+                                        {% endif %}
+                                    </td>
+                                    <td>
+                                        {% if node.voltage %}
+                                            {{ "%.2f"|format(node.voltage) }}V
+                                        {% else %}
+                                            <span class="text-muted">N/A</span>
+                                        {% endif %}
+                                    </td>
+                                    <td>
+                                        {% if node.health_score %}
+                                            <span class="badge 
+                                                {% if node.health_score >= 80 %}bg-success
+                                                {% elif node.health_score >= 40 %}bg-warning
+                                                {% else %}bg-danger{% endif %}">
+                                                {{ node.health_score }}
+                                            </span>
+                                        {% else %}
+                                            <span class="text-muted">N/A</span>
+                                        {% endif %}
+                                    </td>
+                                    <td>
+                                        {% if node.voltage and node.voltage < 3.3 %}
+                                            <span class="badge bg-danger">Critical</span>
+                                        {% elif node.voltage and node.voltage < 3.6 %}
+                                            <span class="badge bg-warning">Low</span>
+                                        {% else %}
+                                            <span class="badge bg-success">Good</span>
+                                        {% endif %}
+                                    </td>
+                                    <td>{{ node.last_telemetry }}</td>
+                                </tr>
+                                {% endfor %}
+                            </tbody>
+                        </table>
+                    </div>
+
+                    <script>
+                        // Make table sortable and searchable with DataTables (if available)
+                        document.addEventListener('DOMContentLoaded', function() {
+                            if (typeof $.fn.DataTable !== 'undefined') {
+                                $('#battery-health-table').DataTable({
+                                    pageLength: 25,
+                                    order: [[4, 'asc']],  // Sort by health score
+                                    language: {
+                                        search: "Filter nodes:"
+                                    }
+                                });
+                            }
+                        });
+                    </script>
+                    {% else %}
+                    <p class="text-muted mb-0">No battery-powered nodes found with telemetry data.</p>
+                    {% endif %}
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Voltage Trends Chart Section -->
+    <div class="row mb-4">
+        <div class="col">
+            <div class="card">
+                <div class="card-header">
+                    <h5 class="card-title mb-0"><i class="bi bi-graph-up"></i> Voltage Trends (Last 7 Days)</h5>
+                </div>
+                <div class="card-body">
+                    <div id="voltage-trends-chart" style="height: 400px;"></div>
+                    <p class="text-muted text-center mt-3">
+                        <small>Chart will be available once nodes start reporting telemetry data. Solar nodes will show daily charging cycles.</small>
+                    </p>
+                </div>
+            </div>
+        </div>
+    </div>
+
+</div>
+
+<!-- Add Bootstrap Icons CSS if not already included -->
+<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/bootstrap-icons@1.11.0/font/bootstrap-icons.css">
+
+{% endblock %}

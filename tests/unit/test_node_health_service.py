@@ -265,7 +265,7 @@ class TestNodeHealthService:
         # Both should be healthy since they have good packet activity
         assert healthy_node["health_score"] >= 80
         assert poor_signal_node["health_score"] >= 80
-        
+
         # Inactive node should have worse score due to low activity
         assert inactive_node["health_score"] < healthy_node["health_score"]
         assert inactive_node["health_score"] < poor_signal_node["health_score"]
