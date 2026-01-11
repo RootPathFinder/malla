@@ -874,6 +874,30 @@ def api_node_neighbors(node_id):
         return jsonify({"error": str(e)}), 500
 
 
+@api_bp.route("/node/<node_id>/telemetry")
+def api_node_telemetry(node_id):
+    """API endpoint for latest node telemetry data."""
+    logger.info(f"API node telemetry endpoint accessed for node {node_id}")
+    try:
+        # Convert node_id to int
+        node_id_int = convert_node_id(node_id)
+
+        # Get latest telemetry using repository
+        telemetry = NodeRepository.get_latest_telemetry(node_id_int)
+
+        if telemetry is None:
+            return jsonify(
+                {"telemetry": None, "message": "No telemetry data available"}
+            )
+
+        return safe_jsonify({"telemetry": telemetry})
+    except ValueError as e:
+        return jsonify({"error": str(e)}), 400
+    except Exception as e:
+        logger.error(f"Error in API node telemetry: {e}")
+        return jsonify({"error": str(e)}), 500
+
+
 @api_bp.route("/longest-links")
 def api_longest_links():
     """API endpoint for longest links analysis."""
