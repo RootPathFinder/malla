@@ -415,6 +415,7 @@ let refreshCountdownInterval = null;
 let nextRefreshCountdown = 30;
 let recentActivities = []; // Track recent activity
 let maxActivityItems = 20; // Max items in activity feed
+let recentNodeTimestamps = {}; // Track real-time node timestamps from activity polling
 
 // Make currentGraph globally accessible for debugging
 window.currentGraph = null;
@@ -1872,10 +1873,18 @@ function softRefreshGraph() {
                     currentGraph.nodes.forEach(node => {
                         if (newNodeMap[node.id]) {
                             const newData = newNodeMap[node.id];
-                            node.last_seen = newData.last_seen;
                             node.packet_count = newData.packet_count;
                             node.connections = newData.connections;
                             node.avg_snr = newData.avg_snr;
+                            
+                            // For last_seen: use the more recent of activity-detected time or API data
+                            if (recentNodeTimestamps[node.id]) {
+                                // Use the more recent timestamp
+                                node.last_seen = Math.max(node.last_seen || 0, recentNodeTimestamps[node.id]);
+                            } else {
+                                // No recent activity, use API data
+                                node.last_seen = newData.last_seen;
+                            }
                         }
                     });
                 }
@@ -2273,6 +2282,10 @@ async function pollPacketActivity() {
                             // Update last_seen timestamps to now for real-time display
                             fromNode.last_seen = now;
                             toNode.last_seen = now;
+                            
+                            // Also track these timestamps separately so they don't get overwritten by soft refresh
+                            recentNodeTimestamps[activity.from_node_id] = now;
+                            recentNodeTimestamps[activity.to_node_id] = now;
 
                             addActivity(fromNode.name, toNode.name, activity.packet_type || 'DATA');
                         }
@@ -2347,6 +2360,15 @@ function startAutoRefresh() {
     // Start the refresh interval - use soft refresh to update data without re-rendering
     autoRefreshInterval = setInterval(() => {
         if (autoRefreshEnabled) {
+            // Clean up old timestamps before soft refresh (older than 5 minutes)
+            const now = Math.floor(Date.now() / 1000);
+            const fiveMinutesAgo = now - (5 * 60);
+            Object.keys(recentNodeTimestamps).forEach(nodeId => {
+                if (recentNodeTimestamps[nodeId] < fiveMinutesAgo) {
+                    delete recentNodeTimestamps[nodeId];
+                }
+            });
+            
             softRefreshGraph();
             nextRefreshCountdown = autoRefreshIntervalSeconds;
         }
