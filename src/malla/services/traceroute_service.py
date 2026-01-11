@@ -1262,8 +1262,8 @@ class TracerouteService:
         """
         Get the true last_seen time for each node across ALL packets (unfiltered).
 
-        This is useful for showing the actual most recent activity for a node,
-        regardless of graph filters.
+        This queries directly from packet_history table to match what the node detail
+        page shows, ensuring consistency.
 
         Args:
             node_ids: Optional list of node IDs to get times for. If None, gets all nodes.
@@ -1271,52 +1271,34 @@ class TracerouteService:
         Returns:
             Dictionary mapping node_id -> last_seen_timestamp
         """
-        from ..database.repositories import TracerouteRepository
+        from ..database import get_db_connection
 
         try:
-            # Get all traceroute packets (no filters for time/SNR)
-            # Only limit by quantity, not by filters
-            result = TracerouteRepository.get_traceroute_packets(
-                limit=10000,
-                filters={"processed_successfully_only": True},
-                group_packets=False,
-            )
+            conn = get_db_connection()
+            cursor = conn.cursor()
+
+            if not node_ids:
+                # Get all nodes' last_seen times
+                cursor.execute("""
+                    SELECT from_node_id, MAX(timestamp) as last_seen
+                    FROM packet_history
+                    GROUP BY from_node_id
+                """)
+            else:
+                # Get last_seen for specific node IDs
+                # Use parameterized query to avoid SQL injection
+                placeholders = ','.join('?' * len(node_ids))
+                cursor.execute(f"""
+                    SELECT from_node_id, MAX(timestamp) as last_seen
+                    FROM packet_history
+                    WHERE from_node_id IN ({placeholders})
+                    GROUP BY from_node_id
+                """, node_ids)
 
             last_seen_map = {}
+            for row in cursor.fetchall():
+                node_id = row['from_node_id']
+                last_seen = row['last_seen']
+                last_seen_map[node_id] = last_seen
 
-            # Process each packet to find the most recent timestamp for each node
-            for packet in result["packets"]:
-                if not packet["raw_payload"]:
-                    continue
-
-                try:
-                    from ..models.traceroute_packet import TraceroutePacket
-
-                    tr_packet = TraceroutePacket(
-                        packet_data=packet,
-                        resolve_names=False  # Don't need names
-                    )
-
-                    rf_hops = tr_packet.get_rf_hops()
-
-                    # Track all nodes involved in this packet
-                    for hop in rf_hops:
-                        # Skip invalid node IDs
-                        if 4294967295 in [hop.from_node_id, hop.to_node_id]:
-                            continue
-
-                        # Update last_seen for both nodes in the hop
-                        for node_id in [hop.from_node_id, hop.to_node_id]:
-                            if node_id and (node_ids is None or node_id in node_ids):
-                                if node_id not in last_seen_map or packet["timestamp"] > last_seen_map[node_id]:
-                                    last_seen_map[node_id] = packet["timestamp"]
-
-                except Exception as e:
-                    logger.warning(f"Error processing packet for last_seen: {e}")
-                    continue
-
-            return last_seen_map
-
-        except Exception as e:
-            logger.error(f"Error getting node last_seen times: {e}")
-            return {}
+            conn.close()
