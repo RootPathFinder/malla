@@ -1838,6 +1838,84 @@ function refreshGraph() {
     loadGraph();
 }
 
+// Soft refresh - updates graph data without re-rendering, just updates node stats
+function softRefreshGraph() {
+    try {
+        // Get filter parameters
+        const params = new URLSearchParams();
+        document.querySelectorAll('#filterForm input, #filterForm select').forEach(function(element) {
+            const value = element.value;
+            if (value && element.type !== 'checkbox') {
+                params.append(element.name, value);
+            } else if (element.type === 'checkbox' && element.checked) {
+                params.append(element.name, 'true');
+            }
+        });
+
+        fetch(`/api/traceroute/graph?${params.toString()}`)
+            .then(response => response.json())
+            .then(data => {
+                if (data.error) {
+                    console.error('Error in soft refresh:', data.error);
+                    return;
+                }
+
+                // Update currentGraph with new data (don't re-render)
+                if (data.nodes && currentGraph && currentGraph.nodes) {
+                    // Create a map of new node data by ID
+                    const newNodeMap = {};
+                    data.nodes.forEach(node => {
+                        newNodeMap[node.id] = node;
+                    });
+
+                    // Update existing nodes with new data
+                    currentGraph.nodes.forEach(node => {
+                        if (newNodeMap[node.id]) {
+                            const newData = newNodeMap[node.id];
+                            node.last_seen = newData.last_seen;
+                            node.packet_count = newData.packet_count;
+                            node.connections = newData.connections;
+                            node.avg_snr = newData.avg_snr;
+                        }
+                    });
+                }
+
+                // Update links with new data
+                if (data.links && currentGraph && currentGraph.links) {
+                    const newLinkMap = {};
+                    data.links.forEach(link => {
+                        const key = `${link.source}-${link.target}`;
+                        newLinkMap[key] = link;
+                    });
+
+                    currentGraph.links.forEach(link => {
+                        const key = `${link.source}-${link.target}`;
+                        if (newLinkMap[key]) {
+                            const newData = newLinkMap[key];
+                            link.last_seen = newData.last_seen;
+                            link.packet_count = newData.packet_count;
+                            link.avg_snr = newData.avg_snr;
+                            link.strength = newData.strength;
+                        }
+                    });
+                }
+
+                // Update stats display with new timestamp
+                if (data.stats) {
+                    updateStats(data.stats);
+                }
+
+                // Update all node labels with fresh last_heard times
+                updateNodeLastHeardTimes();
+            })
+            .catch(error => {
+                console.error('Error in soft refresh:', error);
+            });
+    } catch (error) {
+        console.error('Error in softRefreshGraph:', error);
+    }
+}
+
 function showLoading() {
     document.getElementById('loadingSpinner').style.display = 'flex';
     document.getElementById('networkGraph').style.display = 'none';
@@ -2178,6 +2256,7 @@ async function pollPacketActivity() {
         // Process activities and animate nodes
         if (data.activities && data.activities.length > 0) {
             const nodeIds = new Set();
+            const now = Math.floor(Date.now() / 1000); // Current timestamp in seconds
 
             // Collect all active node IDs and record activities
             data.activities.forEach(activity => {
@@ -2185,17 +2264,24 @@ async function pollPacketActivity() {
                 if (activity.to_node_id) {
                     nodeIds.add(activity.to_node_id);
 
-                    // Get node names from current graph
+                    // Get node names from current graph and update last_seen
                     if (currentGraph && currentGraph.nodes) {
                         const fromNode = currentGraph.nodes.find(n => n.id === activity.from_node_id);
                         const toNode = currentGraph.nodes.find(n => n.id === activity.to_node_id);
 
                         if (fromNode && toNode) {
+                            // Update last_seen timestamps to now for real-time display
+                            fromNode.last_seen = now;
+                            toNode.last_seen = now;
+
                             addActivity(fromNode.name, toNode.name, activity.packet_type || 'DATA');
                         }
                     }
                 }
             });
+
+            // Update the display of last_heard times for active nodes immediately
+            updateNodeLastHeardTimes();
 
             // Animate the active nodes
             animateActiveNodes(nodeIds);
@@ -2258,10 +2344,10 @@ function startAutoRefresh() {
     // Start the countdown timer
     refreshCountdownInterval = setInterval(updateCountdown, 1000);
 
-    // Start the refresh interval
+    // Start the refresh interval - use soft refresh to update data without re-rendering
     autoRefreshInterval = setInterval(() => {
         if (autoRefreshEnabled) {
-            loadGraph();
+            softRefreshGraph();
             nextRefreshCountdown = autoRefreshIntervalSeconds;
         }
     }, autoRefreshIntervalSeconds * 1000);
