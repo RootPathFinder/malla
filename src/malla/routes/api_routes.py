@@ -1303,6 +1303,19 @@ def api_traceroute_graph():
             filters=extra_filters if extra_filters else None,
         )
 
+        # Enrich nodes with their true last_seen times from all packets (not just filtered ones)
+        try:
+            true_last_seen = TracerouteService.get_node_last_seen_times(
+                node_ids=[n["id"] for n in graph_data["nodes"]]
+            )
+            # Update node last_seen with true values
+            for node in graph_data["nodes"]:
+                if node["id"] in true_last_seen:
+                    node["last_seen"] = true_last_seen[node["id"]]
+        except Exception as e:
+            logger.warning(f"Error fetching true last_seen times: {e}")
+            # Continue without true times, use filtered times
+
         return safe_jsonify(graph_data)
 
     except Exception as e:
