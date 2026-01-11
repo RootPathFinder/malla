@@ -29,7 +29,16 @@ class TestNodeHealthAPIEndpoints:
                 first_seen, last_updated
             ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
         """,
-            (2001, "!000007d1", "Test Node", "TN01", "HELTEC_V3", "CLIENT", hours_24_ago, current_time),
+            (
+                2001,
+                "!000007d1",
+                "Test Node",
+                "TN01",
+                "HELTEC_V3",
+                "CLIENT",
+                hours_24_ago,
+                current_time,
+            ),
         )
 
         # Create packets with varying signal quality
@@ -228,15 +237,20 @@ class TestNodeHealthAPIEndpoints:
         node_data = node_response.get_json()
 
         # Get problematic nodes
-        prob_response = db_with_health_data.get("/api/health/problematic-nodes?min_health_score=100")
+        prob_response = db_with_health_data.get(
+            "/api/health/problematic-nodes?min_health_score=100"
+        )
         prob_data = prob_response.get_json()
 
         # If our test node appears in problematic nodes, verify structure matches
         if prob_data["problematic_nodes"]:
             prob_node = next(
-                (n for n in prob_data["problematic_nodes"] if n["node_id"] == 2001), None
+                (n for n in prob_data["problematic_nodes"] if n["node_id"] == 2001),
+                None,
             )
             if prob_node:
                 # Verify same structure
                 assert set(node_data.keys()) == set(prob_node.keys())
-                assert set(node_data["metrics"].keys()) == set(prob_node["metrics"].keys())
+                assert set(node_data["metrics"].keys()) == set(
+                    prob_node["metrics"].keys()
+                )

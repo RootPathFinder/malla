@@ -1287,18 +1287,21 @@ class TracerouteService:
             else:
                 # Get last_seen for specific node IDs
                 # Use parameterized query to avoid SQL injection
-                placeholders = ','.join('?' * len(node_ids))
-                cursor.execute(f"""
+                placeholders = ",".join("?" * len(node_ids))
+                cursor.execute(
+                    f"""
                     SELECT from_node_id, MAX(timestamp) as last_seen
                     FROM packet_history
                     WHERE from_node_id IN ({placeholders})
                     GROUP BY from_node_id
-                """, node_ids)
+                """,
+                    node_ids,
+                )
 
             last_seen_map = {}
             for row in cursor.fetchall():
-                node_id = row['from_node_id']
-                last_seen = row['last_seen']
+                node_id = row["from_node_id"]
+                last_seen = row["last_seen"]
                 last_seen_map[node_id] = last_seen
 
             conn.close()

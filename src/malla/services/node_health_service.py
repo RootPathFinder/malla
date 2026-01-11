@@ -11,11 +11,9 @@ This service analyzes various metrics to identify nodes that may be experiencing
 
 import logging
 import time
-from datetime import datetime, timedelta
 from typing import Any
 
 from ..database import get_db_connection
-from ..utils.node_utils import get_bulk_node_names
 
 logger = logging.getLogger(__name__)
 
@@ -24,9 +22,7 @@ class NodeHealthService:
     """Service for analyzing node health and identifying problematic nodes."""
 
     @staticmethod
-    def analyze_node_health(
-        node_id: int, hours: int = 24
-    ) -> dict[str, Any] | None:
+    def analyze_node_health(node_id: int, hours: int = 24) -> dict[str, Any] | None:
         """
         Analyze health metrics for a specific node.
 
@@ -411,7 +407,6 @@ class NodeHealthService:
 
         # Calculate network health score
         if active_nodes_count > 0:
-            healthy_percentage = (health_distribution["healthy"] / active_nodes_count) * 100
             network_health_score = max(
                 0,
                 100
@@ -420,7 +415,6 @@ class NodeHealthService:
                 - (health_distribution["degraded"] * 2),
             )
         else:
-            healthy_percentage = 0
             network_health_score = 0
 
         return {

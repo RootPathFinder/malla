@@ -2,9 +2,7 @@
 Unit tests for node health service
 """
 
-import os
 import time
-from datetime import datetime, timedelta
 
 import pytest
 
@@ -17,7 +15,7 @@ def db_with_test_data(temp_database, monkeypatch):
     """Create a database with test data for health analysis."""
     # Set the database path environment variable
     monkeypatch.setenv("MALLA_DATABASE_FILE", temp_database)
-    
+
     conn = get_db_connection()
     cursor = conn.cursor()
 
@@ -177,7 +175,9 @@ class TestNodeHealthService:
         assert health_data["metrics"]["avg_rssi"] is not None
         assert health_data["metrics"]["avg_snr"] is not None
         # Should have no critical or warning issues
-        critical_issues = [i for i in health_data["issues"] if i["severity"] == "critical"]
+        critical_issues = [
+            i for i in health_data["issues"] if i["severity"] == "critical"
+        ]
         assert len(critical_issues) == 0
 
     def test_analyze_poor_signal_node(self, db_with_test_data):
@@ -199,7 +199,9 @@ class TestNodeHealthService:
         assert health_data["node_id"] == 1003
         assert health_data["health_score"] < 80  # Should be degraded
         # Should have activity-related issues
-        activity_issues = [i for i in health_data["issues"] if i["category"] == "activity"]
+        activity_issues = [
+            i for i in health_data["issues"] if i["category"] == "activity"
+        ]
         assert len(activity_issues) > 0
         assert health_data["metrics"]["total_packets"] < 5
 
@@ -222,7 +224,9 @@ class TestNodeHealthService:
         # Verify sorting (worst health score first)
         if len(problematic) > 1:
             for i in range(len(problematic) - 1):
-                assert problematic[i]["health_score"] <= problematic[i + 1]["health_score"]
+                assert (
+                    problematic[i]["health_score"] <= problematic[i + 1]["health_score"]
+                )
 
         # Verify all returned nodes meet the criteria
         for node in problematic:
@@ -270,4 +274,7 @@ class TestNodeHealthService:
         assert health_12h["analyzed_hours"] == 12
 
         # 24h should have more packets than 12h
-        assert health_24h["metrics"]["total_packets"] > health_12h["metrics"]["total_packets"]
+        assert (
+            health_24h["metrics"]["total_packets"]
+            > health_12h["metrics"]["total_packets"]
+        )
