@@ -35,13 +35,22 @@ def dashboard():
         )
     except Exception as e:
         logger.error(f"Error loading dashboard: {e}")
-        # Fallback to basic stats without gateway info
-        stats = DashboardRepository.get_stats()
+        # Provide a graceful fallback with empty/default stats
+        fallback_stats = {
+            "total_nodes": 0,
+            "active_nodes_24h": 0,
+            "total_packets": 0,
+            "recent_packets": 0,
+            "success_rate": 0.0,
+            "avg_rssi": 0.0,
+            "avg_snr": 0.0,
+            "packet_types": [],
+        }
         return render_template(
             "dashboard.html",
-            stats=stats,
+            stats=fallback_stats,
             gateway_count=0,
-            error_message="Some dashboard features may be unavailable",
+            error_message="Unable to load dashboard data. Please check if the database is properly initialized.",
         )
 
 

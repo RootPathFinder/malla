@@ -23,6 +23,7 @@ from ..services.location_service import LocationService
 from ..services.meshtastic_service import MeshtasticService
 from ..services.node_service import NodeService
 from ..services.traceroute_service import TracerouteService
+from ..utils.cache_utils import cache_response
 from ..utils.node_utils import (
     convert_node_id,
     get_bulk_node_names,
@@ -36,13 +37,17 @@ api_bp = Blueprint("api", __name__, url_prefix="/api")
 
 
 @api_bp.route("/stats")
+@cache_response(ttl_seconds=30)  # Cache for 30 seconds
 def api_stats():
     """API endpoint for dashboard statistics."""
     logger.info("API stats endpoint accessed")
     try:
         gateway_id = request.args.get("gateway_id")
         stats = DashboardRepository.get_stats(gateway_id=gateway_id)
-        return safe_jsonify(stats)
+        response = safe_jsonify(stats)
+        # Add cache headers for client-side caching
+        response.headers["Cache-Control"] = "public, max-age=30"
+        return response
     except Exception as e:
         logger.error(f"Error in API stats: {e}")
         return jsonify({"error": str(e)}), 500
@@ -85,6 +90,7 @@ def api_node_roles():
 
 
 @api_bp.route("/analytics")
+@cache_response(ttl_seconds=30)  # Cache for 30 seconds
 def api_analytics():
     """API endpoint for analytics data."""
     logger.info("API analytics endpoint accessed")
@@ -96,7 +102,10 @@ def api_analytics():
         analytics_data = AnalyticsService.get_analytics_data(
             gateway_id=gateway_id, from_node=from_node, hop_count=hop_count
         )
-        return safe_jsonify(analytics_data)
+        response = safe_jsonify(analytics_data)
+        # Add cache headers for client-side caching
+        response.headers["Cache-Control"] = "public, max-age=30"
+        return response
     except Exception as e:
         logger.error(f"Error in API analytics: {e}")
         return jsonify({"error": str(e)}), 500
@@ -230,20 +239,20 @@ def api_packets_activity():
         # Build activity data
         activities = []
         for row in rows:
-            activities.append({
-                "from_node_id": row["from_node_id"],
-                "to_node_id": row["to_node_id"],
-                "timestamp": row["timestamp"],
-                "portnum_name": row["portnum_name"],
-                "hop_limit": row["hop_limit"],
-                "hop_start": row["hop_start"]
-            })
+            activities.append(
+                {
+                    "from_node_id": row["from_node_id"],
+                    "to_node_id": row["to_node_id"],
+                    "timestamp": row["timestamp"],
+                    "portnum_name": row["portnum_name"],
+                    "hop_limit": row["hop_limit"],
+                    "hop_start": row["hop_start"],
+                }
+            )
 
-        return jsonify({
-            "activities": activities,
-            "seconds": seconds,
-            "count": len(activities)
-        })
+        return jsonify(
+            {"activities": activities, "seconds": seconds, "count": len(activities)}
+        )
     except Exception as e:
         logger.error(f"Error in API packets activity: {e}")
         return jsonify({"error": str(e)}), 500

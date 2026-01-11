@@ -2107,9 +2107,7 @@ class NodeRepository:
                     continue
 
             # Remove empty metrics
-            metrics_history = {
-                k: v for k, v in metrics_history.items() if len(v) > 0
-            }
+            metrics_history = {k: v for k, v in metrics_history.items() if len(v) > 0}
 
             return metrics_history
 

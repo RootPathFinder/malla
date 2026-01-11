@@ -1,0 +1,230 @@
+/**
+ * Skeleton loader styles for improved perceived performance
+ * Provides smooth loading animations while data is being fetched
+ */
+
+/* Base skeleton animation */
+@keyframes skeleton-loading {
+    0% {
+        background-position: -200px 0;
+    }
+    100% {
+        background-position: calc(200px + 100%) 0;
+    }
+}
+
+.skeleton {
+    background-color: var(--bs-secondary-bg);
+    background-image: linear-gradient(
+        90deg,
+        var(--bs-secondary-bg) 0px,
+        rgba(var(--bs-primary-rgb), 0.1) 40px,
+        var(--bs-secondary-bg) 80px
+    );
+    background-size: 200px 100%;
+    background-repeat: no-repeat;
+    animation: skeleton-loading 1.5s ease-in-out infinite;
+    border-radius: var(--bs-border-radius);
+}
+
+/* Dark mode skeleton */
+[data-bs-theme=dark] .skeleton {
+    background-color: rgba(255, 255, 255, 0.05);
+    background-image: linear-gradient(
+        90deg,
+        rgba(255, 255, 255, 0.05) 0px,
+        rgba(255, 255, 255, 0.1) 40px,
+        rgba(255, 255, 255, 0.05) 80px
+    );
+}
+
+/* Skeleton variants */
+.skeleton-text {
+    height: 1rem;
+    margin-bottom: 0.5rem;
+    width: 100%;
+}
+
+.skeleton-text.short {
+    width: 60%;
+}
+
+.skeleton-text.medium {
+    width: 80%;
+}
+
+.skeleton-heading {
+    height: 2rem;
+    margin-bottom: 1rem;
+    width: 40%;
+}
+
+.skeleton-chart {
+    height: 300px;
+    width: 100%;
+}
+
+.skeleton-table-row {
+    height: 3rem;
+    margin-bottom: 0.5rem;
+}
+
+.skeleton-card {
+    height: 200px;
+    padding: 1.5rem;
+}
+
+.skeleton-metric {
+    height: 100px;
+}
+
+/* Pulse animation for simpler loaders */
+@keyframes skeleton-pulse {
+    0%, 100% {
+        opacity: 1;
+    }
+    50% {
+        opacity: 0.4;
+    }
+}
+
+.skeleton-pulse {
+    animation: skeleton-pulse 2s ease-in-out infinite;
+}
+
+/* Loading container with fade-in */
+@keyframes fade-in {
+    from {
+        opacity: 0;
+        transform: translateY(10px);
+    }
+    to {
+        opacity: 1;
+        transform: translateY(0);
+    }
+}
+
+.fade-in-content {
+    animation: fade-in 0.3s ease-out;
+}
+
+/* Hide skeleton when content loads */
+.loading-container.loaded .skeleton {
+    display: none;
+}
+
+.loading-container.loaded .content {
+    display: block;
+    animation: fade-in 0.3s ease-out;
+}
+
+.loading-container .content {
+    display: none;
+}
+
+/* Spinner replacement with better UX */
+.modern-spinner {
+    width: 48px;
+    height: 48px;
+    border: 4px solid var(--bs-border-color);
+    border-top-color: var(--bs-primary);
+    border-radius: 50%;
+    animation: spinner-rotate 1s linear infinite;
+}
+
+@keyframes spinner-rotate {
+    0% {
+        transform: rotate(0deg);
+    }
+    100% {
+        transform: rotate(360deg);
+    }
+}
+
+.modern-spinner-sm {
+    width: 24px;
+    height: 24px;
+    border-width: 2px;
+}
+
+/* Empty state styling */
+.empty-state {
+    padding: 4rem 2rem;
+    text-align: center;
+    color: var(--bs-secondary-color);
+}
+
+.empty-state-icon {
+    font-size: 4rem;
+    opacity: 0.5;
+    margin-bottom: 1rem;
+}
+
+.empty-state-title {
+    font-size: 1.25rem;
+    font-weight: 500;
+    margin-bottom: 0.5rem;
+    color: var(--bs-body-color);
+}
+
+.empty-state-description {
+    font-size: 0.95rem;
+    max-width: 400px;
+    margin: 0 auto;
+}
+
+/* Error state styling */
+.error-state {
+    padding: 2rem;
+    text-align: center;
+    color: var(--bs-danger);
+    background-color: rgba(var(--bs-danger-rgb), 0.1);
+    border-radius: var(--bs-border-radius);
+    border: 1px solid rgba(var(--bs-danger-rgb), 0.2);
+}
+
+.error-state-icon {
+    font-size: 3rem;
+    margin-bottom: 1rem;
+}
+
+.error-state-title {
+    font-size: 1.1rem;
+    font-weight: 600;
+    margin-bottom: 0.5rem;
+}
+
+.error-state-description {
+    font-size: 0.9rem;
+    margin-bottom: 1rem;
+}
+
+.error-state-action {
+    margin-top: 1rem;
+}
+
+/* Progressive loading for images */
+.progressive-image {
+    position: relative;
+    overflow: hidden;
+}
+
+.progressive-image.loading::before {
+    content: '';
+    position: absolute;
+    top: 0;
+    left: 0;
+    right: 0;
+    bottom: 0;
+    background: var(--bs-secondary-bg);
+    animation: skeleton-loading 1.5s ease-in-out infinite;
+}
+
+.progressive-image img {
+    opacity: 0;
+    transition: opacity 0.3s ease-in;
+}
+
+.progressive-image.loaded img {
+    opacity: 1;
+}
