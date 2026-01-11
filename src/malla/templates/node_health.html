@@ -13,7 +13,7 @@
     .health-degraded { background-color: #ffc107; color: #000; }
     .health-poor { background-color: #fd7e14; }
     .health-critical { background-color: #dc3545; }
-    
+
     .issue-badge {
         font-size: 0.875rem;
         padding: 0.25rem 0.5rem;
@@ -22,13 +22,13 @@
     .issue-critical { background-color: #dc3545; }
     .issue-warning { background-color: #ffc107; color: #000; }
     .issue-info { background-color: #0dcaf0; color: #000; }
-    
+
     .metric-card {
         border-left: 4px solid #0d6efd;
         padding: 1rem;
         margin-bottom: 1rem;
     }
-    
+
     .activity-chart {
         height: 200px;
     }
@@ -63,7 +63,7 @@
                                 <div class="metric-card">
                                     <div class="metric-label">
                                         Network Health Score
-                                        <i class="bi bi-info-circle" data-bs-toggle="tooltip" data-bs-placement="top" 
+                                        <i class="bi bi-info-circle" data-bs-toggle="tooltip" data-bs-placement="top"
                                            title="Overall network health (0-100) based on node reliability metrics: activity patterns, gateway connectivity, and outages. Does NOT include signal strength to avoid distance bias."></i>
                                     </div>
                                     <div class="metric-value" id="network-health-score">--</div>
@@ -73,7 +73,7 @@
                                 <div class="metric-card">
                                     <div class="metric-label">
                                         Active Nodes
-                                        <i class="bi bi-info-circle" data-bs-toggle="tooltip" data-bs-placement="top" 
+                                        <i class="bi bi-info-circle" data-bs-toggle="tooltip" data-bs-placement="top"
                                            title="Number of nodes that have transmitted at least one packet during the selected time period."></i>
                                     </div>
                                     <div class="metric-value" id="active-nodes-count">--</div>
@@ -83,7 +83,7 @@
                                 <div class="metric-card">
                                     <div class="metric-label">
                                         Average RSSI
-                                        <i class="bi bi-info-circle" data-bs-toggle="tooltip" data-bs-placement="top" 
+                                        <i class="bi bi-info-circle" data-bs-toggle="tooltip" data-bs-placement="top"
                                            title="Received Signal Strength Indicator in dBm. Higher values (closer to 0) indicate stronger signal. INFORMATIONAL ONLY - distance-dependent, does not affect health scores."></i>
                                     </div>
                                     <div class="metric-value" id="avg-rssi">--</div>
@@ -93,7 +93,7 @@
                                 <div class="metric-card">
                                     <div class="metric-label">
                                         Average SNR
-                                        <i class="bi bi-info-circle" data-bs-toggle="tooltip" data-bs-placement="top" 
+                                        <i class="bi bi-info-circle" data-bs-toggle="tooltip" data-bs-placement="top"
                                            title="Signal-to-Noise Ratio in dB. Higher values indicate clearer signal above background noise. INFORMATIONAL ONLY - distance-dependent, does not affect health scores."></i>
                                     </div>
                                     <div class="metric-value" id="avg-snr">--</div>
@@ -104,7 +104,7 @@
                             <div class="col-12">
                                 <h6>
                                     Health Distribution
-                                    <i class="bi bi-info-circle" data-bs-toggle="tooltip" data-bs-placement="top" 
+                                    <i class="bi bi-info-circle" data-bs-toggle="tooltip" data-bs-placement="top"
                                        title="Distribution of node health statuses: Healthy (80-100), Degraded (60-79), Poor (40-59), Critical (0-39). Based on reliability metrics, not signal strength."></i>
                                 </h6>
                                 <div class="progress" style="height: 30px;">
@@ -187,40 +187,49 @@
                             <table class="table table-striped table-hover" id="problematic-nodes-table">
                                 <thead>
                                     <tr>
-                                        <th>Node</th>
-                                        <th>
+                                        <th style="cursor: pointer; user-select: none;" data-sort="node" class="sortable-header">
+                                            Node <i class="bi bi-arrow-down-up" style="opacity: 0.5; margin-left: 0.25rem;"></i>
+                                        </th>
+                                        <th style="cursor: pointer; user-select: none;" data-sort="health_score" class="sortable-header">
                                             Health Score
-                                            <i class="bi bi-info-circle" data-bs-toggle="tooltip" data-bs-placement="top" 
+                                            <i class="bi bi-arrow-down-up" style="opacity: 0.5; margin-left: 0.25rem;"></i>
+                                            <i class="bi bi-info-circle" data-bs-toggle="tooltip" data-bs-placement="top"
                                                title="Node health score (0-100) based on activity, connectivity, and reliability. Higher is better."></i>
                                         </th>
-                                        <th>
+                                        <th style="cursor: pointer; user-select: none;" data-sort="health_status" class="sortable-header">
                                             Status
-                                            <i class="bi bi-info-circle" data-bs-toggle="tooltip" data-bs-placement="top" 
+                                            <i class="bi bi-arrow-down-up" style="opacity: 0.5; margin-left: 0.25rem;"></i>
+                                            <i class="bi bi-info-circle" data-bs-toggle="tooltip" data-bs-placement="top"
                                                title="Health status: Healthy (80-100), Degraded (60-79), Poor (40-59), Critical (0-39)."></i>
                                         </th>
-                                        <th>
+                                        <th style="cursor: pointer; user-select: none;" data-sort="issues" class="sortable-header">
                                             Issues
-                                            <i class="bi bi-info-circle" data-bs-toggle="tooltip" data-bs-placement="top" 
+                                            <i class="bi bi-arrow-down-up" style="opacity: 0.5; margin-left: 0.25rem;"></i>
+                                            <i class="bi bi-info-circle" data-bs-toggle="tooltip" data-bs-placement="top"
                                                title="Detected issues categorized by type: activity, connectivity, reliability, or signal (informational only)."></i>
                                         </th>
-                                        <th>
+                                        <th style="cursor: pointer; user-select: none;" data-sort="packets" class="sortable-header">
                                             Packets
-                                            <i class="bi bi-info-circle" data-bs-toggle="tooltip" data-bs-placement="top" 
+                                            <i class="bi bi-arrow-down-up" style="opacity: 0.5; margin-left: 0.25rem;"></i>
+                                            <i class="bi bi-info-circle" data-bs-toggle="tooltip" data-bs-placement="top"
                                                title="Total number of packets transmitted by this node during the analysis period."></i>
                                         </th>
-                                        <th>
+                                        <th style="cursor: pointer; user-select: none;" data-sort="rssi" class="sortable-header">
                                             Avg RSSI
-                                            <i class="bi bi-info-circle" data-bs-toggle="tooltip" data-bs-placement="top" 
+                                            <i class="bi bi-arrow-down-up" style="opacity: 0.5; margin-left: 0.25rem;"></i>
+                                            <i class="bi bi-info-circle" data-bs-toggle="tooltip" data-bs-placement="top"
                                                title="Average Received Signal Strength in dBm. INFORMATIONAL ONLY - varies with distance, does not affect health."></i>
                                         </th>
-                                        <th>
+                                        <th style="cursor: pointer; user-select: none;" data-sort="snr" class="sortable-header">
                                             Avg SNR
-                                            <i class="bi bi-info-circle" data-bs-toggle="tooltip" data-bs-placement="top" 
+                                            <i class="bi bi-arrow-down-up" style="opacity: 0.5; margin-left: 0.25rem;"></i>
+                                            <i class="bi bi-info-circle" data-bs-toggle="tooltip" data-bs-placement="top"
                                                title="Average Signal-to-Noise Ratio in dB. INFORMATIONAL ONLY - varies with distance, does not affect health."></i>
                                         </th>
-                                        <th>
+                                        <th style="cursor: pointer; user-select: none;" data-sort="gateways" class="sortable-header">
                                             Gateways
-                                            <i class="bi bi-info-circle" data-bs-toggle="tooltip" data-bs-placement="top" 
+                                            <i class="bi bi-arrow-down-up" style="opacity: 0.5; margin-left: 0.25rem;"></i>
+                                            <i class="bi bi-info-circle" data-bs-toggle="tooltip" data-bs-placement="top"
                                                title="Number of unique gateways that heard this node. More gateways = better redundancy and reliability."></i>
                                         </th>
                                         <th>Details</th>
@@ -256,6 +265,9 @@
 
 {% block extra_js %}
 <script>
+let healthTableData = [];
+let healthCurrentSort = { column: 'health_score', direction: 'desc' };
+
 let currentFilters = {
     hours: 24,
     minHealthScore: 70,
@@ -273,51 +285,51 @@ function initializeTooltips() {
 // Load network health summary
 async function loadNetworkSummary() {
     const hours = currentFilters.hours;
-    
+
     try {
         const response = await fetch(`/api/health/network-summary?hours=${hours}`);
         const data = await response.json();
-        
+
         if (data.error) {
             console.error('Error loading network summary:', data.error);
             return;
         }
-        
+
         // Update summary metrics
         document.getElementById('network-health-score').textContent = Math.round(data.network_health_score);
         document.getElementById('active-nodes-count').textContent = data.active_nodes;
-        document.getElementById('avg-rssi').textContent = data.network_metrics.avg_rssi ? 
+        document.getElementById('avg-rssi').textContent = data.network_metrics.avg_rssi ?
             data.network_metrics.avg_rssi.toFixed(1) + ' dBm' : 'N/A';
-        document.getElementById('avg-snr').textContent = data.network_metrics.avg_snr ? 
+        document.getElementById('avg-snr').textContent = data.network_metrics.avg_snr ?
             data.network_metrics.avg_snr.toFixed(1) + ' dB' : 'N/A';
-        
+
         // Update health distribution
         const dist = data.health_distribution;
         const total = dist.healthy + dist.degraded + dist.poor + dist.critical;
-        
+
         if (total > 0) {
             const healthyPct = (dist.healthy / total * 100).toFixed(1);
             const degradedPct = (dist.degraded / total * 100).toFixed(1);
             const poorPct = (dist.poor / total * 100).toFixed(1);
             const criticalPct = (dist.critical / total * 100).toFixed(1);
-            
+
             document.getElementById('healthy-bar').style.width = healthyPct + '%';
             document.getElementById('degraded-bar').style.width = degradedPct + '%';
             document.getElementById('poor-bar').style.width = poorPct + '%';
             document.getElementById('critical-bar').style.width = criticalPct + '%';
-            
+
             document.getElementById('healthy-count').textContent = dist.healthy;
             document.getElementById('degraded-count').textContent = dist.degraded;
             document.getElementById('poor-count').textContent = dist.poor;
             document.getElementById('critical-count').textContent = dist.critical;
         }
-        
+
         document.getElementById('network-summary-loading').style.display = 'none';
         document.getElementById('network-summary-content').style.display = 'block';
-        
+
         // Initialize tooltips after content is loaded
         initializeTooltips();
-        
+
     } catch (error) {
         console.error('Error loading network summary:', error);
     }
@@ -326,63 +338,146 @@ async function loadNetworkSummary() {
 // Load problematic nodes
 async function loadProblematicNodes() {
     const { hours, minHealthScore, limit } = currentFilters;
-    
+
     document.getElementById('problematic-nodes-loading').style.display = 'block';
     document.getElementById('problematic-nodes-content').style.display = 'none';
-    
+
     try {
         const response = await fetch(
             `/api/health/problematic-nodes?hours=${hours}&min_health_score=${minHealthScore}&limit=${limit}`
         );
         const data = await response.json();
-        
+
         if (data.error) {
             console.error('Error loading problematic nodes:', data.error);
             return;
         }
-        
-        const tbody = document.getElementById('problematic-nodes-tbody');
-        tbody.innerHTML = '';
-        
+
         if (data.problematic_nodes.length === 0) {
             document.getElementById('no-issues').style.display = 'block';
             document.getElementById('problematic-nodes-table').style.display = 'none';
         } else {
             document.getElementById('no-issues').style.display = 'none';
             document.getElementById('problematic-nodes-table').style.display = 'table';
-            
-            data.problematic_nodes.forEach(node => {
-                const row = createNodeRow(node);
-                tbody.appendChild(row);
+
+            // Store data for sorting
+            healthTableData = data.problematic_nodes.map(node => {
+                const nodeName = node.node_info.long_name || node.node_info.short_name || `!${node.node_id.toString(16).padStart(8, '0')}`;
+                const issuesCount = node.issues.length;
+
+                return {
+                    node: nodeName,
+                    node_id: node.node_id,
+                    health_score: node.health_score,
+                    health_status: node.health_status,
+                    issues: issuesCount,
+                    issues_list: node.issues,
+                    packets: node.metrics.total_packets,
+                    rssi: node.metrics.avg_rssi || -200,
+                    snr: node.metrics.avg_snr || -200,
+                    gateways: node.metrics.unique_gateways,
+                    raw_node: node
+                };
             });
+
+            // Set up sorting handlers
+            document.querySelectorAll('.sortable-header').forEach(header => {
+                header.removeEventListener('click', handleSortClick);
+                header.addEventListener('click', handleSortClick);
+            });
+
+            // Initial render
+            renderHealthTable();
+            updateHealthSortIndicators();
         }
-        
+
         document.getElementById('problematic-nodes-loading').style.display = 'none';
         document.getElementById('problematic-nodes-content').style.display = 'block';
-        
+
         // Initialize tooltips after table content is loaded
         initializeTooltips();
-        
+
     } catch (error) {
         console.error('Error loading problematic nodes:', error);
     }
 }
 
-// Create table row for a node
-function createNodeRow(node) {
+function handleSortClick(e) {
+    const column = e.currentTarget.getAttribute('data-sort');
+    if (healthCurrentSort.column === column) {
+        healthCurrentSort.direction = healthCurrentSort.direction === 'asc' ? 'desc' : 'asc';
+    } else {
+        healthCurrentSort.column = column;
+        healthCurrentSort.direction = column === 'node' ? 'asc' : 'desc';
+    }
+    renderHealthTable();
+    updateHealthSortIndicators();
+}
+
+function renderHealthTable() {
+    const tbody = document.getElementById('problematic-nodes-tbody');
+    if (!tbody) return;
+
+    // Sort data
+    const sorted = [...healthTableData].sort((a, b) => {
+        let aVal = a[healthCurrentSort.column];
+        let bVal = b[healthCurrentSort.column];
+
+        // Handle string vs number comparisons
+        if (typeof aVal === 'string') {
+            aVal = aVal.toLowerCase();
+            bVal = bVal.toLowerCase();
+            return healthCurrentSort.direction === 'asc'
+                ? aVal.localeCompare(bVal)
+                : bVal.localeCompare(aVal);
+        } else {
+            return healthCurrentSort.direction === 'asc'
+                ? aVal - bVal
+                : bVal - aVal;
+        }
+    });
+
+    // Render sorted rows
+    tbody.innerHTML = '';
+    sorted.forEach(item => {
+        const row = createNodeRow(item);
+        tbody.appendChild(row);
+    });
+}
+
+function updateHealthSortIndicators() {
+    document.querySelectorAll('.sortable-header').forEach(header => {
+        const column = header.getAttribute('data-sort');
+        const icon = header.querySelector('.bi-arrow-down-up, .bi-sort-up, .bi-sort-down');
+
+        if (!icon) return;
+
+        if (column === healthCurrentSort.column) {
+            icon.className = healthCurrentSort.direction === 'asc'
+                ? 'bi bi-sort-up'
+                : 'bi bi-sort-down';
+            icon.style.opacity = '1.0';
+        } else {
+            icon.className = 'bi bi-arrow-down-up';
+            icon.style.opacity = '0.5';
+        }
+    });
+}
+
+// Create table row for a node (updated to work with data objects)
+function createNodeRow(nodeData) {
     const tr = document.createElement('tr');
-    
-    const nodeName = node.node_info.long_name || node.node_info.short_name || `!${node.node_id.toString(16).padStart(8, '0')}`;
+    const node = nodeData.raw_node;
     const healthClass = `health-${node.health_status}`;
-    
+
     // Issues summary
     const issuesHtml = node.issues.map(issue => {
         const badgeClass = `issue-${issue.severity}`;
         return `<span class="badge ${badgeClass}">${issue.category}</span>`;
     }).join(' ');
-    
+
     tr.innerHTML = `
-        <td><a href="/node/${node.node_id}">${nodeName}</a></td>
+        <td><a href="/node/${node.node_id}">${nodeData.node}</a></td>
         <td><span class="badge health-score-badge ${healthClass}">${node.health_score}</span></td>
         <td><span class="badge ${healthClass}">${node.health_status}</span></td>
         <td>${issuesHtml}</td>
@@ -394,7 +489,7 @@ function createNodeRow(node) {
             <i class="bi bi-info-circle"></i> View
         </button></td>
     `;
-    
+
     return tr;
 }
 
@@ -403,23 +498,23 @@ async function showNodeDetails(nodeId) {
     const modal = new bootstrap.Modal(document.getElementById('nodeDetailModal'));
     const modalTitle = document.getElementById('nodeDetailModalTitle');
     const modalBody = document.getElementById('nodeDetailModalBody');
-    
+
     modalBody.innerHTML = '<div class="text-center p-3"><div class="spinner-border text-primary"></div></div>';
     modal.show();
-    
+
     try {
         const response = await fetch(`/api/health/node/${nodeId}?hours=${currentFilters.hours}`);
         const data = await response.json();
-        
+
         if (data.error) {
             modalBody.innerHTML = `<div class="alert alert-danger">${data.error}</div>`;
             return;
         }
-        
-        const nodeName = data.node_info.long_name || data.node_info.short_name || 
+
+        const nodeName = data.node_info.long_name || data.node_info.short_name ||
                         `!${data.node_id.toString(16).padStart(8, '0')}`;
         modalTitle.textContent = `Health Details: ${nodeName}`;
-        
+
         // Build detailed view
         let detailsHtml = `
             <div class="row mb-3">
@@ -440,7 +535,7 @@ async function showNodeDetails(nodeId) {
                 </div>
             </div>
         `;
-        
+
         if (data.issues.length > 0) {
             detailsHtml += '<h6>Issues Detected</h6><ul class="list-group mb-3">';
             data.issues.forEach(issue => {
@@ -454,9 +549,9 @@ async function showNodeDetails(nodeId) {
             });
             detailsHtml += '</ul>';
         }
-        
+
         modalBody.innerHTML = detailsHtml;
-        
+
     } catch (error) {
         console.error('Error loading node details:', error);
         modalBody.innerHTML = `<div class="alert alert-danger">Error loading node details</div>`;

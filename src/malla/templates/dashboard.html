@@ -119,7 +119,7 @@
                 </div>
                 <div class="card-body">
                     <div class="mb-3">
-                        <h6>Network Coverage</h6>
+                        <h6 style="font-family: var(--bs-font-sans-serif); font-weight: 600; margin-bottom: 0.5rem;">Network Coverage</h6>
                         <div class="progress mb-2">
                             {% set total_nodes_safe = stats.total_nodes if stats.total_nodes > 0 else 1 %}
                             {% set activity_percentage = (stats.active_nodes_24h / total_nodes_safe * 100)|int %}
@@ -128,33 +128,33 @@
                                 {{ activity_percentage }}%
                             </div>
                         </div>
-                        <small class="text-muted">{{ stats.active_nodes_24h }} of {{ stats.total_nodes }} nodes active</small>
+                        <small class="text-muted" style="font-family: var(--bs-font-sans-serif);">{{ stats.active_nodes_24h }} of {{ stats.total_nodes }} nodes active</small>
                     </div>
 
                     <div class="mb-3">
-                        <h6>Message Success Rate</h6>
+                        <h6 style="font-family: var(--bs-font-sans-serif); font-weight: 600; margin-bottom: 0.5rem;">Message Success Rate</h6>
                         <div class="progress mb-2">
                             {% set success_bar_class = 'bg-success' if stats.success_rate >= 95 else 'bg-warning' if stats.success_rate >= 85 else 'bg-danger' %}
                             <div class="progress-bar {{ success_bar_class }}" style="width: {{ stats.success_rate }}%;">
                                 {{ stats.success_rate }}%
                             </div>
                         </div>
-                        <small class="text-muted">Packet processing reliability</small>
+                        <small class="text-muted" style="font-family: var(--bs-font-sans-serif);">Packet processing reliability</small>
                     </div>
 
                     <div class="mb-3">
-                        <h6>Gateway Diversity</h6>
+                        <h6 style="font-family: var(--bs-font-sans-serif); font-weight: 600; margin-bottom: 0.5rem;">Gateway Diversity</h6>
                         <div class="progress mb-2">
                             {% set gateway_diversity = (gateway_count / 10 * 100)|int if gateway_count <= 10 else 100 %}
                             <div class="progress-bar bg-primary" style="width: {{ gateway_diversity }}%;">
                                 {{ gateway_count }} sources
                             </div>
                         </div>
-                        <small class="text-muted">Active MQTT gateways</small>
+                        <small class="text-muted" style="font-family: var(--bs-font-sans-serif);">Multiple data sources improve reliability</small>
                     </div>
 
                     <div class="mb-3">
-                        <h6>Node Health Status</h6>
+                        <h6 style="font-family: var(--bs-font-sans-serif); font-weight: 600; margin-bottom: 0.5rem;">Node Health Status</h6>
                         <div id="network-health-loading" class="text-center p-2">
                             <div class="spinner-border spinner-border-sm text-primary" role="status">
                                 <span class="visually-hidden">Loading...</span>
@@ -172,17 +172,10 @@
                                     <span id="dash-poor-count">0</span>
                                 </div>
                             </div>
-                            <small class="text-muted">
+                            <small class="text-muted" style="font-family: var(--bs-font-sans-serif);">
                                 <a href="{{ url_for('main.node_health') }}">View detailed health analysis →</a>
                             </small>
                         </div>
-                    </div>
-
-                    <div>
-                        <h6>Signal Quality</h6>
-                            </div>
-                        </div>
-                        <small class="text-muted">Multiple data sources improve reliability</small>
                     </div>
 
                     <hr>
@@ -309,12 +302,18 @@
                         <div class="skeleton skeleton-table-row"></div>
                     </div>
                     <div class="table-responsive" style="display: none;" id="topNodesTableContainer">
-                        <table class="table table-sm" id="topNodesTable">
+                        <table class="table table-sm table-sortable" id="topNodesTable">
                             <thead>
                                 <tr>
-                                    <th>Node</th>
-                                    <th>Messages</th>
-                                    <th>Signal</th>
+                                    <th style="cursor: pointer; user-select: none;" data-sort="node" class="sortable-header">
+                                        Node <i class="bi bi-arrow-down-up" style="opacity: 0.5; margin-left: 0.25rem;"></i>
+                                    </th>
+                                    <th style="cursor: pointer; user-select: none;" data-sort="messages" class="sortable-header">
+                                        Messages <i class="bi bi-arrow-down-up" style="opacity: 0.5; margin-left: 0.25rem;"></i>
+                                    </th>
+                                    <th style="cursor: pointer; user-select: none;" data-sort="signal" class="sortable-header">
+                                        Signal <i class="bi bi-arrow-down-up" style="opacity: 0.5; margin-left: 0.25rem;"></i>
+                                    </th>
                                 </tr>
                             </thead>
                             <tbody>
@@ -556,7 +555,7 @@ async function loadAnalyticsData() {
 function showErrorState(message) {
     // Hide all loading containers
     hideAllLoadingSpinners();
-    
+
     // Show error message in the first chart area as an example
     const container = document.getElementById('timeSeriesChartLoading');
     if (container) {
@@ -808,28 +807,26 @@ function createPacketTypesChart(packetTypes) {
     });
 }
 
+let tableData = [];
+let currentSort = { column: 'messages', direction: 'desc' };
+
 function populateTopNodesTable(topNodes) {
     if (!topNodes || topNodes.length === 0) return;
 
     document.getElementById('topNodesLoading').style.display = 'none';
     document.getElementById('topNodesTableContainer').style.display = 'block';
 
-    const tbody = document.querySelector('#topNodesTable tbody');
-    if (!tbody) return;
-
-    tbody.innerHTML = '';
-
-    topNodes.slice(0, 10).forEach(node => {
-        const row = document.createElement('tr');
-
-        // Node name with link
+    // Store data for sorting
+    tableData = topNodes.slice(0, 10).map(node => {
         const nodeName = node.display_name || `!${node.node_id.toString(16).padStart(8, '0')}`;
         const nodeLink = `/node/${node.node_id}`;
 
-        // Signal quality indicator
         let signalClass = 'text-muted';
         let signalText = 'N/A';
+        let signalValue = -200; // Default low value for sorting
+
         if (node.avg_rssi && node.avg_rssi !== 0) {
+            signalValue = node.avg_rssi;
             if (node.avg_rssi > -70) {
                 signalClass = 'text-success';
                 signalText = 'Excellent';
@@ -845,13 +842,86 @@ function populateTopNodesTable(topNodes) {
             }
         }
 
-        row.innerHTML = `
-            <td><a href="${nodeLink}" class="text-decoration-none">${nodeName}</a></td>
-            <td><span class="badge bg-primary">${node.packet_count || 0}</span></td>
-            <td><span class="${signalClass}">${signalText}</span></td>
-        `;
+        return {
+            node: nodeName,
+            nodeLink: nodeLink,
+            messages: node.packet_count || 0,
+            signal: signalValue,
+            signalClass: signalClass,
+            signalText: signalText
+        };
+    });
 
+    // Set up sorting handlers
+    document.querySelectorAll('.sortable-header').forEach(header => {
+        header.addEventListener('click', function() {
+            const column = this.getAttribute('data-sort');
+            if (currentSort.column === column) {
+                currentSort.direction = currentSort.direction === 'asc' ? 'desc' : 'asc';
+            } else {
+                currentSort.column = column;
+                currentSort.direction = column === 'node' ? 'asc' : 'desc';
+            }
+            renderTable();
+            updateSortIndicators();
+        });
+    });
+
+    // Initial render
+    renderTable();
+    updateSortIndicators();
+}
+
+function renderTable() {
+    const tbody = document.querySelector('#topNodesTable tbody');
+    if (!tbody) return;
+
+    // Sort data
+    const sorted = [...tableData].sort((a, b) => {
+        let aVal = a[currentSort.column];
+        let bVal = b[currentSort.column];
+
+        // Handle string vs number comparisons
+        if (typeof aVal === 'string') {
+            aVal = aVal.toLowerCase();
+            bVal = bVal.toLowerCase();
+            return currentSort.direction === 'asc'
+                ? aVal.localeCompare(bVal)
+                : bVal.localeCompare(aVal);
+        } else {
+            return currentSort.direction === 'asc'
+                ? aVal - bVal
+                : bVal - aVal;
+        }
+    });
+
+    // Render sorted rows
+    tbody.innerHTML = '';
+    sorted.forEach(item => {
+        const row = document.createElement('tr');
+        row.innerHTML = `
+            <td><a href="${item.nodeLink}" class="text-decoration-none">${item.node}</a></td>
+            <td><span class="badge bg-primary">${item.messages}</span></td>
+            <td><span class="${item.signalClass}">${item.signalText}</span></td>
+        `;
         tbody.appendChild(row);
+    });
+}
+
+function updateSortIndicators() {
+    document.querySelectorAll('.sortable-header').forEach(header => {
+        const column = header.getAttribute('data-sort');
+        const icon = header.querySelector('i');
+
+        if (column === currentSort.column) {
+            icon.className = currentSort.direction === 'asc'
+                ? 'bi bi-sort-up'
+                : 'bi bi-sort-down';
+            icon.style.opacity = '1.0';
+        } else {
+            icon.className = 'bi bi-arrow-down-up';
+            icon.style.opacity = '0.5';
+        }
     });
 }
 
@@ -860,33 +930,33 @@ async function loadDashboardNetworkHealth() {
     try {
         const response = await fetch('/api/health/network-summary?hours=24');
         const data = await response.json();
-        
+
         if (data.error) {
             console.error('Error loading network health:', data.error);
             return;
         }
-        
+
         // Update health distribution
         const dist = data.health_distribution;
         const total = dist.healthy + dist.degraded + dist.poor + dist.critical;
-        
+
         if (total > 0) {
             const healthyPct = (dist.healthy / total * 100).toFixed(0);
             const degradedPct = (dist.degraded / total * 100).toFixed(0);
             const poorPct = (dist.poor / total * 100).toFixed(0);
-            
+
             document.getElementById('dash-healthy-bar').style.width = healthyPct + '%';
             document.getElementById('dash-degraded-bar').style.width = degradedPct + '%';
             document.getElementById('dash-poor-bar').style.width = poorPct + '%';
-            
+
             document.getElementById('dash-healthy-count').textContent = dist.healthy;
             document.getElementById('dash-degraded-count').textContent = dist.degraded;
             document.getElementById('dash-poor-count').textContent = dist.poor;
         }
-        
+
         document.getElementById('network-health-loading').style.display = 'none';
         document.getElementById('network-health-content').style.display = 'block';
-        
+
     } catch (error) {
         console.error('Error loading network health:', error);
     }
