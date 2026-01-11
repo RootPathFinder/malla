@@ -280,6 +280,26 @@
             </div>
             {% endif %}
 
+            <!-- Telemetry Information -->
+            <div class="card mb-4" id="telemetry-card" style="display: none;">
+                <div class="card-header">
+                    <h5><i class="bi bi-activity"></i> Latest Telemetry</h5>
+                    <small class="text-muted">Most recent telemetry data from this node</small>
+                </div>
+                <div class="card-body">
+                    <div id="telemetry-content">
+                        <div class="d-flex align-items-center justify-content-center" style="min-height: 100px;">
+                            <div class="text-center">
+                                <div class="spinner-border text-primary" role="status">
+                                    <span class="visually-hidden">Loading...</span>
+                                </div>
+                                <p class="mt-2 text-muted">Loading telemetry data...</p>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
             <!-- Location History Map -->
             <div class="card mb-4" id="location-history-card" style="display: none;">
                 <div class="card-header">
@@ -968,6 +988,194 @@ document.addEventListener('DOMContentLoaded', function() {
     if (typeof updateAllTimestamps === 'function') {
         updateAllTimestamps();
     }
+
+    // Load telemetry data
+    loadTelemetryData();
 });
+
+async function loadTelemetryData() {
+    const scriptTag = document.querySelector('script[data-node-id]');
+    const nodeId = scriptTag.getAttribute('data-node-id');
+    const telemetryCard = document.getElementById('telemetry-card');
+    const telemetryContent = document.getElementById('telemetry-content');
+
+    try {
+        // Fetch telemetry data
+        const response = await fetch(`/api/node/${nodeId}/telemetry`);
+        const data = await response.json();
+
+        if (data.error) {
+            throw new Error(data.error);
+        }
+
+        const telemetry = data.telemetry;
+
+        if (!telemetry) {
+            // No telemetry data available, hide the card
+            return;
+        }
+
+        // Show the card now that we have data
+        telemetryCard.style.display = 'block';
+
+        // Build telemetry HTML
+        let html = '';
+
+        // Display timestamp
+        html += '<div class="mb-3">';
+        html += '<small class="text-muted">';
+        html += '<i class="bi bi-clock"></i> Last updated: ' + telemetry.timestamp_relative;
+        html += ' <span class="timestamp-display" data-timestamp="' + telemetry.timestamp_unix + '">(' + telemetry.timestamp + ')</span>';
+        html += '</small>';
+        html += '</div>';
+
+        html += '<div class="row">';
+
+        // Device Metrics (battery, voltage, etc.)
+        if (telemetry.device_metrics) {
+            const dm = telemetry.device_metrics;
+            html += '<div class="col-md-6">';
+            html += '<h6><i class="bi bi-battery-charging"></i> Device Metrics</h6>';
+            html += '<table class="table table-sm">';
+
+            if (dm.battery_level !== undefined) {
+                const batteryClass = dm.battery_level > 80 ? 'text-success' : dm.battery_level > 20 ? 'text-warning' : 'text-danger';
+                html += '<tr><th>Battery Level:</th><td><span class="' + batteryClass + '">' + dm.battery_level + '%</span></td></tr>';
+            }
+            if (dm.voltage !== undefined) {
+                html += '<tr><th>Voltage:</th><td>' + dm.voltage.toFixed(2) + ' V</td></tr>';
+            }
+            if (dm.channel_utilization !== undefined) {
+                html += '<tr><th>Channel Utilization:</th><td>' + dm.channel_utilization.toFixed(1) + '%</td></tr>';
+            }
+            if (dm.air_util_tx !== undefined) {
+                html += '<tr><th>Air Utilization TX:</th><td>' + dm.air_util_tx.toFixed(1) + '%</td></tr>';
+            }
+            if (dm.uptime_seconds !== undefined) {
+                const uptime = formatUptime(dm.uptime_seconds);
+                html += '<tr><th>Uptime:</th><td>' + uptime + '</td></tr>';
+            }
+
+            html += '</table>';
+            html += '</div>';
+        }
+
+        // Environment Metrics (temperature, humidity, etc.)
+        if (telemetry.environment_metrics) {
+            const em = telemetry.environment_metrics;
+            html += '<div class="col-md-6">';
+            html += '<h6><i class="bi bi-thermometer-half"></i> Environment Metrics</h6>';
+            html += '<table class="table table-sm">';
+
+            if (em.temperature !== undefined) {
+                html += '<tr><th>Temperature:</th><td>' + em.temperature.toFixed(1) + ' °C</td></tr>';
+            }
+            if (em.relative_humidity !== undefined) {
+                html += '<tr><th>Humidity:</th><td>' + em.relative_humidity.toFixed(1) + '%</td></tr>';
+            }
+            if (em.barometric_pressure !== undefined) {
+                html += '<tr><th>Pressure:</th><td>' + em.barometric_pressure.toFixed(1) + ' hPa</td></tr>';
+            }
+            if (em.gas_resistance !== undefined) {
+                html += '<tr><th>Gas Resistance:</th><td>' + em.gas_resistance.toFixed(0) + ' Ω</td></tr>';
+            }
+            if (em.voltage !== undefined) {
+                html += '<tr><th>Voltage:</th><td>' + em.voltage.toFixed(2) + ' V</td></tr>';
+            }
+            if (em.current !== undefined) {
+                html += '<tr><th>Current:</th><td>' + em.current.toFixed(2) + ' mA</td></tr>';
+            }
+
+            html += '</table>';
+            html += '</div>';
+        }
+
+        // Power Metrics
+        if (telemetry.power_metrics) {
+            const pm = telemetry.power_metrics;
+            html += '<div class="col-md-6">';
+            html += '<h6><i class="bi bi-lightning-charge"></i> Power Metrics</h6>';
+            html += '<table class="table table-sm">';
+
+            if (pm.ch1_voltage !== undefined) {
+                html += '<tr><th>Channel 1 Voltage:</th><td>' + pm.ch1_voltage.toFixed(2) + ' V</td></tr>';
+            }
+            if (pm.ch1_current !== undefined) {
+                html += '<tr><th>Channel 1 Current:</th><td>' + pm.ch1_current.toFixed(2) + ' mA</td></tr>';
+            }
+            if (pm.ch2_voltage !== undefined) {
+                html += '<tr><th>Channel 2 Voltage:</th><td>' + pm.ch2_voltage.toFixed(2) + ' V</td></tr>';
+            }
+            if (pm.ch2_current !== undefined) {
+                html += '<tr><th>Channel 2 Current:</th><td>' + pm.ch2_current.toFixed(2) + ' mA</td></tr>';
+            }
+            if (pm.ch3_voltage !== undefined) {
+                html += '<tr><th>Channel 3 Voltage:</th><td>' + pm.ch3_voltage.toFixed(2) + ' V</td></tr>';
+            }
+            if (pm.ch3_current !== undefined) {
+                html += '<tr><th>Channel 3 Current:</th><td>' + pm.ch3_current.toFixed(2) + ' mA</td></tr>';
+            }
+
+            html += '</table>';
+            html += '</div>';
+        }
+
+        // Air Quality Metrics
+        if (telemetry.air_quality_metrics) {
+            const aq = telemetry.air_quality_metrics;
+            html += '<div class="col-md-6">';
+            html += '<h6><i class="bi bi-wind"></i> Air Quality Metrics</h6>';
+            html += '<table class="table table-sm">';
+
+            if (aq.pm10_standard !== undefined) {
+                html += '<tr><th>PM1.0:</th><td>' + aq.pm10_standard + ' µg/m³</td></tr>';
+            }
+            if (aq.pm25_standard !== undefined) {
+                html += '<tr><th>PM2.5:</th><td>' + aq.pm25_standard + ' µg/m³</td></tr>';
+            }
+            if (aq.pm100_standard !== undefined) {
+                html += '<tr><th>PM10:</th><td>' + aq.pm100_standard + ' µg/m³</td></tr>';
+            }
+
+            html += '</table>';
+            html += '</div>';
+        }
+
+        html += '</div>';
+
+        // Update content
+        telemetryContent.innerHTML = html;
+
+        // Update timestamps if the function is available
+        if (typeof updateAllTimestamps === 'function') {
+            updateAllTimestamps();
+        }
+
+    } catch (error) {
+        console.error('Error loading telemetry data:', error);
+
+        // Show error in content
+        telemetryContent.innerHTML = `
+            <div class="text-center text-muted">
+                <i class="bi bi-info-circle" style="font-size: 2rem;"></i>
+                <div class="mt-2">No telemetry data available</div>
+                <div class="small">${error.message || 'This node has not sent any telemetry packets yet.'}</div>
+            </div>
+        `;
+    }
+}
+
+function formatUptime(seconds) {
+    const days = Math.floor(seconds / 86400);
+    const hours = Math.floor((seconds % 86400) / 3600);
+    const minutes = Math.floor((seconds % 3600) / 60);
+
+    let parts = [];
+    if (days > 0) parts.push(days + 'd');
+    if (hours > 0) parts.push(hours + 'h');
+    if (minutes > 0) parts.push(minutes + 'm');
+
+    return parts.join(' ') || '0m';
+}
 </script>
 {% endblock %}

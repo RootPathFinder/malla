@@ -1875,6 +1875,143 @@ class NodeRepository:
             raise
 
     @staticmethod
+    def get_latest_telemetry(node_id: int) -> dict[str, Any] | None:
+        """Get the latest telemetry data for a specific node.
+
+        Args:
+            node_id: The node ID to get telemetry for
+
+        Returns:
+            Dictionary containing telemetry data or None if no telemetry found
+        """
+        try:
+            from meshtastic import telemetry_pb2
+
+            conn = get_db_connection()
+            cursor = conn.cursor()
+
+            # Get the most recent telemetry packet from this node
+            query = """
+            SELECT raw_payload, timestamp
+            FROM packet_history
+            WHERE from_node_id = ?
+            AND portnum_name = 'TELEMETRY_APP'
+            AND raw_payload IS NOT NULL
+            ORDER BY timestamp DESC
+            LIMIT 1
+            """
+
+            cursor.execute(query, (node_id,))
+            result = cursor.fetchone()
+            conn.close()
+
+            if not result or not result["raw_payload"]:
+                return None
+
+            # Decode the telemetry protobuf
+            try:
+                telemetry_data = telemetry_pb2.Telemetry()
+                telemetry_data.ParseFromString(result["raw_payload"])
+
+                telemetry_dict = {}
+                timestamp = datetime.fromtimestamp(result["timestamp"], UTC)
+                telemetry_dict["timestamp"] = timestamp.strftime(
+                    "%Y-%m-%d %H:%M:%S UTC"
+                )
+                telemetry_dict["timestamp_unix"] = result["timestamp"]
+                telemetry_dict["timestamp_relative"] = format_time_ago(timestamp)
+
+                # Extract device metrics (battery, voltage, etc.)
+                if telemetry_data.HasField("device_metrics"):
+                    metrics = telemetry_data.device_metrics
+                    device_metrics = {}
+
+                    if metrics.HasField("battery_level"):
+                        device_metrics["battery_level"] = metrics.battery_level
+                    if metrics.HasField("voltage"):
+                        device_metrics["voltage"] = (
+                            metrics.voltage / 1000.0
+                        )  # Convert mV to V
+                    if metrics.HasField("channel_utilization"):
+                        device_metrics["channel_utilization"] = (
+                            metrics.channel_utilization
+                        )
+                    if metrics.HasField("air_util_tx"):
+                        device_metrics["air_util_tx"] = metrics.air_util_tx
+                    if metrics.HasField("uptime_seconds"):
+                        device_metrics["uptime_seconds"] = metrics.uptime_seconds
+
+                    telemetry_dict["device_metrics"] = device_metrics
+
+                # Extract environment metrics (temperature, humidity, etc.)
+                if telemetry_data.HasField("environment_metrics"):
+                    metrics = telemetry_data.environment_metrics
+                    environment_metrics = {}
+
+                    if metrics.HasField("temperature"):
+                        environment_metrics["temperature"] = metrics.temperature
+                    if metrics.HasField("relative_humidity"):
+                        environment_metrics["relative_humidity"] = (
+                            metrics.relative_humidity
+                        )
+                    if metrics.HasField("barometric_pressure"):
+                        environment_metrics["barometric_pressure"] = (
+                            metrics.barometric_pressure
+                        )
+                    if metrics.HasField("gas_resistance"):
+                        environment_metrics["gas_resistance"] = metrics.gas_resistance
+                    if metrics.HasField("voltage"):
+                        environment_metrics["voltage"] = metrics.voltage
+                    if metrics.HasField("current"):
+                        environment_metrics["current"] = metrics.current
+
+                    telemetry_dict["environment_metrics"] = environment_metrics
+
+                # Extract power metrics
+                if telemetry_data.HasField("power_metrics"):
+                    metrics = telemetry_data.power_metrics
+                    power_metrics = {}
+
+                    if metrics.HasField("ch1_voltage"):
+                        power_metrics["ch1_voltage"] = metrics.ch1_voltage
+                    if metrics.HasField("ch1_current"):
+                        power_metrics["ch1_current"] = metrics.ch1_current
+                    if metrics.HasField("ch2_voltage"):
+                        power_metrics["ch2_voltage"] = metrics.ch2_voltage
+                    if metrics.HasField("ch2_current"):
+                        power_metrics["ch2_current"] = metrics.ch2_current
+                    if metrics.HasField("ch3_voltage"):
+                        power_metrics["ch3_voltage"] = metrics.ch3_voltage
+                    if metrics.HasField("ch3_current"):
+                        power_metrics["ch3_current"] = metrics.ch3_current
+
+                    telemetry_dict["power_metrics"] = power_metrics
+
+                # Extract air quality metrics
+                if telemetry_data.HasField("air_quality_metrics"):
+                    metrics = telemetry_data.air_quality_metrics
+                    air_quality_metrics = {}
+
+                    if metrics.HasField("pm10_standard"):
+                        air_quality_metrics["pm10_standard"] = metrics.pm10_standard
+                    if metrics.HasField("pm25_standard"):
+                        air_quality_metrics["pm25_standard"] = metrics.pm25_standard
+                    if metrics.HasField("pm100_standard"):
+                        air_quality_metrics["pm100_standard"] = metrics.pm100_standard
+
+                    telemetry_dict["air_quality_metrics"] = air_quality_metrics
+
+                return telemetry_dict if telemetry_dict else None
+
+            except Exception as e:
+                logger.error(f"Error decoding telemetry for node {node_id}: {e}")
+                return None
+
+        except Exception as e:
+            logger.error(f"Error getting latest telemetry for node {node_id}: {e}")
+            return None
+
+    @staticmethod
     def get_relay_node_candidates(
         gateway_node_ids: list[int], relay_last_bytes: list[int], cursor=None
     ) -> dict[int, dict[int, list[dict[str, Any]]]]:
