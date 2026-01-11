@@ -262,6 +262,14 @@ let currentFilters = {
     limit: 50
 };
 
+// Initialize Bootstrap tooltips
+function initializeTooltips() {
+    const tooltipTriggerList = [].slice.call(document.querySelectorAll('[data-bs-toggle="tooltip"]'));
+    tooltipTriggerList.map(function (tooltipTriggerEl) {
+        return new bootstrap.Tooltip(tooltipTriggerEl);
+    });
+}
+
 // Load network health summary
 async function loadNetworkSummary() {
     const hours = currentFilters.hours;
@@ -307,6 +315,9 @@ async function loadNetworkSummary() {
         document.getElementById('network-summary-loading').style.display = 'none';
         document.getElementById('network-summary-content').style.display = 'block';
         
+        // Initialize tooltips after content is loaded
+        initializeTooltips();
+        
     } catch (error) {
         console.error('Error loading network summary:', error);
     }
@@ -348,6 +359,9 @@ async function loadProblematicNodes() {
         
         document.getElementById('problematic-nodes-loading').style.display = 'none';
         document.getElementById('problematic-nodes-content').style.display = 'block';
+        
+        // Initialize tooltips after table content is loaded
+        initializeTooltips();
         
     } catch (error) {
         console.error('Error loading problematic nodes:', error);
@@ -483,12 +497,7 @@ document.getElementById('problematic-nodes-tbody').addEventListener('click', (e)
 loadNetworkSummary();
 loadProblematicNodes();
 
-// Initialize Bootstrap tooltips
-document.addEventListener('DOMContentLoaded', function() {
-    const tooltipTriggerList = [].slice.call(document.querySelectorAll('[data-bs-toggle="tooltip"]'));
-    tooltipTriggerList.map(function (tooltipTriggerEl) {
-        return new bootstrap.Tooltip(tooltipTriggerEl);
-    });
-});
+// Initialize tooltips on page load
+document.addEventListener('DOMContentLoaded', initializeTooltips);
 </script>
 {% endblock %}
