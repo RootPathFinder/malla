@@ -1,0 +1,641 @@
+{% extends "base.html" %}
+
+{% block title %}Live Monitor - {{ APP_NAME }}{% endblock %}
+
+{% block extra_css %}
+<style>
+    .live-monitor-container {
+        padding: 20px;
+        max-width: 1400px;
+        margin: 0 auto;
+    }
+
+    .live-header {
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+        margin-bottom: 20px;
+        padding-bottom: 15px;
+        border-bottom: 2px solid #e0e0e0;
+    }
+
+    .live-title {
+        font-size: 28px;
+        font-weight: 600;
+        color: #333;
+    }
+
+    .connection-status {
+        display: flex;
+        align-items: center;
+        gap: 10px;
+        padding: 8px 16px;
+        border-radius: 20px;
+        background: #f5f5f5;
+        font-weight: 500;
+    }
+
+    .status-indicator {
+        width: 10px;
+        height: 10px;
+        border-radius: 50%;
+        animation: pulse 2s infinite;
+    }
+
+    .status-connected {
+        background: #4caf50;
+    }
+
+    .status-disconnected {
+        background: #f44336;
+        animation: none;
+    }
+
+    @keyframes pulse {
+        0%, 100% { opacity: 1; }
+        50% { opacity: 0.5; }
+    }
+
+    .stats-grid {
+        display: grid;
+        grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+        gap: 15px;
+        margin-bottom: 20px;
+    }
+
+    .stat-card {
+        background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+        color: white;
+        padding: 20px;
+        border-radius: 12px;
+        box-shadow: 0 4px 6px rgba(0,0,0,0.1);
+    }
+
+    .stat-card.green {
+        background: linear-gradient(135deg, #11998e 0%, #38ef7d 100%);
+    }
+
+    .stat-card.orange {
+        background: linear-gradient(135deg, #f093fb 0%, #f5576c 100%);
+    }
+
+    .stat-card.blue {
+        background: linear-gradient(135deg, #4facfe 0%, #00f2fe 100%);
+    }
+
+    .stat-label {
+        font-size: 12px;
+        opacity: 0.9;
+        text-transform: uppercase;
+        letter-spacing: 0.5px;
+    }
+
+    .stat-value {
+        font-size: 32px;
+        font-weight: 700;
+        margin-top: 5px;
+    }
+
+    .activity-feed {
+        background: white;
+        border-radius: 12px;
+        box-shadow: 0 2px 8px rgba(0,0,0,0.1);
+        overflow: hidden;
+    }
+
+    .feed-header {
+        background: #f8f9fa;
+        padding: 15px 20px;
+        border-bottom: 1px solid #e0e0e0;
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+    }
+
+    .feed-title {
+        font-size: 18px;
+        font-weight: 600;
+        color: #333;
+    }
+
+    .feed-controls {
+        display: flex;
+        gap: 10px;
+    }
+
+    .filter-btn {
+        padding: 6px 12px;
+        border: 1px solid #ddd;
+        background: white;
+        border-radius: 6px;
+        cursor: pointer;
+        font-size: 13px;
+        transition: all 0.2s;
+    }
+
+    .filter-btn:hover {
+        background: #f0f0f0;
+    }
+
+    .filter-btn.active {
+        background: #667eea;
+        color: white;
+        border-color: #667eea;
+    }
+
+    .feed-content {
+        max-height: calc(100vh - 400px);
+        min-height: 400px;
+        overflow-y: auto;
+    }
+
+    .activity-item {
+        padding: 15px 20px;
+        border-bottom: 1px solid #f0f0f0;
+        display: flex;
+        gap: 15px;
+        animation: slideIn 0.3s ease-out;
+        transition: background 0.2s;
+    }
+
+    .activity-item:hover {
+        background: #f8f9fa;
+    }
+
+    @keyframes slideIn {
+        from {
+            opacity: 0;
+            transform: translateY(-10px);
+        }
+        to {
+            opacity: 1;
+            transform: translateY(0);
+        }
+    }
+
+    .activity-icon {
+        width: 40px;
+        height: 40px;
+        border-radius: 50%;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        font-size: 18px;
+        flex-shrink: 0;
+    }
+
+    .activity-icon.packet {
+        background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+        color: white;
+    }
+
+    .activity-icon.node_online {
+        background: linear-gradient(135deg, #11998e 0%, #38ef7d 100%);
+        color: white;
+    }
+
+    .activity-icon.node_offline {
+        background: linear-gradient(135deg, #ff6b6b 0%, #ee5a6f 100%);
+        color: white;
+    }
+
+    .activity-icon.alert {
+        background: linear-gradient(135deg, #f093fb 0%, #f5576c 100%);
+        color: white;
+    }
+
+    .activity-icon.traceroute {
+        background: linear-gradient(135deg, #4facfe 0%, #00f2fe 100%);
+        color: white;
+    }
+
+    .activity-details {
+        flex: 1;
+    }
+
+    .activity-header {
+        display: flex;
+        justify-content: space-between;
+        align-items: baseline;
+        margin-bottom: 5px;
+    }
+
+    .activity-title {
+        font-weight: 600;
+        color: #333;
+        font-size: 15px;
+    }
+
+    .activity-time {
+        font-size: 12px;
+        color: #999;
+    }
+
+    .activity-description {
+        color: #666;
+        font-size: 14px;
+        line-height: 1.5;
+    }
+
+    .activity-meta {
+        display: flex;
+        gap: 15px;
+        margin-top: 8px;
+        flex-wrap: wrap;
+    }
+
+    .meta-item {
+        display: flex;
+        align-items: center;
+        gap: 5px;
+        font-size: 12px;
+        color: #777;
+        background: #f5f5f5;
+        padding: 4px 10px;
+        border-radius: 12px;
+    }
+
+    .meta-icon {
+        font-size: 10px;
+    }
+
+    .empty-state {
+        text-align: center;
+        padding: 60px 20px;
+        color: #999;
+    }
+
+    .empty-icon {
+        font-size: 48px;
+        margin-bottom: 15px;
+        opacity: 0.5;
+    }
+
+    .severity-badge {
+        display: inline-block;
+        padding: 2px 8px;
+        border-radius: 10px;
+        font-size: 11px;
+        font-weight: 600;
+        text-transform: uppercase;
+    }
+
+    .severity-info {
+        background: #e3f2fd;
+        color: #1976d2;
+    }
+
+    .severity-warning {
+        background: #fff3e0;
+        color: #f57c00;
+    }
+
+    .severity-critical {
+        background: #ffebee;
+        color: #c62828;
+    }
+
+    .signal-quality {
+        display: flex;
+        align-items: center;
+        gap: 4px;
+    }
+
+    .signal-bar {
+        width: 3px;
+        height: 12px;
+        background: #ddd;
+        border-radius: 2px;
+    }
+
+    .signal-bar.active {
+        background: #4caf50;
+    }
+
+    .signal-bar.weak {
+        background: #ff9800;
+    }
+
+    .auto-scroll-toggle {
+        padding: 6px 12px;
+        background: #667eea;
+        color: white;
+        border: none;
+        border-radius: 6px;
+        cursor: pointer;
+        font-size: 13px;
+        transition: all 0.2s;
+    }
+
+    .auto-scroll-toggle:hover {
+        background: #5568d3;
+    }
+
+    .auto-scroll-toggle.disabled {
+        background: #ccc;
+    }
+
+    /* Scrollbar styling */
+    .feed-content::-webkit-scrollbar {
+        width: 8px;
+    }
+
+    .feed-content::-webkit-scrollbar-track {
+        background: #f1f1f1;
+    }
+
+    .feed-content::-webkit-scrollbar-thumb {
+        background: #888;
+        border-radius: 4px;
+    }
+
+    .feed-content::-webkit-scrollbar-thumb:hover {
+        background: #555;
+    }
+</style>
+{% endblock %}
+
+{% block content %}
+<div class="live-monitor-container">
+    <div class="live-header">
+        <h1 class="live-title">🔴 Live Activity Monitor</h1>
+        <div class="connection-status" id="connectionStatus">
+            <div class="status-indicator status-disconnected" id="statusIndicator"></div>
+            <span id="statusText">Connecting...</span>
+        </div>
+    </div>
+
+    <div class="stats-grid" id="statsGrid">
+        <div class="stat-card blue">
+            <div class="stat-label">Total Events</div>
+            <div class="stat-value" id="totalEvents">0</div>
+        </div>
+        <div class="stat-card green">
+            <div class="stat-label">Packets/sec</div>
+            <div class="stat-value" id="packetsPerSec">0.0</div>
+        </div>
+        <div class="stat-card orange">
+            <div class="stat-label">Active Nodes</div>
+            <div class="stat-value" id="activeNodes">0</div>
+        </div>
+        <div class="stat-card">
+            <div class="stat-label">Clients Connected</div>
+            <div class="stat-value" id="clientsConnected">0</div>
+        </div>
+    </div>
+
+    <div class="activity-feed">
+        <div class="feed-header">
+            <h2 class="feed-title">Live Activity Feed</h2>
+            <div class="feed-controls">
+                <button class="filter-btn active" data-filter="all">All</button>
+                <button class="filter-btn" data-filter="packet">Packets</button>
+                <button class="filter-btn" data-filter="node_online">Nodes</button>
+                <button class="filter-btn" data-filter="alert">Alerts</button>
+                <button class="auto-scroll-toggle" id="autoScrollToggle">Auto-scroll: ON</button>
+            </div>
+        </div>
+        <div class="feed-content" id="feedContent">
+            <div class="empty-state">
+                <div class="empty-icon">📡</div>
+                <div>Waiting for mesh activity...</div>
+                <div style="font-size: 13px; margin-top: 10px; color: #bbb;">
+                    Real-time events will appear here as they occur
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+
+<script>
+// Live Monitor JavaScript
+(function() {
+    let eventSource = null;
+    let autoScroll = true;
+    let currentFilter = 'all';
+    let eventCount = 0;
+    
+    const feedContent = document.getElementById('feedContent');
+    const statusIndicator = document.getElementById('statusIndicator');
+    const statusText = document.getElementById('statusText');
+    const autoScrollToggle = document.getElementById('autoScrollToggle');
+    
+    // Icon mapping for different event types
+    const eventIcons = {
+        packet: '📨',
+        node_online: '🟢',
+        node_offline: '🔴',
+        alert: '⚠️',
+        traceroute: '🗺️',
+        connected: '✓'
+    };
+    
+    function connectToStream() {
+        eventSource = new EventSource('/api/live/stream');
+        
+        eventSource.onopen = function() {
+            updateConnectionStatus(true);
+        };
+        
+        eventSource.onerror = function() {
+            updateConnectionStatus(false);
+            // Reconnect after 5 seconds
+            setTimeout(connectToStream, 5000);
+        };
+        
+        eventSource.onmessage = function(e) {
+            try {
+                const event = JSON.parse(e.data);
+                handleEvent(event);
+            } catch (err) {
+                console.error('Error parsing event:', err);
+            }
+        };
+    }
+    
+    function updateConnectionStatus(connected) {
+        if (connected) {
+            statusIndicator.className = 'status-indicator status-connected';
+            statusText.textContent = 'Connected';
+        } else {
+            statusIndicator.className = 'status-indicator status-disconnected';
+            statusText.textContent = 'Disconnected';
+        }
+    }
+    
+    function handleEvent(event) {
+        if (event.type === 'connected') {
+            return;
+        }
+        
+        eventCount++;
+        
+        // Update stats
+        updateStats();
+        
+        // Add to feed if filter matches
+        if (currentFilter === 'all' || currentFilter === event.type) {
+            addEventToFeed(event);
+        }
+    }
+    
+    function addEventToFeed(event) {
+        // Remove empty state if present
+        const emptyState = feedContent.querySelector('.empty-state');
+        if (emptyState) {
+            emptyState.remove();
+        }
+        
+        const eventEl = createEventElement(event);
+        feedContent.insertBefore(eventEl, feedContent.firstChild);
+        
+        // Limit to 100 events in DOM
+        while (feedContent.children.length > 100) {
+            feedContent.removeChild(feedContent.lastChild);
+        }
+        
+        // Auto-scroll if enabled
+        if (autoScroll) {
+            feedContent.scrollTop = 0;
+        }
+    }
+    
+    function createEventElement(event) {
+        const div = document.createElement('div');
+        div.className = 'activity-item';
+        
+        const icon = eventIcons[event.type] || '•';
+        const timeAgo = getTimeAgo(event.timestamp);
+        
+        let title = '';
+        let description = '';
+        let metaItems = [];
+        
+        if (event.type === 'packet') {
+            const d = event.data;
+            title = `${d.type || 'Unknown'} packet`;
+            description = `${d.from_name} → ${d.to_name}`;
+            
+            if (d.rssi) metaItems.push(`RSSI: ${d.rssi}dBm`);
+            if (d.snr) metaItems.push(`SNR: ${d.snr.toFixed(1)}dB`);
+            if (d.hop_limit) metaItems.push(`Hops: ${d.hop_limit}`);
+            if (d.text) description += `: "${d.text}"`;
+        } else if (event.type.startsWith('node_')) {
+            const d = event.data;
+            title = `Node ${d.status}`;
+            description = d.node_name;
+        } else if (event.type === 'alert') {
+            const d = event.data;
+            title = d.alert_type;
+            description = d.message;
+        }
+        
+        const metaHtml = metaItems.map(item => 
+            `<span class="meta-item">${item}</span>`
+        ).join('');
+        
+        div.innerHTML = `
+            <div class="activity-icon ${event.type}">
+                ${icon}
+            </div>
+            <div class="activity-details">
+                <div class="activity-header">
+                    <span class="activity-title">${title}</span>
+                    <span class="activity-time">${timeAgo}</span>
+                </div>
+                <div class="activity-description">${description}</div>
+                ${metaItems.length > 0 ? `<div class="activity-meta">${metaHtml}</div>` : ''}
+            </div>
+        `;
+        
+        return div;
+    }
+    
+    function getTimeAgo(timestamp) {
+        const seconds = Math.floor(Date.now() / 1000 - timestamp);
+        if (seconds < 5) return 'just now';
+        if (seconds < 60) return `${seconds}s ago`;
+        if (seconds < 3600) return `${Math.floor(seconds / 60)}m ago`;
+        return `${Math.floor(seconds / 3600)}h ago`;
+    }
+    
+    function updateStats() {
+        // Fetch stats from API
+        fetch('/api/live/stats')
+            .then(r => r.json())
+            .then(data => {
+                const stats = data.stats;
+                document.getElementById('totalEvents').textContent = stats.total_events || 0;
+                document.getElementById('packetsPerSec').textContent = (stats.packets_per_second || 0).toFixed(1);
+                document.getElementById('clientsConnected').textContent = stats.clients_connected || 0;
+            });
+        
+        // Fetch summary for active nodes
+        fetch('/api/live/summary?window=300')
+            .then(r => r.json())
+            .then(data => {
+                const summary = data.summary;
+                document.getElementById('activeNodes').textContent = summary.unique_nodes || 0;
+            });
+    }
+    
+    // Filter buttons
+    document.querySelectorAll('.filter-btn').forEach(btn => {
+        btn.addEventListener('click', function() {
+            document.querySelectorAll('.filter-btn').forEach(b => b.classList.remove('active'));
+            this.classList.add('active');
+            currentFilter = this.dataset.filter;
+            
+            // Reload recent events with filter
+            loadRecentEvents();
+        });
+    });
+    
+    // Auto-scroll toggle
+    autoScrollToggle.addEventListener('click', function() {
+        autoScroll = !autoScroll;
+        this.textContent = `Auto-scroll: ${autoScroll ? 'ON' : 'OFF'}`;
+        this.classList.toggle('disabled', !autoScroll);
+    });
+    
+    function loadRecentEvents() {
+        const url = currentFilter === 'all' 
+            ? '/api/live/recent?limit=50'
+            : `/api/live/recent?limit=50&type=${currentFilter}`;
+        
+        fetch(url)
+            .then(r => r.json())
+            .then(data => {
+                feedContent.innerHTML = '';
+                if (data.events.length === 0) {
+                    feedContent.innerHTML = `
+                        <div class="empty-state">
+                            <div class="empty-icon">📡</div>
+                            <div>No ${currentFilter === 'all' ? '' : currentFilter} events yet</div>
+                        </div>
+                    `;
+                } else {
+                    data.events.reverse().forEach(event => {
+                        addEventToFeed(event);
+                    });
+                }
+            });
+    }
+    
+    // Initialize
+    connectToStream();
+    loadRecentEvents();
+    updateStats();
+    
+    // Update stats every 5 seconds
+    setInterval(updateStats, 5000);
+    
+    // Cleanup on page unload
+    window.addEventListener('beforeunload', function() {
+        if (eventSource) {
+            eventSource.close();
+        }
+    });
+})();
+</script>
+{% endblock %}
