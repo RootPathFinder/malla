@@ -83,40 +83,40 @@ def test_detect_solar_power_type(db_with_telemetry):
     for day in range(7):
         base_time = current_time - ((6 - day) * 24 * 3600)
 
-        # Nighttime (low voltage)
+        # Nighttime (low voltage - 0am-6am)
         for hour in range(0, 6):
             timestamp = base_time + (hour * 3600)
-            voltage = 3.6 + (hour * 0.01)  # Slowly declining at night
+            voltage = 3.5  # Steady low voltage at night
             cursor.execute(
                 """
                 INSERT INTO telemetry_data (timestamp, node_id, voltage, battery_level)
                 VALUES (?, ?, ?, ?)
             """,
-                (timestamp, node_id, voltage, 60 + hour),
+                (timestamp, node_id, voltage, 50),
             )
 
-        # Daytime (charging - higher voltage)
+        # Daytime (charging - higher voltage 6am-6pm)
         for hour in range(6, 18):
             timestamp = base_time + (hour * 3600)
-            voltage = 3.8 + ((hour - 6) * 0.03)  # Rising during day
+            voltage = 4.2  # High voltage during day (solar charging)
             cursor.execute(
                 """
                 INSERT INTO telemetry_data (timestamp, node_id, voltage, battery_level)
                 VALUES (?, ?, ?, ?)
             """,
-                (timestamp, node_id, voltage, 70 + hour),
+                (timestamp, node_id, voltage, 85),
             )
 
-        # Evening (declining again)
+        # Evening (declining back to night levels 6pm-midnight)
         for hour in range(18, 24):
             timestamp = base_time + (hour * 3600)
-            voltage = 4.1 - ((hour - 18) * 0.05)  # Declining in evening
+            voltage = 3.5  # Back to low voltage in evening
             cursor.execute(
                 """
                 INSERT INTO telemetry_data (timestamp, node_id, voltage, battery_level)
                 VALUES (?, ?, ?, ?)
             """,
-                (timestamp, node_id, voltage, 85 - (hour - 18)),
+                (timestamp, node_id, voltage, 50),
             )
 
     db_with_telemetry.commit()
