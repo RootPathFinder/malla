@@ -2371,6 +2371,97 @@ def api_preferences_validate():
         return jsonify({"error": str(e), "valid": False}), 400
 
 
+@api_bp.route("/search/nodes")
+def api_search_nodes():
+    """
+    Enhanced node search with fuzzy matching.
+    
+    Query parameters:
+        - q: Search query
+        - fuzzy: Enable fuzzy matching (default: true)
+        - threshold: Fuzzy match threshold (default: 0.6)
+        - limit: Maximum results (default: 50)
+    """
+    logger.info("API search nodes endpoint accessed")
+    try:
+        from ..utils.search import search_nodes, rank_search_results
+        
+        query = request.args.get("q", "")
+        if not query:
+            return jsonify({"error": "Search query required"}), 400
+        
+        fuzzy = request.args.get("fuzzy", "true").lower() == "true"
+        threshold = request.args.get("threshold", 0.6, type=float)
+        limit = request.args.get("limit", 50, type=int)
+        
+        # Get all nodes
+        filters = {}
+        nodes = NodeRepository.get_nodes(filters)
+        
+        # Apply search
+        results = search_nodes(nodes, query, fuzzy=fuzzy, threshold=threshold)
+        
+        # Rank results
+        results = rank_search_results(results, boost_recent=True)
+        
+        # Limit results
+        results = results[:limit]
+        
+        return safe_jsonify({
+            "results": results,
+            "count": len(results),
+            "query": query,
+            "fuzzy": fuzzy,
+            "threshold": threshold
+        })
+    except Exception as e:
+        logger.error(f"Error in API search nodes: {e}")
+        return jsonify({"error": str(e)}), 500
+
+
+@api_bp.route("/search/packets")
+def api_search_packets():
+    """
+    Enhanced packet search.
+    
+    Query parameters:
+        - q: Search query
+        - search_in: Comma-separated fields to search (optional)
+        - limit: Maximum results (default: 100)
+    """
+    logger.info("API search packets endpoint accessed")
+    try:
+        from ..utils.search import search_packets
+        
+        query = request.args.get("q", "")
+        if not query:
+            return jsonify({"error": "Search query required"}), 400
+        
+        search_in_str = request.args.get("search_in")
+        search_in = search_in_str.split(",") if search_in_str else None
+        limit = request.args.get("limit", 100, type=int)
+        
+        # Get recent packets (last 1000)
+        filters = {}
+        packets = PacketRepository.get_packets(filters, limit=1000)
+        
+        # Apply search
+        results = search_packets(packets, query, search_in=search_in)
+        
+        # Limit results
+        results = results[:limit]
+        
+        return safe_jsonify({
+            "results": results,
+            "count": len(results),
+            "query": query,
+            "searched_fields": search_in
+        })
+    except Exception as e:
+        logger.error(f"Error in API search packets: {e}")
+        return jsonify({"error": str(e)}), 500
+
+
 def safe_jsonify(data, *args, **kwargs):
     """
     A drop-in replacement for Flask's jsonify() that sanitizes NaN/Inf values.
