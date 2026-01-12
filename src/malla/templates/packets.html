@@ -554,6 +554,7 @@ document.addEventListener('DOMContentLoaded', function() {
     let lastPacketTimestamp = Math.floor(Date.now() / 1000);
     let autoUpdateInterval = null;
     let autoUpdateEnabled = true;
+    let hasNewPackets = false;
 
     async function checkForNewPackets() {
         if (!autoUpdateEnabled) return;
@@ -570,14 +571,10 @@ document.addEventListener('DOMContentLoaded', function() {
                 const newestTimestamp = Math.max(...data.packets.map(p => p.timestamp));
                 lastPacketTimestamp = newestTimestamp;
 
-                // Refresh the table to pick up new packets
-                if (window.controller) {
-                    window.controller.applyCurrentFilters();
-                } else if (table) {
-                    table.refresh();
-                }
+                // Mark that we have new packets but don't refresh yet
+                hasNewPackets = true;
 
-                // Show visual indicator that new packets arrived
+                // Show visual indicator that new packets arrived (subtle pulse)
                 const lastUpdateEl = document.getElementById('statsLastUpdate');
                 if (lastUpdateEl) {
                     lastUpdateEl.classList.add('pulse-update');
@@ -593,10 +590,10 @@ document.addEventListener('DOMContentLoaded', function() {
         }
     }
 
-    // Start real-time updates every 3 seconds
+    // Start real-time updates every 3 seconds (just fetches, no refresh)
     autoUpdateInterval = setInterval(checkForNewPackets, 3000);
 
-    // Stop updates when page is hidden, resume when visible
+    // Refresh table when user clicks on it or when they switch back to the tab
     document.addEventListener('visibilitychange', function() {
         if (document.hidden) {
             autoUpdateEnabled = false;
@@ -604,8 +601,31 @@ document.addEventListener('DOMContentLoaded', function() {
         } else {
             autoUpdateEnabled = true;
             autoUpdateInterval = setInterval(checkForNewPackets, 3000);
+            // Refresh when switching back to tab if we have new packets
+            if (hasNewPackets && window.controller) {
+                window.controller.applyCurrentFilters();
+                hasNewPackets = false;
+            }
         }
     });
+
+    // Refresh table on user interaction (click, scroll, etc)
+    let interactionTimeout = null;
+    function handleTableInteraction() {
+        if (hasNewPackets) {
+            if (interactionTimeout) clearTimeout(interactionTimeout);
+            // Debounce the refresh by 1 second to avoid too many refreshes
+            interactionTimeout = setTimeout(() => {
+                if (hasNewPackets && window.controller) {
+                    window.controller.applyCurrentFilters();
+                    hasNewPackets = false;
+                }
+            }, 1000);
+        }
+    }
+
+    document.addEventListener('click', handleTableInteraction, true);
+    document.addEventListener('scroll', handleTableInteraction, true);
 
     // Initialize the filter controller
     const controller = new TableFilterController({
