@@ -25,11 +25,17 @@ def battery_analytics():
         # Get critical battery alerts
         critical_batteries = BatteryAnalyticsRepository.get_critical_batteries()
 
+        # Get all nodes with battery telemetry
+        nodes_with_telemetry = (
+            BatteryAnalyticsRepository.get_nodes_with_battery_telemetry()
+        )
+
         return render_template(
             "battery_analytics.html",
             power_summary=power_summary,
             battery_health=battery_health,
             critical_batteries=critical_batteries,
+            nodes_with_telemetry=nodes_with_telemetry,
         )
     except Exception as e:
         logger.error(f"Error loading battery analytics: {e}")
@@ -44,4 +50,5 @@ def battery_analytics():
             },
             battery_health=[],
             critical_batteries=[],
+            nodes_with_telemetry=[],
         )

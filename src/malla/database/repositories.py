@@ -4234,3 +4234,85 @@ class BatteryAnalyticsRepository:
         except Exception as e:
             logger.error(f"Error getting voltage history for node {node_id}: {e}")
             return []
+
+    @staticmethod
+    def get_nodes_with_battery_telemetry() -> list[dict[str, Any]]:
+        """Get all nodes that have shared battery telemetry data.
+
+        Returns:
+            List of nodes with battery telemetry sorted by power type and recency
+        """
+        try:
+            conn = get_db_connection()
+            cursor = conn.cursor()
+
+            # Get all nodes that have voltage data in telemetry
+            cursor.execute(
+                """
+                SELECT DISTINCT
+                    ni.node_id,
+                    ni.hex_id,
+                    ni.long_name,
+                    ni.short_name,
+                    ni.power_type,
+                    ni.last_battery_voltage,
+                    ni.battery_health_score,
+                    MAX(td.timestamp) as last_telemetry_time
+                FROM node_info ni
+                INNER JOIN telemetry_data td ON ni.node_id = td.node_id
+                WHERE td.voltage IS NOT NULL
+                GROUP BY ni.node_id
+                ORDER BY
+                    CASE
+                        WHEN ni.power_type = 'solar' THEN 0
+                        WHEN ni.power_type = 'battery' THEN 1
+                        WHEN ni.power_type = 'mains' THEN 2
+                        ELSE 3
+                    END,
+                    MAX(td.timestamp) DESC
+            """
+            )
+
+            results = []
+            for row in cursor.fetchall():
+                node_name = row["long_name"] or row["short_name"] or row["hex_id"]
+                power_type = row["power_type"] or "unknown"
+
+                # Determine power type icon and color
+                if power_type == "solar":
+                    power_icon = "sun-fill"
+                    power_class = "warning"
+                elif power_type == "battery":
+                    power_icon = "battery-half"
+                    power_class = "info"
+                elif power_type == "mains":
+                    power_icon = "plug-fill"
+                    power_class = "success"
+                else:
+                    power_icon = "question-circle"
+                    power_class = "secondary"
+
+                results.append(
+                    {
+                        "node_id": row["node_id"],
+                        "hex_id": row["hex_id"],
+                        "name": node_name,
+                        "power_type": power_type,
+                        "power_icon": power_icon,
+                        "power_class": power_class,
+                        "voltage": row["last_battery_voltage"],
+                        "health_score": row["battery_health_score"],
+                        "last_telemetry": (
+                            format_time_ago(row["last_telemetry_time"])
+                            if row["last_telemetry_time"]
+                            else "Never"
+                        ),
+                    }
+                )
+
+            conn.close()
+            return results
+
+        except Exception as e:
+            logger.error(f"Error getting nodes with battery telemetry: {e}")
+            return []
