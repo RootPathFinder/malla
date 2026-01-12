@@ -163,13 +163,6 @@
                         </a>
                     </li>
 
-                    <!-- Live Monitor -->
-                    <li class="nav-item">
-                        <a class="nav-link {{ 'active' if request.endpoint == 'live_monitor.live_monitor_page' }}" href="{{ url_for('live_monitor.live_monitor_page') }}">
-                            <i class="bi bi-broadcast"></i> Live
-                        </a>
-                    </li>
-
                     <!-- Data dropdown (Packets & Nodes) -->
                     <li class="nav-item dropdown">
                         {% set data_active = 'packet' in request.endpoint or 'node' in request.endpoint %}

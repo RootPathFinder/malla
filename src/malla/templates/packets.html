@@ -550,6 +550,64 @@ document.addEventListener('DOMContentLoaded', function() {
         document.getElementById('statsLastUpdate').textContent = new Date().toLocaleTimeString();
     }
 
+    // Real-time auto-update functionality for new packets
+    let lastPacketTimestamp = Math.floor(Date.now() / 1000);
+    let autoUpdateInterval = null;
+    let autoUpdateEnabled = true;
+
+    async function checkForNewPackets() {
+        if (!autoUpdateEnabled) return;
+
+        try {
+            const response = await fetch(`/api/packets/new?since=${lastPacketTimestamp}&limit=50`);
+            if (!response.ok) {
+                throw new Error(`HTTP ${response.status}`);
+            }
+
+            const data = await response.json();
+            if (data.packets && data.packets.length > 0) {
+                // Update the last timestamp for next check
+                const newestTimestamp = Math.max(...data.packets.map(p => p.timestamp));
+                lastPacketTimestamp = newestTimestamp;
+
+                // Refresh the table to pick up new packets
+                if (window.controller) {
+                    window.controller.applyCurrentFilters();
+                } else if (table) {
+                    table.refresh();
+                }
+
+                // Show visual indicator that new packets arrived
+                const lastUpdateEl = document.getElementById('statsLastUpdate');
+                if (lastUpdateEl) {
+                    lastUpdateEl.classList.add('pulse-update');
+                    setTimeout(() => {
+                        lastUpdateEl.classList.remove('pulse-update');
+                    }, 1000);
+                }
+
+                updateStats();
+            }
+        } catch (error) {
+            // Silently handle errors to avoid console spam
+            console.debug('Real-time update check failed:', error);
+        }
+    }
+
+    // Start real-time updates every 3 seconds
+    autoUpdateInterval = setInterval(checkForNewPackets, 3000);
+
+    // Stop updates when page is hidden, resume when visible
+    document.addEventListener('visibilitychange', function() {
+        if (document.hidden) {
+            autoUpdateEnabled = false;
+            clearInterval(autoUpdateInterval);
+        } else {
+            autoUpdateEnabled = true;
+            autoUpdateInterval = setInterval(checkForNewPackets, 3000);
+        }
+    });
+
     // Initialize the filter controller
     const controller = new TableFilterController({
         table,
@@ -575,6 +633,13 @@ document.addEventListener('DOMContentLoaded', function() {
     refreshBtn.addEventListener('click', () => {
         table.refresh();
         updateStats();
+    });
+
+    // Add cleanup when page unloads
+    window.addEventListener('beforeunload', function() {
+        if (autoUpdateInterval) {
+            clearInterval(autoUpdateInterval);
+        }
     });
 
     // Helper functions for signal quality color coding

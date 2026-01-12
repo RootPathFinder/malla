@@ -5,6 +5,7 @@ API routes for the Meshtastic Mesh Health Web UI
 import json
 import logging
 import time
+from datetime import UTC, datetime
 from typing import Any
 
 from flask import Blueprint, jsonify, request
@@ -2120,7 +2121,7 @@ def api_network_health_summary():
 def api_performance_metrics():
     """
     API endpoint for performance metrics.
-    
+
     Returns detailed performance statistics for monitored functions,
     useful for identifying bottlenecks and slow operations.
     """
@@ -2128,7 +2129,7 @@ def api_performance_metrics():
     try:
         function_name = request.args.get("function")
         metrics = get_metrics(function_name)
-        
+
         return jsonify({
             "metrics": metrics,
             "timestamp": time.time()
@@ -2142,7 +2143,7 @@ def api_performance_metrics():
 def api_slow_functions():
     """
     API endpoint for identifying slow functions.
-    
+
     Returns functions that exceed the specified performance threshold,
     sorted by average execution time.
     """
@@ -2150,9 +2151,9 @@ def api_slow_functions():
     try:
         threshold = request.args.get("threshold", 1.0, type=float)
         limit = request.args.get("limit", 10, type=int)
-        
+
         slow_funcs = get_slow_functions(threshold=threshold, limit=limit)
-        
+
         return jsonify({
             "slow_functions": slow_funcs,
             "threshold": threshold,
@@ -2168,17 +2169,17 @@ def api_slow_functions():
 def api_database_pool_stats():
     """
     API endpoint for database connection pool statistics.
-    
+
     Returns information about connection pool usage, helping identify
     connection bottlenecks and resource utilization.
     """
     logger.info("API database pool stats endpoint accessed")
     try:
         from ..database.connection_pool import get_connection_pool
-        
+
         pool = get_connection_pool()
         stats = pool.get_stats()
-        
+
         return jsonify({
             "pool_stats": stats,
             "timestamp": time.time()
@@ -2204,7 +2205,7 @@ def api_export_formats():
 def api_export_packets():
     """
     API endpoint to export packet data in various formats.
-    
+
     Query parameters:
         - format: csv or json (default: csv)
         - All standard packet filter parameters
@@ -2212,17 +2213,17 @@ def api_export_packets():
     logger.info("API export packets endpoint accessed")
     try:
         from flask import Response, make_response
-        
+
         export_format = request.args.get("format", "csv").lower()
-        
+
         # Get packets using existing filters
         filters = {}
         for key in request.args:
             if key != "format":
                 filters[key] = request.args.get(key)
-        
+
         packets = PacketRepository.get_packets(filters)
-        
+
         if export_format == "csv":
             csv_content, filename = export_packets_to_csv(packets)
             response = make_response(csv_content)
@@ -2238,7 +2239,7 @@ def api_export_packets():
             return response
         else:
             return jsonify({"error": f"Unsupported format: {export_format}"}), 400
-            
+
     except Exception as e:
         logger.error(f"Error in API export packets: {e}")
         return jsonify({"error": str(e)}), 500
@@ -2248,7 +2249,7 @@ def api_export_packets():
 def api_export_nodes():
     """
     API endpoint to export node data in various formats.
-    
+
     Query parameters:
         - format: csv, json, or geojson (default: csv)
         - All standard node filter parameters
@@ -2256,17 +2257,17 @@ def api_export_nodes():
     logger.info("API export nodes endpoint accessed")
     try:
         from flask import Response, make_response
-        
+
         export_format = request.args.get("format", "csv").lower()
-        
+
         # Get nodes using existing filters
         filters = {}
         for key in request.args:
             if key != "format":
                 filters[key] = request.args.get(key)
-        
+
         nodes = NodeRepository.get_nodes(filters)
-        
+
         if export_format == "csv":
             csv_content, filename = export_nodes_to_csv(nodes)
             response = make_response(csv_content)
@@ -2288,7 +2289,7 @@ def api_export_nodes():
             return response
         else:
             return jsonify({"error": f"Unsupported format: {export_format}"}), 400
-            
+
     except Exception as e:
         logger.error(f"Error in API export nodes: {e}")
         return jsonify({"error": str(e)}), 500
@@ -2298,28 +2299,28 @@ def api_export_nodes():
 def api_export_analytics():
     """
     API endpoint to export analytics data.
-    
+
     Query parameters:
         - gateway_id: Optional gateway filter
     """
     logger.info("API export analytics endpoint accessed")
     try:
         from flask import Response, make_response
-        
+
         gateway_id = request.args.get("gateway_id")
         from_node = request.args.get("from_node", type=int)
         hop_count = request.args.get("hop_count", type=int)
-        
+
         analytics = AnalyticsService.get_analytics_data(
             gateway_id=gateway_id, from_node=from_node, hop_count=hop_count
         )
-        
+
         json_content, filename = export_analytics_to_json(analytics)
         response = make_response(json_content)
         response.headers["Content-Type"] = "application/json"
         response.headers["Content-Disposition"] = f"attachment; filename={filename}"
         return response
-            
+
     except Exception as e:
         logger.error(f"Error in API export analytics: {e}")
         return jsonify({"error": str(e)}), 500
@@ -2331,7 +2332,7 @@ def api_preferences_defaults():
     logger.info("API preferences defaults endpoint accessed")
     try:
         from ..utils.preferences import UserPreferences
-        
+
         defaults = UserPreferences.get_default_preferences()
         return jsonify({"preferences": defaults})
     except Exception as e:
@@ -2345,7 +2346,7 @@ def api_preferences_schema():
     logger.info("API preferences schema endpoint accessed")
     try:
         from ..utils.preferences import UserPreferences
-        
+
         schema = UserPreferences.get_preference_schema()
         return jsonify({"schema": schema})
     except Exception as e:
@@ -2359,11 +2360,11 @@ def api_preferences_validate():
     logger.info("API preferences validate endpoint accessed")
     try:
         from ..utils.preferences import UserPreferences
-        
+
         prefs = request.get_json()
         if not prefs:
             return jsonify({"error": "No preferences provided"}), 400
-        
+
         validated = UserPreferences.validate_preferences(prefs)
         return jsonify({"preferences": validated, "valid": True})
     except Exception as e:
@@ -2375,7 +2376,7 @@ def api_preferences_validate():
 def api_search_nodes():
     """
     Enhanced node search with fuzzy matching.
-    
+
     Query parameters:
         - q: Search query
         - fuzzy: Enable fuzzy matching (default: true)
@@ -2385,28 +2386,28 @@ def api_search_nodes():
     logger.info("API search nodes endpoint accessed")
     try:
         from ..utils.search import search_nodes, rank_search_results
-        
+
         query = request.args.get("q", "")
         if not query:
             return jsonify({"error": "Search query required"}), 400
-        
+
         fuzzy = request.args.get("fuzzy", "true").lower() == "true"
         threshold = request.args.get("threshold", 0.6, type=float)
         limit = request.args.get("limit", 50, type=int)
-        
+
         # Get all nodes
         filters = {}
         nodes = NodeRepository.get_nodes(filters)
-        
+
         # Apply search
         results = search_nodes(nodes, query, fuzzy=fuzzy, threshold=threshold)
-        
+
         # Rank results
         results = rank_search_results(results, boost_recent=True)
-        
+
         # Limit results
         results = results[:limit]
-        
+
         return safe_jsonify({
             "results": results,
             "count": len(results),
@@ -2419,11 +2420,72 @@ def api_search_nodes():
         return jsonify({"error": str(e)}), 500
 
 
+@api_bp.route("/packets/new")
+def api_packets_new():
+    """
+    Get newly arrived packets since a specific timestamp.
+    Used for real-time updates on the packets page.
+
+    Query parameters:
+        - since: Unix timestamp (seconds) - only return packets after this time
+        - limit: Maximum packets to return (default: 50, max: 500)
+    """
+    logger.info("API new packets endpoint accessed")
+    try:
+        since = request.args.get("since", type=float)
+        limit = min(request.args.get("limit", 50, type=int), 500)
+
+        if since is None:
+            return jsonify({"error": "since parameter required"}), 400
+
+        conn = get_db_connection()
+        cursor = conn.cursor()
+
+        # Get new packets since the given timestamp
+        query = """
+        SELECT
+            id, timestamp, from_node_id, to_node_id, portnum_name,
+            gateway_id, channel_id, rssi, snr, hop_limit, hop_start,
+            payload_length, processed_successfully
+        FROM packet_history
+        WHERE timestamp > ?
+        ORDER BY timestamp DESC
+        LIMIT ?
+        """
+
+        cursor.execute(query, (since, limit))
+        rows = cursor.fetchall()
+        conn.close()
+
+        # Format packets
+        packets = []
+        for row in rows:
+            packet_dict = dict(row)
+            packet_dict["timestamp_str"] = datetime.fromtimestamp(
+                packet_dict["timestamp"], UTC
+            ).strftime("%Y-%m-%d %H:%M:%S")
+            packet_dict["hop_count"] = (
+                (packet_dict["hop_start"] - packet_dict["hop_limit"])
+                if packet_dict["hop_start"] and packet_dict["hop_limit"] is not None
+                else None
+            )
+            packets.append(packet_dict)
+
+        return jsonify({
+            "packets": packets,
+            "count": len(packets),
+            "since": since
+        })
+    except Exception as e:
+        logger.error(f"Error in API new packets: {e}")
+        return jsonify({"error": str(e)}), 500
+
+
 @api_bp.route("/search/packets")
 def api_search_packets():
     """
     Enhanced packet search.
-    
+
     Query parameters:
         - q: Search query
         - search_in: Comma-separated fields to search (optional)
@@ -2432,25 +2494,25 @@ def api_search_packets():
     logger.info("API search packets endpoint accessed")
     try:
         from ..utils.search import search_packets
-        
+
         query = request.args.get("q", "")
         if not query:
             return jsonify({"error": "Search query required"}), 400
-        
+
         search_in_str = request.args.get("search_in")
         search_in = search_in_str.split(",") if search_in_str else None
         limit = request.args.get("limit", 100, type=int)
-        
+
         # Get recent packets (last 1000)
         filters = {}
         packets = PacketRepository.get_packets(filters, limit=1000)
-        
+
         # Apply search
         results = search_packets(packets, query, search_in=search_in)
-        
+
         # Limit results
         results = results[:limit]
-        
+
         return safe_jsonify({
             "results": results,
             "count": len(results),
