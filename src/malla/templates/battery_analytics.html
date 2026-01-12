@@ -13,10 +13,25 @@
     {% endif %}
 
     <div class="row mb-4">
-        <div class="col">
+        <div class="col-md-8">
             <h1 class="h2">
                 <i class="bi bi-battery-charging"></i> Battery &amp; Power Analytics
             </h1>
+        </div>
+        <div class="col-md-4 text-end">
+            <button id="detect-power-btn" class="btn btn-primary" onclick="detectPowerTypes()">
+                <i class="bi bi-lightning-fill"></i> Detect Power Types
+            </button>
+        </div>
+    </div>
+
+    <!-- Power Type Detection Status -->
+    <div class="row mb-3">
+        <div class="col">
+            <div id="power-detection-status" class="alert alert-info" role="alert" style="display: none;">
+                <i class="bi bi-info-circle"></i>
+                <span id="power-detection-message">Analyzing power types...</span>
+            </div>
         </div>
     </div>
 
@@ -219,8 +234,21 @@
     </div>
 
     <script>
-        // Load and render voltage trends chart
+        // Auto-detect power types if all are unknown
         document.addEventListener('DOMContentLoaded', function() {
+            // Check if auto-detection is needed
+            const hasTelemetry = {{ (nodes_with_telemetry|length > 0)|tojson }};
+            const allUnknown = {{ power_summary.solar }} === 0 &&
+                              {{ power_summary.battery }} === 0 &&
+                              {{ power_summary.mains }} === 0 &&
+                              {{ power_summary.unknown }} > 0;
+
+            if (hasTelemetry && allUnknown) {
+                console.log('Auto-detecting power types on first load...');
+                setTimeout(() => detectPowerTypes(true), 500);
+            }
+
+            // Load and render voltage trends chart
             fetch('/api/voltage-trends')
                 .then(response => response.json())
                 .then(data => {
@@ -232,6 +260,50 @@
                 })
                 .catch(error => console.error('Error loading voltage trends:', error));
         });
+
+        function detectPowerTypes(autoDetect = false) {
+            const button = document.getElementById('detect-power-btn');
+            const statusDiv = document.getElementById('power-detection-status');
+            const messageSpan = document.getElementById('power-detection-message');
+
+            // Disable button and show status
+            if (button) button.disabled = true;
+            statusDiv.style.display = 'block';
+            statusDiv.className = 'alert alert-info';
+            messageSpan.textContent = autoDetect ?
+                'Automatically detecting power types from voltage patterns...' :
+                'Analyzing voltage patterns to detect power sources...';
+
+            fetch('/api/detect-power-types', { method: 'POST' })
+                .then(response => response.json())
+                .then(data => {
+                    if (data.results) {
+                        const total = data.results.solar + data.results.battery + data.results.mains;
+                        statusDiv.className = 'alert alert-success';
+                        messageSpan.innerHTML = `
+                            <strong>Detection complete!</strong>
+                            Found ${data.results.solar} solar, ${data.results.battery} battery,
+                            and ${data.results.mains} mains-powered nodes.
+                            <a href="javascript:location.reload()" class="alert-link">Refresh page</a> to see updated counts.
+                        `;
+                        if (total > 0 && autoDetect) {
+                            // Auto-reload after successful auto-detection
+                            setTimeout(() => location.reload(), 2000);
+                        }
+                    } else {
+                        statusDiv.className = 'alert alert-warning';
+                        messageSpan.textContent = 'Detection completed but no power types were identified. More data may be needed.';
+                    }
+                })
+                .catch(error => {
+                    statusDiv.className = 'alert alert-danger';
+                    messageSpan.textContent = 'Error detecting power types: ' + error.message;
+                    console.error('Error:', error);
+                })
+                .finally(() => {
+                    if (button) button.disabled = false;
+                });
+        }
 
         function renderVoltageTrendsChart(nodesData) {
             // Prepare traces for Plotly
