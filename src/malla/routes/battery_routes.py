@@ -3,9 +3,11 @@ Battery analytics routes for power monitoring dashboard
 """
 
 import logging
+import sqlite3
 
-from flask import Blueprint, render_template
+from flask import Blueprint, jsonify, render_template
 
+from ..database.connection import get_db_connection
 from ..database.repositories import BatteryAnalyticsRepository
 
 logger = logging.getLogger(__name__)
@@ -52,3 +54,79 @@ def battery_analytics():
             critical_batteries=[],
             nodes_with_telemetry=[],
         )
+
+
+@battery_bp.route("/api/battery-debug", methods=["GET"])
+def battery_debug():
+    """Debug endpoint to check telemetry data in database."""
+    try:
+        conn = get_db_connection()
+        cursor = conn.cursor()
+
+        # Get counts
+        cursor.execute("SELECT COUNT(*) as total FROM telemetry_data")
+        total_telemetry = cursor.fetchone()["total"]
+
+        cursor.execute(
+            "SELECT COUNT(*) as total FROM telemetry_data WHERE voltage IS NOT NULL"
+        )
+        voltage_count = cursor.fetchone()["total"]
+
+        cursor.execute(
+            "SELECT COUNT(*) as total FROM telemetry_data WHERE battery_level IS NOT NULL"
+        )
+        battery_level_count = cursor.fetchone()["total"]
+
+        cursor.execute("SELECT COUNT(*) as total FROM node_info")
+        total_nodes = cursor.fetchone()["total"]
+
+        # Get sample telemetry data
+        cursor.execute(
+            """
+            SELECT DISTINCT
+                td.node_id,
+                ni.hex_id,
+                ni.long_name,
+                COUNT(*) as count,
+                MAX(td.timestamp) as last_timestamp,
+                MAX(td.voltage) as max_voltage,
+                AVG(td.voltage) as avg_voltage,
+                MAX(td.battery_level) as max_battery
+            FROM telemetry_data td
+            LEFT JOIN node_info ni ON td.node_id = ni.node_id
+            GROUP BY td.node_id
+            ORDER BY MAX(td.timestamp) DESC
+            LIMIT 20
+        """
+        )
+
+        telemetry_samples = []
+        for row in cursor.fetchall():
+            telemetry_samples.append(
+                {
+                    "node_id": row["node_id"],
+                    "hex_id": row["hex_id"],
+                    "name": row["long_name"],
+                    "telemetry_count": row["count"],
+                    "last_timestamp": row["last_timestamp"],
+                    "max_voltage": row["max_voltage"],
+                    "avg_voltage": row["avg_voltage"],
+                    "max_battery": row["max_battery"],
+                }
+            )
+
+        conn.close()
+
+        return jsonify(
+            {
+                "total_telemetry_records": total_telemetry,
+                "records_with_voltage": voltage_count,
+                "records_with_battery_level": battery_level_count,
+                "total_nodes": total_nodes,
+                "sample_nodes": telemetry_samples,
+            }
+        )
+
+    except Exception as e:
+        logger.error(f"Error in battery debug endpoint: {e}")
+        return jsonify({"error": str(e)}), 500
