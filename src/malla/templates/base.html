@@ -210,13 +210,19 @@
                     </li>
                 </ul>
 
-                <!-- Timezone Toggle and Dark Mode Toggle -->
+                <!-- Timezone Toggle, Temperature Toggle, and Dark Mode Toggle -->
                 <div class="navbar-nav d-flex flex-row gap-2">
                     <button id="timezone-toggle" class="btn btn-outline-light btn-sm" type="button"
                             data-bs-toggle="tooltip" data-bs-placement="bottom"
                             title="Toggle timezone"
                             aria-label="Toggle timezone">
                         <i class="bi bi-globe"></i>
+                    </button>
+                    <button id="temperature-toggle" class="btn btn-outline-light btn-sm" type="button"
+                            data-bs-toggle="tooltip" data-bs-placement="bottom"
+                            title="Toggle temperature unit"
+                            aria-label="Toggle temperature unit">
+                        <i class="bi bi-thermometer-half"></i> C
                     </button>
                     <button id="theme-toggle" class="btn btn-outline-light btn-sm" type="button"
                             data-bs-toggle="tooltip" data-bs-placement="bottom"
@@ -259,6 +265,8 @@
     <script src="{{ url_for('static', filename='js/timezone-utils.js') }}"></script>
     <!-- Timezone Toggle -->
     <script src="{{ url_for('static', filename='js/timezone-toggle.js') }}"></script>
+    <!-- Temperature Toggle -->
+    <script src="{{ url_for('static', filename='js/temperature-toggle.js') }}"></script>
 
     <!-- Node tooltip functionality -->
     <script>
