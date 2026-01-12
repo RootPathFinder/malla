@@ -1298,7 +1298,12 @@ async function loadTelemetryData() {
             if (em.temperature !== undefined) {
                 html += '<tr>';
                 html += '<td class="text-muted" style="width: 50%;">Temperature</td>';
-                html += '<td class="text-end fw-bold"><span class="temperature-display" data-temperature-celsius="' + em.temperature + '">' + em.temperature.toFixed(1) + ' °C</span> <span id="spark-temperature"></span></td>';
+                // Use TemperatureToggle.formatTemperature to respect user preference, fallback to Celsius
+                let tempDisplay = em.temperature.toFixed(1) + ' °C';
+                if (typeof TemperatureToggle !== 'undefined' && TemperatureToggle.formatTemperature) {
+                    tempDisplay = TemperatureToggle.formatTemperature(em.temperature, 1);
+                }
+                html += '<td class="text-end fw-bold"><span class="temperature-display" data-temperature-celsius="' + em.temperature + '">' + tempDisplay + '</span> <span id="spark-temperature"></span></td>';
                 html += '</tr>';
             }
 

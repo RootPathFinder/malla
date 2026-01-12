@@ -1517,6 +1517,11 @@ document.addEventListener('DOMContentLoaded', function() {
     if (typeof updateAllTimestamps === 'function') {
         updateAllTimestamps();
     }
+
+    // Update temperature displays based on current preference
+    if (typeof temperatureToggleInstance !== 'undefined' && temperatureToggleInstance) {
+        temperatureToggleInstance.updateAllTemperatures();
+    }
 });
 
 // Listen for temperature unit changes and update temperature displays

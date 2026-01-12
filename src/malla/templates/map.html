@@ -479,6 +479,11 @@ document.addEventListener('DOMContentLoaded', function() {
             window.addEventListener('themeChanged', function(event) {
                 updateMapTheme();
             });
+
+            // Listen for temperature unit changes
+            window.addEventListener('temperatureUnitChanged', function(event) {
+                updateMapDisplay();
+            });
         } else {
             setTimeout(waitForJQuery, 50);
         }
