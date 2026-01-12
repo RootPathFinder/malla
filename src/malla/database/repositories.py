@@ -4246,7 +4246,27 @@ class BatteryAnalyticsRepository:
             conn = get_db_connection()
             cursor = conn.cursor()
 
-            # Get all nodes that have voltage data in telemetry
+            # Debug: Check how many telemetry records exist
+            cursor.execute("SELECT COUNT(*) as total FROM telemetry_data")
+            total_telemetry = cursor.fetchone()["total"]
+            logger.debug(f"Total telemetry records in database: {total_telemetry}")
+
+            # Debug: Check how many have voltage data
+            cursor.execute(
+                "SELECT COUNT(*) as total FROM telemetry_data WHERE voltage IS NOT NULL"
+            )
+            voltage_count = cursor.fetchone()["total"]
+            logger.debug(f"Telemetry records with voltage data: {voltage_count}")
+
+            # Debug: Check how many have battery_level data
+            cursor.execute(
+                "SELECT COUNT(*) as total FROM telemetry_data WHERE battery_level IS NOT NULL"
+            )
+            battery_level_count = cursor.fetchone()["total"]
+            logger.debug(f"Telemetry records with battery_level data: {battery_level_count}")
+
+            # Get all nodes that have telemetry data (voltage or battery_level)
+            # This includes nodes that may not have power_type set yet
             cursor.execute(
                 """
                 SELECT DISTINCT
@@ -4260,7 +4280,7 @@ class BatteryAnalyticsRepository:
                     MAX(td.timestamp) as last_telemetry_time
                 FROM node_info ni
                 INNER JOIN telemetry_data td ON ni.node_id = td.node_id
-                WHERE td.voltage IS NOT NULL
+                WHERE td.voltage IS NOT NULL OR td.battery_level IS NOT NULL
                 GROUP BY ni.node_id
                 ORDER BY
                     CASE
@@ -4310,6 +4330,7 @@ class BatteryAnalyticsRepository:
                     }
                 )
 
+            logger.info(f"Found {len(results)} nodes with battery telemetry data")
             conn.close()
             return results
 
