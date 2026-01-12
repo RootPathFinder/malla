@@ -765,12 +765,18 @@ async function enrichNodesWithTelemetry(nodes) {
         const telemetryPromises = nodes.map(node =>
             fetch(`/api/node/${node.node_id}/telemetry`)
                 .then(resp => resp.json())
-                .then(telemetry => {
+                .then(data => {
+                    // Response is wrapped in "telemetry" key: { telemetry: {...} }
+                    const telemetry = data.telemetry;
+                    if (!telemetry) return;
+
                     // Extract temperature from telemetry - try device_metrics first, then environment_metrics
-                    if (telemetry.device_metrics && telemetry.device_metrics.temperature !== null) {
+                    if (telemetry.device_metrics && telemetry.device_metrics.temperature !== undefined && telemetry.device_metrics.temperature !== null) {
                         node.latest_telemetry_temp = telemetry.device_metrics.temperature;
-                    } else if (telemetry.environment_metrics && telemetry.environment_metrics.temperature !== null) {
+                        console.log(`Node ${node.display_name} (${node.node_id}): Temperature from device_metrics = ${node.latest_telemetry_temp}°C`);
+                    } else if (telemetry.environment_metrics && telemetry.environment_metrics.temperature !== undefined && telemetry.environment_metrics.temperature !== null) {
                         node.latest_telemetry_temp = telemetry.environment_metrics.temperature;
+                        console.log(`Node ${node.display_name} (${node.node_id}): Temperature from environment_metrics = ${node.latest_telemetry_temp}°C`);
                     }
                 })
                 .catch(err => {
@@ -780,6 +786,7 @@ async function enrichNodesWithTelemetry(nodes) {
         );
 
         await Promise.all(telemetryPromises);
+        console.log('Telemetry enrichment complete');
     } catch (error) {
         console.error('Error enriching nodes with telemetry:', error);
     }
