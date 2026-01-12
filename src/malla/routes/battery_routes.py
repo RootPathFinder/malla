@@ -153,6 +153,22 @@ def battery_debug():
         return jsonify({"error": str(e)}), 500
 
 
+@battery_bp.route("/api/detect-power-types", methods=["POST"])
+def detect_power_types():
+    """API endpoint to detect and update power types based on voltage patterns."""
+    try:
+        logger.info("Starting power type detection...")
+        results = BatteryAnalyticsRepository.detect_and_update_power_types()
+        logger.info(f"Power type detection completed: {results}")
+        return jsonify({
+            "message": "Power type detection completed",
+            "results": results
+        })
+    except Exception as e:
+        logger.error(f"Error detecting power types: {e}", exc_info=True)
+        return jsonify({"error": str(e)}), 500
+
+
 @battery_bp.route("/api/battery-telemetry-nodes", methods=["GET"])
 def battery_telemetry_nodes():
     """API endpoint to get nodes with battery telemetry."""

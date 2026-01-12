@@ -4004,6 +4004,141 @@ class BatteryAnalyticsRepository:
     """Repository for battery and power monitoring analytics."""
 
     @staticmethod
+    def detect_and_update_power_types() -> dict[str, int]:
+        """Detect power types based on voltage patterns and update database.
+
+        Returns:
+            Dictionary with counts of updated nodes by power type
+        """
+        try:
+            conn = get_db_connection()
+            cursor = conn.cursor()
+
+            # Get all nodes with telemetry data
+            cursor.execute(
+                """
+                SELECT DISTINCT ni.node_id, ni.long_name
+                FROM node_info ni
+                INNER JOIN telemetry_data td ON ni.node_id = td.node_id
+                WHERE td.voltage IS NOT NULL
+                GROUP BY ni.node_id
+                """
+            )
+
+            nodes = cursor.fetchall()
+            updated_counts = {"solar": 0, "battery": 0, "mains": 0}
+
+            for node_row in nodes:
+                node_id = node_row["node_id"]
+                node_name = node_row["long_name"]
+
+                # Get voltage history for this node
+                cursor.execute(
+                    """
+                    SELECT voltage, timestamp
+                    FROM telemetry_data
+                    WHERE node_id = ? AND voltage IS NOT NULL
+                    ORDER BY timestamp DESC
+                    LIMIT 100
+                    """,
+                    (node_id,)
+                )
+
+                voltage_data = cursor.fetchall()
+                if len(voltage_data) < 5:
+                    continue  # Not enough data
+
+                # Analyze voltage patterns
+                voltages = [v["voltage"] for v in voltage_data]
+                timestamps = [v["timestamp"] for v in voltage_data]
+
+                # Scale voltages if needed
+                scaled_voltages = []
+                for v in voltages:
+                    if v < 1:
+                        scaled_voltages.append(v * 1000)
+                    else:
+                        scaled_voltages.append(v)
+
+                power_type = BatteryAnalyticsRepository._classify_power_type(
+                    scaled_voltages, timestamps
+                )
+
+                if power_type:
+                    # Update the database
+                    cursor.execute(
+                        """
+                        UPDATE node_info
+                        SET power_type = ?
+                        WHERE node_id = ?
+                        """,
+                        (power_type, node_id)
+                    )
+                    updated_counts[power_type] += 1
+                    logger.info(f"Updated {node_name} ({node_id}) to power_type: {power_type}")
+
+            conn.commit()
+            conn.close()
+
+            logger.info(f"Power type detection complete: {updated_counts}")
+            return updated_counts
+
+        except Exception as e:
+            logger.error(f"Error detecting power types: {e}", exc_info=True)
+            return {"solar": 0, "battery": 0, "mains": 0}
+
+    @staticmethod
+    def _classify_power_type(voltages: list[float], timestamps: list[float]) -> str | None:
+        """Classify power type based on voltage patterns.
+
+        Args:
+            voltages: List of voltage readings (in actual volts, e.g., 4.0 not 0.004)
+            timestamps: List of corresponding timestamps
+
+        Returns:
+            Power type: "solar", "battery", "mains", or None
+        """
+        if len(voltages) < 5:
+            return None
+
+        # Calculate statistics
+        voltage_min = min(voltages)
+        voltage_max = max(voltages)
+        voltage_range = voltage_max - voltage_min
+        voltage_mean = sum(voltages) / len(voltages)
+
+        # Calculate standard deviation
+        variance = sum((v - voltage_mean) ** 2 for v in voltages) / len(voltages)
+        std_dev = variance ** 0.5
+
+        # Analyze time-based patterns
+        if len(timestamps) >= 2:
+            time_span = timestamps[0] - timestamps[-1]  # Most recent to oldest
+            hours_span = time_span / 3600
+        else:
+            hours_span = 0
+
+        # Classification logic
+        # Solar: High variance (daily charging cycles), range > 0.5V, shows cycling
+        if voltage_range > 0.5 and std_dev > 0.15 and hours_span >= 24:
+            return "solar"
+
+        # Mains: Very stable voltage, std_dev < 0.05V, almost no variation
+        if std_dev < 0.05 and voltage_range < 0.1:
+            return "mains"
+
+        # Battery: Moderate variance, steady decline trend, range between solar and mains
+        if 0.1 < voltage_range <= 0.5:
+            # Check for declining trend
+            if len(voltages) >= 3:
+                recent_avg = sum(voltages[:3]) / 3
+                older_avg = sum(voltages[-3:]) / 3
+                if older_avg > recent_avg:  # Voltage declining
+                    return "battery"
+            return "battery"
+
+        return None
+
     @staticmethod
     def get_power_source_summary() -> dict[str, int]:
         """Get summary of nodes by power source type.
