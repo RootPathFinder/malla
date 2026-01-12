@@ -744,6 +744,9 @@ async function loadNodeLocations() {
 
         allLinkData = [...tracerouteLinksFetched, ...packetLinksFetched];
 
+        // Fetch telemetry (temperature) for all nodes
+        await enrichNodesWithTelemetry(allNodeData);
+
         // Apply client-side filters
         applyClientSideFilters();
 
@@ -752,6 +755,33 @@ async function loadNodeLocations() {
     } catch (error) {
         console.error('Error loading node locations:', error);
         showError('Failed to load node locations');
+    }
+}
+
+// Fetch telemetry data (including temperature) for all nodes
+async function enrichNodesWithTelemetry(nodes) {
+    try {
+        // Fetch telemetry for all nodes in parallel
+        const telemetryPromises = nodes.map(node =>
+            fetch(`/api/node/${node.node_id}/telemetry`)
+                .then(resp => resp.json())
+                .then(telemetry => {
+                    // Extract temperature from telemetry - try device_metrics first, then environment_metrics
+                    if (telemetry.device_metrics && telemetry.device_metrics.temperature !== null) {
+                        node.latest_telemetry_temp = telemetry.device_metrics.temperature;
+                    } else if (telemetry.environment_metrics && telemetry.environment_metrics.temperature !== null) {
+                        node.latest_telemetry_temp = telemetry.environment_metrics.temperature;
+                    }
+                })
+                .catch(err => {
+                    // Silently fail for individual node telemetry fetches - node displays without temp
+                    console.debug(`Failed to fetch telemetry for node ${node.node_id}`);
+                })
+        );
+
+        await Promise.all(telemetryPromises);
+    } catch (error) {
+        console.error('Error enriching nodes with telemetry:', error);
     }
 }
 
@@ -927,7 +957,8 @@ function createNodePopupContent(node) {
     const ageClass = getAgeClass(ageHours);
     const roleColor = getRoleColor(node.role);
 
-    return `
+    // Start with basic content
+    let popupHtml = `
         <div class="node-marker-info">
             <div class="node-marker-title">${node.display_name}</div>
             <div><strong>ID:</strong> !${nodeIdHex}</div>
@@ -936,8 +967,19 @@ function createNodePopupContent(node) {
             <div><strong>Location:</strong> ${node.latitude.toFixed(6)}, ${node.longitude.toFixed(6)}</div>
             ${node.altitude ? `<div><strong>Altitude:</strong> ${node.altitude}m</div>` : ''}
             ${node.hw_model ? `<div><strong>Hardware:</strong> ${node.hw_model}</div>` : ''}
-            <div><strong>Age:</strong> <span class="age-indicator ${ageClass}">${formatAge(ageHours)}</span></div>
+            <div><strong>Age:</strong> <span class="age-indicator ${ageClass}">${formatAge(ageHours)}</span></div>`;
 
+    // Add temperature if available
+    if (node.latest_telemetry_temp !== undefined && node.latest_telemetry_temp !== null) {
+        const tempC = node.latest_telemetry_temp;
+        const tempF = (tempC * 9/5) + 32;
+        const tempUnit = localStorage.getItem('malla-temperature-unit') || 'C';
+        const displayTemp = tempUnit === 'F' ? tempF.toFixed(1) : tempC.toFixed(1);
+        const displayUnit = tempUnit;
+        popupHtml += `<div style="margin-top: 8px; padding-top: 8px; border-top: 1px solid #ccc;"><strong>Temperature:</strong> ${displayTemp}°${displayUnit}</div>`;
+    }
+
+    popupHtml += `
             <div class="mt-2">
                 <button class="btn btn-sm btn-primary" onclick="viewNodeDetails(${node.node_id})">
                     View Details
@@ -945,6 +987,8 @@ function createNodePopupContent(node) {
             </div>
         </div>
     `;
+
+    return popupHtml;
 }
 
 // Unified node search and display
