@@ -54,9 +54,21 @@ class TemperatureToggle {
             detail: { unit: unit }
         }));
 
-        // Trigger page refresh or re-render if needed
-        // Some pages may need to update their displayed temperatures
-        window.location.reload();
+        // Update all temperature displays on the page
+        this.updateAllTemperatures();
+    }
+
+    /**
+     * Update all temperature displays on the page
+     */
+    updateAllTemperatures() {
+        const elements = document.querySelectorAll('[data-temperature-celsius]');
+        elements.forEach(el => {
+            const celsius = parseFloat(el.getAttribute('data-temperature-celsius'));
+            if (!isNaN(celsius)) {
+                el.textContent = TemperatureToggle.formatTemperature(celsius, 1);
+            }
+        });
     }
 
     /**
@@ -168,5 +180,12 @@ class TemperatureToggle {
 
 // Initialize on page load
 document.addEventListener('DOMContentLoaded', () => {
-    new TemperatureToggle();
+    const tempToggle = new TemperatureToggle();
+    // Update all temperatures on initial page load
+    tempToggle.updateAllTemperatures();
+
+    // Listen for temperature unit changes to update displays
+    window.addEventListener('temperatureUnitChanged', () => {
+        tempToggle.updateAllTemperatures();
+    });
 });

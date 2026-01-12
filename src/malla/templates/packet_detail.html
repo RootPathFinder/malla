@@ -384,7 +384,7 @@
                                     <h6>Environment Metrics:</h6>
                                     <table class="table table-sm">
                                         {% if payload_info.data.environment_metrics.temperature %}
-                                            <tr><th>Temperature:</th><td>{{ "%.1f"|format(payload_info.data.environment_metrics.temperature) }}°C</td></tr>
+                                            <tr><th>Temperature:</th><td><span class="temperature-display" data-temperature-celsius="{{ payload_info.data.environment_metrics.temperature }}">{{ "%.1f"|format(payload_info.data.environment_metrics.temperature) }}°C</span></td></tr>
                                         {% endif %}
                                         {% if payload_info.data.environment_metrics.relative_humidity %}
                                             <tr><th>Humidity:</th><td>{{ "%.1f"|format(payload_info.data.environment_metrics.relative_humidity) }}%</td></tr>
