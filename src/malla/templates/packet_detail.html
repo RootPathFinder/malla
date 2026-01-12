@@ -1518,5 +1518,12 @@ document.addEventListener('DOMContentLoaded', function() {
         updateAllTimestamps();
     }
 });
+
+// Listen for temperature unit changes and update temperature displays
+document.addEventListener('temperatureUnitChanged', function() {
+    if (typeof temperatureToggleInstance !== 'undefined' && temperatureToggleInstance) {
+        temperatureToggleInstance.updateAllTemperatures();
+    }
+});
 </script>
 {% endblock %}

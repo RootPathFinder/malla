@@ -1115,39 +1115,105 @@ async function loadTelemetryData() {
         // Build comprehensive telemetry HTML
         let html = '';
 
-        // Health Status Section
-        let healthAlerts = [];
-        let healthScore = 100;
-
-        // Evaluate health
-        if (telemetry.device_metrics) {
-            const dm = telemetry.device_metrics;
-            if (dm.battery_level !== undefined && dm.battery_level < 20) {
-                healthAlerts.push('<span class="badge bg-danger">Low Battery (' + dm.battery_level + '%)</span>');
-                healthScore = Math.min(healthScore, 30);
-            } else if (dm.battery_level !== undefined && dm.battery_level < 50) {
-                healthAlerts.push('<span class="badge bg-warning">Battery ' + dm.battery_level + '%</span>');
-                healthScore = Math.min(healthScore, 70);
+        // Fetch comprehensive health data from the health API
+        let nodeHealth = {};
+        try {
+            const healthResponse = await fetch(`/api/node/${nodeId}/health?hours=24`);
+            if (healthResponse.ok) {
+                const healthData = await healthResponse.json();
+                nodeHealth = healthData.health || {};
             }
+        } catch (error) {
+            console.debug('Could not load health data:', error);
+        }
+
+        // Use health score from API if available, otherwise calculate from telemetry
+        let healthScore = nodeHealth.health_score !== undefined ? nodeHealth.health_score : 100;
+        let healthStatus = nodeHealth.health_status || 'unknown';
+        let issues = nodeHealth.issues || [];
+        let metrics = nodeHealth.metrics || {};
+        let confidenceScore = nodeHealth.confidence_score !== undefined ? nodeHealth.confidence_score : 100;
+
+        // Fallback to telemetry-based health if API data unavailable
+        if (healthScore === 100 && telemetry.device_metrics) {
+            const dm = telemetry.device_metrics;
+
+            // Evaluate battery
+            if (dm.battery_level !== undefined) {
+                if (dm.battery_level < 20) {
+                    healthScore -= 30;
+                } else if (dm.battery_level < 50) {
+                    healthScore -= 15;
+                }
+            }
+
+            // Evaluate channel utilization
             if (dm.channel_utilization !== undefined && dm.channel_utilization > 80) {
-                healthAlerts.push('<span class="badge bg-warning">High Channel Util</span>');
-                healthScore = Math.min(healthScore, 75);
+                healthScore -= 15;
             }
         }
+
+        // Determine health color
+        let healthColor = 'success';
+        let healthStatusText = 'Healthy';
+        if (healthScore >= 80) {
+            healthColor = 'success';
+            healthStatusText = 'Healthy';
+        } else if (healthScore >= 60) {
+            healthColor = 'warning';
+            healthStatusText = 'Degraded';
+        } else if (healthScore >= 40) {
+            healthColor = 'danger';
+            healthStatusText = 'Poor';
+        } else {
+            healthColor = 'danger';
+            healthStatusText = 'Critical';
+        }
+
+        // Build health alerts from issues
+        let healthAlerts = [];
+        issues.forEach(issue => {
+            if (issue.severity === 'critical') {
+                healthAlerts.push('<span class="badge bg-danger">' + issue.message + '</span>');
+            } else if (issue.severity === 'warning') {
+                healthAlerts.push('<span class="badge bg-warning text-dark">' + issue.message + '</span>');
+            } else if (issue.severity === 'info') {
+                healthAlerts.push('<span class="badge bg-info text-dark">' + issue.message + '</span>');
+            }
+        });
 
         // Health Summary Row
-        let healthColor = healthScore >= 80 ? 'success' : healthScore >= 50 ? 'warning' : 'danger';
         html += '<div class="row mb-3 pb-3 border-bottom">';
         html += '<div class="col-12">';
-        html += '<div class="d-flex justify-content-between align-items-center">';
-        html += '<h6 class="mb-0"><i class="bi bi-heart-pulse text-' + healthColor + '"></i> <strong>Health Score: <span class="text-' + healthColor + '">' + healthScore + '/100</span></strong></h6>';
-        html += '<small class="text-muted" id="telemetry-timestamp-small"></small>';
+        html += '<div class="d-flex justify-content-between align-items-start mb-2">';
+        html += '<div>';
+        html += '<h5 class="mb-1"><i class="bi bi-heart-pulse text-' + healthColor + '"></i> <strong>Health: <span class="text-' + healthColor + '">' + healthStatusText + ' (' + Math.round(healthScore) + '/100)</span></strong></h5>';
+        html += '<small class="text-muted">Confidence: <span class="badge bg-secondary">' + Math.round(confidenceScore) + '%</span></small>';
         html += '</div>';
+        html += '<small class="text-muted text-end" id="telemetry-timestamp-small"></small>';
+        html += '</div>';
+
         if (healthAlerts.length > 0) {
-            html += '<div class="mt-2">' + healthAlerts.join(' ') + '</div>';
-        } else {
-            html += '<small class="text-success"><i class="bi bi-check-circle"></i> All systems nominal</small>';
+            html += '<div class="d-flex flex-wrap gap-2 mt-2">' + healthAlerts.join('') + '</div>';
+        } else if (issues.length === 0) {
+            html += '<small class="text-success"><i class="bi bi-check-circle"></i> No issues detected</small>';
         }
+
+        // Show metrics summary if available
+        if (metrics.total_packets !== undefined) {
+            html += '<div class="mt-2 pt-2 border-top" style="font-size: 0.85rem;">';
+            html += '<small class="text-muted">24h metrics: ';
+            html += '<strong>' + metrics.total_packets + ' packets</strong>';
+            if (metrics.unique_gateways !== undefined) {
+                html += ' • <strong>' + metrics.unique_gateways + ' gateway(s)</strong>';
+            }
+            if (metrics.long_outages !== undefined && metrics.long_outages > 0) {
+                html += ' • <span class="text-warning"><strong>' + metrics.long_outages + ' outage(s)</strong></span>';
+            }
+            html += '</small>';
+            html += '</div>';
+        }
+
         html += '</div>';
         html += '</div>';
 
@@ -1158,6 +1224,7 @@ async function loadTelemetryData() {
         html += '<div class="col-lg-6">';
         html += '<h6 class="text-secondary mb-2"><i class="bi bi-battery-charging"></i> Power & Battery</h6>';
         html += '<div class="table-responsive">';
+
         html += '<table class="table table-sm table-borderless mb-0" style="font-size: 0.9rem;">';
 
         if (telemetry.device_metrics) {
