@@ -4134,6 +4134,22 @@ class BatteryAnalyticsRepository:
                             f"Could not format telemetry timestamp for {node_name}: {e}"
                         )
 
+                # Convert last_updated timestamp if needed
+                last_seen_str = "Unknown"
+                if row["last_updated"]:
+                    try:
+                        if isinstance(row["last_updated"], (int, float)):
+                            last_updated_dt = datetime.fromtimestamp(
+                                row["last_updated"], tz=UTC
+                            )
+                            last_seen_str = format_time_ago(last_updated_dt)
+                        else:
+                            last_seen_str = format_time_ago(row["last_updated"])
+                    except Exception as e:
+                        logger.warning(
+                            f"Could not format last_updated timestamp for {node_name}: {e}"
+                        )
+
                 results.append(
                     {
                         "node_id": row["node_id"],
@@ -4143,7 +4159,7 @@ class BatteryAnalyticsRepository:
                         "battery_level": row["battery_level"],
                         "voltage": voltage,
                         "health_score": health_score,
-                        "last_seen": format_time_ago(row["last_updated"]),
+                        "last_seen": last_seen_str,
                         "last_telemetry": last_telemetry_str,
                         "status_class": status_class,
                     }

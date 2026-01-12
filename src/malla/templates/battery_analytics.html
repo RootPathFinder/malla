@@ -119,7 +119,7 @@
                                 {% for node in battery_health %}
                                 <tr class="table-{{ node.status_class }}">
                                     <td>
-                                        <a href="/nodes/{{ node.hex_id }}" class="text-decoration-none">
+                                        <a href="/node/{{ node.node_id }}" class="text-decoration-none">
                                             {{ node.name }}
                                         </a>
                                         <small class="text-muted d-block">{{ node.hex_id }}</small>
@@ -293,7 +293,7 @@
                                     <div class="d-flex justify-content-between align-items-start mb-2">
                                         <div>
                                             <h6 class="card-title mb-0">
-                                                <a href="/nodes/{{ node.hex_id }}" class="text-decoration-none">
+                                                <a href="/node/{{ node.node_id }}" class="text-decoration-none">
                                                     {{ node.name }}
                                                 </a>
                                             </h6>
