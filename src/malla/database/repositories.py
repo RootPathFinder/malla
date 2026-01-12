@@ -1932,7 +1932,9 @@ class NodeRepository:
                         voltage = metrics.voltage
                         # Handle both mV (> 1000) and V (< 1000) formats
                         if voltage > 1000:
-                            device_metrics["voltage"] = voltage / 1000.0  # Convert mV to V
+                            device_metrics["voltage"] = (
+                                voltage / 1000.0
+                            )  # Convert mV to V
                         else:
                             device_metrics["voltage"] = voltage  # Already in volts
                     if metrics.HasField("channel_utilization"):
@@ -4007,8 +4009,11 @@ class BatteryAnalyticsRepository:
     """Repository for battery and power monitoring analytics."""
 
     @staticmethod
-    def detect_and_update_power_types() -> dict[str, int]:
+    def detect_and_update_power_types(force_update: bool = False) -> dict[str, int]:
         """Detect power types based on voltage patterns and update database.
+
+        Args:
+            force_update: If True, re-detect even for nodes with existing power types
 
         Returns:
             Dictionary with counts of updated nodes by power type
@@ -4018,15 +4023,30 @@ class BatteryAnalyticsRepository:
             cursor = conn.cursor()
 
             # Get all nodes with telemetry data
-            cursor.execute(
-                """
-                SELECT DISTINCT ni.node_id, ni.long_name
-                FROM node_info ni
-                INNER JOIN telemetry_data td ON ni.node_id = td.node_id
-                WHERE td.voltage IS NOT NULL
-                GROUP BY ni.node_id
-                """
-            )
+            # Optionally filter to only unknown power types
+            if force_update:
+                logger.info("Force mode: Re-detecting power types for all nodes")
+                cursor.execute(
+                    """
+                    SELECT DISTINCT ni.node_id, ni.long_name, ni.power_type
+                    FROM node_info ni
+                    INNER JOIN telemetry_data td ON ni.node_id = td.node_id
+                    WHERE td.voltage IS NOT NULL
+                    GROUP BY ni.node_id
+                    """
+                )
+            else:
+                logger.info("Detecting power types only for unknown nodes")
+                cursor.execute(
+                    """
+                    SELECT DISTINCT ni.node_id, ni.long_name, ni.power_type
+                    FROM node_info ni
+                    INNER JOIN telemetry_data td ON ni.node_id = td.node_id
+                    WHERE td.voltage IS NOT NULL
+                      AND (ni.power_type IS NULL OR ni.power_type = 'unknown')
+                    GROUP BY ni.node_id
+                    """
+                )
 
             nodes = cursor.fetchall()
             updated_counts = {"solar": 0, "battery": 0, "mains": 0}
@@ -4044,7 +4064,7 @@ class BatteryAnalyticsRepository:
                     ORDER BY timestamp DESC
                     LIMIT 100
                     """,
-                    (node_id,)
+                    (node_id,),
                 )
 
                 voltage_data = cursor.fetchall()
@@ -4063,6 +4083,11 @@ class BatteryAnalyticsRepository:
                     else:
                         scaled_voltages.append(v)
 
+                logger.debug(
+                    f"Analyzing {node_name} ({node_id}): {len(voltage_data)} readings, "
+                    f"range {min(scaled_voltages):.2f}-{max(scaled_voltages):.2f}V"
+                )
+
                 power_type = BatteryAnalyticsRepository._classify_power_type(
                     scaled_voltages, timestamps
                 )
@@ -4075,10 +4100,16 @@ class BatteryAnalyticsRepository:
                         SET power_type = ?
                         WHERE node_id = ?
                         """,
-                        (power_type, node_id)
+                        (power_type, node_id),
                     )
                     updated_counts[power_type] += 1
-                    logger.info(f"Updated {node_name} ({node_id}) to power_type: {power_type}")
+                    logger.info(
+                        f"Updated {node_name} ({node_id}) to power_type: {power_type}"
+                    )
+                else:
+                    logger.debug(
+                        f"Could not classify {node_name} ({node_id}) - insufficient pattern"
+                    )
 
             conn.commit()
             conn.close()
@@ -4091,7 +4122,9 @@ class BatteryAnalyticsRepository:
             return {"solar": 0, "battery": 0, "mains": 0}
 
     @staticmethod
-    def _classify_power_type(voltages: list[float], timestamps: list[float]) -> str | None:
+    def _classify_power_type(
+        voltages: list[float], timestamps: list[float]
+    ) -> str | None:
         """Classify power type based on voltage patterns.
 
         Args:
@@ -4112,7 +4145,7 @@ class BatteryAnalyticsRepository:
 
         # Calculate standard deviation
         variance = sum((v - voltage_mean) ** 2 for v in voltages) / len(voltages)
-        std_dev = variance ** 0.5
+        std_dev = variance**0.5
 
         # Analyze time-based patterns
         if len(timestamps) >= 2:
@@ -4121,25 +4154,58 @@ class BatteryAnalyticsRepository:
         else:
             hours_span = 0
 
-        # Classification logic
-        # Solar: High variance (daily charging cycles), range > 0.5V, shows cycling
-        if voltage_range > 0.5 and std_dev > 0.15 and hours_span >= 24:
+        # Calculate trend (slope) to detect charging/discharging
+        n = len(voltages)
+        if n >= 3:
+            # Simple linear regression
+            x_mean = sum(range(n)) / n
+            y_mean = voltage_mean
+            numerator = sum(
+                (i - x_mean) * (voltages[-(i + 1)] - y_mean) for i in range(n)
+            )
+            denominator = sum((i - x_mean) ** 2 for i in range(n))
+            slope = numerator / denominator if denominator > 0 else 0
+        else:
+            slope = 0
+
+        logger.debug(
+            f"Power type analysis: range={voltage_range:.3f}V, std_dev={std_dev:.3f}, "
+            f"mean={voltage_mean:.3f}V, hours={hours_span:.1f}h, slope={slope:.6f}"
+        )
+
+        # Classification logic (ordered by specificity)
+
+        # Solar: Shows charging cycles with significant voltage variation
+        # Relaxed threshold: range > 0.3V OR (range > 0.2V and std_dev > 0.1)
+        # This catches solar even with limited data
+        if voltage_range > 0.3 and std_dev > 0.08:
+            logger.debug("Classified as SOLAR: high variance with cycling")
             return "solar"
 
-        # Mains: Very stable voltage, std_dev < 0.05V, almost no variation
-        if std_dev < 0.05 and voltage_range < 0.1:
+        # Also detect solar by positive slope (charging) with moderate variance
+        if slope > 0.0001 and voltage_range > 0.2 and std_dev > 0.06:
+            logger.debug("Classified as SOLAR: positive slope indicates charging")
+            return "solar"
+
+        # Mains: Very stable voltage near full charge (4.1-4.2V)
+        # Tightened threshold to avoid false positives
+        # Must be both very stable AND at high voltage
+        if std_dev < 0.03 and voltage_range < 0.08 and voltage_mean > 4.05:
+            logger.debug("Classified as MAINS: very stable at high voltage")
             return "mains"
 
-        # Battery: Moderate variance, steady decline trend, range between solar and mains
-        if 0.1 < voltage_range <= 0.5:
-            # Check for declining trend
-            if len(voltages) >= 3:
-                recent_avg = sum(voltages[:3]) / 3
-                older_avg = sum(voltages[-3:]) / 3
-                if older_avg > recent_avg:  # Voltage declining
-                    return "battery"
+        # Battery: Declining voltage OR moderate variance at lower voltage
+        # Negative slope indicates discharging
+        if slope < -0.0001 and voltage_range > 0.15:
+            logger.debug("Classified as BATTERY: declining voltage (discharging)")
             return "battery"
 
+        # Battery: Moderate range, not charging, below full charge
+        if 0.1 < voltage_range <= 0.3 and voltage_mean < 4.05:
+            logger.debug("Classified as BATTERY: moderate variance below full charge")
+            return "battery"
+
+        logger.debug("Could not classify: insufficient distinctive pattern")
         return None
 
     @staticmethod
@@ -4349,7 +4415,10 @@ class BatteryAnalyticsRepository:
                     voltage = voltage * 1000
 
                 # Check critical conditions after scaling
-                if (voltage is not None and voltage < 3.3) or (row["battery_health_score"] is not None and row["battery_health_score"] < 40):
+                if (voltage is not None and voltage < 3.3) or (
+                    row["battery_health_score"] is not None
+                    and row["battery_health_score"] < 40
+                ):
                     results.append(
                         {
                             "node_id": row["node_id"],
@@ -4447,7 +4516,9 @@ class BatteryAnalyticsRepository:
                 "SELECT COUNT(*) as total FROM telemetry_data WHERE battery_level IS NOT NULL"
             )
             battery_level_count = cursor.fetchone()["total"]
-            logger.debug(f"Telemetry records with battery_level data: {battery_level_count}")
+            logger.debug(
+                f"Telemetry records with battery_level data: {battery_level_count}"
+            )
 
             # Debug: Check basic JOIN
             cursor.execute(
@@ -4544,17 +4615,23 @@ class BatteryAnalyticsRepository:
                 )
 
             logger.info(f"Found {len(results)} nodes with battery telemetry data")
-            logger.debug(f"Query returned: {len(results)} nodes from {total_telemetry} telemetry records")
-            logger.debug(f"Records with voltage: {voltage_count}, with battery_level: {battery_level_count}")
+            logger.debug(
+                f"Query returned: {len(results)} nodes from {total_telemetry} telemetry records"
+            )
+            logger.debug(
+                f"Records with voltage: {voltage_count}, with battery_level: {battery_level_count}"
+            )
             if results:
-                logger.info(
-                    f"Sample nodes: {[r['name'] for r in results[:3]]}"
-                )
+                logger.info(f"Sample nodes: {[r['name'] for r in results[:3]]}")
             else:
-                logger.warning(f"No nodes found with telemetry despite {total_telemetry} telemetry records existing")
+                logger.warning(
+                    f"No nodes found with telemetry despite {total_telemetry} telemetry records existing"
+                )
             conn.close()
             return results
 
         except Exception as e:
-            logger.error(f"Error getting nodes with battery telemetry: {e}", exc_info=True)
+            logger.error(
+                f"Error getting nodes with battery telemetry: {e}", exc_info=True
+            )
             return []

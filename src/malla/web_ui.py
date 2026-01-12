@@ -22,6 +22,7 @@ from .config import AppConfig, get_config
 # Import configuration and database setup
 from .database.connection import init_database
 from .routes import register_routes
+from .services.power_monitor import start_power_monitor, stop_power_monitor
 
 # Import utility functions for template filters
 from .utils.formatting import format_node_id, format_time_ago
@@ -241,8 +242,13 @@ def create_app(cfg: AppConfig | None = None):  # noqa: D401
     logger.info("Starting node name cache cleanup background thread")
     start_cache_cleanup()
 
+    # Start periodic power type detection (runs every hour)
+    logger.info("Starting power type monitor background thread")
+    start_power_monitor(interval_seconds=3600)  # Run every hour
+
     # Register cleanup on app shutdown
     atexit.register(stop_cache_cleanup)
+    atexit.register(stop_power_monitor)
 
     # Register all routes
     logger.info("Registering application routes")

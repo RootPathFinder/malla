@@ -6,7 +6,7 @@ import logging
 import time
 from datetime import UTC, datetime
 
-from flask import Blueprint, jsonify, render_template
+from flask import Blueprint, jsonify, render_template, request
 
 from ..database.connection import get_db_connection
 from ..database.repositories import BatteryAnalyticsRepository
@@ -25,11 +25,15 @@ def battery_analytics():
 
         # Get battery health overview
         battery_health = BatteryAnalyticsRepository.get_battery_health_overview()
-        logger.debug(f"Battery health items: {len(battery_health) if battery_health else 0}")
+        logger.debug(
+            f"Battery health items: {len(battery_health) if battery_health else 0}"
+        )
 
         # Get critical battery alerts
         critical_batteries = BatteryAnalyticsRepository.get_critical_batteries()
-        logger.debug(f"Critical batteries: {len(critical_batteries) if critical_batteries else 0}")
+        logger.debug(
+            f"Critical batteries: {len(critical_batteries) if critical_batteries else 0}"
+        )
 
         # Get all nodes with battery telemetry
         nodes_with_telemetry = (
@@ -156,15 +160,25 @@ def battery_debug():
 
 @battery_bp.route("/api/detect-power-types", methods=["GET", "POST"])
 def detect_power_types():
-    """API endpoint to detect and update power types based on voltage patterns."""
+    """API endpoint to detect and update power types based on voltage patterns.
+
+    Query parameters:
+        force: If 'true', re-detect even for nodes with existing power types
+    """
     try:
-        logger.info("Starting power type detection...")
-        results = BatteryAnalyticsRepository.detect_and_update_power_types()
+        force = request.args.get("force", "false").lower() == "true"
+        logger.info(f"Starting power type detection (force={force})...")
+        results = BatteryAnalyticsRepository.detect_and_update_power_types(
+            force_update=force
+        )
         logger.info(f"Power type detection completed: {results}")
-        return jsonify({
-            "message": "Power type detection completed",
-            "results": results
-        })
+        return jsonify(
+            {
+                "message": "Power type detection completed",
+                "results": results,
+                "forced": force,
+            }
+        )
     except Exception as e:
         logger.error(f"Error detecting power types: {e}", exc_info=True)
         return jsonify({"error": str(e)}), 500
@@ -176,10 +190,7 @@ def battery_telemetry_nodes():
     try:
         nodes = BatteryAnalyticsRepository.get_nodes_with_battery_telemetry()
         logger.info(f"API returning {len(nodes) if nodes else 0} nodes with telemetry")
-        return jsonify({
-            "count": len(nodes) if nodes else 0,
-            "nodes": nodes
-        })
+        return jsonify({"count": len(nodes) if nodes else 0, "nodes": nodes})
     except Exception as e:
         logger.error(f"Error getting telemetry nodes: {e}", exc_info=True)
         return jsonify({"error": str(e), "count": 0, "nodes": []}), 500
@@ -209,7 +220,7 @@ def voltage_trends():
             WHERE td.voltage IS NOT NULL AND td.timestamp > ?
             ORDER BY td.node_id, td.timestamp
             """,
-            (cutoff_time,)
+            (cutoff_time,),
         )
 
         rows = cursor.fetchall()
@@ -241,10 +252,7 @@ def voltage_trends():
                 logger.warning(f"Could not parse timestamp {row['timestamp']}: {e}")
 
         logger.info(f"Voltage trends: {len(nodes_data)} nodes with data")
-        return jsonify({
-            "nodes": nodes_data,
-            "count": len(nodes_data)
-        })
+        return jsonify({"nodes": nodes_data, "count": len(nodes_data)})
 
     except Exception as e:
         logger.error(f"Error getting voltage trends: {e}", exc_info=True)

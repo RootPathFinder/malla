@@ -19,9 +19,14 @@
             </h1>
         </div>
         <div class="col-md-4 text-end">
-            <button id="detect-power-btn" class="btn btn-primary" onclick="detectPowerTypes()">
-                <i class="bi bi-lightning-fill"></i> Detect Power Types
-            </button>
+            <div class="btn-group" role="group">
+                <button id="detect-power-btn" class="btn btn-primary" onclick="detectPowerTypes(false)">
+                    <i class="bi bi-lightning-fill"></i> Detect Power Types
+                </button>
+                <button class="btn btn-outline-primary" onclick="detectPowerTypes(true)" title="Re-detect all nodes, even those already classified">
+                    <i class="bi bi-arrow-clockwise"></i> Force Re-detect
+                </button>
+            </div>
         </div>
     </div>
 
@@ -245,7 +250,7 @@
 
             if (hasTelemetry && allUnknown) {
                 console.log('Auto-detecting power types on first load...');
-                setTimeout(() => detectPowerTypes(true), 500);
+                setTimeout(() => detectPowerTypes(false, true), 500);
             }
 
             // Load and render voltage trends chart
@@ -261,7 +266,7 @@
                 .catch(error => console.error('Error loading voltage trends:', error));
         });
 
-        function detectPowerTypes(autoDetect = false) {
+        function detectPowerTypes(force = false, autoDetect = false) {
             const button = document.getElementById('detect-power-btn');
             const statusDiv = document.getElementById('power-detection-status');
             const messageSpan = document.getElementById('power-detection-message');
@@ -270,11 +275,18 @@
             if (button) button.disabled = true;
             statusDiv.style.display = 'block';
             statusDiv.className = 'alert alert-info';
-            messageSpan.textContent = autoDetect ?
-                'Automatically detecting power types from voltage patterns...' :
-                'Analyzing voltage patterns to detect power sources...';
 
-            fetch('/api/detect-power-types', { method: 'POST' })
+            if (force) {
+                messageSpan.textContent = 'Re-analyzing all nodes to detect power sources...';
+            } else if (autoDetect) {
+                messageSpan.textContent = 'Automatically detecting power types from voltage patterns...';
+            } else {
+                messageSpan.textContent = 'Analyzing voltage patterns to detect power sources...';
+            }
+
+            const url = force ? '/api/detect-power-types?force=true' : '/api/detect-power-types';
+
+            fetch(url, { method: 'POST' })
                 .then(response => response.json())
                 .then(data => {
                     if (data.results) {
