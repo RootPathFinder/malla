@@ -1929,9 +1929,11 @@ class NodeRepository:
                     if metrics.HasField("battery_level"):
                         device_metrics["battery_level"] = metrics.battery_level
                     if metrics.HasField("voltage"):
-                        device_metrics["voltage"] = (
-                            metrics.voltage / 1000.0
-                        )  # Convert mV to V
+                        voltage = metrics.voltage / 1000.0  # Convert mV to V
+                        # If voltage is fractional (< 1V), scale by 1000
+                        if voltage < 1:
+                            voltage = voltage * 1000
+                        device_metrics["voltage"] = voltage
                     if metrics.HasField("channel_utilization"):
                         device_metrics["channel_utilization"] = (
                             metrics.channel_utilization
@@ -1973,15 +1975,24 @@ class NodeRepository:
                     power_metrics = {}
 
                     if metrics.HasField("ch1_voltage"):
-                        power_metrics["ch1_voltage"] = metrics.ch1_voltage
+                        ch1_v = metrics.ch1_voltage
+                        if ch1_v < 1:
+                            ch1_v = ch1_v * 1000
+                        power_metrics["ch1_voltage"] = ch1_v
                     if metrics.HasField("ch1_current"):
                         power_metrics["ch1_current"] = metrics.ch1_current
                     if metrics.HasField("ch2_voltage"):
-                        power_metrics["ch2_voltage"] = metrics.ch2_voltage
+                        ch2_v = metrics.ch2_voltage
+                        if ch2_v < 1:
+                            ch2_v = ch2_v * 1000
+                        power_metrics["ch2_voltage"] = ch2_v
                     if metrics.HasField("ch2_current"):
                         power_metrics["ch2_current"] = metrics.ch2_current
                     if metrics.HasField("ch3_voltage"):
-                        power_metrics["ch3_voltage"] = metrics.ch3_voltage
+                        ch3_v = metrics.ch3_voltage
+                        if ch3_v < 1:
+                            ch3_v = ch3_v * 1000
+                        power_metrics["ch3_voltage"] = ch3_v
                     if metrics.HasField("ch3_current"):
                         power_metrics["ch3_current"] = metrics.ch3_current
 
