@@ -107,19 +107,30 @@
                                     <i class="bi bi-info-circle" data-bs-toggle="tooltip" data-bs-placement="top"
                                        title="Distribution of node health statuses: Healthy (80-100), Degraded (60-79), Poor (40-59), Critical (0-39). Based on reliability metrics, not signal strength."></i>
                                 </h6>
-                                <div class="progress" style="height: 30px;">
-                                    <div class="progress-bar bg-success" role="progressbar" id="healthy-bar" style="width: 0%">
-                                        <span id="healthy-count">0</span> Healthy
+                                <div class="progress" style="height: 32px; font-size: 0.875rem;">
+                                    <div class="progress-bar bg-success" role="progressbar" id="healthy-bar" style="width: 0%"
+                                         data-bs-toggle="tooltip" data-bs-placement="top" title="">
+                                        <span class="health-bar-text"><span id="healthy-count">0</span> <span class="health-label">Healthy</span></span>
                                     </div>
-                                    <div class="progress-bar bg-warning" role="progressbar" id="degraded-bar" style="width: 0%">
-                                        <span id="degraded-count">0</span> Degraded
+                                    <div class="progress-bar bg-warning" role="progressbar" id="degraded-bar" style="width: 0%"
+                                         data-bs-toggle="tooltip" data-bs-placement="top" title="">
+                                        <span class="health-bar-text"><span id="degraded-count">0</span> <span class="health-label">Degraded</span></span>
                                     </div>
-                                    <div class="progress-bar bg-danger" role="progressbar" id="poor-bar" style="width: 0%">
-                                        <span id="poor-count">0</span> Poor
+                                    <div class="progress-bar bg-danger" role="progressbar" id="poor-bar" style="width: 0%"
+                                         data-bs-toggle="tooltip" data-bs-placement="top" title="">
+                                        <span class="health-bar-text"><span id="poor-count">0</span> <span class="health-label">Poor</span></span>
                                     </div>
-                                    <div class="progress-bar bg-dark" role="progressbar" id="critical-bar" style="width: 0%">
-                                        <span id="critical-count">0</span> Critical
+                                    <div class="progress-bar bg-dark" role="progressbar" id="critical-bar" style="width: 0%"
+                                         data-bs-toggle="tooltip" data-bs-placement="top" title="">
+                                        <span class="health-bar-text"><span id="critical-count">0</span> <span class="health-label">Critical</span></span>
                                     </div>
+                                </div>
+                                <!-- Legend for small screens -->
+                                <div class="d-flex justify-content-around mt-2 small text-muted d-lg-none">
+                                    <span><span class="badge bg-success">■</span> <span id="healthy-legend">0</span> Healthy</span>
+                                    <span><span class="badge bg-warning">■</span> <span id="degraded-legend">0</span> Degraded</span>
+                                    <span><span class="badge bg-danger">■</span> <span id="poor-legend">0</span> Poor</span>
+                                    <span><span class="badge bg-dark">■</span> <span id="critical-legend">0</span> Critical</span>
                                 </div>
                             </div>
                         </div>
@@ -313,15 +324,36 @@ async function loadNetworkSummary() {
             const poorPct = (dist.poor / total * 100).toFixed(1);
             const criticalPct = (dist.critical / total * 100).toFixed(1);
 
-            document.getElementById('healthy-bar').style.width = healthyPct + '%';
-            document.getElementById('degraded-bar').style.width = degradedPct + '%';
-            document.getElementById('poor-bar').style.width = poorPct + '%';
-            document.getElementById('critical-bar').style.width = criticalPct + '%';
+            // Update bars
+            const healthyBar = document.getElementById('healthy-bar');
+            const degradedBar = document.getElementById('degraded-bar');
+            const poorBar = document.getElementById('poor-bar');
+            const criticalBar = document.getElementById('critical-bar');
 
+            healthyBar.style.width = healthyPct + '%';
+            degradedBar.style.width = degradedPct + '%';
+            poorBar.style.width = poorPct + '%';
+            criticalBar.style.width = criticalPct + '%';
+
+            // Update counts
             document.getElementById('healthy-count').textContent = dist.healthy;
             document.getElementById('degraded-count').textContent = dist.degraded;
             document.getElementById('poor-count').textContent = dist.poor;
             document.getElementById('critical-count').textContent = dist.critical;
+
+            // Update legend for small screens
+            if (document.getElementById('healthy-legend')) {
+                document.getElementById('healthy-legend').textContent = dist.healthy;
+                document.getElementById('degraded-legend').textContent = dist.degraded;
+                document.getElementById('poor-legend').textContent = dist.poor;
+                document.getElementById('critical-legend').textContent = dist.critical;
+            }
+
+            // Update tooltips
+            healthyBar.setAttribute('title', `Healthy: ${dist.healthy} nodes (${healthyPct}%)`);
+            degradedBar.setAttribute('title', `Degraded: ${dist.degraded} nodes (${degradedPct}%)`);
+            poorBar.setAttribute('title', `Poor: ${dist.poor} nodes (${poorPct}%)`);
+            criticalBar.setAttribute('title', `Critical: ${dist.critical} nodes (${criticalPct}%)`);
         }
 
         document.getElementById('network-summary-loading').style.display = 'none';

@@ -106,6 +106,38 @@
             height: 100%;
             max-height: 100%;
         }
+
+        /* Health distribution bar styles */
+        .health-bar-text {
+            white-space: nowrap;
+            overflow: hidden;
+            text-overflow: ellipsis;
+            padding: 0 4px;
+        }
+
+        /* Hide labels on narrow segments */
+        .progress-bar[style*="width: 0%"] .health-bar-text,
+        .progress-bar[style*="width: 1%"] .health-bar-text,
+        .progress-bar[style*="width: 2%"] .health-bar-text,
+        .progress-bar[style*="width: 3%"] .health-bar-text,
+        .progress-bar[style*="width: 4%"] .health-bar-text,
+        .progress-bar[style*="width: 5%"] .health-bar-text {
+            display: none;
+        }
+
+        /* On smaller screens, hide label text but keep counts */
+        @media (max-width: 768px) {
+            .health-label {
+                display: none;
+            }
+        }
+
+        /* On very small screens, show only tooltips */
+        @media (max-width: 576px) {
+            .health-bar-text {
+                font-size: 0.75rem;
+            }
+        }
     </style>
 
     {% block extra_css %}{% endblock %}

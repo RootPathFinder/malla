@@ -161,16 +161,24 @@
                             </div>
                         </div>
                         <div id="network-health-content" style="display: none;">
-                            <div class="progress mb-2" style="height: 30px;">
-                                <div class="progress-bar bg-success" role="progressbar" id="dash-healthy-bar" style="width: 0%">
-                                    <span id="dash-healthy-count">0</span>
+                            <div class="progress mb-2" style="height: 32px; font-size: 0.875rem;">
+                                <div class="progress-bar bg-success" role="progressbar" id="dash-healthy-bar" style="width: 0%"
+                                     data-bs-toggle="tooltip" data-bs-placement="top" title="">
+                                    <span class="health-bar-text" id="dash-healthy-count">0</span>
                                 </div>
-                                <div class="progress-bar bg-warning" role="progressbar" id="dash-degraded-bar" style="width: 0%">
-                                    <span id="dash-degraded-count">0</span>
+                                <div class="progress-bar bg-warning" role="progressbar" id="dash-degraded-bar" style="width: 0%"
+                                     data-bs-toggle="tooltip" data-bs-placement="top" title="">
+                                    <span class="health-bar-text" id="dash-degraded-count">0</span>
                                 </div>
-                                <div class="progress-bar bg-danger" role="progressbar" id="dash-poor-bar" style="width: 0%">
-                                    <span id="dash-poor-count">0</span>
+                                <div class="progress-bar bg-danger" role="progressbar" id="dash-poor-bar" style="width: 0%"
+                                     data-bs-toggle="tooltip" data-bs-placement="top" title="">
+                                    <span class="health-bar-text" id="dash-poor-count">0</span>
                                 </div>
+                            </div>
+                            <div class="d-flex justify-content-between small text-muted mb-2">
+                                <span><span class="text-success">●</span> <span id="dash-healthy-text">0</span> Healthy</span>
+                                <span><span class="text-warning">●</span> <span id="dash-degraded-text">0</span> Degraded</span>
+                                <span><span class="text-danger">●</span> <span id="dash-poor-text">0</span> Poor</span>
                             </div>
                             <small class="text-muted" style="font-family: var(--bs-font-sans-serif);">
                                 <a href="{{ url_for('main.node_health') }}">View detailed health analysis →</a>
@@ -945,13 +953,27 @@ async function loadDashboardNetworkHealth() {
             const degradedPct = (dist.degraded / total * 100).toFixed(0);
             const poorPct = (dist.poor / total * 100).toFixed(0);
 
-            document.getElementById('dash-healthy-bar').style.width = healthyPct + '%';
-            document.getElementById('dash-degraded-bar').style.width = degradedPct + '%';
-            document.getElementById('dash-poor-bar').style.width = poorPct + '%';
+            const healthyBar = document.getElementById('dash-healthy-bar');
+            const degradedBar = document.getElementById('dash-degraded-bar');
+            const poorBar = document.getElementById('dash-poor-bar');
+
+            healthyBar.style.width = healthyPct + '%';
+            degradedBar.style.width = degradedPct + '%';
+            poorBar.style.width = poorPct + '%';
 
             document.getElementById('dash-healthy-count').textContent = dist.healthy;
             document.getElementById('dash-degraded-count').textContent = dist.degraded;
             document.getElementById('dash-poor-count').textContent = dist.poor;
+
+            // Update text labels below bar
+            document.getElementById('dash-healthy-text').textContent = dist.healthy;
+            document.getElementById('dash-degraded-text').textContent = dist.degraded;
+            document.getElementById('dash-poor-text').textContent = dist.poor;
+
+            // Update tooltips
+            healthyBar.setAttribute('title', `Healthy: ${dist.healthy} nodes (${healthyPct}%)`);
+            degradedBar.setAttribute('title', `Degraded: ${dist.degraded} nodes (${degradedPct}%)`);
+            poorBar.setAttribute('title', `Poor: ${dist.poor} nodes (${poorPct}%)`);
         }
 
         document.getElementById('network-health-loading').style.display = 'none';
