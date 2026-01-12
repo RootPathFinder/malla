@@ -20,21 +20,24 @@ def battery_analytics():
     try:
         # Get power source summary
         power_summary = BatteryAnalyticsRepository.get_power_source_summary()
+        logger.debug(f"Power summary: {power_summary}")
 
         # Get battery health overview
         battery_health = BatteryAnalyticsRepository.get_battery_health_overview()
+        logger.debug(f"Battery health items: {len(battery_health) if battery_health else 0}")
 
         # Get critical battery alerts
         critical_batteries = BatteryAnalyticsRepository.get_critical_batteries()
+        logger.debug(f"Critical batteries: {len(critical_batteries) if critical_batteries else 0}")
 
         # Get all nodes with battery telemetry
         nodes_with_telemetry = (
             BatteryAnalyticsRepository.get_nodes_with_battery_telemetry()
         )
-
         logger.info(
-            f"Battery analytics loaded: {len(nodes_with_telemetry)} nodes with telemetry"
+            f"Battery analytics loaded: {len(nodes_with_telemetry) if nodes_with_telemetry else 0} nodes with telemetry"
         )
+        logger.debug(f"Nodes with telemetry: {nodes_with_telemetry}")
 
         return render_template(
             "battery_analytics.html",
@@ -148,3 +151,18 @@ def battery_debug():
     except Exception as e:
         logger.error(f"Error in battery debug endpoint: {e}")
         return jsonify({"error": str(e)}), 500
+
+
+@battery_bp.route("/api/battery-telemetry-nodes", methods=["GET"])
+def battery_telemetry_nodes():
+    """API endpoint to get nodes with battery telemetry."""
+    try:
+        nodes = BatteryAnalyticsRepository.get_nodes_with_battery_telemetry()
+        logger.info(f"API returning {len(nodes) if nodes else 0} nodes with telemetry")
+        return jsonify({
+            "count": len(nodes) if nodes else 0,
+            "nodes": nodes
+        })
+    except Exception as e:
+        logger.error(f"Error getting telemetry nodes: {e}", exc_info=True)
+        return jsonify({"error": str(e), "count": 0, "nodes": []}), 500

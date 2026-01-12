@@ -4292,8 +4292,8 @@ class BatteryAnalyticsRepository:
                     MAX(td.timestamp) as last_telemetry_time
                 FROM node_info ni
                 INNER JOIN telemetry_data td ON ni.node_id = td.node_id
-                WHERE td.voltage IS NOT NULL OR td.battery_level IS NOT NULL
-                GROUP BY ni.node_id
+                WHERE (td.voltage IS NOT NULL OR td.battery_level IS NOT NULL)
+                GROUP BY ni.node_id, ni.hex_id, ni.long_name, ni.short_name, ni.power_type, ni.last_battery_voltage, ni.battery_health_score
                 ORDER BY
                     CASE
                         WHEN ni.power_type = 'solar' THEN 0
@@ -4349,10 +4349,13 @@ class BatteryAnalyticsRepository:
 
             logger.info(f"Found {len(results)} nodes with battery telemetry data")
             logger.debug(f"Query returned: {len(results)} nodes from {total_telemetry} telemetry records")
+            logger.debug(f"Records with voltage: {voltage_count}, with battery_level: {battery_level_count}")
             if results:
                 logger.info(
                     f"Sample nodes: {[r['name'] for r in results[:3]]}"
                 )
+            else:
+                logger.warning(f"No nodes found with telemetry despite {total_telemetry} telemetry records existing")
             conn.close()
             return results
 
