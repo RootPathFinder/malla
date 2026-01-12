@@ -4328,6 +4328,18 @@ class BatteryAnalyticsRepository:
                 if voltage is not None and voltage < 1:
                     voltage = voltage * 1000
 
+                # Convert Unix timestamp to datetime object
+                last_telemetry_dt = None
+                if row["last_telemetry_time"]:
+                    try:
+                        last_telemetry_dt = datetime.fromtimestamp(
+                            row["last_telemetry_time"], tz=UTC
+                        )
+                    except Exception as e:
+                        logger.warning(
+                            f"Could not parse timestamp {row['last_telemetry_time']}: {e}"
+                        )
+
                 # Determine power type icon and color
                 if power_type == "solar":
                     power_icon = "sun-fill"
@@ -4353,18 +4365,8 @@ class BatteryAnalyticsRepository:
                         "voltage": voltage,
                         "health_score": row["battery_health_score"],
                         "last_telemetry": (
-                            format_time_ago(row["last_telemetry_time"])
-                            if row["last_telemetry_time"]
-                            else "Never"
-                        ),
-                    }
-                )
-
-            logger.info(f"Found {len(results)} nodes with battery telemetry data")
-            logger.debug(f"Query returned: {len(results)} nodes from {total_telemetry} telemetry records")
-            logger.debug(f"Records with voltage: {voltage_count}, with battery_level: {battery_level_count}")
-            if results:
-                logger.info(
+                            format_time_ago(last_telemetry_dt)
+                            if last_telemetry_dt
                     f"Sample nodes: {[r['name'] for r in results[:3]]}"
                 )
             else:
