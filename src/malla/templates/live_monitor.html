@@ -16,13 +16,12 @@
         align-items: center;
         margin-bottom: 20px;
         padding-bottom: 15px;
-        border-bottom: 2px solid #e0e0e0;
+        border-bottom: 2px solid var(--bs-border-color);
     }
 
     .live-title {
-        font-size: 28px;
+        font-size: 1.75rem;
         font-weight: 600;
-        color: #333;
     }
 
     .connection-status {
@@ -31,7 +30,7 @@
         gap: 10px;
         padding: 8px 16px;
         border-radius: 20px;
-        background: #f5f5f5;
+        background: var(--bs-light);
         font-weight: 500;
     }
 
@@ -43,11 +42,11 @@
     }
 
     .status-connected {
-        background: #4caf50;
+        background: var(--bs-success);
     }
 
     .status-disconnected {
-        background: #f44336;
+        background: var(--bs-danger);
         animation: none;
     }
 
@@ -64,58 +63,57 @@
     }
 
     .stat-card {
-        background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+        background: var(--bs-primary);
         color: white;
         padding: 20px;
-        border-radius: 12px;
-        box-shadow: 0 4px 6px rgba(0,0,0,0.1);
+        border-radius: var(--bs-border-radius);
+        box-shadow: 0 0.125rem 0.25rem rgba(0,0,0,0.075);
     }
 
-    .stat-card.green {
-        background: linear-gradient(135deg, #11998e 0%, #38ef7d 100%);
+    .stat-card.success {
+        background: var(--bs-success);
     }
 
-    .stat-card.orange {
-        background: linear-gradient(135deg, #f093fb 0%, #f5576c 100%);
+    .stat-card.warning {
+        background: var(--bs-warning);
     }
 
-    .stat-card.blue {
-        background: linear-gradient(135deg, #4facfe 0%, #00f2fe 100%);
+    .stat-card.info {
+        background: var(--bs-info);
     }
 
     .stat-label {
-        font-size: 12px;
+        font-size: 0.75rem;
         opacity: 0.9;
         text-transform: uppercase;
         letter-spacing: 0.5px;
     }
 
     .stat-value {
-        font-size: 32px;
+        font-size: 2rem;
         font-weight: 700;
         margin-top: 5px;
     }
 
     .activity-feed {
-        background: white;
-        border-radius: 12px;
-        box-shadow: 0 2px 8px rgba(0,0,0,0.1);
+        background: var(--bs-body-bg);
+        border-radius: var(--bs-border-radius);
+        border: 1px solid var(--bs-border-color);
         overflow: hidden;
     }
 
     .feed-header {
-        background: #f8f9fa;
+        background: var(--bs-light);
         padding: 15px 20px;
-        border-bottom: 1px solid #e0e0e0;
+        border-bottom: 1px solid var(--bs-border-color);
         display: flex;
         justify-content: space-between;
         align-items: center;
     }
 
     .feed-title {
-        font-size: 18px;
+        font-size: 1.125rem;
         font-weight: 600;
-        color: #333;
     }
 
     .feed-controls {
@@ -125,22 +123,23 @@
 
     .filter-btn {
         padding: 6px 12px;
-        border: 1px solid #ddd;
-        background: white;
-        border-radius: 6px;
+        border: 1px solid var(--bs-border-color);
+        background: var(--bs-body-bg);
+        color: var(--bs-body-color);
+        border-radius: var(--bs-border-radius-sm);
         cursor: pointer;
-        font-size: 13px;
+        font-size: 0.8125rem;
         transition: all 0.2s;
     }
 
     .filter-btn:hover {
-        background: #f0f0f0;
+        background: var(--bs-light);
     }
 
     .filter-btn.active {
-        background: #667eea;
+        background: var(--bs-primary);
         color: white;
-        border-color: #667eea;
+        border-color: var(--bs-primary);
     }
 
     .feed-content {
@@ -151,7 +150,7 @@
 
     .activity-item {
         padding: 15px 20px;
-        border-bottom: 1px solid #f0f0f0;
+        border-bottom: 1px solid var(--bs-border-color);
         display: flex;
         gap: 15px;
         animation: slideIn 0.3s ease-out;
@@ -159,7 +158,7 @@
     }
 
     .activity-item:hover {
-        background: #f8f9fa;
+        background: var(--bs-light);
     }
 
     @keyframes slideIn {
@@ -180,33 +179,29 @@
         display: flex;
         align-items: center;
         justify-content: center;
-        font-size: 18px;
+        font-size: 1.125rem;
         flex-shrink: 0;
+        color: white;
     }
 
     .activity-icon.packet {
-        background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
-        color: white;
+        background: var(--bs-primary);
     }
 
     .activity-icon.node_online {
-        background: linear-gradient(135deg, #11998e 0%, #38ef7d 100%);
-        color: white;
+        background: var(--bs-success);
     }
 
     .activity-icon.node_offline {
-        background: linear-gradient(135deg, #ff6b6b 0%, #ee5a6f 100%);
-        color: white;
+        background: var(--bs-danger);
     }
 
     .activity-icon.alert {
-        background: linear-gradient(135deg, #f093fb 0%, #f5576c 100%);
-        color: white;
+        background: var(--bs-warning);
     }
 
     .activity-icon.traceroute {
-        background: linear-gradient(135deg, #4facfe 0%, #00f2fe 100%);
-        color: white;
+        background: var(--bs-info);
     }
 
     .activity-details {
@@ -222,18 +217,17 @@
 
     .activity-title {
         font-weight: 600;
-        color: #333;
-        font-size: 15px;
+        font-size: 0.9375rem;
     }
 
     .activity-time {
-        font-size: 12px;
-        color: #999;
+        font-size: 0.75rem;
+        color: var(--bs-secondary);
     }
 
     .activity-description {
-        color: #666;
-        font-size: 14px;
+        color: var(--bs-secondary);
+        font-size: 0.875rem;
         line-height: 1.5;
     }
 
@@ -248,25 +242,25 @@
         display: flex;
         align-items: center;
         gap: 5px;
-        font-size: 12px;
-        color: #777;
-        background: #f5f5f5;
+        font-size: 0.75rem;
+        color: var(--bs-secondary);
+        background: var(--bs-light);
         padding: 4px 10px;
         border-radius: 12px;
     }
 
     .meta-icon {
-        font-size: 10px;
+        font-size: 0.625rem;
     }
 
     .empty-state {
         text-align: center;
         padding: 60px 20px;
-        color: #999;
+        color: var(--bs-secondary);
     }
 
     .empty-icon {
-        font-size: 48px;
+        font-size: 3rem;
         margin-bottom: 15px;
         opacity: 0.5;
     }
@@ -275,24 +269,24 @@
         display: inline-block;
         padding: 2px 8px;
         border-radius: 10px;
-        font-size: 11px;
+        font-size: 0.6875rem;
         font-weight: 600;
         text-transform: uppercase;
     }
 
     .severity-info {
-        background: #e3f2fd;
-        color: #1976d2;
+        background: rgba(var(--bs-info-rgb), 0.1);
+        color: var(--bs-info);
     }
 
     .severity-warning {
-        background: #fff3e0;
-        color: #f57c00;
+        background: rgba(var(--bs-warning-rgb), 0.1);
+        color: var(--bs-warning);
     }
 
     .severity-critical {
-        background: #ffebee;
-        color: #c62828;
+        background: rgba(var(--bs-danger-rgb), 0.1);
+        color: var(--bs-danger);
     }
 
     .signal-quality {
@@ -304,35 +298,37 @@
     .signal-bar {
         width: 3px;
         height: 12px;
-        background: #ddd;
+        background: var(--bs-border-color);
         border-radius: 2px;
     }
 
     .signal-bar.active {
-        background: #4caf50;
+        background: var(--bs-success);
     }
 
     .signal-bar.weak {
-        background: #ff9800;
+        background: var(--bs-warning);
     }
 
     .auto-scroll-toggle {
         padding: 6px 12px;
-        background: #667eea;
+        background: var(--bs-primary);
         color: white;
         border: none;
-        border-radius: 6px;
+        border-radius: var(--bs-border-radius-sm);
         cursor: pointer;
-        font-size: 13px;
+        font-size: 0.8125rem;
         transition: all 0.2s;
     }
 
     .auto-scroll-toggle:hover {
-        background: #5568d3;
+        background: var(--bs-primary);
+        filter: brightness(0.9);
     }
 
     .auto-scroll-toggle.disabled {
-        background: #ccc;
+        background: var(--bs-secondary);
+        opacity: 0.65;
     }
 
     /* Scrollbar styling */
@@ -341,16 +337,16 @@
     }
 
     .feed-content::-webkit-scrollbar-track {
-        background: #f1f1f1;
+        background: var(--bs-light);
     }
 
     .feed-content::-webkit-scrollbar-thumb {
-        background: #888;
+        background: var(--bs-secondary);
         border-radius: 4px;
     }
 
     .feed-content::-webkit-scrollbar-thumb:hover {
-        background: #555;
+        background: var(--bs-dark);
     }
 </style>
 {% endblock %}
@@ -366,15 +362,15 @@
     </div>
 
     <div class="stats-grid" id="statsGrid">
-        <div class="stat-card blue">
+        <div class="stat-card info">
             <div class="stat-label">Total Events</div>
             <div class="stat-value" id="totalEvents">0</div>
         </div>
-        <div class="stat-card green">
+        <div class="stat-card success">
             <div class="stat-label">Packets/sec</div>
             <div class="stat-value" id="packetsPerSec">0.0</div>
         </div>
-        <div class="stat-card orange">
+        <div class="stat-card warning">
             <div class="stat-label">Active Nodes</div>
             <div class="stat-value" id="activeNodes">0</div>
         </div>
@@ -414,12 +410,12 @@
     let autoScroll = true;
     let currentFilter = 'all';
     let eventCount = 0;
-    
+
     const feedContent = document.getElementById('feedContent');
     const statusIndicator = document.getElementById('statusIndicator');
     const statusText = document.getElementById('statusText');
     const autoScrollToggle = document.getElementById('autoScrollToggle');
-    
+
     // Icon mapping for different event types
     const eventIcons = {
         packet: '📨',
@@ -429,20 +425,20 @@
         traceroute: '🗺️',
         connected: '✓'
     };
-    
+
     function connectToStream() {
         eventSource = new EventSource('/api/live/stream');
-        
+
         eventSource.onopen = function() {
             updateConnectionStatus(true);
         };
-        
+
         eventSource.onerror = function() {
             updateConnectionStatus(false);
             // Reconnect after 5 seconds
             setTimeout(connectToStream, 5000);
         };
-        
+
         eventSource.onmessage = function(e) {
             try {
                 const event = JSON.parse(e.data);
@@ -452,7 +448,7 @@
             }
         };
     }
-    
+
     function updateConnectionStatus(connected) {
         if (connected) {
             statusIndicator.className = 'status-indicator status-connected';
@@ -462,60 +458,60 @@
             statusText.textContent = 'Disconnected';
         }
     }
-    
+
     function handleEvent(event) {
         if (event.type === 'connected') {
             return;
         }
-        
+
         eventCount++;
-        
+
         // Update stats
         updateStats();
-        
+
         // Add to feed if filter matches
         if (currentFilter === 'all' || currentFilter === event.type) {
             addEventToFeed(event);
         }
     }
-    
+
     function addEventToFeed(event) {
         // Remove empty state if present
         const emptyState = feedContent.querySelector('.empty-state');
         if (emptyState) {
             emptyState.remove();
         }
-        
+
         const eventEl = createEventElement(event);
         feedContent.insertBefore(eventEl, feedContent.firstChild);
-        
+
         // Limit to 100 events in DOM
         while (feedContent.children.length > 100) {
             feedContent.removeChild(feedContent.lastChild);
         }
-        
+
         // Auto-scroll if enabled
         if (autoScroll) {
             feedContent.scrollTop = 0;
         }
     }
-    
+
     function createEventElement(event) {
         const div = document.createElement('div');
         div.className = 'activity-item';
-        
+
         const icon = eventIcons[event.type] || '•';
         const timeAgo = getTimeAgo(event.timestamp);
-        
+
         let title = '';
         let description = '';
         let metaItems = [];
-        
+
         if (event.type === 'packet') {
             const d = event.data;
             title = `${d.type || 'Unknown'} packet`;
             description = `${d.from_name} → ${d.to_name}`;
-            
+
             if (d.rssi) metaItems.push(`RSSI: ${d.rssi}dBm`);
             if (d.snr) metaItems.push(`SNR: ${d.snr.toFixed(1)}dB`);
             if (d.hop_limit) metaItems.push(`Hops: ${d.hop_limit}`);
@@ -529,11 +525,11 @@
             title = d.alert_type;
             description = d.message;
         }
-        
-        const metaHtml = metaItems.map(item => 
+
+        const metaHtml = metaItems.map(item =>
             `<span class="meta-item">${item}</span>`
         ).join('');
-        
+
         div.innerHTML = `
             <div class="activity-icon ${event.type}">
                 ${icon}
@@ -547,10 +543,10 @@
                 ${metaItems.length > 0 ? `<div class="activity-meta">${metaHtml}</div>` : ''}
             </div>
         `;
-        
+
         return div;
     }
-    
+
     function getTimeAgo(timestamp) {
         const seconds = Math.floor(Date.now() / 1000 - timestamp);
         if (seconds < 5) return 'just now';
@@ -558,7 +554,7 @@
         if (seconds < 3600) return `${Math.floor(seconds / 60)}m ago`;
         return `${Math.floor(seconds / 3600)}h ago`;
     }
-    
+
     function updateStats() {
         // Fetch stats from API
         fetch('/api/live/stats')
@@ -569,7 +565,7 @@
                 document.getElementById('packetsPerSec').textContent = (stats.packets_per_second || 0).toFixed(1);
                 document.getElementById('clientsConnected').textContent = stats.clients_connected || 0;
             });
-        
+
         // Fetch summary for active nodes
         fetch('/api/live/summary?window=300')
             .then(r => r.json())
@@ -578,31 +574,31 @@
                 document.getElementById('activeNodes').textContent = summary.unique_nodes || 0;
             });
     }
-    
+
     // Filter buttons
     document.querySelectorAll('.filter-btn').forEach(btn => {
         btn.addEventListener('click', function() {
             document.querySelectorAll('.filter-btn').forEach(b => b.classList.remove('active'));
             this.classList.add('active');
             currentFilter = this.dataset.filter;
-            
+
             // Reload recent events with filter
             loadRecentEvents();
         });
     });
-    
+
     // Auto-scroll toggle
     autoScrollToggle.addEventListener('click', function() {
         autoScroll = !autoScroll;
         this.textContent = `Auto-scroll: ${autoScroll ? 'ON' : 'OFF'}`;
         this.classList.toggle('disabled', !autoScroll);
     });
-    
+
     function loadRecentEvents() {
-        const url = currentFilter === 'all' 
+        const url = currentFilter === 'all'
             ? '/api/live/recent?limit=50'
             : `/api/live/recent?limit=50&type=${currentFilter}`;
-        
+
         fetch(url)
             .then(r => r.json())
             .then(data => {
@@ -621,15 +617,15 @@
                 }
             });
     }
-    
+
     // Initialize
     connectToStream();
     loadRecentEvents();
     updateStats();
-    
+
     // Update stats every 5 seconds
     setInterval(updateStats, 5000);
-    
+
     // Cleanup on page unload
     window.addEventListener('beforeunload', function() {
         if (eventSource) {

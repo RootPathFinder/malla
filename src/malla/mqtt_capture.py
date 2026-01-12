@@ -1506,6 +1506,58 @@ def on_message(client: mqtt.Client, userdata: Any, msg: mqtt.MQTTMessage) -> Non
     except Exception as db_error:
         logging.error(f"Failed to log packet to database: {db_error}")
 
+    # Track packet in live monitor if processed successfully
+    if processed_successfully and mesh_packet:
+        try:
+            from malla.services.live_monitor import track_packet
+
+            # Build packet data for live monitor
+            from_node_id_numeric = getattr(mesh_packet, "from", None)
+            to_node_id_numeric = getattr(mesh_packet, "to", None)
+            portnum = (
+                mesh_packet.decoded.portnum if hasattr(mesh_packet, "decoded") else None
+            )
+            portnum_name = (
+                portnums_pb2.PortNum.Name(portnum) if portnum is not None else "UNKNOWN"
+            )
+
+            packet_data = {
+                "from_node_id": from_node_id_numeric,
+                "from_node_name": get_node_display_name(from_node_id_numeric)
+                if from_node_id_numeric
+                else "Unknown",
+                "to_node_id": to_node_id_numeric,
+                "to_node_name": get_node_display_name(to_node_id_numeric)
+                if to_node_id_numeric and to_node_id_numeric != 0xFFFFFFFF
+                else "Broadcast",
+                "portnum_name": portnum_name,
+                "rssi": getattr(mesh_packet, "rx_rssi", None),
+                "snr": getattr(mesh_packet, "rx_snr", None),
+                "hop_limit": getattr(mesh_packet, "hop_limit", None),
+                "gateway_id": getattr(service_envelope, "gateway_id", None)
+                if service_envelope
+                else None,
+                "channel_id": getattr(service_envelope, "channel_id", None)
+                if service_envelope
+                else None,
+            }
+
+            # Add decoded text if it's a text message
+            if portnum == portnums_pb2.PortNum.TEXT_MESSAGE_APP and hasattr(
+                mesh_packet, "decoded"
+            ):
+                try:
+                    packet_data["decoded_text"] = mesh_packet.decoded.payload.decode(
+                        "utf-8", errors="replace"
+                    )
+                except Exception:
+                    pass
+
+            track_packet(packet_data)
+        except Exception as live_error:
+            # Don't let live monitor errors affect packet processing
+            logging.debug(f"Failed to track packet in live monitor: {live_error}")
+
     # Log statistics for different message types
     if message_type and processed_successfully:
         if message_type == "e":
