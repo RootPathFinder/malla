@@ -283,12 +283,12 @@
             <!-- Telemetry Information -->
             <div class="card mb-4" id="telemetry-card" style="display: none;">
                 <div class="card-header">
-                    <h5><i class="bi bi-activity"></i> Latest Telemetry</h5>
+                    <h5 class="mb-0"><i class="bi bi-activity"></i> Latest Telemetry</h5>
                     <small class="text-muted">Most recent telemetry data from this node</small>
                 </div>
                 <div class="card-body">
-                    <div class="row">
-                        <div class="col-md-8" id="telemetry-content">
+                    <div class="row g-3">
+                        <div class="col-lg-9" id="telemetry-content">
                             <div class="d-flex align-items-center justify-content-center" style="min-height: 100px;">
                                 <div class="text-center">
                                     <div class="spinner-border text-primary" role="status">
@@ -298,12 +298,14 @@
                                 </div>
                             </div>
                         </div>
-                        <div class="col-md-4" id="health-warnings-container" style="display: none;">
-                            <h6><i class="bi bi-exclamation-triangle"></i> Health Warnings</h6>
-                            <div id="health-warnings-content">
-                                <div class="text-center text-muted">
-                                    <div class="spinner-border spinner-border-sm" role="status">
-                                        <span class="visually-hidden">Loading...</span>
+                        <div class="col-lg-3" id="health-warnings-container" style="display: none;">
+                            <div class="border rounded p-3 h-100 bg-light">
+                                <h6 class="mb-3"><i class="bi bi-heart-pulse"></i> Health Status</h6>
+                                <div id="health-warnings-content">
+                                    <div class="text-center text-muted">
+                                        <div class="spinner-border spinner-border-sm" role="status">
+                                            <span class="visually-hidden">Loading...</span>
+                                        </div>
                                     </div>
                                 </div>
                             </div>
@@ -1125,42 +1127,42 @@ async function loadTelemetryData() {
         let html = '';
 
         // Display timestamp
-        html += '<div class="mb-3">';
+        html += '<div class="mb-3 pb-2 border-bottom">';
         html += '<small class="text-muted">';
-        html += '<i class="bi bi-clock"></i> Last updated: ' + telemetry.timestamp_relative;
+        html += '<i class="bi bi-clock"></i> Last updated: <strong>' + telemetry.timestamp_relative + '</strong>';
         html += ' <span class="timestamp-display" data-timestamp="' + telemetry.timestamp_unix + '">(' + telemetry.timestamp + ')</span>';
         html += '</small>';
         html += '</div>';
 
-        html += '<div class="row">';
+        html += '<div class="row g-3">';
 
         // Device Metrics (battery, voltage, etc.)
         if (telemetry.device_metrics) {
             const dm = telemetry.device_metrics;
-            html += '<div class="col-md-6">';
-            html += '<h6><i class="bi bi-battery-charging"></i> Device Metrics</h6>';
-            html += '<table class="table table-sm">';
+            html += '<div class="col-md-6 col-lg-4">';
+            html += '<h6 class="mb-3"><i class="bi bi-battery-charging text-success"></i> Device Metrics</h6>';
+            html += '<table class="table table-sm table-borderless">';
 
             if (dm.battery_level !== undefined) {
                 const batteryClass = dm.battery_level > 80 ? 'text-success' : dm.battery_level > 20 ? 'text-warning' : 'text-danger';
-                html += '<tr><th>Battery Level:</th><td><span class="' + batteryClass + '">' + dm.battery_level + '%</span>';
+                html += '<tr><th class="text-muted" style="width: 50%;">Battery Level:</th><td class="text-end"><span class="' + batteryClass + ' fw-bold">' + dm.battery_level + '%</span>';
                 html += '<span id="spark-battery_level" style="margin-left:10px"></span></td></tr>';
             }
             if (dm.voltage !== undefined && dm.voltage > 0) {
-                html += '<tr><th>Voltage:</th><td>' + dm.voltage.toFixed(2) + ' V';
+                html += '<tr><th class="text-muted">Voltage:</th><td class="text-end fw-bold">' + dm.voltage.toFixed(2) + ' V';
                 html += '<span id="spark-voltage" style="margin-left:10px"></span></td></tr>';
             }
             if (dm.channel_utilization !== undefined) {
-                html += '<tr><th>Channel Utilization:</th><td>' + dm.channel_utilization.toFixed(1) + '%';
+                html += '<tr><th class="text-muted">Channel Util:</th><td class="text-end fw-bold">' + dm.channel_utilization.toFixed(1) + '%';
                 html += '<span id="spark-channel_utilization" style="margin-left:10px"></span></td></tr>';
             }
             if (dm.air_util_tx !== undefined) {
-                html += '<tr><th>Air Utilization TX:</th><td>' + dm.air_util_tx.toFixed(1) + '%';
+                html += '<tr><th class="text-muted">Air Util TX:</th><td class="text-end fw-bold">' + dm.air_util_tx.toFixed(1) + '%';
                 html += '<span id="spark-air_util_tx" style="margin-left:10px"></span></td></tr>';
             }
             if (dm.uptime_seconds !== undefined) {
                 const uptime = formatUptime(dm.uptime_seconds);
-                html += '<tr><th>Uptime:</th><td>' + uptime + '</td></tr>';
+                html += '<tr><th class="text-muted">Uptime:</th><td class="text-end fw-bold">' + uptime + '</td></tr>';
             }
 
             html += '</table>';
@@ -1170,30 +1172,30 @@ async function loadTelemetryData() {
         // Environment Metrics (temperature, humidity, etc.)
         if (telemetry.environment_metrics) {
             const em = telemetry.environment_metrics;
-            html += '<div class="col-md-6">';
-            html += '<h6><i class="bi bi-thermometer-half"></i> Environment Metrics</h6>';
-            html += '<table class="table table-sm">';
+            html += '<div class="col-md-6 col-lg-4">';
+            html += '<h6 class="mb-3"><i class="bi bi-thermometer-half text-info"></i> Environment</h6>';
+            html += '<table class="table table-sm table-borderless">';
 
             if (em.temperature !== undefined) {
-                html += '<tr><th>Temperature:</th><td><span class="temperature-display" data-temperature-celsius="' + em.temperature + '">' + em.temperature.toFixed(1) + ' °C</span>';
+                html += '<tr><th class="text-muted" style="width: 50%;">Temperature:</th><td class="text-end"><span class="temperature-display fw-bold" data-temperature-celsius="' + em.temperature + '">' + em.temperature.toFixed(1) + ' °C</span>';
                 html += '<span id="spark-temperature" style="margin-left:10px"></span></td></tr>';
             }
             if (em.relative_humidity !== undefined) {
-                html += '<tr><th>Humidity:</th><td>' + em.relative_humidity.toFixed(1) + '%';
+                html += '<tr><th class="text-muted">Humidity:</th><td class="text-end fw-bold">' + em.relative_humidity.toFixed(1) + '%';
                 html += '<span id="spark-relative_humidity" style="margin-left:10px"></span></td></tr>';
             }
             if (em.barometric_pressure !== undefined) {
-                html += '<tr><th>Pressure:</th><td>' + em.barometric_pressure.toFixed(1) + ' hPa';
+                html += '<tr><th class="text-muted">Pressure:</th><td class="text-end fw-bold">' + em.barometric_pressure.toFixed(1) + ' hPa';
                 html += '<span id="spark-barometric_pressure" style="margin-left:10px"></span></td></tr>';
             }
             if (em.gas_resistance !== undefined) {
-                html += '<tr><th>Gas Resistance:</th><td>' + em.gas_resistance.toFixed(0) + ' Ω</td></tr>';
+                html += '<tr><th class="text-muted">Gas Resistance:</th><td class="text-end fw-bold">' + em.gas_resistance.toFixed(0) + ' Ω</td></tr>';
             }
             if (em.voltage !== undefined) {
-                html += '<tr><th>Voltage:</th><td>' + em.voltage.toFixed(2) + ' V</td></tr>';
+                html += '<tr><th class="text-muted">Voltage:</th><td class="text-end fw-bold">' + em.voltage.toFixed(2) + ' V</td></tr>';
             }
             if (em.current !== undefined) {
-                html += '<tr><th>Current:</th><td>' + em.current.toFixed(2) + ' mA</td></tr>';
+                html += '<tr><th class="text-muted">Current:</th><td class="text-end fw-bold">' + em.current.toFixed(2) + ' mA</td></tr>';
             }
 
             html += '</table>';
@@ -1203,27 +1205,27 @@ async function loadTelemetryData() {
         // Power Metrics
         if (telemetry.power_metrics) {
             const pm = telemetry.power_metrics;
-            html += '<div class="col-md-6">';
-            html += '<h6><i class="bi bi-lightning-charge"></i> Power Metrics</h6>';
-            html += '<table class="table table-sm">';
+            html += '<div class="col-md-6 col-lg-4">';
+            html += '<h6 class="mb-3"><i class="bi bi-lightning-charge text-warning"></i> Power Metrics</h6>';
+            html += '<table class="table table-sm table-borderless">';
 
             if (pm.ch1_voltage !== undefined) {
-                html += '<tr><th>Channel 1 Voltage:</th><td>' + pm.ch1_voltage.toFixed(2) + ' V</td></tr>';
+                html += '<tr><th class="text-muted" style="width: 50%;">CH1 Voltage:</th><td class="text-end fw-bold">' + pm.ch1_voltage.toFixed(2) + ' V</td></tr>';
             }
             if (pm.ch1_current !== undefined) {
-                html += '<tr><th>Channel 1 Current:</th><td>' + pm.ch1_current.toFixed(2) + ' mA</td></tr>';
+                html += '<tr><th class="text-muted">CH1 Current:</th><td class="text-end fw-bold">' + pm.ch1_current.toFixed(2) + ' mA</td></tr>';
             }
             if (pm.ch2_voltage !== undefined) {
-                html += '<tr><th>Channel 2 Voltage:</th><td>' + pm.ch2_voltage.toFixed(2) + ' V</td></tr>';
+                html += '<tr><th class="text-muted">CH2 Voltage:</th><td class="text-end fw-bold">' + pm.ch2_voltage.toFixed(2) + ' V</td></tr>';
             }
             if (pm.ch2_current !== undefined) {
-                html += '<tr><th>Channel 2 Current:</th><td>' + pm.ch2_current.toFixed(2) + ' mA</td></tr>';
+                html += '<tr><th class="text-muted">CH2 Current:</th><td class="text-end fw-bold">' + pm.ch2_current.toFixed(2) + ' mA</td></tr>';
             }
             if (pm.ch3_voltage !== undefined) {
-                html += '<tr><th>Channel 3 Voltage:</th><td>' + pm.ch3_voltage.toFixed(2) + ' V</td></tr>';
+                html += '<tr><th class="text-muted">CH3 Voltage:</th><td class="text-end fw-bold">' + pm.ch3_voltage.toFixed(2) + ' V</td></tr>';
             }
             if (pm.ch3_current !== undefined) {
-                html += '<tr><th>Channel 3 Current:</th><td>' + pm.ch3_current.toFixed(2) + ' mA</td></tr>';
+                html += '<tr><th class="text-muted">CH3 Current:</th><td class="text-end fw-bold">' + pm.ch3_current.toFixed(2) + ' mA</td></tr>';
             }
 
             html += '</table>';
@@ -1233,18 +1235,18 @@ async function loadTelemetryData() {
         // Air Quality Metrics
         if (telemetry.air_quality_metrics) {
             const aq = telemetry.air_quality_metrics;
-            html += '<div class="col-md-6">';
-            html += '<h6><i class="bi bi-wind"></i> Air Quality Metrics</h6>';
-            html += '<table class="table table-sm">';
+            html += '<div class="col-md-6 col-lg-4">';
+            html += '<h6 class="mb-3"><i class="bi bi-wind text-primary"></i> Air Quality</h6>';
+            html += '<table class="table table-sm table-borderless">';
 
             if (aq.pm10_standard !== undefined) {
-                html += '<tr><th>PM1.0:</th><td>' + aq.pm10_standard + ' µg/m³</td></tr>';
+                html += '<tr><th class="text-muted" style="width: 50%;">PM1.0:</th><td class="text-end fw-bold">' + aq.pm10_standard + ' µg/m³</td></tr>';
             }
             if (aq.pm25_standard !== undefined) {
-                html += '<tr><th>PM2.5:</th><td>' + aq.pm25_standard + ' µg/m³</td></tr>';
+                html += '<tr><th class="text-muted">PM2.5:</th><td class="text-end fw-bold">' + aq.pm25_standard + ' µg/m³</td></tr>';
             }
             if (aq.pm100_standard !== undefined) {
-                html += '<tr><th>PM10:</th><td>' + aq.pm100_standard + ' µg/m³</td></tr>';
+                html += '<tr><th class="text-muted">PM10:</th><td class="text-end fw-bold">' + aq.pm100_standard + ' µg/m³</td></tr>';
             }
 
             html += '</table>';
