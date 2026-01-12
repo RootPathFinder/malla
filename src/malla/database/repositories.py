@@ -4053,6 +4053,7 @@ class BatteryAnalyticsRepository:
             return {"solar": 0, "battery": 0, "mains": 0, "unknown": 0}
 
     @staticmethod
+    @staticmethod
     def get_battery_health_overview() -> list[dict[str, Any]]:
         """Get overview of all nodes with battery health information.
 
@@ -4078,13 +4079,12 @@ class BatteryAnalyticsRepository:
                     td.battery_level,
                     td.timestamp as last_telemetry
                 FROM node_info ni
-                LEFT JOIN (
+                INNER JOIN (
                     SELECT node_id, battery_level, voltage, timestamp,
                            ROW_NUMBER() OVER (PARTITION BY node_id ORDER BY timestamp DESC) as rn
                     FROM telemetry_data
-                    WHERE timestamp > ?
+                    WHERE timestamp > ? AND (voltage IS NOT NULL OR battery_level IS NOT NULL)
                 ) td ON ni.node_id = td.node_id AND td.rn = 1
-                WHERE ni.power_type IN ('solar', 'battery')
                 ORDER BY
                     CASE
                         WHEN ni.last_battery_voltage IS NOT NULL AND ni.last_battery_voltage < 3.3 THEN 0
