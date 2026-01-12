@@ -1188,7 +1188,7 @@ function renderSparklines(history) {
         'voltage': { color: '#ffc107', suffix: 'V', min: 0 },
         'channel_utilization': { color: '#17a2b8', suffix: '%', min: 0, max: 100 },
         'air_util_tx': { color: '#6c757d', suffix: '%', min: 0, max: 100 },
-        'temperature': { color: '#dc3545', suffix: TemperatureToggle.getUnit() === 'F' ? '°F' : '°C', isTemperature: true },
+        'temperature': { color: '#dc3545', suffix: '', isTemperature: true },
         'relative_humidity': { color: '#007bff', suffix: '%', min: 0, max: 100 },
         'barometric_pressure': { color: '#6610f2', suffix: 'hPa' }
     };
@@ -1208,13 +1208,26 @@ function renderSparkline(container, data, config) {
     const height = 20;
     const color = config.color || '#007bff';
 
+    // Determine temperature suffix at runtime if this is a temperature metric
+    let suffix = config.suffix;
+    if (config.isTemperature) {
+        // Get temperature unit - check if TemperatureToggle is available
+        const unit = (typeof TemperatureToggle !== 'undefined' && TemperatureToggle.getUnit)
+            ? TemperatureToggle.getUnit()
+            : 'C';
+        suffix = unit === 'F' ? '°F' : '°C';
+    }
+
     // Convert temperature data if needed
     let processedData = data;
-    if (config.isTemperature && TemperatureToggle.getUnit() === 'F') {
-        processedData = data.map(d => ({
-            x: d.x,
-            y: TemperatureToggle.celsiusToFahrenheit(d.y)
-        }));
+    if (config.isTemperature && typeof TemperatureToggle !== 'undefined' && TemperatureToggle.celsiusToFahrenheit) {
+        const unit = TemperatureToggle.getUnit();
+        if (unit === 'F') {
+            processedData = data.map(d => ({
+                x: d.x,
+                y: TemperatureToggle.celsiusToFahrenheit(d.y)
+            }));
+        }
     }
 
     // Extract y values

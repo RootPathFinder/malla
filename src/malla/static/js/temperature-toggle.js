@@ -178,14 +178,27 @@ class TemperatureToggle {
     }
 }
 
+// Global instance for easy access
+let temperatureToggleInstance = null;
+
 // Initialize on page load
 document.addEventListener('DOMContentLoaded', () => {
-    const tempToggle = new TemperatureToggle();
+    if (!temperatureToggleInstance) {
+        temperatureToggleInstance = new TemperatureToggle();
+    }
     // Update all temperatures on initial page load
-    tempToggle.updateAllTemperatures();
+    temperatureToggleInstance.updateAllTemperatures();
 
     // Listen for temperature unit changes to update displays
     window.addEventListener('temperatureUnitChanged', () => {
-        tempToggle.updateAllTemperatures();
+        temperatureToggleInstance.updateAllTemperatures();
     });
 });
+
+// Expose static methods via a convenience object for use in templates
+TemperatureToggle.getUnit = function() {
+    if (!temperatureToggleInstance) {
+        temperatureToggleInstance = new TemperatureToggle();
+    }
+    return temperatureToggleInstance.getUnit();
+};
