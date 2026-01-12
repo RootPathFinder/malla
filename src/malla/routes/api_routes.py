@@ -979,6 +979,33 @@ def api_node_telemetry_history(node_id):
         return jsonify({"error": str(e)}), 500
 
 
+@api_bp.route("/node/<node_id>/health")
+def api_node_health(node_id):
+    """API endpoint for node health analysis."""
+    from ..services.node_health_service import NodeHealthService
+
+    logger.info(f"API node health endpoint accessed for node {node_id}")
+    try:
+        # Convert node_id to int
+        node_id_int = convert_node_id(node_id)
+
+        # Get hours parameter (default 24)
+        hours = request.args.get("hours", 24, type=int)
+
+        # Get health analysis
+        health_data = NodeHealthService.analyze_node_health(node_id_int, hours=hours)
+
+        if health_data is None:
+            return jsonify({"error": "Node not found"}), 404
+
+        return safe_jsonify(health_data)
+    except ValueError as e:
+        return jsonify({"error": str(e)}), 400
+    except Exception as e:
+        logger.error(f"Error in API node health: {e}")
+        return jsonify({"error": str(e)}), 500
+
+
 @api_bp.route("/longest-links")
 def api_longest_links():
     """API endpoint for longest links analysis."""

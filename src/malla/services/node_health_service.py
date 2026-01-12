@@ -22,6 +22,101 @@ class NodeHealthService:
     """Service for analyzing node health and identifying problematic nodes."""
 
     @staticmethod
+    def _calculate_baseline_behavior(node_id: int, cursor: Any) -> dict[str, Any]:
+        """
+        Calculate baseline behavior for a node over the last 30 days.
+
+        Returns baseline metrics including average packets per day,
+        typical activity pattern, and confidence in the baseline.
+        """
+        # Look back 30 days for baseline
+        baseline_cutoff = int(time.time()) - (30 * 24 * 3600)
+        current_time = int(time.time())
+
+        # Get all packets in baseline period
+        cursor.execute(
+            """
+            SELECT timestamp
+            FROM packet_history
+            WHERE from_node_id = ?
+            AND timestamp >= ?
+            ORDER BY timestamp
+        """,
+            (node_id, baseline_cutoff),
+        )
+        baseline_timestamps = [row["timestamp"] for row in cursor.fetchall()]
+
+        if len(baseline_timestamps) < 5:  # Insufficient data
+            return {
+                "avg_packets_per_day": 0,
+                "total_days": 0,
+                "total_packets": 0,
+                "confidence": 0,
+                "has_baseline": False,
+            }
+
+        # Calculate metrics
+        total_days = (current_time - baseline_cutoff) / 86400
+        total_packets = len(baseline_timestamps)
+        avg_packets_per_day = total_packets / total_days if total_days > 0 else 0
+
+        # Calculate activity distribution (packets per day)
+        from collections import defaultdict
+
+        packets_by_day = defaultdict(int)
+        for ts in baseline_timestamps:
+            day_key = int(ts / 86400)  # Days since epoch
+            packets_by_day[day_key] += 1
+
+        # Calculate standard deviation of daily packet counts
+        if len(packets_by_day) > 1:
+            daily_counts = list(packets_by_day.values())
+            mean_daily = sum(daily_counts) / len(daily_counts)
+            variance = sum((x - mean_daily) ** 2 for x in daily_counts) / len(
+                daily_counts
+            )
+            std_dev = variance**0.5
+            coefficient_of_variation = (std_dev / mean_daily) if mean_daily > 0 else 0
+        else:
+            coefficient_of_variation = 0
+
+        # Calculate confidence in baseline (0-100)
+        # Factors: amount of data, consistency of behavior, time period
+        confidence = 100
+
+        # Reduce confidence if limited data points
+        if total_packets < 10:
+            confidence -= 40
+        elif total_packets < 30:
+            confidence -= 20
+        elif total_packets < 100:
+            confidence -= 10
+
+        # Reduce confidence if limited time period
+        if total_days < 7:
+            confidence -= 30
+        elif total_days < 14:
+            confidence -= 15
+
+        # Reduce confidence if behavior is highly variable (inconsistent)
+        if coefficient_of_variation > 1.5:  # Very inconsistent
+            confidence -= 20
+        elif coefficient_of_variation > 1.0:  # Moderately inconsistent
+            confidence -= 10
+
+        confidence = max(0, confidence)
+
+        return {
+            "avg_packets_per_day": avg_packets_per_day,
+            "total_days": total_days,
+            "total_packets": total_packets,
+            "days_with_activity": len(packets_by_day),
+            "coefficient_of_variation": coefficient_of_variation,
+            "confidence": confidence,
+            "has_baseline": True,
+        }
+
+    @staticmethod
     def analyze_node_health(node_id: int, hours: int = 24) -> dict[str, Any] | None:
         """
         Analyze health metrics for a specific node.
@@ -137,6 +232,89 @@ class NodeHealthService:
         issues = []
         health_score = 100  # Start with perfect score
 
+        # Get baseline behavior for this node
+        baseline = NodeHealthService._calculate_baseline_behavior(node_id, cursor)
+
+        # Calculate confidence score for health assessment
+        confidence_score = 100
+        confidence_factors = []
+
+        # Baseline confidence affects overall confidence
+        if baseline["has_baseline"]:
+            confidence_score = min(confidence_score, baseline["confidence"])
+            if baseline["confidence"] < 70:
+                confidence_factors.append(
+                    f"Limited historical data (baseline confidence: {baseline['confidence']}%)"
+                )
+        else:
+            confidence_score = 30  # Very low confidence without baseline
+            confidence_factors.append(
+                "No baseline data available (new node or insufficient history)"
+            )
+
+        # Reduce confidence if analysis period is too short
+        if hours < 12:
+            confidence_score -= 20
+            confidence_factors.append(
+                f"Short analysis period ({hours}h < 12h recommended)"
+            )
+
+        # Reduce confidence if very few packets in analysis period
+        if packet_stats["total_packets"] > 0 and packet_stats["total_packets"] < 5:
+            confidence_score -= 25
+            confidence_factors.append(
+                f"Limited data points ({packet_stats['total_packets']} packets)"
+            )
+        elif packet_stats["total_packets"] == 0:
+            confidence_score -= 15  # Some confidence still remains from baseline
+            confidence_factors.append("No packets in analysis period")
+
+        confidence_score = max(0, min(100, confidence_score))
+
+        # Check for behavioral anomalies (only if we have baseline)
+        if baseline["has_baseline"] and baseline["avg_packets_per_day"] > 0:
+            # Expected packets in the analysis period
+            expected_packets = baseline["avg_packets_per_day"] * (hours / 24)
+            actual_packets = packet_stats["total_packets"]
+
+            # Calculate deviation from baseline
+            if expected_packets > 0:
+                deviation_ratio = actual_packets / expected_packets
+
+                # Significant drop in activity (less than 50% of expected)
+                if deviation_ratio < 0.5 and expected_packets >= 2:
+                    severity = "warning" if deviation_ratio >= 0.25 else "critical"
+                    issues.append(
+                        {
+                            "severity": severity,
+                            "category": "behavior",
+                            "message": f"Abnormally low activity: {actual_packets} packets vs {expected_packets:.1f} expected (baseline: {baseline['avg_packets_per_day']:.1f}/day)",
+                            "expected": expected_packets,
+                            "actual": actual_packets,
+                            "deviation_percent": (1 - deviation_ratio) * 100,
+                        }
+                    )
+                    if severity == "critical":
+                        health_score -= 30
+                    else:
+                        health_score -= 15
+
+                # Unusually high activity (more than 3x expected) - might indicate issues
+                elif (
+                    deviation_ratio > 3.0 and baseline["coefficient_of_variation"] < 1.0
+                ):
+                    # Only flag if baseline behavior is relatively consistent
+                    issues.append(
+                        {
+                            "severity": "info",
+                            "category": "behavior",
+                            "message": f"Unusually high activity: {actual_packets} packets vs {expected_packets:.1f} expected (possible retransmission issues)",
+                            "expected": expected_packets,
+                            "actual": actual_packets,
+                            "deviation_percent": (deviation_ratio - 1) * 100,
+                        }
+                    )
+
         # Note: RSSI and SNR are informational only and do NOT affect health score
         # These metrics are distance-dependent and would bias against remote nodes
         # Signal quality is tracked but not penalized to ensure fair health assessment
@@ -200,13 +378,38 @@ class NodeHealthService:
 
         # Check for activity gaps
         long_gaps = [g for g in gaps if g["duration_minutes"] > 120]  # > 2 hours
+        outage_details = []
         if long_gaps:
             total_gap_time = sum(g["duration_minutes"] for g in long_gaps)
+
+            # Format detailed outage information
+            for gap in long_gaps:
+                from datetime import UTC, datetime
+
+                start_time = datetime.fromtimestamp(gap["start"], tz=UTC)
+                end_time = datetime.fromtimestamp(gap["end"], tz=UTC)
+                duration_hours = gap["duration_minutes"] / 60
+
+                outage_details.append(
+                    {
+                        "start_timestamp": gap["start"],
+                        "end_timestamp": gap["end"],
+                        "start_time": start_time.strftime("%Y-%m-%d %H:%M:%S UTC"),
+                        "end_time": end_time.strftime("%Y-%m-%d %H:%M:%S UTC"),
+                        "duration_minutes": gap["duration_minutes"],
+                        "duration_hours": duration_hours,
+                        "duration_formatted": f"{int(duration_hours)}h {int(gap['duration_minutes'] % 60)}m"
+                        if duration_hours >= 1
+                        else f"{int(gap['duration_minutes'])}m",
+                    }
+                )
+
             issues.append(
                 {
                     "severity": "warning",
                     "category": "reliability",
                     "message": f"{len(long_gaps)} significant outage(s) totaling {total_gap_time:.0f} minutes",
+                    "outage_details": outage_details,
                 }
             )
             health_score -= min(25, len(long_gaps) * 5)
@@ -229,6 +432,9 @@ class NodeHealthService:
             "node_info": node_info,
             "health_score": health_score,
             "health_status": health_status,
+            "confidence_score": confidence_score,
+            "confidence_factors": confidence_factors,
+            "baseline": baseline,
             "issues": issues,
             "metrics": {
                 "total_packets": packet_stats["total_packets"],

@@ -502,10 +502,18 @@ function createNodeRow(nodeData) {
     const node = nodeData.raw_node;
     const healthClass = `health-${node.health_status}`;
 
-    // Issues summary
+    // Issues summary - highlight outages
     const issuesHtml = node.issues.map(issue => {
         const badgeClass = `issue-${issue.severity}`;
-        return `<span class="badge ${badgeClass}">${issue.category}</span>`;
+        let issueText = issue.category;
+
+        // Add outage count badge if present
+        if (issue.category === 'reliability' && issue.outage_details && issue.outage_details.length > 0) {
+            issueText += ` (${issue.outage_details.length})`;
+        }
+
+        return `<span class="badge ${badgeClass}" data-bs-toggle="tooltip" data-bs-placement="top"
+                      title="${issue.message}">${issueText}</span>`;
     }).join(' ');
 
     tr.innerHTML = `
@@ -548,25 +556,63 @@ async function showNodeDetails(nodeId) {
         modalTitle.textContent = `Health Details: ${nodeName}`;
 
         // Build detailed view
+        const confidenceClass = data.confidence_score >= 80 ? 'success' :
+                               data.confidence_score >= 60 ? 'warning' : 'danger';
+
         let detailsHtml = `
             <div class="row mb-3">
                 <div class="col-md-6">
                     <h6>Health Overview</h6>
                     <p><strong>Health Score:</strong> <span class="badge health-score-badge health-${data.health_status}">${data.health_score}</span></p>
                     <p><strong>Status:</strong> <span class="badge health-${data.health_status}">${data.health_status}</span></p>
+                    <p><strong>Confidence:</strong>
+                        <span class="badge bg-${confidenceClass}" data-bs-toggle="tooltip" data-bs-placement="top"
+                              title="${data.confidence_factors ? data.confidence_factors.join('; ') : 'Assessment confidence'}">
+                            ${data.confidence_score}%
+                        </span>
+                        <i class="bi bi-info-circle text-muted" data-bs-toggle="tooltip" data-bs-placement="top"
+                           title="Confidence score indicates reliability of health assessment based on data availability and consistency"></i>
+                    </p>
                     <p><strong>Hardware:</strong> ${data.node_info.hw_model || 'Unknown'}</p>
                     <p><strong>Role:</strong> ${data.node_info.role || 'Unknown'}</p>
                 </div>
                 <div class="col-md-6">
-                    <h6>Metrics (${data.analyzed_hours}h)</h6>
+                    <h6>Metrics (${data.analyzed_hours}h)
+                        <i class="bi bi-info-circle" data-bs-toggle="tooltip" data-bs-placement="top"
+                           title="Metrics calculated over the last ${data.analyzed_hours} hours of network activity"></i>
+                    </h6>
                     <p><strong>Total Packets:</strong> ${data.metrics.total_packets}</p>
                     <p><strong>Avg RSSI:</strong> ${data.metrics.avg_rssi ? data.metrics.avg_rssi.toFixed(1) + ' dBm' : 'N/A'}</p>
                     <p><strong>Avg SNR:</strong> ${data.metrics.avg_snr ? data.metrics.avg_snr.toFixed(1) + ' dB' : 'N/A'}</p>
                     <p><strong>Unique Gateways:</strong> ${data.metrics.unique_gateways}</p>
-                    <p><strong>Activity Gaps:</strong> ${data.metrics.activity_gaps}</p>
+                    <p><strong>Activity Gaps:</strong> ${data.metrics.activity_gaps}
+                        <i class="bi bi-info-circle" data-bs-toggle="tooltip" data-bs-placement="top"
+                           title="Number of gaps in activity (periods > 30 minutes between packets)"></i>
+                    </p>
+                    <p><strong>Long Outages:</strong> ${data.metrics.long_outages}
+                        <i class="bi bi-info-circle" data-bs-toggle="tooltip" data-bs-placement="top"
+                           title="Outages lasting more than 2 hours. Detected when no packets are received for an extended period, indicating node offline or network issues."></i>
+                    </p>
                 </div>
             </div>
         `;
+
+        // Add baseline information if available
+        if (data.baseline && data.baseline.has_baseline) {
+            const variabilityText = data.baseline.coefficient_of_variation > 1.5 ? 'highly variable' :
+                                   data.baseline.coefficient_of_variation > 1.0 ? 'moderately variable' : 'consistent';
+            detailsHtml += `
+                <div class="alert alert-info mb-3">
+                    <h6 class="alert-heading"><i class="bi bi-graph-up"></i> Baseline Behavior</h6>
+                    <small>
+                        <strong>Average Activity:</strong> ${data.baseline.avg_packets_per_day.toFixed(1)} packets/day<br>
+                        <strong>History:</strong> ${data.baseline.total_packets} packets over ${data.baseline.total_days.toFixed(0)} days<br>
+                        <strong>Pattern:</strong> ${variabilityText} activity pattern<br>
+                        <strong>Active Days:</strong> ${data.baseline.days_with_activity} of ${data.baseline.total_days.toFixed(0)} days
+                    </small>
+                </div>
+            `;
+        }
 
         if (data.issues.length > 0) {
             detailsHtml += '<h6>Issues Detected</h6><ul class="list-group mb-3">';
@@ -576,13 +622,35 @@ async function showNodeDetails(nodeId) {
                     <li class="list-group-item">
                         <span class="badge ${badgeClass}">${issue.severity}</span>
                         <strong>${issue.category}:</strong> ${issue.message}
-                    </li>
                 `;
+
+                // Add detailed outage information if available
+                if (issue.outage_details && issue.outage_details.length > 0) {
+                    detailsHtml += '<div class="mt-2"><small class="text-muted"><strong>Outage Details:</strong></small><ul class="small mt-1">';
+                    issue.outage_details.forEach(outage => {
+                        detailsHtml += `
+                            <li>
+                                <span data-bs-toggle="tooltip" data-bs-placement="top"
+                                      title="Outage detected when no packets were received for ${outage.duration_formatted}. This indicates the node was offline or unable to transmit.">
+                                    <strong>${outage.duration_formatted}</strong> -
+                                    ${outage.start_time} to ${outage.end_time}
+                                    <i class="bi bi-info-circle text-muted"></i>
+                                </span>
+                            </li>
+                        `;
+                    });
+                    detailsHtml += '</ul></div>';
+                }
+
+                detailsHtml += '</li>';
             });
             detailsHtml += '</ul>';
         }
 
         modalBody.innerHTML = detailsHtml;
+
+        // Reinitialize tooltips for the modal content
+        initializeTooltips();
 
     } catch (error) {
         console.error('Error loading node details:', error);

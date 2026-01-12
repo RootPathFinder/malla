@@ -287,13 +287,25 @@
                     <small class="text-muted">Most recent telemetry data from this node</small>
                 </div>
                 <div class="card-body">
-                    <div id="telemetry-content">
-                        <div class="d-flex align-items-center justify-content-center" style="min-height: 100px;">
-                            <div class="text-center">
-                                <div class="spinner-border text-primary" role="status">
-                                    <span class="visually-hidden">Loading...</span>
+                    <div class="row">
+                        <div class="col-md-8" id="telemetry-content">
+                            <div class="d-flex align-items-center justify-content-center" style="min-height: 100px;">
+                                <div class="text-center">
+                                    <div class="spinner-border text-primary" role="status">
+                                        <span class="visually-hidden">Loading...</span>
+                                    </div>
+                                    <p class="mt-2 text-muted">Loading telemetry data...</p>
                                 </div>
-                                <p class="mt-2 text-muted">Loading telemetry data...</p>
+                            </div>
+                        </div>
+                        <div class="col-md-4" id="health-warnings-container" style="display: none;">
+                            <h6><i class="bi bi-exclamation-triangle"></i> Health Warnings</h6>
+                            <div id="health-warnings-content">
+                                <div class="text-center text-muted">
+                                    <div class="spinner-border spinner-border-sm" role="status">
+                                        <span class="visually-hidden">Loading...</span>
+                                    </div>
+                                </div>
                             </div>
                         </div>
                     </div>
@@ -991,7 +1003,87 @@ document.addEventListener('DOMContentLoaded', function() {
 
     // Load telemetry data
     loadTelemetryData();
+
+    // Load health warnings
+    loadHealthWarnings();
 });
+
+async function loadHealthWarnings() {
+    const scriptTag = document.querySelector('script[data-node-id]');
+    const nodeId = scriptTag.getAttribute('data-node-id');
+    const warningsContainer = document.getElementById('health-warnings-container');
+    const warningsContent = document.getElementById('health-warnings-content');
+
+    try {
+        const response = await fetch(`/api/node/${nodeId}/health?hours=24`);
+        const data = await response.json();
+
+        if (data.error || !data.issues || data.issues.length === 0) {
+            // No warnings, hide the container
+            return;
+        }
+
+        // Filter out info-level issues, show only warnings and critical
+        const importantIssues = data.issues.filter(i => i.severity !== 'info');
+
+        if (importantIssues.length === 0) {
+            return;
+        }
+
+        // Show the container
+        warningsContainer.style.display = 'block';
+
+        // Build warnings HTML
+        let html = '<div class="list-group list-group-flush">';
+
+        for (const issue of importantIssues) {
+            const severityClass = issue.severity === 'critical' ? 'danger' : 'warning';
+            const severityIcon = issue.severity === 'critical' ? 'exclamation-circle-fill' : 'exclamation-triangle-fill';
+
+            html += `<div class="list-group-item list-group-item-${severityClass} p-2">`;
+            html += `<small><i class="bi bi-${severityIcon}"></i> ${issue.message}</small>`;
+            html += '</div>';
+        }
+
+        html += '</div>';
+
+        // Add health score badge
+        const scoreClass = data.health_status === 'healthy' ? 'success' :
+                          data.health_status === 'degraded' ? 'warning' :
+                          data.health_status === 'poor' ? 'danger' : 'dark';
+
+        const confidenceClass = data.confidence_score >= 80 ? 'success' :
+                               data.confidence_score >= 60 ? 'warning' : 'danger';
+
+        html += `<div class="mt-2 text-center">`;
+        html += `<span class="badge bg-${scoreClass}">Health: ${data.health_score}/100</span>`;
+        html += ` <span class="badge bg-${confidenceClass}" data-bs-toggle="tooltip"
+                        title="Confidence in health assessment. Based on: ${data.confidence_factors.join('; ')}">
+                    Confidence: ${data.confidence_score}%</span>`;
+        html += '</div>';
+
+        // Add baseline info if available
+        if (data.baseline && data.baseline.has_baseline) {
+            html += `<div class="mt-2"><small class="text-muted">`;
+            html += `<i class="bi bi-graph-up"></i> Baseline: ${data.baseline.avg_packets_per_day.toFixed(1)} packets/day `;
+            html += `(${data.baseline.total_days.toFixed(0)} days, ${data.baseline.total_packets} packets)`;
+            html += '</small></div>';
+        }
+
+        warningsContent.innerHTML = html;
+
+        // Reinitialize tooltips
+        const tooltipTriggerList = warningsContent.querySelectorAll('[data-bs-toggle="tooltip"]');
+        [...tooltipTriggerList].forEach(tooltipTriggerEl => {
+            if (typeof bootstrap !== 'undefined' && bootstrap.Tooltip) {
+                new bootstrap.Tooltip(tooltipTriggerEl);
+            }
+        });
+
+    } catch (error) {
+        console.error('Error loading health warnings:', error);
+    }
+}
 
 async function loadTelemetryData() {
     const scriptTag = document.querySelector('script[data-node-id]');
