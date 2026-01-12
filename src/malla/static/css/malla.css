@@ -831,25 +831,24 @@ h1, .h1 {
 [data-bs-theme=dark] .nav-link.active {
   color: rgba(255, 255, 255, 1) !important;
 }
-/* Real-time update pulse animation */
+/* Real-time update pulse animation - subtle and smooth */
 @keyframes pulse-update {
   0% {
-    opacity: 1;
-    transform: scale(1);
+    background-color: transparent;
+    box-shadow: none;
   }
   50% {
-    opacity: 0.7;
-    transform: scale(1.05);
+    background-color: rgba(13, 110, 253, 0.15);
+    box-shadow: 0 0 8px rgba(13, 110, 253, 0.3);
   }
   100% {
-    opacity: 1;
-    transform: scale(1);
+    background-color: transparent;
+    box-shadow: none;
   }
 }
 
 .pulse-update {
-  animation: pulse-update 0.6s ease-in-out;
-  background-color: rgba(13, 110, 253, 0.1) !important;
+  animation: pulse-update 0.8s ease-in-out;
   border-radius: 0.25rem;
-  padding: 0.25rem 0.5rem !important;
+  transition: all 0.3s ease;
 }
