@@ -24,11 +24,19 @@ from ..services.meshtastic_service import MeshtasticService
 from ..services.node_service import NodeService
 from ..services.traceroute_service import TracerouteService
 from ..utils.cache_utils import cache_response
+from ..utils.export import (
+    export_analytics_to_json,
+    export_nodes_to_csv,
+    export_nodes_to_geojson,
+    export_packets_to_csv,
+    get_export_formats,
+)
 from ..utils.node_utils import (
     convert_node_id,
     get_bulk_node_names,
     get_bulk_node_short_names,
 )
+from ..utils.performance import get_metrics, get_slow_functions
 from ..utils.serialization_utils import convert_bytes_to_base64, sanitize_floats
 from ..utils.traceroute_utils import parse_traceroute_payload
 
@@ -2106,6 +2114,261 @@ def api_network_health_summary():
     except Exception as e:
         logger.error(f"Error in API network health summary: {e}")
         return jsonify({"error": str(e)}), 500
+
+
+@api_bp.route("/performance/metrics")
+def api_performance_metrics():
+    """
+    API endpoint for performance metrics.
+    
+    Returns detailed performance statistics for monitored functions,
+    useful for identifying bottlenecks and slow operations.
+    """
+    logger.info("API performance metrics endpoint accessed")
+    try:
+        function_name = request.args.get("function")
+        metrics = get_metrics(function_name)
+        
+        return jsonify({
+            "metrics": metrics,
+            "timestamp": time.time()
+        })
+    except Exception as e:
+        logger.error(f"Error in API performance metrics: {e}")
+        return jsonify({"error": str(e)}), 500
+
+
+@api_bp.route("/performance/slow-functions")
+def api_slow_functions():
+    """
+    API endpoint for identifying slow functions.
+    
+    Returns functions that exceed the specified performance threshold,
+    sorted by average execution time.
+    """
+    logger.info("API slow functions endpoint accessed")
+    try:
+        threshold = request.args.get("threshold", 1.0, type=float)
+        limit = request.args.get("limit", 10, type=int)
+        
+        slow_funcs = get_slow_functions(threshold=threshold, limit=limit)
+        
+        return jsonify({
+            "slow_functions": slow_funcs,
+            "threshold": threshold,
+            "limit": limit,
+            "count": len(slow_funcs)
+        })
+    except Exception as e:
+        logger.error(f"Error in API slow functions: {e}")
+        return jsonify({"error": str(e)}), 500
+
+
+@api_bp.route("/performance/database-pool")
+def api_database_pool_stats():
+    """
+    API endpoint for database connection pool statistics.
+    
+    Returns information about connection pool usage, helping identify
+    connection bottlenecks and resource utilization.
+    """
+    logger.info("API database pool stats endpoint accessed")
+    try:
+        from ..database.connection_pool import get_connection_pool
+        
+        pool = get_connection_pool()
+        stats = pool.get_stats()
+        
+        return jsonify({
+            "pool_stats": stats,
+            "timestamp": time.time()
+        })
+    except Exception as e:
+        logger.error(f"Error in API database pool stats: {e}")
+        return jsonify({"error": str(e)}), 500
+
+
+@api_bp.route("/export/formats")
+def api_export_formats():
+    """API endpoint for available export formats."""
+    logger.info("API export formats endpoint accessed")
+    try:
+        formats = get_export_formats()
+        return jsonify({"formats": formats})
+    except Exception as e:
+        logger.error(f"Error in API export formats: {e}")
+        return jsonify({"error": str(e)}), 500
+
+
+@api_bp.route("/export/packets")
+def api_export_packets():
+    """
+    API endpoint to export packet data in various formats.
+    
+    Query parameters:
+        - format: csv or json (default: csv)
+        - All standard packet filter parameters
+    """
+    logger.info("API export packets endpoint accessed")
+    try:
+        from flask import Response, make_response
+        
+        export_format = request.args.get("format", "csv").lower()
+        
+        # Get packets using existing filters
+        filters = {}
+        for key in request.args:
+            if key != "format":
+                filters[key] = request.args.get(key)
+        
+        packets = PacketRepository.get_packets(filters)
+        
+        if export_format == "csv":
+            csv_content, filename = export_packets_to_csv(packets)
+            response = make_response(csv_content)
+            response.headers["Content-Type"] = "text/csv"
+            response.headers["Content-Disposition"] = f"attachment; filename={filename}"
+            return response
+        elif export_format == "json":
+            from ..utils.export import export_to_json
+            json_content, filename = export_to_json(packets, pretty=True)
+            response = make_response(json_content)
+            response.headers["Content-Type"] = "application/json"
+            response.headers["Content-Disposition"] = f"attachment; filename={filename}"
+            return response
+        else:
+            return jsonify({"error": f"Unsupported format: {export_format}"}), 400
+            
+    except Exception as e:
+        logger.error(f"Error in API export packets: {e}")
+        return jsonify({"error": str(e)}), 500
+
+
+@api_bp.route("/export/nodes")
+def api_export_nodes():
+    """
+    API endpoint to export node data in various formats.
+    
+    Query parameters:
+        - format: csv, json, or geojson (default: csv)
+        - All standard node filter parameters
+    """
+    logger.info("API export nodes endpoint accessed")
+    try:
+        from flask import Response, make_response
+        
+        export_format = request.args.get("format", "csv").lower()
+        
+        # Get nodes using existing filters
+        filters = {}
+        for key in request.args:
+            if key != "format":
+                filters[key] = request.args.get(key)
+        
+        nodes = NodeRepository.get_nodes(filters)
+        
+        if export_format == "csv":
+            csv_content, filename = export_nodes_to_csv(nodes)
+            response = make_response(csv_content)
+            response.headers["Content-Type"] = "text/csv"
+            response.headers["Content-Disposition"] = f"attachment; filename={filename}"
+            return response
+        elif export_format == "json":
+            from ..utils.export import export_to_json
+            json_content, filename = export_to_json(nodes, pretty=True)
+            response = make_response(json_content)
+            response.headers["Content-Type"] = "application/json"
+            response.headers["Content-Disposition"] = f"attachment; filename={filename}"
+            return response
+        elif export_format == "geojson":
+            geojson_content, filename = export_nodes_to_geojson(nodes)
+            response = make_response(geojson_content)
+            response.headers["Content-Type"] = "application/geo+json"
+            response.headers["Content-Disposition"] = f"attachment; filename={filename}"
+            return response
+        else:
+            return jsonify({"error": f"Unsupported format: {export_format}"}), 400
+            
+    except Exception as e:
+        logger.error(f"Error in API export nodes: {e}")
+        return jsonify({"error": str(e)}), 500
+
+
+@api_bp.route("/export/analytics")
+def api_export_analytics():
+    """
+    API endpoint to export analytics data.
+    
+    Query parameters:
+        - gateway_id: Optional gateway filter
+    """
+    logger.info("API export analytics endpoint accessed")
+    try:
+        from flask import Response, make_response
+        
+        gateway_id = request.args.get("gateway_id")
+        from_node = request.args.get("from_node", type=int)
+        hop_count = request.args.get("hop_count", type=int)
+        
+        analytics = AnalyticsService.get_analytics_data(
+            gateway_id=gateway_id, from_node=from_node, hop_count=hop_count
+        )
+        
+        json_content, filename = export_analytics_to_json(analytics)
+        response = make_response(json_content)
+        response.headers["Content-Type"] = "application/json"
+        response.headers["Content-Disposition"] = f"attachment; filename={filename}"
+        return response
+            
+    except Exception as e:
+        logger.error(f"Error in API export analytics: {e}")
+        return jsonify({"error": str(e)}), 500
+
+
+@api_bp.route("/preferences/defaults")
+def api_preferences_defaults():
+    """Get default user preferences."""
+    logger.info("API preferences defaults endpoint accessed")
+    try:
+        from ..utils.preferences import UserPreferences
+        
+        defaults = UserPreferences.get_default_preferences()
+        return jsonify({"preferences": defaults})
+    except Exception as e:
+        logger.error(f"Error in API preferences defaults: {e}")
+        return jsonify({"error": str(e)}), 500
+
+
+@api_bp.route("/preferences/schema")
+def api_preferences_schema():
+    """Get preference schema for UI generation."""
+    logger.info("API preferences schema endpoint accessed")
+    try:
+        from ..utils.preferences import UserPreferences
+        
+        schema = UserPreferences.get_preference_schema()
+        return jsonify({"schema": schema})
+    except Exception as e:
+        logger.error(f"Error in API preferences schema: {e}")
+        return jsonify({"error": str(e)}), 500
+
+
+@api_bp.route("/preferences/validate", methods=["POST"])
+def api_preferences_validate():
+    """Validate user preferences."""
+    logger.info("API preferences validate endpoint accessed")
+    try:
+        from ..utils.preferences import UserPreferences
+        
+        prefs = request.get_json()
+        if not prefs:
+            return jsonify({"error": "No preferences provided"}), 400
+        
+        validated = UserPreferences.validate_preferences(prefs)
+        return jsonify({"preferences": validated, "valid": True})
+    except Exception as e:
+        logger.error(f"Error in API preferences validate: {e}")
+        return jsonify({"error": str(e), "valid": False}), 400
 
 
 def safe_jsonify(data, *args, **kwargs):
