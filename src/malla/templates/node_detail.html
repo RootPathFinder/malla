@@ -282,26 +282,26 @@
 
             <!-- Telemetry Information -->
             <div class="card mb-4" id="telemetry-card" style="display: none;">
-                <div class="card-header">
-                    <h5 class="mb-0"><i class="bi bi-activity"></i> Latest Telemetry</h5>
-                    <small class="text-muted">Most recent telemetry data from this node</small>
+                <div class="card-header py-2">
+                    <h5 class="mb-1"><i class="bi bi-activity"></i> Latest Telemetry</h5>
+                    <small class="text-muted d-block" style="font-size: 0.8rem;">Most recent telemetry data from this node</small>
                 </div>
-                <div class="card-body">
+                <div class="card-body py-2 px-3">
                     <div class="row g-2">
                         <div class="col-lg-9" id="telemetry-content">
-                            <div class="d-flex align-items-center justify-content-center" style="min-height: 100px;">
+                            <div class="d-flex align-items-center justify-content-center" style="min-height: 80px;">
                                 <div class="text-center">
-                                    <div class="spinner-border text-primary" role="status">
+                                    <div class="spinner-border text-primary" role="status" style="width: 1.5rem; height: 1.5rem;">
                                         <span class="visually-hidden">Loading...</span>
                                     </div>
-                                    <p class="mt-2 text-muted">Loading telemetry data...</p>
+                                    <p class="mt-2 text-muted mb-0" style="font-size: 0.85rem;">Loading telemetry data...</p>
                                 </div>
                             </div>
                         </div>
                         <div class="col-lg-3" id="health-warnings-container" style="display: none;">
                             <div class="border rounded p-2 h-100 bg-light">
-                                <h6 class="mb-2"><i class="bi bi-heart-pulse"></i> Health Status</h6>
-                                <div id="health-warnings-content">
+                                <h6 class="mb-2" style="font-size: 0.9rem;"><i class="bi bi-heart-pulse"></i> Health Status</h6>
+                                <div id="health-warnings-content" style="font-size: 0.85rem;">
                                     <div class="text-center text-muted">
                                         <div class="spinner-border spinner-border-sm" role="status">
                                             <span class="visually-hidden">Loading...</span>
@@ -1126,43 +1126,43 @@ async function loadTelemetryData() {
         // Build telemetry HTML
         let html = '';
 
-        // Display timestamp
-        html += '<div class="mb-2 pb-2 border-bottom">';
+        // Display timestamp - more compact
+        html += '<div class="mb-1 pb-1 border-bottom" style="font-size: 0.85rem;">';
         html += '<small class="text-muted">';
         html += '<i class="bi bi-clock"></i> Last updated: <strong>' + telemetry.timestamp_relative + '</strong> ';
         html += '<span class="timestamp-display" data-timestamp="' + telemetry.timestamp_unix + '">(' + telemetry.timestamp + ')</span>';
         html += '</small>';
         html += '</div>';
 
-        html += '<div class="row g-2">';
+        html += '<div class="row g-2" style="margin-top: 0.25rem;">';
 
         // Device Metrics (battery, voltage, etc.)
         if (telemetry.device_metrics) {
             const dm = telemetry.device_metrics;
             html += '<div class="col-md-6 col-lg-4">';
-            html += '<h6 class="mb-2 mt-1"><i class="bi bi-battery-charging text-success"></i> Device Metrics</h6>';
-            html += '<table class="table table-sm table-borderless mb-0" style="font-size: 0.9rem;">';
+            html += '<h6 class="mb-1 mt-0" style="font-size: 0.9rem;"><i class="bi bi-battery-charging text-success"></i> Device Metrics</h6>';
+            html += '<table class="table table-sm table-borderless mb-0" style="font-size: 0.85rem;">';
 
             if (dm.battery_level !== undefined) {
                 const batteryClass = dm.battery_level > 80 ? 'text-success' : dm.battery_level > 20 ? 'text-warning' : 'text-danger';
-                html += '<tr><td class="text-muted py-1" style="width: 45%;">Battery Level:</td><td class="text-end py-1"><span class="' + batteryClass + ' fw-bold">' + dm.battery_level + '%</span>';
+                html += '<tr><td class="text-muted py-0" style="width: 45%; padding: 0.25rem 0;">Battery Level:</td><td class="text-end py-0" style="padding: 0.25rem 0;"><span class="' + batteryClass + ' fw-bold">' + dm.battery_level + '%</span>';
                 html += '<span id="spark-battery_level" style="margin-left:8px"></span></td></tr>';
             }
             if (dm.voltage !== undefined && dm.voltage > 0) {
-                html += '<tr><td class="text-muted py-1">Voltage:</td><td class="text-end py-1 fw-bold">' + dm.voltage.toFixed(2) + ' V';
+                html += '<tr><td class="text-muted py-0" style="padding: 0.25rem 0;">Voltage:</td><td class="text-end py-0" style="padding: 0.25rem 0;" class="fw-bold">' + dm.voltage.toFixed(2) + ' V';
                 html += '<span id="spark-voltage" style="margin-left:8px"></span></td></tr>';
             }
             if (dm.channel_utilization !== undefined) {
-                html += '<tr><td class="text-muted py-1">Channel Util:</td><td class="text-end py-1 fw-bold">' + dm.channel_utilization.toFixed(1) + '%';
+                html += '<tr><td class="text-muted py-0" style="padding: 0.25rem 0;">Channel Util:</td><td class="text-end py-0" style="padding: 0.25rem 0;" class="fw-bold">' + dm.channel_utilization.toFixed(1) + '%';
                 html += '<span id="spark-channel_utilization" style="margin-left:8px"></span></td></tr>';
             }
             if (dm.air_util_tx !== undefined) {
-                html += '<tr><td class="text-muted py-1">Air Util TX:</td><td class="text-end py-1 fw-bold">' + dm.air_util_tx.toFixed(1) + '%';
+                html += '<tr><td class="text-muted py-0" style="padding: 0.25rem 0;">Air Util TX:</td><td class="text-end py-0" style="padding: 0.25rem 0;" class="fw-bold">' + dm.air_util_tx.toFixed(1) + '%';
                 html += '<span id="spark-air_util_tx" style="margin-left:8px"></span></td></tr>';
             }
             if (dm.uptime_seconds !== undefined) {
                 const uptime = formatUptime(dm.uptime_seconds);
-                html += '<tr><td class="text-muted py-1">Uptime:</td><td class="text-end py-1 fw-bold">' + uptime + '</td></tr>';
+                html += '<tr><td class="text-muted py-0" style="padding: 0.25rem 0;">Uptime:</td><td class="text-end py-0" style="padding: 0.25rem 0; font-weight: bold;">' + uptime + '</td></tr>';
             }
 
             html += '</table>';
@@ -1173,29 +1173,29 @@ async function loadTelemetryData() {
         if (telemetry.environment_metrics) {
             const em = telemetry.environment_metrics;
             html += '<div class="col-md-6 col-lg-4">';
-            html += '<h6 class="mb-2 mt-1"><i class="bi bi-thermometer-half text-info"></i> Environment</h6>';
-            html += '<table class="table table-sm table-borderless mb-0" style="font-size: 0.9rem;">';
+            html += '<h6 class="mb-1 mt-0" style="font-size: 0.9rem;"><i class="bi bi-thermometer-half text-info"></i> Environment</h6>';
+            html += '<table class="table table-sm table-borderless mb-0" style="font-size: 0.85rem;">';
 
             if (em.temperature !== undefined) {
-                html += '<tr><td class="text-muted py-1" style="width: 45%;">Temperature:</td><td class="text-end py-1"><span class="temperature-display fw-bold" data-temperature-celsius="' + em.temperature + '">' + em.temperature.toFixed(1) + ' °C</span>';
+                html += '<tr><td class="text-muted py-0" style="width: 45%; padding: 0.25rem 0;">Temperature:</td><td class="text-end py-0" style="padding: 0.25rem 0;"><span class="temperature-display fw-bold" data-temperature-celsius="' + em.temperature + '">' + em.temperature.toFixed(1) + ' °C</span>';
                 html += '<span id="spark-temperature" style="margin-left:8px"></span></td></tr>';
             }
             if (em.relative_humidity !== undefined) {
-                html += '<tr><td class="text-muted py-1">Humidity:</td><td class="text-end py-1 fw-bold">' + em.relative_humidity.toFixed(1) + '%';
+                html += '<tr><td class="text-muted py-0" style="padding: 0.25rem 0;">Humidity:</td><td class="text-end py-0" style="padding: 0.25rem 0; font-weight: bold;">' + em.relative_humidity.toFixed(1) + '%';
                 html += '<span id="spark-relative_humidity" style="margin-left:8px"></span></td></tr>';
             }
             if (em.barometric_pressure !== undefined) {
-                html += '<tr><td class="text-muted py-1">Pressure:</td><td class="text-end py-1 fw-bold">' + em.barometric_pressure.toFixed(1) + ' hPa';
+                html += '<tr><td class="text-muted py-0" style="padding: 0.25rem 0;">Pressure:</td><td class="text-end py-0" style="padding: 0.25rem 0; font-weight: bold;">' + em.barometric_pressure.toFixed(1) + ' hPa';
                 html += '<span id="spark-barometric_pressure" style="margin-left:8px"></span></td></tr>';
             }
             if (em.gas_resistance !== undefined) {
-                html += '<tr><td class="text-muted py-1">Gas Resistance:</td><td class="text-end py-1 fw-bold">' + em.gas_resistance.toFixed(0) + ' Ω</td></tr>';
+                html += '<tr><td class="text-muted py-0" style="padding: 0.25rem 0;">Gas Resistance:</td><td class="text-end py-0" style="padding: 0.25rem 0; font-weight: bold;">' + em.gas_resistance.toFixed(0) + ' Ω</td></tr>';
             }
             if (em.voltage !== undefined) {
-                html += '<tr><td class="text-muted py-1">Voltage:</td><td class="text-end py-1 fw-bold">' + em.voltage.toFixed(2) + ' V</td></tr>';
+                html += '<tr><td class="text-muted py-0" style="padding: 0.25rem 0;">Voltage:</td><td class="text-end py-0" style="padding: 0.25rem 0; font-weight: bold;">' + em.voltage.toFixed(2) + ' V</td></tr>';
             }
             if (em.current !== undefined) {
-                html += '<tr><td class="text-muted py-1">Current:</td><td class="text-end py-1 fw-bold">' + em.current.toFixed(2) + ' mA</td></tr>';
+                html += '<tr><td class="text-muted py-0" style="padding: 0.25rem 0;">Current:</td><td class="text-end py-0" style="padding: 0.25rem 0; font-weight: bold;">' + em.current.toFixed(2) + ' mA</td></tr>';
             }
 
             html += '</table>';
@@ -1206,8 +1206,8 @@ async function loadTelemetryData() {
         if (telemetry.power_metrics) {
             const pm = telemetry.power_metrics;
             html += '<div class="col-md-6 col-lg-4">';
-            html += '<h6 class="mb-2 mt-1"><i class="bi bi-lightning-charge text-warning"></i> Power Metrics</h6>';
-            html += '<table class="table table-sm table-borderless mb-0" style="font-size: 0.9rem;">';
+            html += '<h6 class="mb-1 mt-0" style="font-size: 0.9rem;"><i class="bi bi-lightning-charge text-warning"></i> Power Metrics</h6>';
+            html += '<table class="table table-sm table-borderless mb-0" style="font-size: 0.85rem;">';
 
             if (pm.ch1_voltage !== undefined) {
                 html += '<tr><td class="text-muted py-1" style="width: 45%;">CH1 Voltage:</td><td class="text-end py-1 fw-bold">' + pm.ch1_voltage.toFixed(2) + ' V</td></tr>';

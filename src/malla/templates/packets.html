@@ -570,24 +570,14 @@ document.addEventListener('DOMContentLoaded', function() {
                 const newestTimestamp = Math.max(...data.packets.map(p => p.timestamp));
                 lastPacketTimestamp = newestTimestamp;
 
-                // Silently refresh data without user-visible flash by calling the backend
-                // This updates the cache but doesn't cause a UI redraw
-                if (window.controller && window.controller.table) {
-                    // Request data refresh in background - the table will update on next user interaction
-                    // or the next scheduled data load, keeping UI smooth
-                    window.controller.table.clearCache?.();
-
-                    // Gentle update: only refresh if user hasn't interacted recently
-                    // This prevents interrupting the user while they're scrolling or reading
-                    const lastInteraction = window.lastTableInteraction || 0;
-                    const timeSinceInteraction = Date.now() - lastInteraction;
-                    if (timeSinceInteraction > 5000) {
-                        // Only auto-refresh if user hasn't interacted in 5+ seconds
-                        window.controller.table.refresh?.({ silent: true });
-                    }
+                // Refresh the table to pick up new packets
+                if (window.controller) {
+                    window.controller.applyCurrentFilters();
+                } else if (table) {
+                    table.refresh();
                 }
 
-                // Show subtle visual indicator that new packets arrived
+                // Show visual indicator that new packets arrived
                 const lastUpdateEl = document.getElementById('statsLastUpdate');
                 if (lastUpdateEl) {
                     lastUpdateEl.classList.add('pulse-update');
@@ -599,21 +589,9 @@ document.addEventListener('DOMContentLoaded', function() {
                 updateStats();
             }
         } catch (error) {
-            // Silently handle errors to avoid console spam
             console.debug('Real-time update check failed:', error);
         }
     }
-
-    // Track user interactions with the table to avoid refreshing during use
-    document.addEventListener('scroll', () => {
-        window.lastTableInteraction = Date.now();
-    }, true);
-
-    document.addEventListener('click', (e) => {
-        if (e.target.closest('.modern-table-container') || e.target.closest('.table-sidebar')) {
-            window.lastTableInteraction = Date.now();
-        }
-    }, true);
 
     // Start real-time updates every 3 seconds
     autoUpdateInterval = setInterval(checkForNewPackets, 3000);
