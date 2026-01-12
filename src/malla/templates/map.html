@@ -883,6 +883,12 @@ function applyClientSideFilters() {
 
 // Update map display with filtered data
 function updateMapDisplay() {
+    // Safety check: ensure map components are initialized
+    if (!markerClusterGroup || !map) {
+        console.warn('Map components not yet initialized');
+        return;
+    }
+
     // Update statistics
     updateStats();
 
