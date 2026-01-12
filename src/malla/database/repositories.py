@@ -4248,6 +4248,7 @@ class BatteryAnalyticsRepository:
             return []
 
     @staticmethod
+    @staticmethod
     def get_nodes_with_battery_telemetry() -> list[dict[str, Any]]:
         """Get all nodes that have shared battery telemetry data.
 
@@ -4277,11 +4278,23 @@ class BatteryAnalyticsRepository:
             battery_level_count = cursor.fetchone()["total"]
             logger.debug(f"Telemetry records with battery_level data: {battery_level_count}")
 
-            # Get all nodes that have telemetry data (voltage or battery_level)
-            # This includes nodes that may not have power_type set yet
+            # Debug: Check basic JOIN
             cursor.execute(
                 """
-                SELECT DISTINCT
+                SELECT COUNT(DISTINCT ni.node_id) as count
+                FROM node_info ni
+                INNER JOIN telemetry_data td ON ni.node_id = td.node_id
+                WHERE td.voltage IS NOT NULL OR td.battery_level IS NOT NULL
+                """
+            )
+            join_count = cursor.fetchone()["count"]
+            logger.debug(f"Nodes with telemetry after JOIN: {join_count}")
+
+            # Get all nodes that have telemetry data (voltage or battery_level)
+            # Simplified query without GROUP BY complications
+            cursor.execute(
+                """
+                SELECT
                     ni.node_id,
                     ni.hex_id,
                     ni.long_name,
@@ -4292,8 +4305,8 @@ class BatteryAnalyticsRepository:
                     MAX(td.timestamp) as last_telemetry_time
                 FROM node_info ni
                 INNER JOIN telemetry_data td ON ni.node_id = td.node_id
-                WHERE (td.voltage IS NOT NULL OR td.battery_level IS NOT NULL)
-                GROUP BY ni.node_id, ni.hex_id, ni.long_name, ni.short_name, ni.power_type, ni.last_battery_voltage, ni.battery_health_score
+                WHERE td.voltage IS NOT NULL OR td.battery_level IS NOT NULL
+                GROUP BY ni.node_id
                 ORDER BY
                     CASE
                         WHEN ni.power_type = 'solar' THEN 0
@@ -4360,5 +4373,5 @@ class BatteryAnalyticsRepository:
             return results
 
         except Exception as e:
-            logger.error(f"Error getting nodes with battery telemetry: {e}")
+            logger.error(f"Error getting nodes with battery telemetry: {e}", exc_info=True)
             return []
