@@ -1,5 +1,4 @@
-"""
-Node health monitoring service for identifying problematic nodes in the mesh network.
+"""Node health monitoring service for identifying problematic nodes in the mesh network.
 
 This service analyzes various metrics to identify nodes that may be experiencing issues:
 - Poor signal quality (low RSSI/SNR)
@@ -17,9 +16,39 @@ from ..database import get_db_connection
 
 logger = logging.getLogger(__name__)
 
+# In-memory cache for health scores (node_id -> {score, timestamp})
+_health_cache: dict[int, dict[str, Any]] = {}
+_HEALTH_CACHE_TTL = 300  # 5 minutes
+
 
 class NodeHealthService:
     """Service for analyzing node health and identifying problematic nodes."""
+
+    @staticmethod
+    def _get_cached_health(node_id: int, hours: int) -> dict[str, Any] | None:
+        """Get cached health data if available and not expired."""
+        cache_key = (node_id, hours)
+        if cache_key in _health_cache:
+            cached = _health_cache[cache_key]
+            if time.time() - cached["cached_at"] < _HEALTH_CACHE_TTL:
+                logger.debug(f"Health cache hit for node {node_id}")
+                return cached["data"]
+        return None
+
+    @staticmethod
+    def _set_cached_health(node_id: int, hours: int, data: dict[str, Any]) -> None:
+        """Store health data in cache."""
+        cache_key = (node_id, hours)
+        _health_cache[cache_key] = {"data": data, "cached_at": time.time()}
+        # Clean old cache entries (simple cleanup)
+        current_time = time.time()
+        keys_to_remove = [
+            k
+            for k, v in _health_cache.items()
+            if current_time - v["cached_at"] > _HEALTH_CACHE_TTL * 2
+        ]
+        for k in keys_to_remove:
+            del _health_cache[k]
 
     @staticmethod
     def _calculate_baseline_behavior(node_id: int, cursor: Any) -> dict[str, Any]:
@@ -449,7 +478,7 @@ class NodeHealthService:
         else:
             health_status = "critical"
 
-        return {
+        result = {
             "node_id": node_id,
             "node_info": node_info,
             "health_score": health_score,
@@ -472,6 +501,10 @@ class NodeHealthService:
             "activity_timeline": activity_timeline,
             "analyzed_hours": hours,
         }
+
+        # Cache the result
+        NodeHealthService._set_cached_health(node_id, hours, result)
+        return result
 
     @staticmethod
     def get_problematic_nodes(

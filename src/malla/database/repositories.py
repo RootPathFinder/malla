@@ -1926,9 +1926,10 @@ class NodeRepository:
                     metrics = telemetry_data.device_metrics
                     device_metrics = {}
 
-                    if metrics.HasField("battery_level"):
+                    # Always include battery_level and voltage if they have meaningful values
+                    if metrics.HasField("battery_level") or metrics.battery_level > 0:
                         device_metrics["battery_level"] = metrics.battery_level
-                    if metrics.HasField("voltage"):
+                    if metrics.HasField("voltage") or metrics.voltage > 0:
                         voltage = metrics.voltage
                         # Handle both mV (> 1000) and V (< 1000) formats
                         if voltage > 1000:
@@ -1937,16 +1938,20 @@ class NodeRepository:
                             )  # Convert mV to V
                         else:
                             device_metrics["voltage"] = voltage  # Already in volts
-                    if metrics.HasField("channel_utilization"):
+                    if (
+                        metrics.HasField("channel_utilization")
+                        or metrics.channel_utilization > 0
+                    ):
                         device_metrics["channel_utilization"] = (
                             metrics.channel_utilization
                         )
-                    if metrics.HasField("air_util_tx"):
+                    if metrics.HasField("air_util_tx") or metrics.air_util_tx > 0:
                         device_metrics["air_util_tx"] = metrics.air_util_tx
-                    if metrics.HasField("uptime_seconds"):
+                    if metrics.HasField("uptime_seconds") or metrics.uptime_seconds > 0:
                         device_metrics["uptime_seconds"] = metrics.uptime_seconds
 
-                    telemetry_dict["device_metrics"] = device_metrics
+                    if device_metrics:  # Only add if we have at least one metric
+                        telemetry_dict["device_metrics"] = device_metrics
 
                 # Extract environment metrics (temperature, humidity, etc.)
                 if telemetry_data.HasField("environment_metrics"):
@@ -4277,10 +4282,10 @@ class BatteryAnalyticsRepository:
                     ni.long_name,
                     ni.short_name,
                     ni.power_type,
-                    ni.battery_health_score,
                     ni.last_battery_voltage,
                     ni.last_updated,
                     td.battery_level,
+                    td.voltage,
                     td.timestamp as last_telemetry
                 FROM node_info ni
                 INNER JOIN (
@@ -4292,7 +4297,6 @@ class BatteryAnalyticsRepository:
                 ORDER BY
                     CASE
                         WHEN ni.last_battery_voltage IS NOT NULL AND ni.last_battery_voltage < 3.3 THEN 0
-                        WHEN ni.battery_health_score IS NOT NULL AND ni.battery_health_score < 40 THEN 1
                         ELSE 2
                     END,
                     ni.last_battery_voltage ASC NULLS LAST
@@ -4304,12 +4308,20 @@ class BatteryAnalyticsRepository:
             for row in cursor.fetchall():
                 node_name = row["long_name"] or row["short_name"] or row["hex_id"]
 
+                # Get actual node health score from NodeHealthService
+                from ..services.node_health_service import NodeHealthService
+
+                health_data = NodeHealthService.analyze_node_health(
+                    row["node_id"], hours=24
+                )
+                health_score = health_data["health_score"] if health_data else None
+
                 # Determine health status color
-                voltage = row["last_battery_voltage"]
+                # Use telemetry voltage if available, otherwise use cached voltage
+                voltage = row.get("voltage") or row["last_battery_voltage"]
                 # Scale voltage from fractional volts to actual volts (0.004 -> 4.0)
                 if voltage is not None and voltage < 1:
                     voltage = voltage * 1000
-                health_score = row["battery_health_score"]
 
                 if voltage is not None and voltage < 3.3:
                     status_class = "danger"
