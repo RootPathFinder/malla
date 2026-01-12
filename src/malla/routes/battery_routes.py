@@ -32,6 +32,10 @@ def battery_analytics():
             BatteryAnalyticsRepository.get_nodes_with_battery_telemetry()
         )
 
+        logger.info(
+            f"Battery analytics loaded: {len(nodes_with_telemetry)} nodes with telemetry"
+        )
+
         return render_template(
             "battery_analytics.html",
             power_summary=power_summary,
@@ -40,7 +44,7 @@ def battery_analytics():
             nodes_with_telemetry=nodes_with_telemetry,
         )
     except Exception as e:
-        logger.error(f"Error loading battery analytics: {e}")
+        logger.error(f"Error loading battery analytics: {e}", exc_info=True)
         return render_template(
             "battery_analytics.html",
             error_message="Unable to load battery analytics data.",
@@ -102,6 +106,18 @@ def battery_debug():
 
         telemetry_samples = []
         for row in cursor.fetchall():
+            max_v = row["max_voltage"]
+            avg_v = row["avg_voltage"]
+
+            # Check if voltage might be incorrectly scaled
+            # If max_voltage < 1, it might be in fractional volts (should be multiplied by 1000)
+            if max_v and max_v < 1:
+                max_v_scaled = max_v * 1000
+                avg_v_scaled = avg_v * 1000 if avg_v else None
+            else:
+                max_v_scaled = max_v
+                avg_v_scaled = avg_v
+
             telemetry_samples.append(
                 {
                     "node_id": row["node_id"],
@@ -111,6 +127,8 @@ def battery_debug():
                     "last_timestamp": row["last_timestamp"],
                     "max_voltage": row["max_voltage"],
                     "avg_voltage": row["avg_voltage"],
+                    "max_voltage_scaled": max_v_scaled,
+                    "avg_voltage_scaled": avg_v_scaled,
                     "max_battery": row["max_battery"],
                 }
             )

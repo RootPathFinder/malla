@@ -4331,6 +4331,11 @@ class BatteryAnalyticsRepository:
                 )
 
             logger.info(f"Found {len(results)} nodes with battery telemetry data")
+            logger.debug(f"Query returned: {len(results)} nodes from {total_telemetry} telemetry records")
+            if results:
+                logger.info(
+                    f"Sample nodes: {[r['name'] for r in results[:3]]}"
+                )
             conn.close()
             return results
 
