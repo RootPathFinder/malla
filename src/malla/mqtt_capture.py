@@ -1030,6 +1030,7 @@ def power_analysis_worker() -> None:
                         )
 
                 # Check for battery alerts if enabled
+                alerts = []
                 if _cfg.battery_alerts_enabled:
                     alerts = check_battery_alerts(
                         conn,
