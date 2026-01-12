@@ -4118,6 +4118,22 @@ class BatteryAnalyticsRepository:
                 else:
                     status_class = "success"
 
+                # Convert Unix timestamp to datetime if needed
+                last_telemetry_str = "Never"
+                if row["last_telemetry"]:
+                    try:
+                        if isinstance(row["last_telemetry"], (int, float)):
+                            last_telemetry_dt = datetime.fromtimestamp(
+                                row["last_telemetry"], tz=UTC
+                            )
+                            last_telemetry_str = format_time_ago(last_telemetry_dt)
+                        else:
+                            last_telemetry_str = format_time_ago(row["last_telemetry"])
+                    except Exception as e:
+                        logger.warning(
+                            f"Could not format telemetry timestamp for {node_name}: {e}"
+                        )
+
                 results.append(
                     {
                         "node_id": row["node_id"],
@@ -4128,11 +4144,7 @@ class BatteryAnalyticsRepository:
                         "voltage": voltage,
                         "health_score": health_score,
                         "last_seen": format_time_ago(row["last_updated"]),
-                        "last_telemetry": (
-                            format_time_ago(row["last_telemetry"])
-                            if row["last_telemetry"]
-                            else "Never"
-                        ),
+                        "last_telemetry": last_telemetry_str,
                         "status_class": status_class,
                     }
                 )
@@ -4141,7 +4153,7 @@ class BatteryAnalyticsRepository:
             return results
 
         except Exception as e:
-            logger.error(f"Error getting battery health overview: {e}")
+            logger.error(f"Error getting battery health overview: {e}", exc_info=True)
             return []
 
     @staticmethod
