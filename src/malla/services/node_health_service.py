@@ -226,14 +226,14 @@ class NodeHealthService:
                         }
                     )
 
+        # Get baseline behavior for this node (before closing connection)
+        baseline = NodeHealthService._calculate_baseline_behavior(node_id, cursor)
+
         conn.close()
 
         # Analyze health issues
         issues = []
         health_score = 100  # Start with perfect score
-
-        # Get baseline behavior for this node
-        baseline = NodeHealthService._calculate_baseline_behavior(node_id, cursor)
 
         # Calculate confidence score for health assessment
         confidence_score = 100
@@ -483,10 +483,9 @@ class NodeHealthService:
             (cutoff_time,),
         )
         active_nodes = [row["from_node_id"] for row in cursor.fetchall()]
-
         conn.close()
 
-        # Analyze each node
+        # Analyze each node (each opens its own connection)
         problematic_nodes = []
         for node_id in active_nodes:
             health_data = NodeHealthService.analyze_node_health(node_id, hours)
