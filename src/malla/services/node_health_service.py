@@ -573,12 +573,26 @@ class NodeHealthService:
         )
         isolated_count = cursor.fetchone()["isolated_nodes"]
 
+        # Get all active nodes for health distribution (before closing conn)
+        cursor.execute(
+            """
+            SELECT DISTINCT from_node_id
+            FROM packet_history
+            WHERE timestamp >= ?
+            AND from_node_id IS NOT NULL
+        """,
+            (cutoff_time,),
+        )
+        active_nodes = [row["from_node_id"] for row in cursor.fetchall()]
+
         conn.close()
 
         # Analyze a sample of nodes to get health distribution
-        problematic_nodes = NodeHealthService.get_problematic_nodes(
-            hours, min_health_score=100, limit=1000
-        )
+        problematic_nodes = []
+        for node_id in active_nodes[:1000]:  # Limit to 1000 nodes
+            health_data = NodeHealthService.analyze_node_health(node_id, hours)
+            if health_data:
+                problematic_nodes.append(health_data)
 
         health_distribution = {
             "healthy": 0,  # 80-100
