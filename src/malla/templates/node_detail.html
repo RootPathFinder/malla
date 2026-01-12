@@ -1018,49 +1018,54 @@ async function loadHealthWarnings() {
         const response = await fetch(`/api/health/node/${nodeId}?hours=24`);
         const data = await response.json();
 
-        if (data.error || !data.issues || data.issues.length === 0) {
-            // No warnings, hide the container
+        if (data.error) {
+            // Error fetching health data - show error message
+            warningsContainer.style.display = 'block';
+            warningsContent.innerHTML = `<div class="alert alert-warning mb-0"><small>${data.error}</small></div>`;
             return;
         }
 
-        // Filter out info-level issues, show only warnings and critical
-        const importantIssues = data.issues.filter(i => i.severity !== 'info');
-
-        if (importantIssues.length === 0) {
-            return;
-        }
-
-        // Show the container
+        // Always show the health status, even if no warnings
         warningsContainer.style.display = 'block';
 
         // Build warnings HTML
-        let html = '<div class="list-group list-group-flush">';
+        let html = '';
 
-        for (const issue of importantIssues) {
-            const severityClass = issue.severity === 'critical' ? 'danger' : 'warning';
-            const severityIcon = issue.severity === 'critical' ? 'exclamation-circle-fill' : 'exclamation-triangle-fill';
+        // Show issues if any exist
+        if (data.issues && data.issues.length > 0) {
+            // Filter out info-level issues, show only warnings and critical
+            const importantIssues = data.issues.filter(i => i.severity !== 'info');
 
-            html += `<div class="list-group-item list-group-item-${severityClass} p-2">`;
-            html += `<small><i class="bi bi-${severityIcon}"></i> ${issue.message}</small>`;
-            html += '</div>';
+            if (importantIssues.length > 0) {
+                html += '<div class="list-group list-group-flush mb-2">';
+                for (const issue of importantIssues) {
+                    const severityClass = issue.severity === 'critical' ? 'danger' : 'warning';
+                    const severityIcon = issue.severity === 'critical' ? 'exclamation-circle-fill' : 'exclamation-triangle-fill';
+
+                    html += `<div class="list-group-item list-group-item-${severityClass} p-2">`;
+                    html += `<small><i class="bi bi-${severityIcon}"></i> ${issue.message}</small>`;
+                    html += '</div>';
+                }
+                html += '</div>';
+            }
         }
 
-        html += '</div>';
+        // Always show health score and confidence
+        if (data.health_score !== undefined) {
+            const scoreClass = data.health_status === 'healthy' ? 'success' :
+                              data.health_status === 'degraded' ? 'warning' :
+                              data.health_status === 'poor' ? 'danger' : 'dark';
 
-        // Add health score badge
-        const scoreClass = data.health_status === 'healthy' ? 'success' :
-                          data.health_status === 'degraded' ? 'warning' :
-                          data.health_status === 'poor' ? 'danger' : 'dark';
+            const confidenceClass = data.confidence_score >= 80 ? 'success' :
+                                   data.confidence_score >= 60 ? 'warning' : 'danger';
 
-        const confidenceClass = data.confidence_score >= 80 ? 'success' :
-                               data.confidence_score >= 60 ? 'warning' : 'danger';
-
-        html += `<div class="mt-2 text-center">`;
-        html += `<span class="badge bg-${scoreClass}">Health: ${data.health_score}/100</span>`;
-        html += ` <span class="badge bg-${confidenceClass}" data-bs-toggle="tooltip"
-                        title="Confidence in health assessment. Based on: ${data.confidence_factors.join('; ')}">
-                    Confidence: ${data.confidence_score}%</span>`;
-        html += '</div>';
+            html += `<div class="text-center">`;
+            html += `<span class="badge bg-${scoreClass}">Health: ${data.health_score}/100</span>`;
+            html += ` <span class="badge bg-${confidenceClass}" data-bs-toggle="tooltip"
+                            title="Confidence in health assessment. Based on: ${data.confidence_factors ? data.confidence_factors.join('; ') : 'Available data'}">
+                        Confidence: ${data.confidence_score}%</span>`;
+            html += '</div>';
+        }
 
         // Add baseline info if available
         if (data.baseline && data.baseline.has_baseline) {

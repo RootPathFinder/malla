@@ -88,6 +88,59 @@
         </div>
     </div>
 
+    <!-- Power Type Distribution Bar -->
+    <div class="row mb-4">
+        <div class="col">
+            <div class="card">
+                <div class="card-body">
+                    <h6>
+                        Power Type Distribution
+                        <i class="bi bi-info-circle" data-bs-toggle="tooltip" data-bs-placement="top"
+                           title="Distribution of node power sources across the network. Solar uses renewable energy, Battery runs on stored power, Mains has constant power, Unknown needs detection."></i>
+                    </h6>
+                    <div class="progress" style="height: 32px; font-size: 0.875rem;">
+                        {% set total_known = power_summary.solar + power_summary.battery + power_summary.mains + power_summary.unknown %}
+                        {% if total_known > 0 %}
+                            {% set solar_pct = (power_summary.solar / total_known * 100)|round(1) %}
+                            {% set battery_pct = (power_summary.battery / total_known * 100)|round(1) %}
+                            {% set mains_pct = (power_summary.mains / total_known * 100)|round(1) %}
+                            {% set unknown_pct = (power_summary.unknown / total_known * 100)|round(1) %}
+                        {% else %}
+                            {% set solar_pct = 0 %}
+                            {% set battery_pct = 0 %}
+                            {% set mains_pct = 0 %}
+                            {% set unknown_pct = 0 %}
+                        {% endif %}
+
+                        <div class="progress-bar bg-warning" role="progressbar" style="width: {{ solar_pct }}%"
+                             data-bs-toggle="tooltip" data-bs-placement="top" title="{{ power_summary.solar }} solar nodes ({{ solar_pct }}%)">
+                            <span class="health-bar-text"><span>{{ power_summary.solar }}</span> <span class="health-label">Solar</span></span>
+                        </div>
+                        <div class="progress-bar bg-info" role="progressbar" style="width: {{ battery_pct }}%"
+                             data-bs-toggle="tooltip" data-bs-placement="top" title="{{ power_summary.battery }} battery nodes ({{ battery_pct }}%)">
+                            <span class="health-bar-text"><span>{{ power_summary.battery }}</span> <span class="health-label">Battery</span></span>
+                        </div>
+                        <div class="progress-bar bg-success" role="progressbar" style="width: {{ mains_pct }}%"
+                             data-bs-toggle="tooltip" data-bs-placement="top" title="{{ power_summary.mains }} mains nodes ({{ mains_pct }}%)">
+                            <span class="health-bar-text"><span>{{ power_summary.mains }}</span> <span class="health-label">Mains</span></span>
+                        </div>
+                        <div class="progress-bar bg-secondary" role="progressbar" style="width: {{ unknown_pct }}%"
+                             data-bs-toggle="tooltip" data-bs-placement="top" title="{{ power_summary.unknown }} unknown nodes ({{ unknown_pct }}%)">
+                            <span class="health-bar-text"><span>{{ power_summary.unknown }}</span> <span class="health-label">Unknown</span></span>
+                        </div>
+                    </div>
+                    <!-- Legend for small screens -->
+                    <div class="d-flex justify-content-around mt-2 small text-muted d-lg-none">
+                        <span><span class="badge bg-warning">■</span> {{ power_summary.solar }} Solar</span>
+                        <span><span class="badge bg-info">■</span> {{ power_summary.battery }} Battery</span>
+                        <span><span class="badge bg-success">■</span> {{ power_summary.mains }} Mains</span>
+                        <span><span class="badge bg-secondary">■</span> {{ power_summary.unknown }} Unknown</span>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
     <!-- Critical Batteries Alert -->
     {% if critical_batteries %}
     <div class="row mb-4">
@@ -137,7 +190,7 @@
                             </thead>
                             <tbody>
                                 {% for node in battery_health %}
-                                <tr class="table-{{ node.status_class }}">
+                                <tr style="{% if node.status_class == 'danger' %}background-color: rgba(220, 53, 69, 0.08);{% elif node.status_class == 'warning' %}background-color: rgba(255, 193, 7, 0.08);{% elif node.status_class == 'success' %}background-color: rgba(25, 135, 84, 0.05);{% endif %}">
                                     <td>
                                         <a href="/node/{{ node.node_id }}" class="text-decoration-none">
                                             {{ node.name }}

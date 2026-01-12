@@ -146,10 +146,32 @@ class NodeHealthService:
         node_row = cursor.fetchone()
 
         if not node_row:
-            conn.close()
-            return None
+            # Node not in node_info, check if it exists in packet_history
+            cursor.execute(
+                """
+                SELECT COUNT(*) as packet_count
+                FROM packet_history
+                WHERE from_node_id = ?
+                AND timestamp >= ?
+            """,
+                (node_id, cutoff_time),
+            )
+            packet_check = cursor.fetchone()
 
-        node_info = dict(node_row)
+            if not packet_check or packet_check["packet_count"] == 0:
+                conn.close()
+                return None
+
+            # Create temporary node info for analysis
+            node_info = {
+                "node_id": node_id,
+                "long_name": f"Node !{node_id:08x}",
+                "short_name": f"!{node_id:08x}",
+                "hw_model": None,
+                "role": None,
+            }
+        else:
+            node_info = dict(node_row)
 
         # Get packet statistics
         cursor.execute(
