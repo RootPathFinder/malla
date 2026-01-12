@@ -4097,6 +4097,9 @@ class BatteryAnalyticsRepository:
 
                 # Determine health status color
                 voltage = row["last_battery_voltage"]
+                # Scale voltage from fractional volts to actual volts (0.004 -> 4.0)
+                if voltage is not None and voltage < 1:
+                    voltage = voltage * 1000
                 health_score = row["battery_health_score"]
 
                 if voltage is not None and voltage < 3.3:
@@ -4160,10 +4163,6 @@ class BatteryAnalyticsRepository:
                     ni.last_updated
                 FROM node_info ni
                 WHERE ni.power_type IN ('solar', 'battery')
-                  AND (
-                      ni.last_battery_voltage < 3.3
-                      OR ni.battery_health_score < 40
-                  )
                 ORDER BY ni.last_battery_voltage ASC NULLS LAST
                 LIMIT 10
             """
@@ -4172,17 +4171,25 @@ class BatteryAnalyticsRepository:
             results = []
             for row in cursor.fetchall():
                 node_name = row["long_name"] or row["short_name"] or row["hex_id"]
-                results.append(
-                    {
-                        "node_id": row["node_id"],
-                        "hex_id": row["hex_id"],
-                        "name": node_name,
-                        "power_type": row["power_type"],
-                        "voltage": row["last_battery_voltage"],
-                        "health_score": row["battery_health_score"],
-                        "last_seen": format_time_ago(row["last_updated"]),
-                    }
-                )
+
+                # Scale voltage from fractional volts to actual volts (0.004 -> 4.0)
+                voltage = row["last_battery_voltage"]
+                if voltage is not None and voltage < 1:
+                    voltage = voltage * 1000
+
+                # Check critical conditions after scaling
+                if (voltage is not None and voltage < 3.3) or (row["battery_health_score"] is not None and row["battery_health_score"] < 40):
+                    results.append(
+                        {
+                            "node_id": row["node_id"],
+                            "hex_id": row["hex_id"],
+                            "name": node_name,
+                            "power_type": row["power_type"],
+                            "voltage": voltage,
+                            "health_score": row["battery_health_score"],
+                            "last_seen": format_time_ago(row["last_updated"]),
+                        }
+                    )
 
             conn.close()
             return results
@@ -4220,10 +4227,15 @@ class BatteryAnalyticsRepository:
 
             results = []
             for row in cursor.fetchall():
+                # Scale voltage from fractional volts to actual volts (0.004 -> 4.0)
+                voltage = row["voltage"]
+                if voltage is not None and voltage < 1:
+                    voltage = voltage * 1000
+
                 results.append(
                     {
                         "timestamp": row["timestamp"],
-                        "voltage": row["voltage"],
+                        "voltage": voltage,
                         "battery_level": row["battery_level"],
                     }
                 )
@@ -4298,6 +4310,11 @@ class BatteryAnalyticsRepository:
                 node_name = row["long_name"] or row["short_name"] or row["hex_id"]
                 power_type = row["power_type"] or "unknown"
 
+                # Scale voltage from fractional volts to actual volts (0.004 -> 4.0)
+                voltage = row["last_battery_voltage"]
+                if voltage is not None and voltage < 1:
+                    voltage = voltage * 1000
+
                 # Determine power type icon and color
                 if power_type == "solar":
                     power_icon = "sun-fill"
@@ -4320,7 +4337,7 @@ class BatteryAnalyticsRepository:
                         "power_type": power_type,
                         "power_icon": power_icon,
                         "power_class": power_class,
-                        "voltage": row["last_battery_voltage"],
+                        "voltage": voltage,
                         "health_score": row["battery_health_score"],
                         "last_telemetry": (
                             format_time_ago(row["last_telemetry_time"])
