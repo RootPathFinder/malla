@@ -1015,7 +1015,7 @@ async function loadHealthWarnings() {
     const warningsContent = document.getElementById('health-warnings-content');
 
     try {
-        const response = await fetch(`/api/node/${nodeId}/health?hours=24`);
+        const response = await fetch(`/api/health/node/${nodeId}?hours=24`);
         const data = await response.json();
 
         if (data.error || !data.issues || data.issues.length === 0) {

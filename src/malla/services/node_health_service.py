@@ -586,9 +586,11 @@ class NodeHealthService:
 
         conn.close()
 
-        # Analyze a sample of nodes to get health distribution
+        # Analyze a LIMITED sample of nodes for health distribution (performance optimization)
+        # Only analyze up to 100 nodes to avoid slow page loads
+        sample_size = min(100, len(active_nodes))
         problematic_nodes = []
-        for node_id in active_nodes[:1000]:  # Limit to 1000 nodes
+        for node_id in active_nodes[:sample_size]:
             health_data = NodeHealthService.analyze_node_health(node_id, hours)
             if health_data:
                 problematic_nodes.append(health_data)

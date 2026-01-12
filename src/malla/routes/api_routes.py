@@ -2022,6 +2022,7 @@ def api_channels():
 
 
 @api_bp.route("/health/node/<node_id>")
+@cache_response(ttl_seconds=60)  # Cache for 60 seconds
 def api_node_health(node_id):
     """API endpoint for individual node health analysis."""
     logger.info(f"API node health endpoint accessed for node {node_id}")
@@ -2040,7 +2041,10 @@ def api_node_health(node_id):
         if not health_data:
             return jsonify({"error": "Node not found or no data available"}), 404
 
-        return safe_jsonify(health_data)
+        response = safe_jsonify(health_data)
+        # Add cache headers for client-side caching
+        response.headers["Cache-Control"] = "public, max-age=60"
+        return response
     except ValueError as e:
         return jsonify({"error": str(e)}), 400
     except Exception as e:
