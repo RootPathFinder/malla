@@ -788,6 +788,13 @@ async function enrichNodesWithTelemetry(nodes) {
 
         await Promise.all(telemetryPromises);
         console.log('Telemetry enrichment complete');
+
+        // Debug: check if temperatures were actually added to nodes
+        const nodesWithTemp = nodes.filter(n => n.latest_telemetry_temp !== undefined);
+        console.log(`Nodes with temperature: ${nodesWithTemp.length} / ${nodes.length}`);
+        if (nodesWithTemp.length > 0) {
+            console.log('Sample node with temp:', nodesWithTemp[0].display_name, nodesWithTemp[0].latest_telemetry_temp);
+        }
     } catch (error) {
         console.error('Error enriching nodes with telemetry:', error);
     }
@@ -970,6 +977,13 @@ function createNodePopupContent(node) {
     const ageHours = (Date.now() / 1000 - node.timestamp) / 3600;
     const ageClass = getAgeClass(ageHours);
     const roleColor = getRoleColor(node.role);
+
+    // Debug: log all properties of the node
+    console.log(`Creating popup for ${node.display_name}:`, {
+        hasTemp: node.latest_telemetry_temp !== undefined,
+        tempValue: node.latest_telemetry_temp,
+        allProps: Object.keys(node)
+    });
 
     // Start with basic content
     let popupHtml = `
