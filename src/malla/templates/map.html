@@ -371,6 +371,18 @@
     text-align: center;
 }
 
+.node-marker-temp {
+    font-size: 7px;
+    line-height: 1;
+    margin-top: 2px;
+    max-width: 36px;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    text-align: center;
+    opacity: 0.9;
+}
+
 /* Additional mobile adjustments specific to map */
 @media (max-width: 768px) {
     .map-container {
@@ -945,15 +957,26 @@ function addNodeMarker(node) {
         displayText = displayText.substring(0, 4);
     }
 
+    // Prepare temperature display if available
+    let temperatureHTML = '';
+    if (node.latest_telemetry_temp !== undefined && node.latest_telemetry_temp !== null) {
+        const tempC = node.latest_telemetry_temp;
+        const tempF = (tempC * 9/5) + 32;
+        const tempUnit = localStorage.getItem('malla-temperature-unit') || 'C';
+        const displayTemp = tempUnit === 'F' ? tempF.toFixed(1) : tempC.toFixed(1);
+        temperatureHTML = `<div class="node-marker-temp">${displayTemp}°${tempUnit}</div>`;
+    }
+
     const markerIcon = L.divIcon({
         className: 'custom-node-marker',
         html: `
             <div class="node-marker-container" style="background-color: ${roleColor};">
                 <div class="node-marker-label">${displayText}</div>
+                ${temperatureHTML}
             </div>
         `,
-        iconSize: [40, 40],
-        iconAnchor: [20, 20]
+        iconSize: [40, 50],
+        iconAnchor: [20, 25]
     });
 
     const marker = L.marker([node.latitude, node.longitude], { icon: markerIcon });
