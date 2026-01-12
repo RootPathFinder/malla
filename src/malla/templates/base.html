@@ -131,25 +131,44 @@
                         </a>
                     </li>
 
-                    <!-- Packets -->
-                    <li class="nav-item">
-                        <a class="nav-link {{ 'active' if 'packet' in request.endpoint }}" href="{{ url_for('packet.packets') }}">
-                            <i class="bi bi-box"></i> Packets
+                    <!-- Data dropdown (Packets & Nodes) -->
+                    <li class="nav-item dropdown">
+                        {% set data_active = 'packet' in request.endpoint or 'node' in request.endpoint %}
+                        <a class="nav-link dropdown-toggle {{ 'active' if data_active }}" href="#" id="dataDropdown" role="button" data-bs-toggle="dropdown">
+                            <i class="bi bi-database"></i> Data
                         </a>
+                        <ul class="dropdown-menu">
+                            <li>
+                                <a class="dropdown-item {{ 'active' if 'packet' in request.endpoint }}" href="{{ url_for('packet.packets') }}">
+                                    <i class="bi bi-box"></i> Packets
+                                </a>
+                            </li>
+                            <li>
+                                <a class="dropdown-item {{ 'active' if 'node' in request.endpoint }}" href="{{ url_for('node.nodes') }}">
+                                    <i class="bi bi-router"></i> Nodes
+                                </a>
+                            </li>
+                        </ul>
                     </li>
 
-                    <!-- Nodes -->
-                    <li class="nav-item">
-                        <a class="nav-link {{ 'active' if 'node' in request.endpoint }}" href="{{ url_for('node.nodes') }}">
-                            <i class="bi bi-router"></i> Nodes
+                    <!-- Network dropdown (Traceroutes & Network Graph) -->
+                    <li class="nav-item dropdown">
+                        {% set network_active = request.endpoint in ['traceroute.traceroute', 'traceroute.traceroute_graph'] %}
+                        <a class="nav-link dropdown-toggle {{ 'active' if network_active }}" href="#" id="networkDropdown" role="button" data-bs-toggle="dropdown">
+                            <i class="bi bi-diagram-3"></i> Network
                         </a>
-                    </li>
-
-                    <!-- Traceroutes (list) -->
-                    <li class="nav-item">
-                        <a class="nav-link {{ 'active' if request.endpoint == 'traceroute.traceroute' }}" href="{{ url_for('traceroute.traceroute') }}">
-                            <i class="bi bi-diagram-3"></i> Traceroutes
-                        </a>
+                        <ul class="dropdown-menu">
+                            <li>
+                                <a class="dropdown-item {{ 'active' if request.endpoint == 'traceroute.traceroute' }}" href="{{ url_for('traceroute.traceroute') }}">
+                                    <i class="bi bi-list-ul"></i> Traceroutes
+                                </a>
+                            </li>
+                            <li>
+                                <a class="dropdown-item {{ 'active' if request.endpoint == 'traceroute.traceroute_graph' }}" href="{{ url_for('traceroute.traceroute_graph') }}">
+                                    <i class="bi bi-diagram-2"></i> Network Graph
+                                </a>
+                            </li>
+                        </ul>
                     </li>
 
                     <!-- Map -->
@@ -159,50 +178,50 @@
                         </a>
                     </li>
 
-                    <!-- Network Graph -->
-                    <li class="nav-item">
-                        <a class="nav-link {{ 'active' if request.endpoint == 'traceroute.traceroute_graph' }}" href="{{ url_for('traceroute.traceroute_graph') }}">
-                            <i class="bi bi-diagram-2"></i> Network Graph
-                        </a>
-                    </li>
-
-                    <!-- Battery Analytics -->
-                    <li class="nav-item">
-                        <a class="nav-link {{ 'active' if request.endpoint == 'battery.battery_analytics' }}" href="{{ url_for('battery.battery_analytics') }}">
-                            <i class="bi bi-battery-charging"></i> Power
-                        </a>
-                    </li>
-
-                    <!-- Tools dropdown -->
+                    <!-- Monitoring dropdown (Power & Node Health) -->
                     <li class="nav-item dropdown">
-                        {% set tools_active = request.endpoint in ['traceroute.traceroute_hops', 'gateway.gateway_compare', 'main.longest_links', 'main.line_of_sight', 'main.node_health'] %}
-                        <a class="nav-link dropdown-toggle {{ 'active' if tools_active }}" href="#" id="toolsDropdown" role="button" data-bs-toggle="dropdown">
-                            <i class="bi bi-tools"></i> Tools
+                        {% set monitoring_active = request.endpoint in ['battery.battery_analytics', 'main.node_health'] %}
+                        <a class="nav-link dropdown-toggle {{ 'active' if monitoring_active }}" href="#" id="monitoringDropdown" role="button" data-bs-toggle="dropdown">
+                            <i class="bi bi-activity"></i> Monitoring
                         </a>
                         <ul class="dropdown-menu">
                             <li>
-                                <a class="dropdown-item" href="{{ url_for('main.node_health') }}">
-                                    <i class="bi bi-activity"></i> Node Health
+                                <a class="dropdown-item {{ 'active' if request.endpoint == 'battery.battery_analytics' }}" href="{{ url_for('battery.battery_analytics') }}">
+                                    <i class="bi bi-battery-charging"></i> Power Analytics
                                 </a>
                             </li>
-                            <li><hr class="dropdown-divider"></li>
                             <li>
-                                <a class="dropdown-item" href="{{ url_for('traceroute.traceroute_hops') }}">
+                                <a class="dropdown-item {{ 'active' if request.endpoint == 'main.node_health' }}" href="{{ url_for('main.node_health') }}">
+                                    <i class="bi bi-heart-pulse"></i> Node Health
+                                </a>
+                            </li>
+                        </ul>
+                    </li>
+
+                    <!-- Analysis Tools dropdown -->
+                    <li class="nav-item dropdown">
+                        {% set tools_active = request.endpoint in ['traceroute.traceroute_hops', 'gateway.gateway_compare', 'main.longest_links', 'main.line_of_sight'] %}
+                        <a class="nav-link dropdown-toggle {{ 'active' if tools_active }}" href="#" id="toolsDropdown" role="button" data-bs-toggle="dropdown">
+                            <i class="bi bi-tools"></i> Analysis
+                        </a>
+                        <ul class="dropdown-menu">
+                            <li>
+                                <a class="dropdown-item {{ 'active' if request.endpoint == 'traceroute.traceroute_hops' }}" href="{{ url_for('traceroute.traceroute_hops') }}">
                                     <i class="bi bi-graph-up"></i> Hop Analysis
                                 </a>
                             </li>
                             <li>
-                                <a class="dropdown-item" href="{{ url_for('gateway.gateway_compare') }}">
+                                <a class="dropdown-item {{ 'active' if request.endpoint == 'gateway.gateway_compare' }}" href="{{ url_for('gateway.gateway_compare') }}">
                                     <i class="bi bi-router-fill"></i> Gateway Compare
                                 </a>
                             </li>
                             <li>
-                                <a class="dropdown-item" href="{{ url_for('main.longest_links') }}">
+                                <a class="dropdown-item {{ 'active' if request.endpoint == 'main.longest_links' }}" href="{{ url_for('main.longest_links') }}">
                                     <i class="bi bi-rulers"></i> Longest Links
                                 </a>
                             </li>
                             <li>
-                                <a class="dropdown-item" href="{{ url_for('main.line_of_sight') }}">
+                                <a class="dropdown-item {{ 'active' if request.endpoint == 'main.line_of_sight' }}" href="{{ url_for('main.line_of_sight') }}">
                                     <i class="bi bi-bezier"></i> Line of Sight
                                 </a>
                             </li>
