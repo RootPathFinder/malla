@@ -4367,6 +4367,16 @@ class BatteryAnalyticsRepository:
                         "last_telemetry": (
                             format_time_ago(last_telemetry_dt)
                             if last_telemetry_dt
+                            else "Never"
+                        ),
+                    }
+                )
+
+            logger.info(f"Found {len(results)} nodes with battery telemetry data")
+            logger.debug(f"Query returned: {len(results)} nodes from {total_telemetry} telemetry records")
+            logger.debug(f"Records with voltage: {voltage_count}, with battery_level: {battery_level_count}")
+            if results:
+                logger.info(
                     f"Sample nodes: {[r['name'] for r in results[:3]]}"
                 )
             else:
