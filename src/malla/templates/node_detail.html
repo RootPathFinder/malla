@@ -1139,7 +1139,7 @@ async function loadTelemetryData() {
         // Device Metrics (battery, voltage, etc.)
         if (telemetry.device_metrics) {
             const dm = telemetry.device_metrics;
-            html += '<div class="col-md-6 col-lg-4">';
+            html += '<div class="col-md-6 col-lg-6">';
             html += '<h6 class="mb-1 mt-0" style="font-size: 0.9rem;"><i class="bi bi-battery-charging text-success"></i> Device Metrics</h6>';
             html += '<table class="table table-sm table-borderless mb-0" style="font-size: 0.85rem;">';
 
@@ -1172,7 +1172,7 @@ async function loadTelemetryData() {
         // Environment Metrics (temperature, humidity, etc.)
         if (telemetry.environment_metrics) {
             const em = telemetry.environment_metrics;
-            html += '<div class="col-md-6 col-lg-4">';
+            html += '<div class="col-md-6 col-lg-6">';
             html += '<h6 class="mb-1 mt-0" style="font-size: 0.9rem;"><i class="bi bi-thermometer-half text-info"></i> Environment</h6>';
             html += '<table class="table table-sm table-borderless mb-0" style="font-size: 0.85rem;">';
 
@@ -1205,7 +1205,7 @@ async function loadTelemetryData() {
         // Power Metrics
         if (telemetry.power_metrics) {
             const pm = telemetry.power_metrics;
-            html += '<div class="col-md-6 col-lg-4">';
+            html += '<div class="col-md-6 col-lg-6">';
             html += '<h6 class="mb-1 mt-0" style="font-size: 0.9rem;"><i class="bi bi-lightning-charge text-warning"></i> Power Metrics</h6>';
             html += '<table class="table table-sm table-borderless mb-0" style="font-size: 0.85rem;">';
 
