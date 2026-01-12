@@ -3,7 +3,8 @@ Battery analytics routes for power monitoring dashboard
 """
 
 import logging
-import sqlite3
+import time
+from datetime import UTC, datetime
 
 from flask import Blueprint, jsonify, render_template
 
@@ -153,7 +154,7 @@ def battery_debug():
         return jsonify({"error": str(e)}), 500
 
 
-@battery_bp.route("/api/detect-power-types", methods=["POST"])
+@battery_bp.route("/api/detect-power-types", methods=["GET", "POST"])
 def detect_power_types():
     """API endpoint to detect and update power types based on voltage patterns."""
     try:
@@ -188,9 +189,6 @@ def battery_telemetry_nodes():
 def voltage_trends():
     """API endpoint to get voltage trends for all nodes over the last 7 days."""
     try:
-        import time
-        from datetime import datetime, UTC
-
         conn = get_db_connection()
         cursor = conn.cursor()
 
