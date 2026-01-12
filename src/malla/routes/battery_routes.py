@@ -166,3 +166,72 @@ def battery_telemetry_nodes():
     except Exception as e:
         logger.error(f"Error getting telemetry nodes: {e}", exc_info=True)
         return jsonify({"error": str(e), "count": 0, "nodes": []}), 500
+
+
+@battery_bp.route("/api/voltage-trends", methods=["GET"])
+def voltage_trends():
+    """API endpoint to get voltage trends for all nodes over the last 7 days."""
+    try:
+        import time
+        from datetime import datetime, UTC
+
+        conn = get_db_connection()
+        cursor = conn.cursor()
+
+        # Get data for the last 7 days
+        cutoff_time = time.time() - (7 * 24 * 3600)
+
+        cursor.execute(
+            """
+            SELECT
+                td.node_id,
+                ni.long_name,
+                ni.hex_id,
+                td.timestamp,
+                td.voltage,
+                td.battery_level
+            FROM telemetry_data td
+            LEFT JOIN node_info ni ON td.node_id = ni.node_id
+            WHERE td.voltage IS NOT NULL AND td.timestamp > ?
+            ORDER BY td.node_id, td.timestamp
+            """,
+            (cutoff_time,)
+        )
+
+        rows = cursor.fetchall()
+        conn.close()
+
+        # Group data by node for charting
+        nodes_data = {}
+        for row in rows:
+            node_id = row["node_id"]
+            if node_id not in nodes_data:
+                node_name = row["long_name"] or row["hex_id"] or f"Node {node_id}"
+                nodes_data[node_id] = {
+                    "name": node_name,
+                    "timestamps": [],
+                    "voltages": [],
+                }
+
+            # Scale voltage if needed
+            voltage = row["voltage"]
+            if voltage is not None and voltage < 1:
+                voltage = voltage * 1000
+
+            # Convert Unix timestamp to ISO format
+            try:
+                dt = datetime.fromtimestamp(row["timestamp"], tz=UTC)
+                nodes_data[node_id]["timestamps"].append(dt.isoformat())
+                nodes_data[node_id]["voltages"].append(voltage)
+            except Exception as e:
+                logger.warning(f"Could not parse timestamp {row['timestamp']}: {e}")
+
+        logger.info(f"Voltage trends: {len(nodes_data)} nodes with data")
+        return jsonify({
+            "nodes": nodes_data,
+            "count": len(nodes_data)
+        })
+
+    except Exception as e:
+        logger.error(f"Error getting voltage trends: {e}", exc_info=True)
+        return jsonify({"error": str(e), "nodes": {}, "count": 0}), 500

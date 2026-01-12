@@ -218,6 +218,64 @@
         </div>
     </div>
 
+    <script>
+        // Load and render voltage trends chart
+        document.addEventListener('DOMContentLoaded', function() {
+            fetch('/api/voltage-trends')
+                .then(response => response.json())
+                .then(data => {
+                    if (data.nodes && Object.keys(data.nodes).length > 0) {
+                        renderVoltageTrendsChart(data.nodes);
+                    } else {
+                        console.log('No voltage trend data available');
+                    }
+                })
+                .catch(error => console.error('Error loading voltage trends:', error));
+        });
+
+        function renderVoltageTrendsChart(nodesData) {
+            // Prepare traces for Plotly
+            const traces = [];
+
+            Object.entries(nodesData).forEach(([nodeId, nodeData]) => {
+                traces.push({
+                    x: nodeData.timestamps,
+                    y: nodeData.voltages,
+                    mode: 'lines+markers',
+                    name: nodeData.name,
+                    type: 'scatter',
+                    line: {
+                        shape: 'spline'
+                    }
+                });
+            });
+
+            const layout = {
+                title: 'Voltage Trends (Last 7 Days)',
+                xaxis: {
+                    title: 'Time'
+                },
+                yaxis: {
+                    title: 'Voltage (V)',
+                    rangemode: 'tozero'
+                },
+                hovermode: 'x unified',
+                plot_bgcolor: 'rgba(0,0,0,0)',
+                paper_bgcolor: 'rgba(0,0,0,0)',
+                font: {
+                    color: getComputedStyle(document.documentElement).getPropertyValue('--bs-body-color') || '#000'
+                }
+            };
+
+            // Use Plotly if available
+            if (typeof Plotly !== 'undefined') {
+                Plotly.newPlot('voltage-trends-chart', traces, layout, {responsive: true, displayModeBar: false});
+            } else {
+                console.warn('Plotly not loaded, cannot render chart');
+            }
+        }
+    </script>
+
     <!-- Nodes Sharing Battery Telemetry Section -->
     <div class="row mb-4">
         <div class="col">

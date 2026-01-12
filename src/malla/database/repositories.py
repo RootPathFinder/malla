@@ -4004,6 +4004,7 @@ class BatteryAnalyticsRepository:
     """Repository for battery and power monitoring analytics."""
 
     @staticmethod
+    @staticmethod
     def get_power_source_summary() -> dict[str, int]:
         """Get summary of nodes by power source type.
 
@@ -4014,13 +4015,16 @@ class BatteryAnalyticsRepository:
             conn = get_db_connection()
             cursor = conn.cursor()
 
+            # Count only nodes that have telemetry data (voltage or battery_level)
             cursor.execute(
                 """
                 SELECT
-                    COALESCE(power_type, 'unknown') as power_type,
-                    COUNT(*) as count
-                FROM node_info
-                GROUP BY power_type
+                    COALESCE(ni.power_type, 'unknown') as power_type,
+                    COUNT(DISTINCT ni.node_id) as count
+                FROM node_info ni
+                INNER JOIN telemetry_data td ON ni.node_id = td.node_id
+                WHERE td.voltage IS NOT NULL OR td.battery_level IS NOT NULL
+                GROUP BY ni.power_type
             """
             )
 
@@ -4041,10 +4045,11 @@ class BatteryAnalyticsRepository:
                 if power_type in summary:
                     summary[power_type] = row["count"]
 
+            logger.debug(f"Power source summary: {summary}")
             return summary
 
         except Exception as e:
-            logger.error(f"Error getting power source summary: {e}")
+            logger.error(f"Error getting power source summary: {e}", exc_info=True)
             return {"solar": 0, "battery": 0, "mains": 0, "unknown": 0}
 
     @staticmethod
