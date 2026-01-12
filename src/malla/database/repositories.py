@@ -4288,18 +4288,22 @@ class BatteryAnalyticsRepository:
                     td.voltage,
                     td.timestamp as last_telemetry
                 FROM node_info ni
-                INNER JOIN (
+                LEFT JOIN (
                     SELECT node_id, battery_level, voltage, timestamp,
                            ROW_NUMBER() OVER (PARTITION BY node_id ORDER BY timestamp DESC) as rn
                     FROM telemetry_data
                     WHERE timestamp > ? AND (voltage IS NOT NULL OR battery_level IS NOT NULL)
                 ) td ON ni.node_id = td.node_id AND td.rn = 1
+                WHERE ni.last_battery_voltage IS NOT NULL
+                   OR td.voltage IS NOT NULL
+                   OR td.battery_level IS NOT NULL
                 ORDER BY
                     CASE
                         WHEN ni.last_battery_voltage IS NOT NULL AND ni.last_battery_voltage < 3.3 THEN 0
+                        WHEN td.voltage IS NOT NULL AND td.voltage < 3.3 THEN 0
                         ELSE 2
                     END,
-                    ni.last_battery_voltage ASC NULLS LAST
+                    COALESCE(td.voltage, ni.last_battery_voltage) ASC NULLS LAST
             """,
                 (time.time() - (7 * 24 * 3600),),  # Last 7 days
             )
