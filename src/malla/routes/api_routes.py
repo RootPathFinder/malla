@@ -2129,15 +2129,7 @@ def api_performance_metrics():
     try:
         function_name = request.args.get("function")
         metrics = get_metrics(function_name)
-
-<<<<<<< HEAD
-        return jsonify({
-            "metrics": metrics,
-            "timestamp": time.time()
-        })
-=======
         return jsonify({"metrics": metrics, "timestamp": time.time()})
->>>>>>> aca0955 (fixing ci linting)
     except Exception as e:
         logger.error(f"Error in API performance metrics: {e}")
         return jsonify({"error": str(e)}), 500
@@ -2158,14 +2150,6 @@ def api_slow_functions():
 
         slow_funcs = get_slow_functions(threshold=threshold, limit=limit)
 
-<<<<<<< HEAD
-        return jsonify({
-            "slow_functions": slow_funcs,
-            "threshold": threshold,
-            "limit": limit,
-            "count": len(slow_funcs)
-        })
-=======
         return jsonify(
             {
                 "slow_functions": slow_funcs,
@@ -2174,7 +2158,6 @@ def api_slow_functions():
                 "count": len(slow_funcs),
             }
         )
->>>>>>> aca0955 (fixing ci linting)
     except Exception as e:
         logger.error(f"Error in API slow functions: {e}")
         return jsonify({"error": str(e)}), 500
@@ -2194,8 +2177,7 @@ def api_database_pool_stats():
 
         pool = get_connection_pool()
         stats = pool.get_stats()
-
-    return jsonify({"pool_stats": stats, "timestamp": time.time()})
+        return jsonify({"pool_stats": stats, "timestamp": time.time()})
     except Exception as e:
         logger.error(f"Error in API database pool stats: {e}")
         return jsonify({"error": str(e)}), 500
@@ -2224,7 +2206,7 @@ def api_export_packets():
     """
     logger.info("API export packets endpoint accessed")
     try:
-    from flask import make_response
+        from flask import make_response
 
         export_format = request.args.get("format", "csv").lower()
 
@@ -2234,8 +2216,8 @@ def api_export_packets():
             if key != "format":
                 filters[key] = request.args.get(key)
 
-    packets_data = PacketRepository.get_packets(filters=filters)
-    packets = packets_data.get("packets", [])
+        packets_data = PacketRepository.get_packets(filters=filters)
+        packets = packets_data.get("packets", [])
 
         if export_format == "csv":
             csv_content, filename = export_packets_to_csv(packets)
@@ -2270,7 +2252,7 @@ def api_export_nodes():
     """
     logger.info("API export nodes endpoint accessed")
     try:
-    from flask import make_response
+        from flask import make_response
 
         export_format = request.args.get("format", "csv").lower()
 
@@ -2280,8 +2262,8 @@ def api_export_nodes():
             if key != "format":
                 filters[key] = request.args.get(key)
 
-    nodes_data = NodeRepository.get_nodes(filters=filters)
-    nodes = nodes_data.get("nodes", [])
+        nodes_data = NodeRepository.get_nodes(filters=filters)
+        nodes = nodes_data.get("nodes", [])
 
         if export_format == "csv":
             csv_content, filename = export_nodes_to_csv(nodes)
@@ -2321,7 +2303,7 @@ def api_export_analytics():
     """
     logger.info("API export analytics endpoint accessed")
     try:
-    from flask import make_response
+        from flask import make_response
 
         gateway_id = request.args.get("gateway_id")
         from_node = request.args.get("from_node", type=int)
@@ -2401,7 +2383,7 @@ def api_search_nodes():
     """
     logger.info("API search nodes endpoint accessed")
     try:
-    from ..utils.search import rank_search_results, search_nodes
+        from ..utils.search import rank_search_results, search_nodes
 
         query = request.args.get("q", "")
         if not query:
@@ -2413,8 +2395,8 @@ def api_search_nodes():
 
         # Get all nodes
         filters = {}
-    nodes_data = NodeRepository.get_nodes(filters=filters)
-    nodes = nodes_data.get("nodes", [])
+        nodes_data = NodeRepository.get_nodes(filters=filters)
+        nodes = nodes_data.get("nodes", [])
 
         # Apply search
         results = search_nodes(nodes, query, fuzzy=fuzzy, threshold=threshold)
@@ -2490,11 +2472,7 @@ def api_packets_new():
             )
             packets.append(packet_dict)
 
-        return jsonify({
-            "packets": packets,
-            "count": len(packets),
-            "since": since
-        })
+        return jsonify({"packets": packets, "count": len(packets), "since": since})
     except Exception as e:
         logger.error(f"Error in API new packets: {e}")
         return jsonify({"error": str(e)}), 500
@@ -2514,14 +2492,14 @@ def api_packets_per_minute():
         # Get total packets in last hour
         cursor.execute(
             "SELECT COUNT(*) as count FROM packet_history WHERE timestamp > ?",
-            (one_hour_ago,)
+            (one_hour_ago,),
         )
         total_packets_hour = cursor.fetchone()["count"]
 
         # Get packets in last minute
         cursor.execute(
             "SELECT COUNT(*) as count FROM packet_history WHERE timestamp > ?",
-            (one_minute_ago,)
+            (one_minute_ago,),
         )
         packets_last_minute = cursor.fetchone()["count"]
 
@@ -2530,11 +2508,13 @@ def api_packets_per_minute():
 
         conn.close()
 
-        return jsonify({
-            "packets_per_minute": round(avg_ppm, 1),
-            "current_minute_packets": packets_last_minute,
-            "hourly_total": total_packets_hour
-        })
+        return jsonify(
+            {
+                "packets_per_minute": round(avg_ppm, 1),
+                "current_minute_packets": packets_last_minute,
+                "hourly_total": total_packets_hour,
+            }
+        )
     except Exception as e:
         logger.error(f"Error in API packets per minute: {e}")
         return jsonify({"error": str(e)}), 500
@@ -2556,7 +2536,7 @@ def api_new_nodes_24h():
             FROM node_info
             WHERE last_updated > ?
             """,
-            (twenty_four_hours_ago,)
+            (twenty_four_hours_ago,),
         )
         new_nodes = cursor.fetchone()["new_nodes"]
 
@@ -2567,17 +2547,21 @@ def api_new_nodes_24h():
             FROM packet_history
             WHERE timestamp > ?
             """,
-            (twenty_four_hours_ago,)
+            (twenty_four_hours_ago,),
         )
         active_nodes = cursor.fetchone()["active_nodes"]
 
         conn.close()
 
-        return jsonify({
-            "new_nodes_24h": new_nodes,
-            "active_nodes_24h": active_nodes,
-            "new_node_percentage": round((new_nodes / active_nodes * 100) if active_nodes > 0 else 0, 1)
-        })
+        return jsonify(
+            {
+                "new_nodes_24h": new_nodes,
+                "active_nodes_24h": active_nodes,
+                "new_node_percentage": round(
+                    (new_nodes / active_nodes * 100) if active_nodes > 0 else 0, 1
+                ),
+            }
+        )
     except Exception as e:
         logger.error(f"Error in API new nodes 24h: {e}")
         return jsonify({"error": str(e)}), 500
@@ -2608,7 +2592,7 @@ def api_gateway_coverage():
                 GROUP BY packet_id
             ) as packet_gateways
             """,
-            (twenty_four_hours_ago,)
+            (twenty_four_hours_ago,),
         )
         result = cursor.fetchone()
         unique_gateways = result["unique_gateways"]
@@ -2616,11 +2600,13 @@ def api_gateway_coverage():
 
         conn.close()
 
-        return jsonify({
-            "unique_gateways": unique_gateways,
-            "avg_gateways_per_packet": avg_gateways_per_packet or 0,
-            "coverage_metric": round(avg_gateways_per_packet or 0, 1)
-        })
+        return jsonify(
+            {
+                "unique_gateways": unique_gateways,
+                "avg_gateways_per_packet": avg_gateways_per_packet or 0,
+                "coverage_metric": round(avg_gateways_per_packet or 0, 1),
+            }
+        )
     except Exception as e:
         logger.error(f"Error in API gateway coverage: {e}")
         return jsonify({"error": str(e)}), 500
@@ -2650,8 +2636,8 @@ def api_search_packets():
 
         # Get recent packets (last 1000)
         filters = {}
-    packets_data = PacketRepository.get_packets(limit=1000, filters=filters)
-    packets = packets_data.get("packets", [])
+        packets_data = PacketRepository.get_packets(limit=1000, filters=filters)
+        packets = packets_data.get("packets", [])
 
         # Apply search
         results = search_packets(packets, query, search_in=search_in)
