@@ -1118,21 +1118,22 @@ async function loadTelemetryData() {
         // Fetch comprehensive health data from the health API
         let nodeHealth = {};
         try {
-            const healthResponse = await fetch(`/api/node/${nodeId}/health?hours=24`);
+            const healthResponse = await fetch(`/api/health/node/${nodeId}?hours=24`);
             if (healthResponse.ok) {
                 const healthData = await healthResponse.json();
-                nodeHealth = healthData.health || {};
+                nodeHealth = healthData;
             }
         } catch (error) {
             console.debug('Could not load health data:', error);
         }
 
-        // Use health score from API if available, otherwise calculate from telemetry
+        // Use health data from API
         let healthScore = nodeHealth.health_score !== undefined ? nodeHealth.health_score : 100;
         let healthStatus = nodeHealth.health_status || 'unknown';
         let issues = nodeHealth.issues || [];
         let metrics = nodeHealth.metrics || {};
         let confidenceScore = nodeHealth.confidence_score !== undefined ? nodeHealth.confidence_score : 100;
+        let baseline = nodeHealth.baseline || {};
 
         // Fallback to telemetry-based health if API data unavailable
         if (healthScore === 100 && telemetry.device_metrics) {
@@ -1172,14 +1173,31 @@ async function loadTelemetryData() {
 
         // Build health alerts from issues
         let healthAlerts = [];
+        let detailedIssues = [];
         issues.forEach(issue => {
+            // Create badge for quick view
+            let badgeClass = 'bg-info text-dark';
             if (issue.severity === 'critical') {
-                healthAlerts.push('<span class="badge bg-danger">' + issue.message + '</span>');
+                badgeClass = 'bg-danger';
             } else if (issue.severity === 'warning') {
-                healthAlerts.push('<span class="badge bg-warning text-dark">' + issue.message + '</span>');
-            } else if (issue.severity === 'info') {
-                healthAlerts.push('<span class="badge bg-info text-dark">' + issue.message + '</span>');
+                badgeClass = 'bg-warning text-dark';
             }
+
+            // Format issue with category if available
+            let issueText = issue.message;
+            if (issue.category) {
+                issueText = issue.category + ': ' + issue.message;
+            }
+
+            healthAlerts.push('<span class="badge ' + badgeClass + '">' + issueText + '</span>');
+
+            // Store detailed issues for display
+            detailedIssues.push({
+                severity: issue.severity,
+                category: issue.category || 'Other',
+                message: issue.message,
+                outage_details: issue.outage_details || []
+            });
         });
 
         // Health Summary Row
@@ -1195,6 +1213,18 @@ async function loadTelemetryData() {
 
         if (healthAlerts.length > 0) {
             html += '<div class="d-flex flex-wrap gap-2 mt-2">' + healthAlerts.join('') + '</div>';
+
+            // Show detailed outage information if available
+            detailedIssues.forEach(issue => {
+                if (issue.outage_details && issue.outage_details.length > 0) {
+                    html += '<div class="mt-2 small alert alert-warning mb-0">';
+                    html += '<strong>' + issue.category + ' Details:</strong><ul class="mt-1 mb-0">';
+                    issue.outage_details.forEach(outage => {
+                        html += '<li>' + outage.duration_formatted + ' - ' + outage.start_time + ' to ' + outage.end_time + '</li>';
+                    });
+                    html += '</ul></div>';
+                }
+            });
         } else if (issues.length === 0) {
             html += '<small class="text-success"><i class="bi bi-check-circle"></i> No issues detected</small>';
         }
@@ -1202,15 +1232,36 @@ async function loadTelemetryData() {
         // Show metrics summary if available
         if (metrics.total_packets !== undefined) {
             html += '<div class="mt-2 pt-2 border-top" style="font-size: 0.85rem;">';
-            html += '<small class="text-muted">24h metrics: ';
+            html += '<small class="text-muted">24h Metrics: ';
             html += '<strong>' + metrics.total_packets + ' packets</strong>';
+            if (metrics.avg_rssi !== undefined && metrics.avg_rssi !== null) {
+                html += ' • RSSI: <strong>' + metrics.avg_rssi.toFixed(1) + ' dBm</strong>';
+            }
+            if (metrics.avg_snr !== undefined && metrics.avg_snr !== null) {
+                html += ' • SNR: <strong>' + metrics.avg_snr.toFixed(1) + ' dB</strong>';
+            }
             if (metrics.unique_gateways !== undefined) {
                 html += ' • <strong>' + metrics.unique_gateways + ' gateway(s)</strong>';
+            }
+            if (metrics.activity_gaps !== undefined && metrics.activity_gaps > 0) {
+                html += ' • <strong>' + metrics.activity_gaps + ' activity gap(s)</strong>';
             }
             if (metrics.long_outages !== undefined && metrics.long_outages > 0) {
                 html += ' • <span class="text-warning"><strong>' + metrics.long_outages + ' outage(s)</strong></span>';
             }
             html += '</small>';
+            html += '</div>';
+        }
+
+        // Show baseline information if available
+        if (baseline && baseline.has_baseline) {
+            const variabilityText = baseline.coefficient_of_variation > 1.5 ? 'highly variable' :
+                                   baseline.coefficient_of_variation > 1.0 ? 'moderately variable' : 'consistent';
+            html += '<div class="mt-2 pt-2 border-top small alert alert-info mb-0" style="font-size: 0.85rem;">';
+            html += '<strong>Baseline Behavior:</strong> ';
+            html += 'Avg ' + baseline.avg_packets_per_day.toFixed(1) + ' packets/day • ';
+            html += baseline.total_packets + ' packets over ' + Math.round(baseline.total_days) + ' days • ';
+            html += variabilityText + ' pattern';
             html += '</div>';
         }
 
