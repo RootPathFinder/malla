@@ -175,19 +175,22 @@ class NodeHealthService:
         node_row = cursor.fetchone()
 
         if not node_row:
-            # Node not in node_info, check if it exists in packet_history
+            # Node not in node_info, check if it exists in packet_history at all.
+            # (We still compute health using the requested `hours` window, but we
+            # allow analysis for recently-offline nodes that have no packets in
+            # that window.)
             cursor.execute(
                 """
-                SELECT COUNT(*) as packet_count
+                SELECT 1
                 FROM packet_history
                 WHERE from_node_id = ?
-                AND timestamp >= ?
+                LIMIT 1
             """,
-                (node_id, cutoff_time),
+                (node_id,),
             )
-            packet_check = cursor.fetchone()
+            packet_exists = cursor.fetchone()
 
-            if not packet_check or packet_check["packet_count"] == 0:
+            if not packet_exists:
                 conn.close()
                 return None
 
@@ -524,8 +527,11 @@ class NodeHealthService:
         conn = get_db_connection()
         cursor = conn.cursor()
 
-        # Calculate time threshold
-        cutoff_time = int(time.time()) - (hours * 3600)
+        # Include offline/inactive nodes for up to 48 hours since last seen.
+        # This ensures nodes that have recently dropped off the mesh still show up
+        # in the health list, while older inactive nodes are omitted.
+        candidate_hours = max(hours, 48)
+        cutoff_time = int(time.time()) - (candidate_hours * 3600)
 
         # Get all nodes that have been active
         cursor.execute(
