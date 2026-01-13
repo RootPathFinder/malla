@@ -14,6 +14,74 @@
 <!-- Override the base template's container to make this page full-width/full-height -->
 </div> <!-- Close the base template's container -->
 
+<!-- High-Level Stats Cards -->
+<div class="container-fluid mb-3" style="padding: 1rem;">
+    <div class="row g-3">
+        <div class="col-md-4">
+            <div class="card shadow-sm">
+                <div class="card-body p-3">
+                    <div class="d-flex justify-content-between align-items-start mb-2">
+                        <h6 class="card-title mb-0">
+                            <i class="bi bi-speedometer2"></i> Packets/Min
+                        </h6>
+                        <small class="text-muted">24h avg</small>
+                    </div>
+                    <div id="gauge-ppm" style="height: 120px; display: flex; align-items: center; justify-content: center;">
+                        <div class="spinner-border spinner-border-sm text-primary" role="status">
+                            <span class="visually-hidden">Loading...</span>
+                        </div>
+                    </div>
+                    <div class="text-center mt-2">
+                        <small id="ppm-value" class="text-muted">-- packets/min</small>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <div class="col-md-4">
+            <div class="card shadow-sm">
+                <div class="card-body p-3">
+                    <div class="d-flex justify-content-between align-items-start mb-2">
+                        <h6 class="card-title mb-0">
+                            <i class="bi bi-plus-circle"></i> New Nodes
+                        </h6>
+                        <small class="text-muted">Last 24h</small>
+                    </div>
+                    <div id="gauge-nodes" style="height: 120px; display: flex; align-items: center; justify-content: center;">
+                        <div class="spinner-border spinner-border-sm text-primary" role="status">
+                            <span class="visually-hidden">Loading...</span>
+                        </div>
+                    </div>
+                    <div class="text-center mt-2">
+                        <small id="nodes-value" class="text-muted">-- new nodes</small>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <div class="col-md-4">
+            <div class="card shadow-sm">
+                <div class="card-body p-3">
+                    <div class="d-flex justify-content-between align-items-start mb-2">
+                        <h6 class="card-title mb-0">
+                            <i class="bi bi-broadcast"></i> Gateway Avg
+                        </h6>
+                        <small class="text-muted">Per packet</small>
+                    </div>
+                    <div id="gauge-gateway" style="height: 120px; display: flex; align-items: center; justify-content: center;">
+                        <div class="spinner-border spinner-border-sm text-primary" role="status">
+                            <span class="visually-hidden">Loading...</span>
+                        </div>
+                    </div>
+                    <div class="text-center mt-2">
+                        <small id="gateway-value" class="text-muted">-- gateways</small>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+
 {% call fullscreen_table_container("packetsTable", "Packets", "bi bi-envelope", "toggleSidebar") %}
     <!-- Main table content -->
     <div id="packetsTable" class="modern-table-container"></div>
@@ -147,7 +215,140 @@
 <script src="{{ url_for('static', filename='js/node-picker.js') }}"></script>
 <script src="{{ url_for('static', filename='js/modern-table.js') }}"></script>
 <script>
+// Stats update functions for high-level metrics
+async function updatePacketStats() {
+    try {
+        // Fetch packets per minute
+        const ppmResponse = await fetch('/api/stats/packets-per-minute');
+        const ppmData = await ppmResponse.json();
+
+        // Fetch new nodes
+        const nodesResponse = await fetch('/api/stats/new-nodes-24h');
+        const nodesData = await nodesResponse.json();
+
+        // Fetch gateway coverage
+        const gatewayResponse = await fetch('/api/stats/gateway-coverage');
+        const gatewayData = await gatewayResponse.json();
+
+        // Update PPM display
+        const ppmValue = ppmData.packets_per_minute || 0;
+        document.getElementById('ppm-value').textContent = ppmValue.toFixed(1) + ' packets/min';
+        updateGauge('gauge-ppm', ppmValue, 100, 'linear-gradient(135deg, #667eea 0%, #764ba2 100%)');
+
+        // Update New Nodes display
+        const newNodesValue = nodesData.new_nodes_24h || 0;
+        const activeNodes = nodesData.active_nodes_24h || 1;
+        const newNodePercentage = (newNodesValue / activeNodes * 100).toFixed(1);
+        document.getElementById('nodes-value').textContent = newNodesValue + ' nodes (' + newNodePercentage + '%)';
+        updateGauge('gauge-nodes', newNodePercentage, 100, 'linear-gradient(135deg, #f093fb 0%, #f5576c 100%)');
+
+        // Update Gateway Coverage display
+        const gatewayValue = gatewayData.coverage_metric || 0;
+        document.getElementById('gateway-value').textContent = gatewayValue.toFixed(1) + ' gateways/packet';
+        updateGauge('gauge-gateway', gatewayValue * 20, 100, 'linear-gradient(135deg, #4facfe 0%, #00f2fe 100%)');
+    } catch (error) {
+        console.error('Error updating packet stats:', error);
+    }
+}
+
+// Create a simple gauge visualization
+function updateGauge(containerId, value, max, gradient) {
+    const container = document.getElementById(containerId);
+    if (!container) return;
+
+    const percentage = Math.min((value / max) * 100, 100);
+    const radius = 40;
+    const circumference = 2 * Math.PI * radius;
+    const offset = circumference - (percentage / 100) * circumference;
+
+    let svg = container.querySelector('svg');
+    if (!svg) {
+        svg = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
+        svg.setAttribute('viewBox', '0 0 100 100');
+        svg.setAttribute('style', 'width: 100px; height: 100px;');
+
+        const defs = document.createElementNS('http://www.w3.org/2000/svg', 'defs');
+        const gradientEl = document.createElementNS('http://www.w3.org/2000/svg', 'linearGradient');
+        gradientEl.setAttribute('id', 'grad-' + containerId);
+        gradientEl.setAttribute('x1', '0%');
+        gradientEl.setAttribute('y1', '0%');
+        gradientEl.setAttribute('x2', '100%');
+        gradientEl.setAttribute('y2', '100%');
+
+        // Parse gradient colors
+        const colors = gradient.match(/#[0-9a-f]{6}|rgb[^)]*\)/gi) || ['#667eea', '#764ba2'];
+        if (colors.length >= 2) {
+            const stop1 = document.createElementNS('http://www.w3.org/2000/svg', 'stop');
+            stop1.setAttribute('offset', '0%');
+            stop1.setAttribute('stop-color', colors[0]);
+
+            const stop2 = document.createElementNS('http://www.w3.org/2000/svg', 'stop');
+            stop2.setAttribute('offset', '100%');
+            stop2.setAttribute('stop-color', colors[1]);
+
+            gradientEl.appendChild(stop1);
+            gradientEl.appendChild(stop2);
+        }
+        defs.appendChild(gradientEl);
+        svg.appendChild(defs);
+
+        // Background circle
+        const bgCircle = document.createElementNS('http://www.w3.org/2000/svg', 'circle');
+        bgCircle.setAttribute('cx', '50');
+        bgCircle.setAttribute('cy', '50');
+        bgCircle.setAttribute('r', radius);
+        bgCircle.setAttribute('fill', 'none');
+        bgCircle.setAttribute('stroke', '#e9ecef');
+        bgCircle.setAttribute('stroke-width', '8');
+        svg.appendChild(bgCircle);
+
+        // Progress circle
+        const progressCircle = document.createElementNS('http://www.w3.org/2000/svg', 'circle');
+        progressCircle.setAttribute('cx', '50');
+        progressCircle.setAttribute('cy', '50');
+        progressCircle.setAttribute('r', radius);
+        progressCircle.setAttribute('fill', 'none');
+        progressCircle.setAttribute('stroke', 'url(#grad-' + containerId + ')');
+        progressCircle.setAttribute('stroke-width', '8');
+        progressCircle.setAttribute('stroke-dasharray', circumference);
+        progressCircle.setAttribute('stroke-dashoffset', circumference);
+        progressCircle.setAttribute('transform', 'rotate(-90 50 50)');
+        progressCircle.setAttribute('style', 'transition: stroke-dashoffset 0.3s ease-in-out;');
+        svg.appendChild(progressCircle);
+
+        // Text
+        const text = document.createElementNS('http://www.w3.org/2000/svg', 'text');
+        text.setAttribute('x', '50');
+        text.setAttribute('y', '55');
+        text.setAttribute('text-anchor', 'middle');
+        text.setAttribute('font-size', '20');
+        text.setAttribute('font-weight', 'bold');
+        text.setAttribute('fill', '#495057');
+        text.textContent = '0%';
+        svg.appendChild(text);
+
+        container.innerHTML = '';
+        container.appendChild(svg);
+    }
+
+    // Update progress circle
+    const progressCircle = svg.querySelectorAll('circle')[1];
+    if (progressCircle) {
+        progressCircle.setAttribute('stroke-dashoffset', offset);
+    }
+
+    // Update text
+    const text = svg.querySelector('text');
+    if (text) {
+        text.textContent = Math.round(percentage) + '%';
+    }
+}
+
 document.addEventListener('DOMContentLoaded', function() {
+    // Update stats immediately and then every 5 seconds
+    updatePacketStats();
+    setInterval(updatePacketStats, 5000);
+
     // Move sidebar content into the actual sidebar FIRST
     const sidebarContent = document.getElementById('sidebarContent');
     const sidebarContainer = document.querySelector('.sidebar-content');

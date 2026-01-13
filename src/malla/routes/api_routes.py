@@ -2481,6 +2481,132 @@ def api_packets_new():
         return jsonify({"error": str(e)}), 500
 
 
+@api_bp.route("/stats/packets-per-minute")
+def api_packets_per_minute():
+    """Get packets per minute in the last hour and current minute."""
+    try:
+        conn = get_db_connection()
+        cursor = conn.cursor()
+
+        current_time = time.time()
+        one_hour_ago = current_time - 3600
+        one_minute_ago = current_time - 60
+
+        # Get total packets in last hour
+        cursor.execute(
+            "SELECT COUNT(*) as count FROM packet_history WHERE timestamp > ?",
+            (one_hour_ago,)
+        )
+        total_packets_hour = cursor.fetchone()["count"]
+
+        # Get packets in last minute
+        cursor.execute(
+            "SELECT COUNT(*) as count FROM packet_history WHERE timestamp > ?",
+            (one_minute_ago,)
+        )
+        packets_last_minute = cursor.fetchone()["count"]
+
+        # Calculate average packets per minute
+        avg_ppm = total_packets_hour / 60 if total_packets_hour > 0 else 0
+
+        conn.close()
+
+        return jsonify({
+            "packets_per_minute": round(avg_ppm, 1),
+            "current_minute_packets": packets_last_minute,
+            "hourly_total": total_packets_hour
+        })
+    except Exception as e:
+        logger.error(f"Error in API packets per minute: {e}")
+        return jsonify({"error": str(e)}), 500
+
+
+@api_bp.route("/stats/new-nodes-24h")
+def api_new_nodes_24h():
+    """Get count of new nodes discovered in the last 24 hours."""
+    try:
+        conn = get_db_connection()
+        cursor = conn.cursor()
+
+        twenty_four_hours_ago = time.time() - (24 * 3600)
+
+        # Get nodes that have last_updated in the last 24 hours but no activity before that
+        cursor.execute(
+            """
+            SELECT COUNT(DISTINCT node_id) as new_nodes
+            FROM node_info
+            WHERE last_updated > ?
+            """,
+            (twenty_four_hours_ago,)
+        )
+        new_nodes = cursor.fetchone()["new_nodes"]
+
+        # Get total active nodes in last 24 hours for context
+        cursor.execute(
+            """
+            SELECT COUNT(DISTINCT from_node_id) as active_nodes
+            FROM packet_history
+            WHERE timestamp > ?
+            """,
+            (twenty_four_hours_ago,)
+        )
+        active_nodes = cursor.fetchone()["active_nodes"]
+
+        conn.close()
+
+        return jsonify({
+            "new_nodes_24h": new_nodes,
+            "active_nodes_24h": active_nodes,
+            "new_node_percentage": round((new_nodes / active_nodes * 100) if active_nodes > 0 else 0, 1)
+        })
+    except Exception as e:
+        logger.error(f"Error in API new nodes 24h: {e}")
+        return jsonify({"error": str(e)}), 500
+
+
+@api_bp.route("/stats/gateway-coverage")
+def api_gateway_coverage():
+    """Get average gateway coverage and redundancy metrics."""
+    try:
+        conn = get_db_connection()
+        cursor = conn.cursor()
+
+        twenty_four_hours_ago = time.time() - (24 * 3600)
+
+        # Get unique gateways and average packet reception redundancy
+        cursor.execute(
+            """
+            SELECT
+                COUNT(DISTINCT gateway_id) as unique_gateways,
+                COUNT(*) as total_packets,
+                ROUND(AVG(gateway_count), 1) as avg_gateways_per_packet
+            FROM (
+                SELECT
+                    packet_id,
+                    COUNT(DISTINCT gateway_id) as gateway_count
+                FROM packet_history
+                WHERE timestamp > ?
+                GROUP BY packet_id
+            ) as packet_gateways
+            """,
+            (twenty_four_hours_ago,)
+        )
+        result = cursor.fetchone()
+        unique_gateways = result["unique_gateways"]
+        avg_gateways_per_packet = result["avg_gateways_per_packet"]
+
+        conn.close()
+
+        return jsonify({
+            "unique_gateways": unique_gateways,
+            "avg_gateways_per_packet": avg_gateways_per_packet or 0,
+            "coverage_metric": round(avg_gateways_per_packet or 0, 1)
+        })
+    except Exception as e:
+        logger.error(f"Error in API gateway coverage: {e}")
+        return jsonify({"error": str(e)}), 500
+
+
 @api_bp.route("/search/packets")
 def api_search_packets():
     """
