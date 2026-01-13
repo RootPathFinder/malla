@@ -9,8 +9,8 @@ import functools
 import logging
 import time
 from collections import defaultdict
+from collections.abc import Callable
 from threading import Lock
-from typing import Callable, Optional
 
 from flask import Request, jsonify, request
 
@@ -134,7 +134,9 @@ class RateLimiter:
 
             rate_limit_info = {
                 "limit": self.max_requests,
-                "remaining": max(0, self.max_requests - request_count - (0 if allowed else 1)),
+                "remaining": max(
+                    0, self.max_requests - request_count - (0 if allowed else 1)
+                ),
                 "reset": int(reset_time),
                 "window": self.window_seconds,
             }
@@ -176,7 +178,7 @@ _generous_limiter = RateLimiter(max_requests=1000, window_seconds=60)
 def rate_limit(
     max_requests: int = 100,
     window_seconds: int = 60,
-    tier: Optional[str] = None,
+    tier: str | None = None,
 ) -> Callable:
     """
     Decorator to apply rate limiting to Flask routes.

@@ -16,9 +16,9 @@ import queue
 import threading
 import time
 from collections import deque
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from datetime import datetime
-from typing import Any, Optional
+from typing import Any
 
 logger = logging.getLogger(__name__)
 
@@ -31,7 +31,7 @@ class ActivityEvent:
     timestamp: float
     data: dict[str, Any]
     severity: str = "info"  # info, warning, critical
-    id: Optional[str] = None
+    id: str | None = None
 
     def to_dict(self) -> dict:
         """Convert event to dictionary for JSON serialization."""
@@ -53,7 +53,7 @@ class ActivityEvent:
 class LiveActivityMonitor:
     """
     Manages real-time activity monitoring and event broadcasting.
-    
+
     Thread-safe service that collects network events and broadcasts them
     to connected clients via Server-Sent Events.
     """
@@ -69,7 +69,7 @@ class LiveActivityMonitor:
         self._event_queue: queue.Queue = queue.Queue(maxsize=10000)
         self._event_history: deque = deque(maxlen=max_history)
         self._history_lock = threading.Lock()
-        
+
         # Statistics
         self._stats = {
             "total_events": 0,
@@ -91,7 +91,7 @@ class LiveActivityMonitor:
         event_type: str,
         data: dict[str, Any],
         severity: str = "info",
-        event_id: Optional[str] = None,
+        event_id: str | None = None,
     ) -> None:
         """
         Add a new activity event.
@@ -169,7 +169,7 @@ class LiveActivityMonitor:
         self.add_event("packet", event_data, severity)
 
     def add_node_status_event(
-        self, node_id: int, node_name: str, status: str, details: Optional[dict] = None
+        self, node_id: int, node_name: str, status: str, details: dict | None = None
     ) -> None:
         """
         Add a node status change event.
@@ -210,7 +210,9 @@ class LiveActivityMonitor:
         severity = "critical" if "critical" in alert_type else "warning"
         self.add_event("alert", event_data, severity)
 
-    def get_recent_events(self, limit: int = 100, event_type: Optional[str] = None) -> list[dict]:
+    def get_recent_events(
+        self, limit: int = 100, event_type: str | None = None
+    ) -> list[dict]:
         """
         Get recent events from history.
 
@@ -306,7 +308,9 @@ class LiveActivityMonitor:
         cutoff_time = time.time() - time_window
 
         with self._history_lock:
-            recent_events = [e for e in self._event_history if e.timestamp >= cutoff_time]
+            recent_events = [
+                e for e in self._event_history if e.timestamp >= cutoff_time
+            ]
 
         summary = {
             "time_window": time_window,
@@ -339,7 +343,7 @@ class LiveActivityMonitor:
 
 
 # Global monitor instance
-_monitor: Optional[LiveActivityMonitor] = None
+_monitor: LiveActivityMonitor | None = None
 _monitor_lock = threading.Lock()
 
 
@@ -370,7 +374,9 @@ def track_packet(packet: dict[str, Any]) -> None:
     monitor.add_packet_event(packet)
 
 
-def track_node_status(node_id: int, node_name: str, status: str, details: Optional[dict] = None) -> None:
+def track_node_status(
+    node_id: int, node_name: str, status: str, details: dict | None = None
+) -> None:
     """
     Track a node status change.
 

@@ -7,8 +7,6 @@ via JavaScript API, with server-side API for synchronization and backup.
 
 import json
 import logging
-from datetime import datetime
-from typing import Any, Optional
 
 logger = logging.getLogger(__name__)
 
@@ -16,7 +14,7 @@ logger = logging.getLogger(__name__)
 class UserPreferences:
     """
     User preferences with defaults and validation.
-    
+
     Preferences are stored in browser local storage and can be optionally
     synced to server for backup or cross-device synchronization.
     """
@@ -93,7 +91,7 @@ class UserPreferences:
                         result[key] = merge_dicts(result[key], value)
                     else:
                         # Validate type matches
-                        if type(result[key]) == type(value):
+                        if type(result[key]) is type(value):
                             result[key] = value
                         else:
                             logger.warning(

@@ -17,7 +17,7 @@ from ..database import get_db_connection
 logger = logging.getLogger(__name__)
 
 # In-memory cache for health scores (node_id -> {score, timestamp})
-_health_cache: dict[int, dict[str, Any]] = {}
+_health_cache: dict[tuple[int, int], dict[str, Any]] = {}
 _HEALTH_CACHE_TTL = 300  # 5 minutes
 
 

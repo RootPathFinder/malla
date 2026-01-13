@@ -10,15 +10,15 @@ import io
 import json
 import logging
 from datetime import datetime
-from typing import Any, Optional
+from typing import Any
 
 logger = logging.getLogger(__name__)
 
 
 def export_to_csv(
     data: list[dict],
-    columns: Optional[list[str]] = None,
-    filename: Optional[str] = None,
+    columns: list[str] | None = None,
+    filename: str | None = None,
 ) -> tuple[str, str]:
     """
     Export data to CSV format.
@@ -72,7 +72,7 @@ def export_to_csv(
 def export_to_json(
     data: Any,
     pretty: bool = True,
-    filename: Optional[str] = None,
+    filename: str | None = None,
 ) -> tuple[str, str]:
     """
     Export data to JSON format.

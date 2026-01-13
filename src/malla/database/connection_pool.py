@@ -11,7 +11,6 @@ import sqlite3
 import threading
 import time
 from collections import deque
-from typing import Optional
 
 from malla.config import get_config
 
@@ -42,8 +41,8 @@ class ConnectionPool:
         self._pool_lock = threading.Lock()
         self._active_connections = 0
         self._total_connections = 0
-        self._db_path: Optional[str] = None
-        
+        self._db_path: str | None = None
+
         # Statistics
         self._stats_lock = threading.Lock()
         self._connections_created = 0
@@ -56,8 +55,6 @@ class ConnectionPool:
     def _initialize_pool(self) -> None:
         """Initialize the pool with minimum number of connections."""
         import os
-
-        from malla.config import get_config
 
         # Resolve DB path
         self._db_path = (
@@ -77,13 +74,16 @@ class ConnectionPool:
                     self._pool.append(conn)
                     self._total_connections += 1
 
-    def _create_new_connection(self) -> Optional[sqlite3.Connection]:
+    def _create_new_connection(self) -> sqlite3.Connection | None:
         """
         Create a new database connection with proper configuration.
 
         Returns:
             sqlite3.Connection or None if creation fails
         """
+        if self._db_path is None:
+            logger.error("Database path is not configured.")
+            return None
         try:
             conn = sqlite3.connect(self._db_path, timeout=30.0, check_same_thread=False)
             conn.row_factory = sqlite3.Row
@@ -100,7 +100,9 @@ class ConnectionPool:
             with self._stats_lock:
                 self._connections_created += 1
 
-            logger.debug(f"Created new database connection (total: {self._total_connections + 1})")
+            logger.debug(
+                f"Created new database connection (total: {self._total_connections + 1})"
+            )
             return conn
 
         except Exception as e:
@@ -174,7 +176,7 @@ class ConnectionPool:
 
             with self._pool_lock:
                 self._active_connections -= 1
-                
+
                 # Only keep connection if pool isn't full
                 if len(self._pool) < self.max_connections:
                     self._pool.append(conn)
@@ -244,7 +246,7 @@ class ConnectionPool:
 
 
 # Global connection pool instance
-_connection_pool: Optional[ConnectionPool] = None
+_connection_pool: ConnectionPool | None = None
 _pool_lock = threading.Lock()
 
 

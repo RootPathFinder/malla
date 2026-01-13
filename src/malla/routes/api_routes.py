@@ -2130,10 +2130,14 @@ def api_performance_metrics():
         function_name = request.args.get("function")
         metrics = get_metrics(function_name)
 
+<<<<<<< HEAD
         return jsonify({
             "metrics": metrics,
             "timestamp": time.time()
         })
+=======
+        return jsonify({"metrics": metrics, "timestamp": time.time()})
+>>>>>>> aca0955 (fixing ci linting)
     except Exception as e:
         logger.error(f"Error in API performance metrics: {e}")
         return jsonify({"error": str(e)}), 500
@@ -2154,12 +2158,23 @@ def api_slow_functions():
 
         slow_funcs = get_slow_functions(threshold=threshold, limit=limit)
 
+<<<<<<< HEAD
         return jsonify({
             "slow_functions": slow_funcs,
             "threshold": threshold,
             "limit": limit,
             "count": len(slow_funcs)
         })
+=======
+        return jsonify(
+            {
+                "slow_functions": slow_funcs,
+                "threshold": threshold,
+                "limit": limit,
+                "count": len(slow_funcs),
+            }
+        )
+>>>>>>> aca0955 (fixing ci linting)
     except Exception as e:
         logger.error(f"Error in API slow functions: {e}")
         return jsonify({"error": str(e)}), 500
@@ -2180,10 +2195,7 @@ def api_database_pool_stats():
         pool = get_connection_pool()
         stats = pool.get_stats()
 
-        return jsonify({
-            "pool_stats": stats,
-            "timestamp": time.time()
-        })
+    return jsonify({"pool_stats": stats, "timestamp": time.time()})
     except Exception as e:
         logger.error(f"Error in API database pool stats: {e}")
         return jsonify({"error": str(e)}), 500
@@ -2212,7 +2224,7 @@ def api_export_packets():
     """
     logger.info("API export packets endpoint accessed")
     try:
-        from flask import Response, make_response
+    from flask import make_response
 
         export_format = request.args.get("format", "csv").lower()
 
@@ -2222,7 +2234,8 @@ def api_export_packets():
             if key != "format":
                 filters[key] = request.args.get(key)
 
-        packets = PacketRepository.get_packets(filters)
+    packets_data = PacketRepository.get_packets(filters=filters)
+    packets = packets_data.get("packets", [])
 
         if export_format == "csv":
             csv_content, filename = export_packets_to_csv(packets)
@@ -2232,6 +2245,7 @@ def api_export_packets():
             return response
         elif export_format == "json":
             from ..utils.export import export_to_json
+
             json_content, filename = export_to_json(packets, pretty=True)
             response = make_response(json_content)
             response.headers["Content-Type"] = "application/json"
@@ -2256,7 +2270,7 @@ def api_export_nodes():
     """
     logger.info("API export nodes endpoint accessed")
     try:
-        from flask import Response, make_response
+    from flask import make_response
 
         export_format = request.args.get("format", "csv").lower()
 
@@ -2266,7 +2280,8 @@ def api_export_nodes():
             if key != "format":
                 filters[key] = request.args.get(key)
 
-        nodes = NodeRepository.get_nodes(filters)
+    nodes_data = NodeRepository.get_nodes(filters=filters)
+    nodes = nodes_data.get("nodes", [])
 
         if export_format == "csv":
             csv_content, filename = export_nodes_to_csv(nodes)
@@ -2276,6 +2291,7 @@ def api_export_nodes():
             return response
         elif export_format == "json":
             from ..utils.export import export_to_json
+
             json_content, filename = export_to_json(nodes, pretty=True)
             response = make_response(json_content)
             response.headers["Content-Type"] = "application/json"
@@ -2305,7 +2321,7 @@ def api_export_analytics():
     """
     logger.info("API export analytics endpoint accessed")
     try:
-        from flask import Response, make_response
+    from flask import make_response
 
         gateway_id = request.args.get("gateway_id")
         from_node = request.args.get("from_node", type=int)
@@ -2385,7 +2401,7 @@ def api_search_nodes():
     """
     logger.info("API search nodes endpoint accessed")
     try:
-        from ..utils.search import search_nodes, rank_search_results
+    from ..utils.search import rank_search_results, search_nodes
 
         query = request.args.get("q", "")
         if not query:
@@ -2397,7 +2413,8 @@ def api_search_nodes():
 
         # Get all nodes
         filters = {}
-        nodes = NodeRepository.get_nodes(filters)
+    nodes_data = NodeRepository.get_nodes(filters=filters)
+    nodes = nodes_data.get("nodes", [])
 
         # Apply search
         results = search_nodes(nodes, query, fuzzy=fuzzy, threshold=threshold)
@@ -2408,13 +2425,15 @@ def api_search_nodes():
         # Limit results
         results = results[:limit]
 
-        return safe_jsonify({
-            "results": results,
-            "count": len(results),
-            "query": query,
-            "fuzzy": fuzzy,
-            "threshold": threshold
-        })
+        return safe_jsonify(
+            {
+                "results": results,
+                "count": len(results),
+                "query": query,
+                "fuzzy": fuzzy,
+                "threshold": threshold,
+            }
+        )
     except Exception as e:
         logger.error(f"Error in API search nodes: {e}")
         return jsonify({"error": str(e)}), 500
@@ -2631,7 +2650,8 @@ def api_search_packets():
 
         # Get recent packets (last 1000)
         filters = {}
-        packets = PacketRepository.get_packets(filters, limit=1000)
+    packets_data = PacketRepository.get_packets(limit=1000, filters=filters)
+    packets = packets_data.get("packets", [])
 
         # Apply search
         results = search_packets(packets, query, search_in=search_in)
@@ -2639,12 +2659,14 @@ def api_search_packets():
         # Limit results
         results = results[:limit]
 
-        return safe_jsonify({
-            "results": results,
-            "count": len(results),
-            "query": query,
-            "searched_fields": search_in
-        })
+        return safe_jsonify(
+            {
+                "results": results,
+                "count": len(results),
+                "query": query,
+                "searched_fields": search_in,
+            }
+        )
     except Exception as e:
         logger.error(f"Error in API search packets: {e}")
         return jsonify({"error": str(e)}), 500

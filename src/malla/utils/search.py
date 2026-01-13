@@ -8,7 +8,7 @@ with fuzzy matching, ranking, and advanced filters.
 import logging
 import re
 from difflib import SequenceMatcher
-from typing import Any, Callable, Optional
+from typing import Any
 
 logger = logging.getLogger(__name__)
 
@@ -49,7 +49,7 @@ def calculate_relevance_score(
     query: str,
     item: dict[str, Any],
     search_fields: list[str],
-    weights: Optional[dict[str, float]] = None,
+    weights: dict[str, float] | None = None,
 ) -> float:
     """
     Calculate relevance score for a search result.
@@ -67,7 +67,7 @@ def calculate_relevance_score(
         return 0.0
 
     if weights is None:
-        weights = {field: 1.0 for field in search_fields}
+        weights = dict.fromkeys(search_fields, 1.0)
 
     total_score = 0.0
     total_weight = 0.0
@@ -180,26 +180,20 @@ def advanced_filter(
             result = [
                 item
                 for item in result
-                if field in item
-                and item[field] is not None
-                and item[field] >= value
+                if field in item and item[field] is not None and item[field] >= value
             ]
         elif key.endswith("_max"):
             field = key[:-4]
             result = [
                 item
                 for item in result
-                if field in item
-                and item[field] is not None
-                and item[field] <= value
+                if field in item and item[field] is not None and item[field] <= value
             ]
 
         # Multiple values (in)
         elif key.endswith("_in"):
             field = key[:-3]
-            result = [
-                item for item in result if field in item and item[field] in value
-            ]
+            result = [item for item in result if field in item and item[field] in value]
 
         # Null checks
         elif key.endswith("_null"):
@@ -238,7 +232,7 @@ def advanced_filter(
 def search_packets(
     packets: list[dict[str, Any]],
     query: str,
-    search_in: list[str] = None,
+    search_in: list[str] | None = None,
 ) -> list[dict[str, Any]]:
     """
     Search packets with text matching in specified fields.
@@ -330,8 +324,8 @@ class FilterBuilder:
     def range(
         self,
         field: str,
-        min_value: Optional[Any] = None,
-        max_value: Optional[Any] = None,
+        min_value: Any | None = None,
+        max_value: Any | None = None,
     ) -> "FilterBuilder":
         """Add range filter."""
         if min_value is not None:
@@ -366,7 +360,9 @@ class FilterBuilder:
 
 
 def rank_search_results(
-    results: list[dict[str, Any]], boost_recent: bool = True, recency_weight: float = 0.2
+    results: list[dict[str, Any]],
+    boost_recent: bool = True,
+    recency_weight: float = 0.2,
 ) -> list[dict[str, Any]]:
     """
     Re-rank search results considering recency and other factors.

@@ -9,9 +9,10 @@ import functools
 import logging
 import time
 from collections import defaultdict
+from collections.abc import Callable
 from datetime import datetime
 from threading import Lock
-from typing import Any, Callable, Optional
+from typing import Any
 
 logger = logging.getLogger(__name__)
 
@@ -55,7 +56,7 @@ class PerformanceMetrics:
             if error:
                 metrics["errors"] += 1
 
-    def get_metrics(self, function_name: Optional[str] = None) -> dict:
+    def get_metrics(self, function_name: str | None = None) -> dict:
         """
         Get performance metrics.
 
@@ -131,7 +132,7 @@ class PerformanceMetrics:
             slow_funcs.sort(key=lambda x: x["avg_time"], reverse=True)
             return slow_funcs[:limit]
 
-    def reset(self, function_name: Optional[str] = None) -> None:
+    def reset(self, function_name: str | None = None) -> None:
         """
         Reset metrics.
 
@@ -150,7 +151,7 @@ class PerformanceMetrics:
 _metrics = PerformanceMetrics()
 
 
-def get_metrics(function_name: Optional[str] = None) -> dict:
+def get_metrics(function_name: str | None = None) -> dict:
     """
     Get performance metrics.
 
@@ -177,7 +178,7 @@ def get_slow_functions(threshold: float = 1.0, limit: int = 10) -> list[dict]:
     return _metrics.get_slow_functions(threshold, limit)
 
 
-def reset_metrics(function_name: Optional[str] = None) -> None:
+def reset_metrics(function_name: str | None = None) -> None:
     """
     Reset performance metrics.
 
@@ -187,9 +188,7 @@ def reset_metrics(function_name: Optional[str] = None) -> None:
     _metrics.reset(function_name)
 
 
-def track_performance(
-    log_threshold: float = 1.0, log_all: bool = False
-) -> Callable:
+def track_performance(log_threshold: float = 1.0, log_all: bool = False) -> Callable:
     """
     Decorator to track function performance.
 
@@ -218,7 +217,7 @@ def track_performance(
                 result = func(*args, **kwargs)
                 return result
 
-            except Exception as e:
+            except Exception:
                 error_occurred = True
                 raise
 
@@ -227,11 +226,13 @@ def track_performance(
                 _metrics.record_call(function_name, duration, error_occurred)
 
                 if log_all or duration >= log_threshold:
-                    level = logging.WARNING if duration >= log_threshold else logging.DEBUG
+                    level = (
+                        logging.WARNING if duration >= log_threshold else logging.DEBUG
+                    )
                     logger.log(
                         level,
                         f"Performance: {function_name} took {duration:.3f}s"
-                        + (f" [ERROR]" if error_occurred else ""),
+                        + (" [ERROR]" if error_occurred else ""),
                     )
 
         return wrapper
@@ -268,7 +269,7 @@ def track_db_query(warn_threshold: float = 1.0) -> Callable:
                 result = func(*args, **kwargs)
                 return result
 
-            except Exception as e:
+            except Exception:
                 error_occurred = True
                 raise
 
@@ -279,7 +280,7 @@ def track_db_query(warn_threshold: float = 1.0) -> Callable:
                 if duration >= warn_threshold:
                     logger.warning(
                         f"Slow database query: {function_name} took {duration:.3f}s"
-                        + (f" [ERROR]" if error_occurred else "")
+                        + (" [ERROR]" if error_occurred else "")
                     )
                 else:
                     logger.debug(f"DB query: {function_name} took {duration:.3f}s")
@@ -312,7 +313,11 @@ class Timer:
 
     def __exit__(self, exc_type, exc_val, exc_tb):
         """Stop timing and log if needed."""
-        self.duration = time.time() - self.start_time
+        if self.start_time is None:
+            # Start time should be set in __enter__, but guard for type safety
+            self.duration = 0.0
+        else:
+            self.duration = time.time() - self.start_time
 
         if self.duration >= self.log_threshold:
             logger.info(f"Timer '{self.name}': {self.duration:.3f}s")

@@ -6,13 +6,13 @@ integrity, security, and better error messages for users.
 """
 
 import re
-from typing import Any, Optional
+from typing import Any
 
 
 class ValidationError(ValueError):
     """Custom exception for validation errors with user-friendly messages."""
 
-    def __init__(self, message: str, field: Optional[str] = None):
+    def __init__(self, message: str, field: str | None = None):
         """
         Initialize validation error.
 
@@ -43,11 +43,11 @@ def validate_node_id(node_id: Any, field_name: str = "node_id") -> int:
 
     try:
         node_id_int = int(node_id)
-    except (ValueError, TypeError):
+    except (ValueError, TypeError) as e:
         raise ValidationError(
             f"{field_name} must be a valid integer, got: {node_id}",
             field=field_name,
-        )
+        ) from e
 
     # Meshtastic node IDs are typically 32-bit unsigned integers
     if node_id_int < 0 or node_id_int > 0xFFFFFFFF:
@@ -78,20 +78,20 @@ def validate_pagination(
     """
     try:
         page_int = int(page) if page is not None else 1
-    except (ValueError, TypeError):
-        raise ValidationError(f"page must be a valid integer, got: {page}", field="page")
+    except (ValueError, TypeError) as e:
+        raise ValidationError(
+            f"page must be a valid integer, got: {page}", field="page"
+        ) from e
 
     try:
         per_page_int = int(per_page) if per_page is not None else 50
-    except (ValueError, TypeError):
+    except (ValueError, TypeError) as e:
         raise ValidationError(
             f"per_page must be a valid integer, got: {per_page}", field="per_page"
-        )
+        ) from e
 
     if page_int < 1:
-        raise ValidationError(
-            f"page must be at least 1, got: {page_int}", field="page"
-        )
+        raise ValidationError(f"page must be at least 1, got: {page_int}", field="page")
 
     if per_page_int < 1:
         raise ValidationError(
@@ -109,7 +109,7 @@ def validate_pagination(
 
 def validate_time_range(
     start_time: Any = None, end_time: Any = None
-) -> tuple[Optional[float], Optional[float]]:
+) -> tuple[float | None, float | None]:
     """
     Validate time range parameters (Unix timestamps).
 
@@ -129,11 +129,11 @@ def validate_time_range(
     if start_time is not None:
         try:
             start_float = float(start_time)
-        except (ValueError, TypeError):
+        except (ValueError, TypeError) as e:
             raise ValidationError(
                 f"start_time must be a valid timestamp, got: {start_time}",
                 field="start_time",
-            )
+            ) from e
 
         if start_float < 0:
             raise ValidationError(
@@ -144,11 +144,11 @@ def validate_time_range(
     if end_time is not None:
         try:
             end_float = float(end_time)
-        except (ValueError, TypeError):
+        except (ValueError, TypeError) as e:
             raise ValidationError(
                 f"end_time must be a valid timestamp, got: {end_time}",
                 field="end_time",
-            )
+            ) from e
 
         if end_float < 0:
             raise ValidationError(
@@ -165,8 +165,11 @@ def validate_time_range(
 
 
 def validate_signal_value(
-    value: Any, field_name: str, min_value: Optional[float] = None, max_value: Optional[float] = None
-) -> Optional[float]:
+    value: Any,
+    field_name: str,
+    min_value: float | None = None,
+    max_value: float | None = None,
+) -> float | None:
     """
     Validate signal-related values (RSSI, SNR, etc.).
 
@@ -187,10 +190,10 @@ def validate_signal_value(
 
     try:
         value_float = float(value)
-    except (ValueError, TypeError):
+    except (ValueError, TypeError) as e:
         raise ValidationError(
             f"{field_name} must be a valid number, got: {value}", field=field_name
-        )
+        ) from e
 
     if min_value is not None and value_float < min_value:
         raise ValidationError(
@@ -207,7 +210,7 @@ def validate_signal_value(
     return value_float
 
 
-def validate_gateway_id(gateway_id: Any) -> Optional[str]:
+def validate_gateway_id(gateway_id: Any) -> str | None:
     """
     Validate gateway ID format.
 
@@ -247,8 +250,10 @@ def validate_gateway_id(gateway_id: Any) -> Optional[str]:
 
 
 def validate_sort_params(
-    sort_by: Any = None, sort_order: Any = None, allowed_fields: Optional[list[str]] = None
-) -> tuple[Optional[str], str]:
+    sort_by: Any = None,
+    sort_order: Any = None,
+    allowed_fields: list[str] | None = None,
+) -> tuple[str | None, str]:
     """
     Validate sorting parameters.
 
@@ -271,7 +276,7 @@ def validate_sort_params(
             f"sort_order must be a string, got: {type(sort_order).__name__}",
             field="sort_order",
         )
-    
+
     sort_order = sort_order.lower()
     if sort_order not in ("asc", "desc"):
         raise ValidationError(
@@ -298,7 +303,7 @@ def validate_sort_params(
     return sort_by, sort_order
 
 
-def validate_hop_count(hop_count: Any) -> Optional[int]:
+def validate_hop_count(hop_count: Any) -> int | None:
     """
     Validate hop count parameter.
 
@@ -316,11 +321,11 @@ def validate_hop_count(hop_count: Any) -> Optional[int]:
 
     try:
         hop_count_int = int(hop_count)
-    except (ValueError, TypeError):
+    except (ValueError, TypeError) as e:
         raise ValidationError(
             f"hop_count must be a valid integer, got: {hop_count}",
             field="hop_count",
-        )
+        ) from e
 
     # Meshtastic supports up to 7 hops
     if hop_count_int < 0 or hop_count_int > 7:
@@ -352,10 +357,10 @@ def validate_limit(limit: Any, default: int = 100, max_limit: int = 10000) -> in
 
     try:
         limit_int = int(limit)
-    except (ValueError, TypeError):
+    except (ValueError, TypeError) as e:
         raise ValidationError(
             f"limit must be a valid integer, got: {limit}", field="limit"
-        )
+        ) from e
 
     if limit_int < 1:
         raise ValidationError(
@@ -370,7 +375,7 @@ def validate_limit(limit: Any, default: int = 100, max_limit: int = 10000) -> in
     return limit_int
 
 
-def sanitize_search_query(query: Any, max_length: int = 200) -> Optional[str]:
+def sanitize_search_query(query: Any, max_length: int = 200) -> str | None:
     """
     Sanitize and validate search query string.
 
@@ -406,8 +411,6 @@ def sanitize_search_query(query: Any, max_length: int = 200) -> Optional[str]:
     # (Note: We still use parameterized queries, but this is defense in depth)
     # Allow alphanumeric, spaces, and some common punctuation
     if not re.match(r"^[a-zA-Z0-9\s\-_.,!?@#()]+$", query):
-        raise ValidationError(
-            "search query contains invalid characters", field="query"
-        )
+        raise ValidationError("search query contains invalid characters", field="query")
 
     return query
