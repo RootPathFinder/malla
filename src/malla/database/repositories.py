@@ -4168,7 +4168,7 @@ class BatteryAnalyticsRepository:
 
         # Calculate overall trend (positive = charging, negative = discharging)
         # Sort by timestamp to ensure chronological order
-        paired = sorted(zip(timestamps, voltages), key=lambda x: x[0])
+        paired = sorted(zip(timestamps, voltages, strict=False), key=lambda x: x[0])
         sorted_voltages = [v for _, v in paired]
 
         if len(sorted_voltages) >= 3:
@@ -4176,15 +4176,23 @@ class BatteryAnalyticsRepository:
             x_vals = list(range(len(sorted_voltages)))
             x_mean = sum(x_vals) / len(x_vals)
             y_mean = sum(sorted_voltages) / len(sorted_voltages)
-            numerator = sum((x - x_mean) * (y - y_mean) for x, y in zip(x_vals, sorted_voltages))
+            numerator = sum(
+                (x - x_mean) * (y - y_mean)
+                for x, y in zip(x_vals, sorted_voltages, strict=False)
+            )
             denominator = sum((x - x_mean) ** 2 for x in x_vals)
             slope = numerator / denominator if denominator > 0 else 0
         else:
             slope = 0
 
         # Detect charging/discharging cycles (sign changes in voltage delta)
-        deltas = [sorted_voltages[i+1] - sorted_voltages[i] for i in range(len(sorted_voltages)-1)]
-        sign_changes = sum(1 for i in range(len(deltas)-1) if deltas[i] * deltas[i+1] < 0)
+        deltas = [
+            sorted_voltages[i + 1] - sorted_voltages[i]
+            for i in range(len(sorted_voltages) - 1)
+        ]
+        sign_changes = sum(
+            1 for i in range(len(deltas) - 1) if deltas[i] * deltas[i + 1] < 0
+        )
         cycle_ratio = sign_changes / max(len(deltas) - 1, 1) if len(deltas) > 1 else 0
 
         # Count significant charging events (voltage increase > 0.05V)
@@ -4225,12 +4233,16 @@ class BatteryAnalyticsRepository:
 
         # Solar: Large voltage swings (typical 3.4V to 4.2V range)
         if voltage_range > 0.5 and std_dev > 0.1:
-            logger.debug("Classified as SOLAR: large voltage swings indicating charge cycles")
+            logger.debug(
+                "Classified as SOLAR: large voltage swings indicating charge cycles"
+            )
             return "solar"
 
         # Moderate range with clear charging periods
         if charging_events >= 3 and voltage_range > 0.15 and voltage_max > 4.0:
-            logger.debug("Classified as SOLAR: multiple charging events reaching full charge")
+            logger.debug(
+                "Classified as SOLAR: multiple charging events reaching full charge"
+            )
             return "solar"
 
         # === BATTERY DETECTION ===
@@ -4243,7 +4255,11 @@ class BatteryAnalyticsRepository:
             return "battery"
 
         # Low/mid voltage with only discharge events
-        if voltage_mean < 3.9 and discharging_events > charging_events and charging_events <= 1:
+        if (
+            voltage_mean < 3.9
+            and discharging_events > charging_events
+            and charging_events <= 1
+        ):
             logger.debug("Classified as BATTERY: discharge-dominant pattern")
             return "battery"
 
@@ -4254,7 +4270,9 @@ class BatteryAnalyticsRepository:
 
         # General declining trend without charging
         if slope < 0 and charging_events == 0 and len(voltages) >= 5:
-            logger.debug("Classified as BATTERY: declining voltage, no charging detected")
+            logger.debug(
+                "Classified as BATTERY: declining voltage, no charging detected"
+            )
             return "battery"
 
         # === FALLBACK CLASSIFICATION ===
@@ -4357,7 +4375,9 @@ class BatteryAnalyticsRepository:
             )
 
             nodes = cursor.fetchall()
-            logger.info(f"Battery health overview: found {len(nodes)} nodes with telemetry")
+            logger.info(
+                f"Battery health overview: found {len(nodes)} nodes with telemetry"
+            )
 
             results = []
             for row in nodes:
@@ -4411,7 +4431,9 @@ class BatteryAnalyticsRepository:
                 last_telemetry_str = "Never"
                 if last_telemetry_ts:
                     try:
-                        last_telemetry_dt = datetime.fromtimestamp(last_telemetry_ts, tz=UTC)
+                        last_telemetry_dt = datetime.fromtimestamp(
+                            last_telemetry_ts, tz=UTC
+                        )
                         last_telemetry_str = format_time_ago(last_telemetry_dt)
                     except Exception:
                         pass
@@ -4482,7 +4504,10 @@ class BatteryAnalyticsRepository:
         readings = cursor.fetchall()
 
         if len(readings) < 5:
-            return {"health_score": None, "issues": ["Insufficient data for health analysis"]}
+            return {
+                "health_score": None,
+                "issues": ["Insufficient data for health analysis"],
+            }
 
         # Scale voltages and extract data
         voltages = []
@@ -4499,9 +4524,6 @@ class BatteryAnalyticsRepository:
             return {"health_score": None, "issues": ["Insufficient voltage data"]}
 
         voltage_max = max(voltages)
-        voltage_min = min(voltages)
-        voltage_mean = sum(voltages) / len(voltages)
-        voltage_range = voltage_max - voltage_min
         latest_voltage = voltages[-1]
 
         # Calculate discharge rates between readings
@@ -4518,7 +4540,9 @@ class BatteryAnalyticsRepository:
         # For solar/charging devices, max voltage should reach near 4.2V
         if voltage_max < 3.9:
             health_score -= 25
-            issues.append(f"Battery not fully charging (max: {voltage_max:.2f}V, expected: >4.0V)")
+            issues.append(
+                f"Battery not fully charging (max: {voltage_max:.2f}V, expected: >4.0V)"
+            )
         elif voltage_max < 4.0:
             health_score -= 10
             issues.append(f"Battery charging below optimal (max: {voltage_max:.2f}V)")
@@ -4532,15 +4556,21 @@ class BatteryAnalyticsRepository:
             # Faster than 0.05 V/hour indicates potential issues
             if avg_discharge_rate > 0.08:
                 health_score -= 30
-                issues.append(f"Rapid battery drain ({avg_discharge_rate:.3f} V/hr avg)")
+                issues.append(
+                    f"Rapid battery drain ({avg_discharge_rate:.3f} V/hr avg)"
+                )
             elif avg_discharge_rate > 0.05:
                 health_score -= 15
-                issues.append(f"Elevated discharge rate ({avg_discharge_rate:.3f} V/hr avg)")
+                issues.append(
+                    f"Elevated discharge rate ({avg_discharge_rate:.3f} V/hr avg)"
+                )
 
             # Check for sudden discharge spikes
             if max_discharge_rate > 0.15:
                 health_score -= 10
-                issues.append(f"Discharge spikes detected ({max_discharge_rate:.3f} V/hr max)")
+                issues.append(
+                    f"Discharge spikes detected ({max_discharge_rate:.3f} V/hr max)"
+                )
 
         # === Health Check 3: Low voltage warning ===
         if latest_voltage < 3.3:
@@ -4552,11 +4582,13 @@ class BatteryAnalyticsRepository:
 
         # === Health Check 4: Voltage instability ===
         # Calculate variance in recent readings
-        recent_voltages = voltages[-min(20, len(voltages)):]
+        recent_voltages = voltages[-min(20, len(voltages)) :]
         if len(recent_voltages) >= 5:
             recent_mean = sum(recent_voltages) / len(recent_voltages)
-            variance = sum((v - recent_mean) ** 2 for v in recent_voltages) / len(recent_voltages)
-            std_dev = variance ** 0.5
+            variance = sum((v - recent_mean) ** 2 for v in recent_voltages) / len(
+                recent_voltages
+            )
+            std_dev = variance**0.5
 
             # Very high variance might indicate connection issues or failing battery
             if std_dev > 0.3:

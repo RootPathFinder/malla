@@ -139,26 +139,30 @@ def api_links():
 
             # Only include links where both nodes have location
             if node_a in locations and node_b in locations:
-                links.append({
-                    "node_a": node_a,
-                    "node_b": node_b,
-                    "node_a_name": edge["node_a_name"],
-                    "node_b_name": edge["node_b_name"],
-                    "node_a_location": locations[node_a],
-                    "node_b_location": locations[node_b],
-                    "snr_a_to_b": edge["snr_a_to_b"],
-                    "snr_b_to_a": edge["snr_b_to_a"],
-                    "avg_snr": edge["avg_snr"],
-                    "quality": edge["quality"],
-                    "bidirectional": edge["bidirectional"],
-                })
+                links.append(
+                    {
+                        "node_a": node_a,
+                        "node_b": node_b,
+                        "node_a_name": edge["node_a_name"],
+                        "node_b_name": edge["node_b_name"],
+                        "node_a_location": locations[node_a],
+                        "node_b_location": locations[node_b],
+                        "snr_a_to_b": edge["snr_a_to_b"],
+                        "snr_b_to_a": edge["snr_b_to_a"],
+                        "avg_snr": edge["avg_snr"],
+                        "quality": edge["quality"],
+                        "bidirectional": edge["bidirectional"],
+                    }
+                )
 
-        return jsonify({
-            "links": links,
-            "total_links": len(links),
-            "links_without_location": len(topology["edges"]) - len(links),
-            "analysis_hours": hours,
-        })
+        return jsonify(
+            {
+                "links": links,
+                "total_links": len(links),
+                "links_without_location": len(topology["edges"]) - len(links),
+                "analysis_hours": hours,
+            }
+        )
 
     except Exception as e:
         logger.error(f"Error getting links: {e}", exc_info=True)
@@ -196,11 +200,13 @@ def api_health_scores():
                 "issues": node.get("issues", []),
             }
 
-        return jsonify({
-            "health_scores": health_map,
-            "network_score": summary.get("overall_score", 0),
-            "analysis_hours": hours,
-        })
+        return jsonify(
+            {
+                "health_scores": health_map,
+                "network_score": summary.get("overall_score", 0),
+                "analysis_hours": hours,
+            }
+        )
 
     except Exception as e:
         logger.error(f"Error getting health scores: {e}", exc_info=True)

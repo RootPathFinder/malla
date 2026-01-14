@@ -12,7 +12,6 @@ import json
 import logging
 import sqlite3
 import time
-from collections import defaultdict
 from dataclasses import dataclass, field
 from datetime import datetime
 from enum import Enum
@@ -49,7 +48,9 @@ def _execute_with_retry(func, max_retries: int = 3, initial_delay: float = 0.1):
                 raise
             last_error = e
             if attempt < max_retries - 1:
-                logger.debug(f"Database locked, retrying in {delay}s (attempt {attempt + 1}/{max_retries})")
+                logger.debug(
+                    f"Database locked, retrying in {delay}s (attempt {attempt + 1}/{max_retries})"
+                )
                 time.sleep(delay)
                 delay *= 2  # Exponential backoff
 
@@ -59,6 +60,7 @@ def _execute_with_retry(func, max_retries: int = 3, initial_delay: float = 0.1):
 
 class AlertSeverity(Enum):
     """Alert severity levels."""
+
     INFO = "info"
     WARNING = "warning"
     CRITICAL = "critical"
@@ -66,6 +68,7 @@ class AlertSeverity(Enum):
 
 class AlertType(Enum):
     """Types of alerts the system can generate."""
+
     NODE_OFFLINE = "node_offline"
     NODE_BACK_ONLINE = "node_back_online"
     LOW_BATTERY = "low_battery"
@@ -81,6 +84,7 @@ class AlertType(Enum):
 @dataclass
 class Alert:
     """Represents a single alert."""
+
     alert_type: AlertType
     severity: AlertSeverity
     node_id: int | None
@@ -103,7 +107,9 @@ class Alert:
             "timestamp_iso": datetime.fromtimestamp(self.timestamp).isoformat(),
             "resolved": self.resolved,
             "resolved_at": self.resolved_at,
-            "resolved_at_iso": datetime.fromtimestamp(self.resolved_at).isoformat() if self.resolved_at else None,
+            "resolved_at_iso": datetime.fromtimestamp(self.resolved_at).isoformat()
+            if self.resolved_at
+            else None,
             "metadata": self.metadata,
         }
 
@@ -111,6 +117,7 @@ class Alert:
 @dataclass
 class AlertThresholds:
     """Configurable thresholds for alert generation."""
+
     # Battery thresholds
     battery_warning_voltage: float = 3.4
     battery_critical_voltage: float = 3.2
@@ -184,48 +191,58 @@ class AlertService:
     @classmethod
     def add_alert(cls, alert: Alert) -> None:
         """Add a new alert to the database with retry logic."""
+
         def _insert_alert():
             conn = get_db_connection()
             try:
                 cursor = conn.cursor()
 
                 # Check for existing active alert of the same type and node
-                cursor.execute("""
+                cursor.execute(
+                    """
                     SELECT id FROM alerts
-                    WHERE alert_type = ? AND node_id IS ? AND resolved = 0
+                    WHERE alert_type = ? AND node_id = ? AND resolved = 0
                     LIMIT 1
-                """, (alert.alert_type.value, alert.node_id))
+                """,
+                    (alert.alert_type.value, alert.node_id),
+                )
 
                 existing = cursor.fetchone()
 
                 if existing:
                     # Update existing alert instead of creating duplicate
-                    cursor.execute("""
+                    cursor.execute(
+                        """
                         UPDATE alerts
                         SET timestamp = ?, message = ?, metadata = ?
                         WHERE id = ?
-                    """, (
-                        alert.timestamp,
-                        alert.message,
-                        json.dumps(alert.metadata),
-                        existing["id"],
-                    ))
+                    """,
+                        (
+                            alert.timestamp,
+                            alert.message,
+                            json.dumps(alert.metadata),
+                            existing["id"],
+                        ),
+                    )
                     logger.debug(f"Updated existing alert: {alert.title}")
                 else:
                     # Insert new alert
-                    cursor.execute("""
+                    cursor.execute(
+                        """
                         INSERT INTO alerts
                         (alert_type, severity, node_id, title, message, timestamp, resolved, metadata)
                         VALUES (?, ?, ?, ?, ?, ?, 0, ?)
-                    """, (
-                        alert.alert_type.value,
-                        alert.severity.value,
-                        alert.node_id,
-                        alert.title,
-                        alert.message,
-                        alert.timestamp,
-                        json.dumps(alert.metadata),
-                    ))
+                    """,
+                        (
+                            alert.alert_type.value,
+                            alert.severity.value,
+                            alert.node_id,
+                            alert.title,
+                            alert.message,
+                            alert.timestamp,
+                            json.dumps(alert.metadata),
+                        ),
+                    )
                     logger.info(f"New alert: [{alert.severity.value}] {alert.title}")
 
                 conn.commit()
@@ -240,22 +257,28 @@ class AlertService:
     @classmethod
     def resolve_alert(cls, alert_type: AlertType, node_id: int | None) -> bool:
         """Resolve an active alert in the database with retry logic."""
+
         def _resolve():
             conn = get_db_connection()
             try:
                 cursor = conn.cursor()
 
-                cursor.execute("""
+                cursor.execute(
+                    """
                     UPDATE alerts
                     SET resolved = 1, resolved_at = ?
-                    WHERE alert_type = ? AND node_id IS ? AND resolved = 0
-                """, (time.time(), alert_type.value, node_id))
+                    WHERE alert_type = ? AND node_id = ? AND resolved = 0
+                """,
+                    (time.time(), alert_type.value, node_id),
+                )
 
                 success = cursor.rowcount > 0
                 conn.commit()
 
                 if success:
-                    logger.info(f"Alert resolved: {alert_type.value} for node {node_id}")
+                    logger.info(
+                        f"Alert resolved: {alert_type.value} for node {node_id}"
+                    )
                 return success
             finally:
                 conn.close()
@@ -288,6 +311,7 @@ class AlertService:
         Returns:
             List of alert dictionaries
         """
+
         def _fetch_alerts():
             conn = get_db_connection()
             try:
@@ -320,7 +344,9 @@ class AlertService:
                 rows = cursor.fetchall()
 
                 # Get node names for display
-                node_ids = [row["node_id"] for row in rows if row["node_id"] is not None]
+                node_ids = [
+                    row["node_id"] for row in rows if row["node_id"] is not None
+                ]
                 node_names = get_bulk_node_names(node_ids) if node_ids else {}
 
                 # Convert rows to dictionaries
@@ -333,14 +359,24 @@ class AlertService:
                         "title": row["title"],
                         "message": row["message"],
                         "timestamp": row["timestamp"],
-                        "timestamp_iso": datetime.fromtimestamp(row["timestamp"]).isoformat(),
+                        "timestamp_iso": datetime.fromtimestamp(
+                            row["timestamp"]
+                        ).isoformat(),
                         "resolved": bool(row["resolved"]),
                         "resolved_at": row["resolved_at"],
-                        "resolved_at_iso": datetime.fromtimestamp(row["resolved_at"]).isoformat() if row["resolved_at"] else None,
-                        "metadata": json.loads(row["metadata"]) if row["metadata"] else {},
+                        "resolved_at_iso": datetime.fromtimestamp(
+                            row["resolved_at"]
+                        ).isoformat()
+                        if row["resolved_at"]
+                        else None,
+                        "metadata": json.loads(row["metadata"])
+                        if row["metadata"]
+                        else {},
                     }
                     if row["node_id"]:
-                        alert_dict["node_name"] = node_names.get(row["node_id"], f"!{row['node_id']:08x}")
+                        alert_dict["node_name"] = node_names.get(
+                            row["node_id"], f"!{row['node_id']:08x}"
+                        )
                         alert_dict["node_hex"] = f"!{row['node_id']:08x}"
                     result.append(alert_dict)
 
@@ -357,6 +393,7 @@ class AlertService:
     @classmethod
     def get_alert_summary(cls) -> dict[str, Any]:
         """Get summary of current alert state from database."""
+
         def _fetch_summary():
             conn = get_db_connection()
             try:
@@ -375,11 +412,15 @@ class AlertService:
                     by_severity[row["severity"]] = row["count"]
 
                 # Get total active alerts
-                cursor.execute("SELECT COUNT(*) as count FROM alerts WHERE resolved = 0")
+                cursor.execute(
+                    "SELECT COUNT(*) as count FROM alerts WHERE resolved = 0"
+                )
                 total_active = cursor.fetchone()["count"]
 
                 # Get total resolved alerts
-                cursor.execute("SELECT COUNT(*) as count FROM alerts WHERE resolved = 1")
+                cursor.execute(
+                    "SELECT COUNT(*) as count FROM alerts WHERE resolved = 1"
+                )
                 total_resolved = cursor.fetchone()["count"]
 
                 return {
@@ -393,9 +434,13 @@ class AlertService:
                 conn.close()
 
         try:
-            return _execute_with_retry(_fetch_summary, max_retries=3, initial_delay=0.05)
+            return _execute_with_retry(
+                _fetch_summary, max_retries=3, initial_delay=0.05
+            )
         except Exception as e:
-            logger.error(f"Error getting alert summary after retries: {e}", exc_info=True)
+            logger.error(
+                f"Error getting alert summary after retries: {e}", exc_info=True
+            )
             return {
                 "total_active": 0,
                 "total_resolved": 0,
@@ -464,7 +509,8 @@ class AlertService:
             cursor = conn.cursor()
 
             # Get latest battery telemetry for each node
-            cursor.execute("""
+            cursor.execute(
+                """
                 SELECT
                     t.node_id,
                     t.battery_level,
@@ -478,7 +524,9 @@ class AlertService:
                     GROUP BY node_id
                 ) latest ON t.node_id = latest.node_id AND t.timestamp = latest.max_ts
                 WHERE t.timestamp > ?
-            """, (time.time() - 86400,))  # Last 24 hours
+            """,
+                (time.time() - 86400,),
+            )  # Last 24 hours
 
             rows = cursor.fetchall()
             conn.close()
@@ -491,47 +539,61 @@ class AlertService:
                 # Check battery percentage
                 if battery_level is not None:
                     if battery_level <= cls._thresholds.battery_critical_percent:
-                        cls.add_alert(Alert(
-                            alert_type=AlertType.CRITICAL_BATTERY,
-                            severity=AlertSeverity.CRITICAL,
-                            node_id=node_id,
-                            title=f"Critical Battery: {battery_level}%",
-                            message=f"Node battery is critically low at {battery_level}%. Device may shut down soon.",
-                            metadata={"battery_level": battery_level, "voltage": voltage},
-                        ))
+                        cls.add_alert(
+                            Alert(
+                                alert_type=AlertType.CRITICAL_BATTERY,
+                                severity=AlertSeverity.CRITICAL,
+                                node_id=node_id,
+                                title=f"Critical Battery: {battery_level}%",
+                                message=f"Node battery is critically low at {battery_level}%. Device may shut down soon.",
+                                metadata={
+                                    "battery_level": battery_level,
+                                    "voltage": voltage,
+                                },
+                            )
+                        )
                         alerts_generated += 1
                     elif battery_level <= cls._thresholds.battery_warning_percent:
-                        cls.add_alert(Alert(
-                            alert_type=AlertType.LOW_BATTERY,
-                            severity=AlertSeverity.WARNING,
-                            node_id=node_id,
-                            title=f"Low Battery: {battery_level}%",
-                            message=f"Node battery is getting low at {battery_level}%.",
-                            metadata={"battery_level": battery_level, "voltage": voltage},
-                        ))
+                        cls.add_alert(
+                            Alert(
+                                alert_type=AlertType.LOW_BATTERY,
+                                severity=AlertSeverity.WARNING,
+                                node_id=node_id,
+                                title=f"Low Battery: {battery_level}%",
+                                message=f"Node battery is getting low at {battery_level}%.",
+                                metadata={
+                                    "battery_level": battery_level,
+                                    "voltage": voltage,
+                                },
+                            )
+                        )
                         alerts_generated += 1
 
                 # Check voltage
                 if voltage is not None and battery_level is None:
                     if voltage <= cls._thresholds.battery_critical_voltage:
-                        cls.add_alert(Alert(
-                            alert_type=AlertType.CRITICAL_BATTERY,
-                            severity=AlertSeverity.CRITICAL,
-                            node_id=node_id,
-                            title=f"Critical Voltage: {voltage:.2f}V",
-                            message=f"Node voltage is critically low at {voltage:.2f}V. Device may shut down.",
-                            metadata={"voltage": voltage},
-                        ))
+                        cls.add_alert(
+                            Alert(
+                                alert_type=AlertType.CRITICAL_BATTERY,
+                                severity=AlertSeverity.CRITICAL,
+                                node_id=node_id,
+                                title=f"Critical Voltage: {voltage:.2f}V",
+                                message=f"Node voltage is critically low at {voltage:.2f}V. Device may shut down.",
+                                metadata={"voltage": voltage},
+                            )
+                        )
                         alerts_generated += 1
                     elif voltage <= cls._thresholds.battery_warning_voltage:
-                        cls.add_alert(Alert(
-                            alert_type=AlertType.LOW_BATTERY,
-                            severity=AlertSeverity.WARNING,
-                            node_id=node_id,
-                            title=f"Low Voltage: {voltage:.2f}V",
-                            message=f"Node voltage is getting low at {voltage:.2f}V.",
-                            metadata={"voltage": voltage},
-                        ))
+                        cls.add_alert(
+                            Alert(
+                                alert_type=AlertType.LOW_BATTERY,
+                                severity=AlertSeverity.WARNING,
+                                node_id=node_id,
+                                title=f"Low Voltage: {voltage:.2f}V",
+                                message=f"Node voltage is getting low at {voltage:.2f}V.",
+                                metadata={"voltage": voltage},
+                            )
+                        )
                         alerts_generated += 1
 
         except Exception as e:
@@ -549,17 +611,22 @@ class AlertService:
             conn = get_db_connection()
             cursor = conn.cursor()
 
-            offline_threshold = time.time() - (cls._thresholds.node_offline_minutes * 60)
+            offline_threshold = time.time() - (
+                cls._thresholds.node_offline_minutes * 60
+            )
             active_threshold = time.time() - 3600  # Active in last hour
 
             # Get nodes that were active before but haven't been seen recently
-            cursor.execute("""
+            cursor.execute(
+                """
                 SELECT DISTINCT from_node_id, MAX(timestamp) as last_seen
                 FROM packet_history
                 WHERE from_node_id IS NOT NULL
                 GROUP BY from_node_id
                 HAVING last_seen < ? AND last_seen > ?
-            """, (offline_threshold, offline_threshold - 86400))  # Went offline in last 24h
+            """,
+                (offline_threshold, offline_threshold - 86400),
+            )  # Went offline in last 24h
 
             offline_nodes = cursor.fetchall()
 
@@ -568,32 +635,43 @@ class AlertService:
                 last_seen = row["last_seen"]
                 hours_offline = (time.time() - last_seen) / 3600
 
-                cls.add_alert(Alert(
-                    alert_type=AlertType.NODE_OFFLINE,
-                    severity=AlertSeverity.WARNING,
-                    node_id=node_id,
-                    title=f"Node Offline ({hours_offline:.1f}h)",
-                    message=f"Node has not transmitted for {hours_offline:.1f} hours.",
-                    metadata={"last_seen": last_seen, "hours_offline": hours_offline},
-                ))
+                cls.add_alert(
+                    Alert(
+                        alert_type=AlertType.NODE_OFFLINE,
+                        severity=AlertSeverity.WARNING,
+                        node_id=node_id,
+                        title=f"Node Offline ({hours_offline:.1f}h)",
+                        message=f"Node has not transmitted for {hours_offline:.1f} hours.",
+                        metadata={
+                            "last_seen": last_seen,
+                            "hours_offline": hours_offline,
+                        },
+                    )
+                )
                 alerts_generated += 1
 
             # Check for nodes that have come back online
-            cursor.execute("""
+            cursor.execute(
+                """
                 SELECT DISTINCT from_node_id
                 FROM packet_history
                 WHERE from_node_id IS NOT NULL
                 AND timestamp > ?
-            """, (active_threshold,))
+            """,
+                (active_threshold,),
+            )
 
             active_nodes = {row["from_node_id"] for row in cursor.fetchall()}
 
             # Resolve offline alerts for nodes that are now active
             # Get all unresolved NODE_OFFLINE alerts
-            cursor.execute("""
+            cursor.execute(
+                """
                 SELECT node_id FROM alerts
                 WHERE alert_type = ? AND resolved = 0
-            """, (AlertType.NODE_OFFLINE.value,))
+            """,
+                (AlertType.NODE_OFFLINE.value,),
+            )
 
             offline_alerts = cursor.fetchall()
 
@@ -603,14 +681,16 @@ class AlertService:
                     # Resolve the offline alert
                     if cls.resolve_alert(AlertType.NODE_OFFLINE, node_id):
                         # Add a "back online" alert
-                        cls.add_alert(Alert(
-                            alert_type=AlertType.NODE_BACK_ONLINE,
-                            severity=AlertSeverity.INFO,
-                            node_id=node_id,
-                            title="Node Back Online",
-                            message=f"Node has resumed transmitting after being offline.",
-                            metadata={},
-                        ))
+                        cls.add_alert(
+                            Alert(
+                                alert_type=AlertType.NODE_BACK_ONLINE,
+                                severity=AlertSeverity.INFO,
+                                node_id=node_id,
+                                title="Node Back Online",
+                                message="Node has resumed transmitting after being offline.",
+                                metadata={},
+                            )
+                        )
                         alerts_resolved += 1
 
             conn.close()
@@ -638,7 +718,8 @@ class AlertService:
             one_day_ago = time.time() - 86400
 
             # Calculate baseline activity (packets per day over last 7 days)
-            cursor.execute("""
+            cursor.execute(
+                """
                 SELECT
                     from_node_id,
                     COUNT(*) as total_packets,
@@ -649,7 +730,9 @@ class AlertService:
                 AND timestamp < ?
                 GROUP BY from_node_id
                 HAVING total_packets >= 10
-            """, (one_week_ago, one_day_ago))
+            """,
+                (one_week_ago, one_day_ago),
+            )
 
             baselines = {}
             for row in cursor.fetchall():
@@ -662,15 +745,20 @@ class AlertService:
                 }
 
             # Get recent activity (last 24 hours)
-            cursor.execute("""
+            cursor.execute(
+                """
                 SELECT from_node_id, COUNT(*) as recent_packets
                 FROM packet_history
                 WHERE from_node_id IS NOT NULL
                 AND timestamp >= ?
                 GROUP BY from_node_id
-            """, (one_day_ago,))
+            """,
+                (one_day_ago,),
+            )
 
-            recent_activity = {row["from_node_id"]: row["recent_packets"] for row in cursor.fetchall()}
+            recent_activity = {
+                row["from_node_id"]: row["recent_packets"] for row in cursor.fetchall()
+            }
             conn.close()
 
             # Compare recent to baseline
@@ -683,19 +771,21 @@ class AlertService:
 
                     if ratio < cls._thresholds.activity_anomaly_threshold:
                         # Activity dropped significantly
-                        cls.add_alert(Alert(
-                            alert_type=AlertType.ACTIVITY_ANOMALY,
-                            severity=AlertSeverity.WARNING,
-                            node_id=node_id,
-                            title=f"Activity Anomaly: {int(ratio * 100)}% of normal",
-                            message=f"Node activity is unusually low. Expected ~{expected:.0f} packets/day, "
-                                   f"but only saw {actual} in the last 24 hours.",
-                            metadata={
-                                "expected_per_day": expected,
-                                "actual_24h": actual,
-                                "ratio": ratio,
-                            },
-                        ))
+                        cls.add_alert(
+                            Alert(
+                                alert_type=AlertType.ACTIVITY_ANOMALY,
+                                severity=AlertSeverity.WARNING,
+                                node_id=node_id,
+                                title=f"Activity Anomaly: {int(ratio * 100)}% of normal",
+                                message=f"Node activity is unusually low. Expected ~{expected:.0f} packets/day, "
+                                f"but only saw {actual} in the last 24 hours.",
+                                metadata={
+                                    "expected_per_day": expected,
+                                    "actual_24h": actual,
+                                    "ratio": ratio,
+                                },
+                            )
+                        )
                         alerts_generated += 1
 
             # Store baselines for future reference
@@ -707,7 +797,9 @@ class AlertService:
         return {"alerts": alerts_generated}
 
     @classmethod
-    def get_activity_heatmap(cls, node_id: int | None = None, days: int = 7) -> dict[str, Any]:
+    def get_activity_heatmap(
+        cls, node_id: int | None = None, days: int = 7
+    ) -> dict[str, Any]:
         """
         Get activity heatmap data (packets by hour of day).
 
@@ -725,7 +817,8 @@ class AlertService:
             cutoff = time.time() - (days * 86400)
 
             if node_id:
-                cursor.execute("""
+                cursor.execute(
+                    """
                     SELECT
                         strftime('%w', timestamp, 'unixepoch', 'localtime') as day_of_week,
                         strftime('%H', timestamp, 'unixepoch', 'localtime') as hour,
@@ -735,9 +828,12 @@ class AlertService:
                     AND timestamp >= ?
                     GROUP BY day_of_week, hour
                     ORDER BY day_of_week, hour
-                """, (node_id, cutoff))
+                """,
+                    (node_id, cutoff),
+                )
             else:
-                cursor.execute("""
+                cursor.execute(
+                    """
                     SELECT
                         strftime('%w', timestamp, 'unixepoch', 'localtime') as day_of_week,
                         strftime('%H', timestamp, 'unixepoch', 'localtime') as hour,
@@ -746,7 +842,9 @@ class AlertService:
                     WHERE timestamp >= ?
                     GROUP BY day_of_week, hour
                     ORDER BY day_of_week, hour
-                """, (cutoff,))
+                """,
+                    (cutoff,),
+                )
 
             rows = cursor.fetchall()
             conn.close()
@@ -763,7 +861,15 @@ class AlertService:
                 max_value = max(max_value, count)
 
             # Day names
-            day_names = ["Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"]
+            day_names = [
+                "Sunday",
+                "Monday",
+                "Tuesday",
+                "Wednesday",
+                "Thursday",
+                "Friday",
+                "Saturday",
+            ]
 
             return {
                 "heatmap": heatmap,
@@ -779,7 +885,9 @@ class AlertService:
             raise
 
     @classmethod
-    def get_trend_data(cls, metric: str = "packets", hours: int = 168) -> dict[str, Any]:
+    def get_trend_data(
+        cls, metric: str = "packets", hours: int = 168
+    ) -> dict[str, Any]:
         """
         Get time-series trend data for a metric.
 
@@ -808,7 +916,8 @@ class AlertService:
                 bucket_format = "%Y-%m-%d"
 
             if metric == "packets":
-                cursor.execute(f"""
+                cursor.execute(
+                    f"""
                     SELECT
                         (CAST(timestamp AS INTEGER) / {bucket_seconds}) * {bucket_seconds} as bucket,
                         COUNT(*) as value,
@@ -817,20 +926,31 @@ class AlertService:
                     WHERE timestamp >= ?
                     GROUP BY bucket
                     ORDER BY bucket
-                """, (cutoff,))
+                """,
+                    (cutoff,),
+                )
 
                 data = []
                 for row in cursor.fetchall():
-                    data.append({
-                        "timestamp": row["bucket"],
-                        "timestamp_str": datetime.fromtimestamp(row["bucket"]).strftime(bucket_format),
-                        "total": row["value"],
-                        "successful": row["successful"],
-                        "success_rate": round(row["successful"] / row["value"] * 100, 1) if row["value"] > 0 else 0,
-                    })
+                    data.append(
+                        {
+                            "timestamp": row["bucket"],
+                            "timestamp_str": datetime.fromtimestamp(
+                                row["bucket"]
+                            ).strftime(bucket_format),
+                            "total": row["value"],
+                            "successful": row["successful"],
+                            "success_rate": round(
+                                row["successful"] / row["value"] * 100, 1
+                            )
+                            if row["value"] > 0
+                            else 0,
+                        }
+                    )
 
             elif metric == "nodes":
-                cursor.execute(f"""
+                cursor.execute(
+                    f"""
                     SELECT
                         (CAST(timestamp AS INTEGER) / {bucket_seconds}) * {bucket_seconds} as bucket,
                         COUNT(DISTINCT from_node_id) as active_nodes
@@ -839,18 +959,25 @@ class AlertService:
                     AND from_node_id IS NOT NULL
                     GROUP BY bucket
                     ORDER BY bucket
-                """, (cutoff,))
+                """,
+                    (cutoff,),
+                )
 
                 data = []
                 for row in cursor.fetchall():
-                    data.append({
-                        "timestamp": row["bucket"],
-                        "timestamp_str": datetime.fromtimestamp(row["bucket"]).strftime(bucket_format),
-                        "active_nodes": row["active_nodes"],
-                    })
+                    data.append(
+                        {
+                            "timestamp": row["bucket"],
+                            "timestamp_str": datetime.fromtimestamp(
+                                row["bucket"]
+                            ).strftime(bucket_format),
+                            "active_nodes": row["active_nodes"],
+                        }
+                    )
 
             elif metric == "signal":
-                cursor.execute(f"""
+                cursor.execute(
+                    f"""
                     SELECT
                         (CAST(timestamp AS INTEGER) / {bucket_seconds}) * {bucket_seconds} as bucket,
                         AVG(rssi) as avg_rssi,
@@ -862,18 +989,28 @@ class AlertService:
                     AND rssi IS NOT NULL
                     GROUP BY bucket
                     ORDER BY bucket
-                """, (cutoff,))
+                """,
+                    (cutoff,),
+                )
 
                 data = []
                 for row in cursor.fetchall():
-                    data.append({
-                        "timestamp": row["bucket"],
-                        "timestamp_str": datetime.fromtimestamp(row["bucket"]).strftime(bucket_format),
-                        "avg_rssi": round(row["avg_rssi"], 1) if row["avg_rssi"] else None,
-                        "avg_snr": round(row["avg_snr"], 1) if row["avg_snr"] else None,
-                        "min_rssi": row["min_rssi"],
-                        "max_rssi": row["max_rssi"],
-                    })
+                    data.append(
+                        {
+                            "timestamp": row["bucket"],
+                            "timestamp_str": datetime.fromtimestamp(
+                                row["bucket"]
+                            ).strftime(bucket_format),
+                            "avg_rssi": round(row["avg_rssi"], 1)
+                            if row["avg_rssi"]
+                            else None,
+                            "avg_snr": round(row["avg_snr"], 1)
+                            if row["avg_snr"]
+                            else None,
+                            "min_rssi": row["min_rssi"],
+                            "max_rssi": row["max_rssi"],
+                        }
+                    )
 
             else:
                 data = []

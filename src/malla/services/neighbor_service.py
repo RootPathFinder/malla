@@ -10,7 +10,6 @@ This service provides:
 import logging
 import time
 from collections import defaultdict
-from datetime import datetime
 from typing import Any
 
 from meshtastic import mesh_pb2
@@ -143,7 +142,8 @@ class NeighborService:
 
                         # Create edge key (always smaller node_id first for consistency)
                         edge_key = (
-                            (min(actual_node_id, neighbor_node_id), max(actual_node_id, neighbor_node_id))
+                            min(actual_node_id, neighbor_node_id),
+                            max(actual_node_id, neighbor_node_id),
                         )
 
                         if edge_key not in edges:
@@ -180,7 +180,9 @@ class NeighborService:
                         )
 
                 except Exception as e:
-                    logger.warning(f"Failed to parse NeighborInfo packet {packet['id']}: {e}")
+                    logger.warning(
+                        f"Failed to parse NeighborInfo packet {packet['id']}: {e}"
+                    )
                     continue
 
             conn.close()
@@ -196,7 +198,7 @@ class NeighborService:
 
             # Convert edges to list format for JSON
             edge_list = []
-            for edge_key, edge_data in edges.items():
+            for _edge_key, edge_data in edges.items():
                 edge_data["node_a_name"] = nodes[edge_data["node_a"]]["name"]
                 edge_data["node_b_name"] = nodes[edge_data["node_b"]]["name"]
 
@@ -227,7 +229,9 @@ class NeighborService:
             total_nodes = len(nodes)
             total_edges = len(edge_list)
             bidirectional_edges = sum(1 for e in edge_list if e["bidirectional"])
-            nodes_with_neighbors = sum(1 for n in nodes.values() if n["neighbor_count"] > 0)
+            nodes_with_neighbors = sum(
+                1 for n in nodes.values() if n["neighbor_count"] > 0
+            )
 
             # Calculate average connectivity
             avg_neighbors = (
@@ -272,7 +276,9 @@ class NeighborService:
             raise
 
     @staticmethod
-    def get_neighbor_stability(node_id: int | None = None, hours: int = 168) -> dict[str, Any]:
+    def get_neighbor_stability(
+        node_id: int | None = None, hours: int = 168
+    ) -> dict[str, Any]:
         """
         Analyze neighbor stability over time.
 
@@ -319,7 +325,9 @@ class NeighborService:
             packets = cursor.fetchall()
             conn.close()
 
-            logger.info(f"Found {len(packets)} NeighborInfo packets for stability analysis")
+            logger.info(
+                f"Found {len(packets)} NeighborInfo packets for stability analysis"
+            )
 
             # Track neighbor history per node
             # {node_id: [{timestamp, neighbors: set()}]}
@@ -347,11 +355,13 @@ class NeighborService:
                             neighbors_set.add(neighbor.node_id)
                             neighbor_snrs[neighbor.node_id] = neighbor.snr
 
-                    neighbor_history[actual_node_id].append({
-                        "timestamp": packet["timestamp"],
-                        "neighbors": neighbors_set,
-                        "neighbor_snrs": neighbor_snrs,
-                    })
+                    neighbor_history[actual_node_id].append(
+                        {
+                            "timestamp": packet["timestamp"],
+                            "neighbors": neighbors_set,
+                            "neighbor_snrs": neighbor_snrs,
+                        }
+                    )
 
                 except Exception as e:
                     logger.warning(f"Failed to parse packet for stability: {e}")
@@ -386,18 +396,22 @@ class NeighborService:
                     lost = prev_neighbors - curr_neighbors
 
                     for g in gained:
-                        neighbors_gained.append({
-                            "node_id": g,
-                            "timestamp": history[i]["timestamp"],
-                        })
+                        neighbors_gained.append(
+                            {
+                                "node_id": g,
+                                "timestamp": history[i]["timestamp"],
+                            }
+                        )
                         unstable_neighbors.add(g)
 
-                    for l in lost:
-                        neighbors_lost.append({
-                            "node_id": l,
-                            "timestamp": history[i]["timestamp"],
-                        })
-                        unstable_neighbors.add(l)
+                    for lost_node in lost:
+                        neighbors_lost.append(
+                            {
+                                "node_id": lost_node,
+                                "timestamp": history[i]["timestamp"],
+                            }
+                        )
+                        unstable_neighbors.add(lost_node)
 
                 # Stable neighbors are those that appear in most reports without changes
                 all_ever_neighbors = set()
@@ -412,42 +426,47 @@ class NeighborService:
 
                 if total_neighbor_appearances > 0:
                     stability_score = max(
-                        0,
-                        100 - (total_changes / total_neighbor_appearances * 100)
+                        0, 100 - (total_changes / total_neighbor_appearances * 100)
                     )
                 else:
                     stability_score = 100
 
-                stability_results.append({
-                    "node_id": nid,
-                    "node_name": node_names.get(nid, f"!{nid:08x}"),
-                    "hex_id": f"!{nid:08x}",
-                    "report_count": len(history),
-                    "first_report": history[0]["timestamp"],
-                    "last_report": history[-1]["timestamp"],
-                    "current_neighbors": len(history[-1]["neighbors"]),
-                    "stable_neighbors": len(stable_neighbors),
-                    "unstable_neighbors": len(unstable_neighbors),
-                    "neighbors_gained_count": len(neighbors_gained),
-                    "neighbors_lost_count": len(neighbors_lost),
-                    "stability_score": round(stability_score, 1),
-                    "neighbors_gained": [
-                        {
-                            "node_id": ng["node_id"],
-                            "node_name": node_names.get(ng["node_id"], f"!{ng['node_id']:08x}"),
-                            "timestamp": ng["timestamp"],
-                        }
-                        for ng in neighbors_gained[-10:]  # Last 10 gained
-                    ],
-                    "neighbors_lost": [
-                        {
-                            "node_id": nl["node_id"],
-                            "node_name": node_names.get(nl["node_id"], f"!{nl['node_id']:08x}"),
-                            "timestamp": nl["timestamp"],
-                        }
-                        for nl in neighbors_lost[-10:]  # Last 10 lost
-                    ],
-                })
+                stability_results.append(
+                    {
+                        "node_id": nid,
+                        "node_name": node_names.get(nid, f"!{nid:08x}"),
+                        "hex_id": f"!{nid:08x}",
+                        "report_count": len(history),
+                        "first_report": history[0]["timestamp"],
+                        "last_report": history[-1]["timestamp"],
+                        "current_neighbors": len(history[-1]["neighbors"]),
+                        "stable_neighbors": len(stable_neighbors),
+                        "unstable_neighbors": len(unstable_neighbors),
+                        "neighbors_gained_count": len(neighbors_gained),
+                        "neighbors_lost_count": len(neighbors_lost),
+                        "stability_score": round(stability_score, 1),
+                        "neighbors_gained": [
+                            {
+                                "node_id": ng["node_id"],
+                                "node_name": node_names.get(
+                                    ng["node_id"], f"!{ng['node_id']:08x}"
+                                ),
+                                "timestamp": ng["timestamp"],
+                            }
+                            for ng in neighbors_gained[-10:]  # Last 10 gained
+                        ],
+                        "neighbors_lost": [
+                            {
+                                "node_id": nl["node_id"],
+                                "node_name": node_names.get(
+                                    nl["node_id"], f"!{nl['node_id']:08x}"
+                                ),
+                                "timestamp": nl["timestamp"],
+                            }
+                            for nl in neighbors_lost[-10:]  # Last 10 lost
+                        ],
+                    }
+                )
 
             # Sort by stability score (most unstable first)
             stability_results.sort(key=lambda x: x["stability_score"])
@@ -514,11 +533,15 @@ class NeighborService:
             for neighbor in neighbor_info.neighbors:
                 if neighbor.node_id:
                     neighbor_ids.append(neighbor.node_id)
-                    neighbors.append({
-                        "node_id": neighbor.node_id,
-                        "snr": neighbor.snr if neighbor.snr else 0.0,
-                        "last_rx_time": neighbor.last_rx_time if neighbor.last_rx_time else None,
-                    })
+                    neighbors.append(
+                        {
+                            "node_id": neighbor.node_id,
+                            "snr": neighbor.snr if neighbor.snr else 0.0,
+                            "last_rx_time": neighbor.last_rx_time
+                            if neighbor.last_rx_time
+                            else None,
+                        }
+                    )
 
             conn.close()
 
@@ -552,7 +575,8 @@ class NeighborService:
                 "last_report": latest_packet["timestamp"],
                 "neighbor_count": len(neighbors),
                 "neighbors": neighbors,
-                "broadcast_interval": neighbor_info.node_broadcast_interval_secs or None,
+                "broadcast_interval": neighbor_info.node_broadcast_interval_secs
+                or None,
             }
 
         except Exception as e:

@@ -47,7 +47,9 @@ def api_alerts_list():
         JSON with alerts list
     """
     try:
-        include_resolved = request.args.get("include_resolved", "false").lower() == "true"
+        include_resolved = (
+            request.args.get("include_resolved", "false").lower() == "true"
+        )
         severity_str = request.args.get("severity")
         node_id = request.args.get("node_id", type=int)
         limit = request.args.get("limit", 100, type=int)
@@ -68,10 +70,12 @@ def api_alerts_list():
 
         summary = AlertService.get_alert_summary()
 
-        return jsonify({
-            "alerts": alerts,
-            "summary": summary,
-        })
+        return jsonify(
+            {
+                "alerts": alerts,
+                "summary": summary,
+            }
+        )
 
     except Exception as e:
         logger.error(f"Error getting alerts: {e}", exc_info=True)
@@ -123,10 +127,12 @@ def api_thresholds():
             thresholds = AlertThresholds.from_dict(data)
             AlertService.set_thresholds(thresholds)
 
-            return jsonify({
-                "success": True,
-                "thresholds": thresholds.to_dict(),
-            })
+            return jsonify(
+                {
+                    "success": True,
+                    "thresholds": thresholds.to_dict(),
+                }
+            )
 
     except Exception as e:
         logger.error(f"Error with thresholds: {e}", exc_info=True)
@@ -197,10 +203,12 @@ def api_resolve_alert(alert_type: str, node_id: int):
 
         resolved = AlertService.resolve_alert(at, node_id)
 
-        return jsonify({
-            "success": resolved,
-            "message": "Alert resolved" if resolved else "Alert not found",
-        })
+        return jsonify(
+            {
+                "success": resolved,
+                "message": "Alert resolved" if resolved else "Alert not found",
+            }
+        )
 
     except Exception as e:
         logger.error(f"Error resolving alert: {e}", exc_info=True)
