@@ -1516,6 +1516,12 @@ async function loadTelemetryData() {
         // Update content
         telemetryContent.innerHTML = html;
 
+        // Reinitialize tooltips
+        const tooltipTriggerList = telemetryContent.querySelectorAll('[data-bs-toggle="tooltip"]');
+        [...tooltipTriggerList].forEach(tooltipTriggerEl => {
+            new bootstrap.Tooltip(tooltipTriggerEl);
+        });
+
         // Update timestamp
         if (telemetry.timestamp_relative) {
             document.getElementById('telemetry-timestamp').textContent = telemetry.timestamp_relative;
