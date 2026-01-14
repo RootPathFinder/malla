@@ -4168,7 +4168,7 @@ class BatteryAnalyticsRepository:
                     logger.info(
                         f"Updated {node_name} ({node_id}): {old_power_type} -> {power_type}"
                     )
-                elif power_type == old_power_type:
+                elif power_type == old_power_type and power_type is not None:
                     # Same classification, just update timestamp
                     cursor.execute(
                         """
@@ -4181,9 +4181,19 @@ class BatteryAnalyticsRepository:
                     logger.debug(
                         f"Confirmed {node_name} ({node_id}): power_type={power_type}"
                     )
-                else:
-                    logger.debug(
-                        f"Could not classify {node_name} ({node_id}) - insufficient pattern"
+                elif power_type is None:
+                    # Could not classify, but update timestamp to avoid constant retries
+                    cursor.execute(
+                        """
+                        UPDATE node_info
+                        SET power_type = 'unknown', power_analysis_timestamp = ?
+                        WHERE node_id = ?
+                        """,
+                        (current_time, node_id),
+                    )
+                    logger.warning(
+                        f"Could not classify {node_name} ({node_id}) - marked as unknown "
+                        f"({len(voltage_data)} readings, {time_span_hours:.1f}h span)"
                     )
 
             conn.commit()
@@ -4371,7 +4381,7 @@ class BatteryAnalyticsRepository:
             return "battery"
 
         # For nodes with substantial data (multiple days), be more aggressive
-        if len(voltages) >= 50 and hours_span >= 48:
+        if len(voltages) >= 50 and hours_span >= 24:
             # Any sign of charging cycles suggests solar
             if charging_events > 0 or voltage_range > 0.2:
                 logger.debug(
@@ -4388,7 +4398,34 @@ class BatteryAnalyticsRepository:
             )
             return "battery"
 
-        logger.debug("Could not classify: insufficient distinctive pattern")
+        # Final aggressive fallback - if we have any reasonable amount of data, classify it
+        if len(voltages) >= 20:
+            logger.info(
+                f"Final fallback for {len(voltages)} readings: "
+                f"mean={voltage_mean:.2f}V, range={voltage_range:.2f}V, "
+                f"charging={charging_events}, discharging={discharging_events}"
+            )
+            # Very stable = mains
+            if std_dev < 0.15 and voltage_mean > 3.8:
+                logger.info("Classified as MAINS (final fallback): stable voltage")
+                return "mains"
+            # Any charging at all = solar
+            if charging_events > 0:
+                logger.info("Classified as SOLAR (final fallback): has charging events")
+                return "solar"
+            # Any significant voltage variation = solar
+            if voltage_range > 0.15:
+                logger.info("Classified as SOLAR (final fallback): voltage variation")
+                return "solar"
+            # Declining or flat = battery
+            logger.info(
+                "Classified as BATTERY (final fallback): no charging, declining/flat"
+            )
+            return "battery"
+
+        logger.debug(
+            f"Could not classify: insufficient data ({len(voltages)} readings, {hours_span:.1f}h)"
+        )
         return None
 
     @staticmethod

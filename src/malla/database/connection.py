@@ -193,8 +193,7 @@ def _ensure_schema_migrations(cursor: sqlite3.Cursor) -> None:
                 timestamp REAL NOT NULL,
                 resolved BOOLEAN DEFAULT 0,
                 resolved_at REAL,
-                metadata TEXT,
-                UNIQUE(alert_type, node_id, resolved)
+                metadata TEXT
             )
         """)
         cursor.execute(
@@ -209,6 +208,11 @@ def _ensure_schema_migrations(cursor: sqlite3.Cursor) -> None:
         cursor.execute(
             "CREATE INDEX IF NOT EXISTS idx_alerts_timestamp ON alerts(timestamp)"
         )
+        # Partial unique index: only one unresolved alert per (alert_type, node_id)
+        cursor.execute(
+            """CREATE UNIQUE INDEX IF NOT EXISTS idx_alerts_unique_active
+               ON alerts(alert_type, node_id) WHERE resolved = 0"""
+        )
         logging.info("Alerts table created via auto-migration")
 
         _SCHEMA_MIGRATIONS_DONE.add("alerts")
@@ -217,3 +221,66 @@ def _ensure_schema_migrations(cursor: sqlite3.Cursor) -> None:
             _SCHEMA_MIGRATIONS_DONE.add("alerts")
         else:
             raise
+    # Migration: Fix alerts table UNIQUE constraint
+    # Old constraint included 'resolved' column which caused errors when resolving alerts
+    if "alerts_constraint_fix" not in _SCHEMA_MIGRATIONS_DONE:
+        try:
+            # Check if the old bad constraint exists by checking table schema
+            cursor.execute(
+                "SELECT sql FROM sqlite_master WHERE type='table' AND name='alerts'"
+            )
+            table_schema = cursor.fetchone()
+
+            if (
+                table_schema
+                and "UNIQUE(alert_type, node_id, resolved)" in table_schema[0]
+            ):
+                logging.info("Migrating alerts table to fix UNIQUE constraint...")
+
+                # Recreate the table without the bad constraint
+                cursor.execute("""
+                    CREATE TABLE alerts_new (
+                        id INTEGER PRIMARY KEY AUTOINCREMENT,
+                        alert_type TEXT NOT NULL,
+                        severity TEXT NOT NULL,
+                        node_id INTEGER,
+                        title TEXT NOT NULL,
+                        message TEXT NOT NULL,
+                        timestamp REAL NOT NULL,
+                        resolved BOOLEAN DEFAULT 0,
+                        resolved_at REAL,
+                        metadata TEXT
+                    )
+                """)
+
+                # Copy all data
+                cursor.execute("""
+                    INSERT INTO alerts_new
+                    SELECT id, alert_type, severity, node_id, title, message,
+                           timestamp, resolved, resolved_at, metadata
+                    FROM alerts
+                """)
+
+                # Drop old table and rename new one
+                cursor.execute("DROP TABLE alerts")
+                cursor.execute("ALTER TABLE alerts_new RENAME TO alerts")
+
+                # Recreate indexes
+                cursor.execute("CREATE INDEX idx_alerts_resolved ON alerts(resolved)")
+                cursor.execute("CREATE INDEX idx_alerts_severity ON alerts(severity)")
+                cursor.execute("CREATE INDEX idx_alerts_node_id ON alerts(node_id)")
+                cursor.execute("CREATE INDEX idx_alerts_timestamp ON alerts(timestamp)")
+                cursor.execute(
+                    """CREATE UNIQUE INDEX idx_alerts_unique_active
+                       ON alerts(alert_type, node_id) WHERE resolved = 0"""
+                )
+
+                logging.info("Alerts table migration complete - constraint fixed")
+            else:
+                logging.debug("Alerts table already has correct schema")
+
+            _SCHEMA_MIGRATIONS_DONE.add("alerts_constraint_fix")
+        except Exception as exc:
+            logging.error(f"Failed to migrate alerts table: {exc}")
+            # Don't fail startup, just log the error
+            _SCHEMA_MIGRATIONS_DONE.add("alerts_constraint_fix")
