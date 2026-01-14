@@ -149,38 +149,80 @@ class AlertService:
 
     @classmethod
     def add_alert(cls, alert: Alert) -> None:
-        """Add a new alert."""
-        # Check for duplicate active alerts
-        for existing in cls._alerts:
-            if (
-                not existing.resolved
-                and existing.alert_type == alert.alert_type
-                and existing.node_id == alert.node_id
-            ):
-                # Update existing alert instead of duplicating
-                existing.timestamp = alert.timestamp
-                existing.message = alert.message
-                existing.metadata.update(alert.metadata)
-                logger.debug(f"Updated existing alert: {alert.title}")
-                return
+        """Add a new alert to the database."""
+        try:
+            conn = get_db_connection()
+            cursor = conn.cursor()
 
-        cls._alerts.append(alert)
-        logger.info(f"New alert: [{alert.severity.value}] {alert.title}")
+            # Check for existing active alert of the same type and node
+            cursor.execute("""
+                SELECT id FROM alerts
+                WHERE alert_type = ? AND node_id IS ? AND resolved = 0
+                LIMIT 1
+            """, (alert.alert_type.value, alert.node_id))
+
+            existing = cursor.fetchone()
+
+            if existing:
+                # Update existing alert instead of creating duplicate
+                cursor.execute("""
+                    UPDATE alerts
+                    SET timestamp = ?, message = ?, metadata = ?
+                    WHERE id = ?
+                """, (
+                    alert.timestamp,
+                    alert.message,
+                    json.dumps(alert.metadata),
+                    existing["id"],
+                ))
+                logger.debug(f"Updated existing alert: {alert.title}")
+            else:
+                # Insert new alert
+                cursor.execute("""
+                    INSERT INTO alerts
+                    (alert_type, severity, node_id, title, message, timestamp, resolved, metadata)
+                    VALUES (?, ?, ?, ?, ?, ?, 0, ?)
+                """, (
+                    alert.alert_type.value,
+                    alert.severity.value,
+                    alert.node_id,
+                    alert.title,
+                    alert.message,
+                    alert.timestamp,
+                    json.dumps(alert.metadata),
+                ))
+                logger.info(f"New alert: [{alert.severity.value}] {alert.title}")
+
+            conn.commit()
+            conn.close()
+
+        except Exception as e:
+            logger.error(f"Error adding alert: {e}", exc_info=True)
 
     @classmethod
     def resolve_alert(cls, alert_type: AlertType, node_id: int | None) -> bool:
-        """Resolve an active alert."""
-        for alert in cls._alerts:
-            if (
-                not alert.resolved
-                and alert.alert_type == alert_type
-                and alert.node_id == node_id
-            ):
-                alert.resolved = True
-                alert.resolved_at = time.time()
-                logger.info(f"Alert resolved: {alert.title}")
-                return True
-        return False
+        """Resolve an active alert in the database."""
+        try:
+            conn = get_db_connection()
+            cursor = conn.cursor()
+
+            cursor.execute("""
+                UPDATE alerts
+                SET resolved = 1, resolved_at = ?
+                WHERE alert_type = ? AND node_id IS ? AND resolved = 0
+            """, (time.time(), alert_type.value, node_id))
+
+            success = cursor.rowcount > 0
+            conn.commit()
+            conn.close()
+
+            if success:
+                logger.info(f"Alert resolved: {alert_type.value} for node {node_id}")
+            return success
+
+        except Exception as e:
+            logger.error(f"Error resolving alert: {e}", exc_info=True)
+            return False
 
     @classmethod
     def get_alerts(
@@ -192,7 +234,7 @@ class AlertService:
         limit: int = 100,
     ) -> list[dict]:
         """
-        Get alerts with optional filtering.
+        Get alerts from database with optional filtering.
 
         Args:
             include_resolved: Include resolved alerts
@@ -204,57 +246,114 @@ class AlertService:
         Returns:
             List of alert dictionaries
         """
-        alerts = cls._alerts.copy()
+        try:
+            conn = get_db_connection()
+            cursor = conn.cursor()
 
-        # Apply filters
-        if not include_resolved:
-            alerts = [a for a in alerts if not a.resolved]
+            # Build query
+            query = "SELECT * FROM alerts WHERE 1=1"
+            params = []
 
-        if severity:
-            alerts = [a for a in alerts if a.severity == severity]
+            if not include_resolved:
+                query += " AND resolved = 0"
 
-        if node_id is not None:
-            alerts = [a for a in alerts if a.node_id == node_id]
+            if severity:
+                query += " AND severity = ?"
+                params.append(severity.value)
 
-        if alert_type:
-            alerts = [a for a in alerts if a.alert_type == alert_type]
+            if node_id is not None:
+                query += " AND node_id = ?"
+                params.append(node_id)
 
-        # Sort by timestamp (newest first)
-        alerts.sort(key=lambda a: a.timestamp, reverse=True)
+            if alert_type:
+                query += " AND alert_type = ?"
+                params.append(alert_type.value)
 
-        # Enhance with node names
-        node_ids = [a.node_id for a in alerts if a.node_id is not None]
-        node_names = get_bulk_node_names(node_ids) if node_ids else {}
+            # Sort by timestamp (newest first) and limit
+            query += " ORDER BY timestamp DESC LIMIT ?"
+            params.append(limit)
 
-        result = []
-        for alert in alerts[:limit]:
-            alert_dict = alert.to_dict()
-            if alert.node_id:
-                alert_dict["node_name"] = node_names.get(alert.node_id, f"!{alert.node_id:08x}")
-                alert_dict["node_hex"] = f"!{alert.node_id:08x}"
-            result.append(alert_dict)
+            cursor.execute(query, params)
+            rows = cursor.fetchall()
+            conn.close()
 
-        return result
+            # Get node names for display
+            node_ids = [row["node_id"] for row in rows if row["node_id"] is not None]
+            node_names = get_bulk_node_names(node_ids) if node_ids else {}
+
+            # Convert rows to dictionaries
+            result = []
+            for row in rows:
+                alert_dict = {
+                    "alert_type": row["alert_type"],
+                    "severity": row["severity"],
+                    "node_id": row["node_id"],
+                    "title": row["title"],
+                    "message": row["message"],
+                    "timestamp": row["timestamp"],
+                    "timestamp_iso": datetime.fromtimestamp(row["timestamp"]).isoformat(),
+                    "resolved": bool(row["resolved"]),
+                    "resolved_at": row["resolved_at"],
+                    "resolved_at_iso": datetime.fromtimestamp(row["resolved_at"]).isoformat() if row["resolved_at"] else None,
+                    "metadata": json.loads(row["metadata"]) if row["metadata"] else {},
+                }
+                if row["node_id"]:
+                    alert_dict["node_name"] = node_names.get(row["node_id"], f"!{row['node_id']:08x}")
+                    alert_dict["node_hex"] = f"!{row['node_id']:08x}"
+                result.append(alert_dict)
+
+            return result
+
+        except Exception as e:
+            logger.error(f"Error getting alerts: {e}", exc_info=True)
+            return []
 
     @classmethod
     def get_alert_summary(cls) -> dict[str, Any]:
-        """Get summary of current alert state."""
-        active_alerts = [a for a in cls._alerts if not a.resolved]
+        """Get summary of current alert state from database."""
+        try:
+            conn = get_db_connection()
+            cursor = conn.cursor()
 
-        by_severity = defaultdict(int)
-        by_type = defaultdict(int)
+            # Get counts by severity for active alerts
+            cursor.execute("""
+                SELECT severity, COUNT(*) as count
+                FROM alerts
+                WHERE resolved = 0
+                GROUP BY severity
+            """)
 
-        for alert in active_alerts:
-            by_severity[alert.severity.value] += 1
-            by_type[alert.alert_type.value] += 1
+            by_severity = {}
+            for row in cursor.fetchall():
+                by_severity[row["severity"]] = row["count"]
 
-        return {
-            "total_active": len(active_alerts),
-            "total_resolved": len(cls._alerts) - len(active_alerts),
-            "by_severity": dict(by_severity),
-            "by_type": dict(by_type),
-            "last_check": cls._last_check,
-        }
+            # Get total active alerts
+            cursor.execute("SELECT COUNT(*) as count FROM alerts WHERE resolved = 0")
+            total_active = cursor.fetchone()["count"]
+
+            # Get total resolved alerts
+            cursor.execute("SELECT COUNT(*) as count FROM alerts WHERE resolved = 1")
+            total_resolved = cursor.fetchone()["count"]
+
+            conn.close()
+
+            return {
+                "total_active": total_active,
+                "total_resolved": total_resolved,
+                "by_severity": by_severity,
+                "by_type": {},  # Could add if needed
+                "last_check": cls._last_check,
+            }
+
+        except Exception as e:
+            logger.error(f"Error getting alert summary: {e}", exc_info=True)
+            return {
+                "total_active": 0,
+                "total_resolved": 0,
+                "by_severity": {},
+                "by_type": {},
+                "last_check": cls._last_check,
+            }
 
     @classmethod
     def run_health_checks(cls, force: bool = False) -> dict[str, Any]:
@@ -441,22 +540,29 @@ class AlertService:
             active_nodes = {row["from_node_id"] for row in cursor.fetchall()}
 
             # Resolve offline alerts for nodes that are now active
-            for alert in cls._alerts:
-                if (
-                    not alert.resolved
-                    and alert.alert_type == AlertType.NODE_OFFLINE
-                    and alert.node_id in active_nodes
-                ):
-                    cls.resolve_alert(AlertType.NODE_OFFLINE, alert.node_id)
-                    cls.add_alert(Alert(
-                        alert_type=AlertType.NODE_BACK_ONLINE,
-                        severity=AlertSeverity.INFO,
-                        node_id=alert.node_id,
-                        title="Node Back Online",
-                        message=f"Node has resumed transmitting after being offline.",
-                        metadata={},
-                    ))
-                    alerts_resolved += 1
+            # Get all unresolved NODE_OFFLINE alerts
+            cursor.execute("""
+                SELECT node_id FROM alerts
+                WHERE alert_type = ? AND resolved = 0
+            """, (AlertType.NODE_OFFLINE.value,))
+
+            offline_alerts = cursor.fetchall()
+
+            for alert_row in offline_alerts:
+                node_id = alert_row["node_id"]
+                if node_id in active_nodes:
+                    # Resolve the offline alert
+                    if cls.resolve_alert(AlertType.NODE_OFFLINE, node_id):
+                        # Add a "back online" alert
+                        cls.add_alert(Alert(
+                            alert_type=AlertType.NODE_BACK_ONLINE,
+                            severity=AlertSeverity.INFO,
+                            node_id=node_id,
+                            title="Node Back Online",
+                            message=f"Node has resumed transmitting after being offline.",
+                            metadata={},
+                        ))
+                        alerts_resolved += 1
 
             conn.close()
 

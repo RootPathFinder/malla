@@ -160,3 +160,41 @@ def _ensure_schema_migrations(cursor: sqlite3.Cursor) -> None:
             _SCHEMA_MIGRATIONS_DONE.add("primary_channel")
         else:
             raise
+
+    # Create alerts table if it doesn't exist
+    try:
+        cursor.execute("""
+            CREATE TABLE IF NOT EXISTS alerts (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                alert_type TEXT NOT NULL,
+                severity TEXT NOT NULL,
+                node_id INTEGER,
+                title TEXT NOT NULL,
+                message TEXT NOT NULL,
+                timestamp REAL NOT NULL,
+                resolved BOOLEAN DEFAULT 0,
+                resolved_at REAL,
+                metadata TEXT,
+                UNIQUE(alert_type, node_id, resolved)
+            )
+        """)
+        cursor.execute(
+            "CREATE INDEX IF NOT EXISTS idx_alerts_resolved ON alerts(resolved)"
+        )
+        cursor.execute(
+            "CREATE INDEX IF NOT EXISTS idx_alerts_severity ON alerts(severity)"
+        )
+        cursor.execute(
+            "CREATE INDEX IF NOT EXISTS idx_alerts_node_id ON alerts(node_id)"
+        )
+        cursor.execute(
+            "CREATE INDEX IF NOT EXISTS idx_alerts_timestamp ON alerts(timestamp)"
+        )
+        logging.info("Alerts table created via auto-migration")
+
+        _SCHEMA_MIGRATIONS_DONE.add("alerts")
+    except sqlite3.OperationalError as exc:
+        if "already exists" in str(exc).lower():
+            _SCHEMA_MIGRATIONS_DONE.add("alerts")
+        else:
+            raise

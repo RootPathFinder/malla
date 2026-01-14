@@ -7,11 +7,21 @@
     .alert-card {
         border-left: 4px solid;
         margin-bottom: 0.5rem;
+        background-color: var(--bs-card-bg);
+        color: var(--bs-body-color);
     }
 
     .alert-card.severity-critical { border-left-color: #dc3545; }
     .alert-card.severity-warning { border-left-color: #ffc107; }
     .alert-card.severity-info { border-left-color: #0dcaf0; }
+
+    .alert-card h6 {
+        color: var(--bs-body-color);
+    }
+
+    .alert-card p {
+        color: var(--bs-body-color);
+    }
 
     .severity-badge {
         font-size: 0.75rem;
