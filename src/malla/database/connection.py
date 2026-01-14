@@ -134,7 +134,25 @@ def _ensure_schema_migrations(cursor: sqlite3.Cursor) -> None:
 
     global _SCHEMA_MIGRATIONS_DONE  # pylint: disable=global-statement
 
-    # Quickly short-circuit if we've already handled migrations in this process
+    # Create alert_thresholds table first (regardless of other tables)
+    try:
+        if "alert_thresholds" not in _SCHEMA_MIGRATIONS_DONE:
+            cursor.execute("""
+                CREATE TABLE IF NOT EXISTS alert_thresholds (
+                    key TEXT PRIMARY KEY,
+                    value REAL NOT NULL,
+                    updated_at REAL NOT NULL
+                )
+            """)
+            logging.info("Alert thresholds table created via auto-migration")
+            _SCHEMA_MIGRATIONS_DONE.add("alert_thresholds")
+    except sqlite3.OperationalError as exc:
+        if "already exists" in str(exc).lower():
+            _SCHEMA_MIGRATIONS_DONE.add("alert_thresholds")
+        else:
+            raise
+
+    # Quickly short-circuit if we've already handled other migrations in this process
     if "primary_channel" in _SCHEMA_MIGRATIONS_DONE:
         return
 
@@ -158,6 +176,7 @@ def _ensure_schema_migrations(cursor: sqlite3.Cursor) -> None:
         # process may have altered the table first.
         if "duplicate column name" in str(exc).lower():
             _SCHEMA_MIGRATIONS_DONE.add("primary_channel")
+
         else:
             raise
 

@@ -119,7 +119,7 @@ def api_thresholds():
             thresholds = AlertService.get_thresholds()
             return jsonify(thresholds.to_dict())
 
-        elif request.method == "POST":
+        if request.method == "POST":
             data = request.get_json()
             if not data:
                 return jsonify({"error": "No data provided"}), 400
@@ -133,6 +133,8 @@ def api_thresholds():
                     "thresholds": thresholds.to_dict(),
                 }
             )
+
+        return jsonify({"error": "Method not allowed"}), 405
 
     except Exception as e:
         logger.error(f"Error with thresholds: {e}", exc_info=True)

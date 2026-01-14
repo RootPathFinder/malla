@@ -38,7 +38,7 @@ def _execute_with_retry(func, max_retries: int = 3, initial_delay: float = 0.1):
         sqlite3.OperationalError: If all retries fail
     """
     delay = initial_delay
-    last_error = None
+    last_error: sqlite3.OperationalError | None = None
 
     for attempt in range(max_retries):
         try:
@@ -55,7 +55,9 @@ def _execute_with_retry(func, max_retries: int = 3, initial_delay: float = 0.1):
                 delay *= 2  # Exponential backoff
 
     logger.error(f"Database operation failed after {max_retries} retries")
-    raise last_error
+    if last_error:
+        raise last_error
+    raise sqlite3.OperationalError("Database operation failed after retries")
 
 
 class AlertSeverity(Enum):
@@ -179,14 +181,63 @@ class AlertService:
 
     @classmethod
     def set_thresholds(cls, thresholds: AlertThresholds) -> None:
-        """Update alert thresholds."""
+        """Update alert thresholds and save to database."""
         cls._thresholds = thresholds
-        logger.info(f"Alert thresholds updated: {thresholds.to_dict()}")
+
+        # Save to database
+        def _save_thresholds():
+            conn = get_db_connection()
+            try:
+                cursor = conn.cursor()
+                current_time = time.time()
+                threshold_dict = thresholds.to_dict()
+
+                # Save each threshold value
+                for key, value in threshold_dict.items():
+                    cursor.execute(
+                        """
+                        INSERT OR REPLACE INTO alert_thresholds (key, value, updated_at)
+                        VALUES (?, ?, ?)
+                    """,
+                        (key, value, current_time),
+                    )
+
+                conn.commit()
+                logger.info(f"Alert thresholds saved to database: {threshold_dict}")
+            finally:
+                conn.close()
+
+        _execute_with_retry(_save_thresholds)
 
     @classmethod
     def get_thresholds(cls) -> AlertThresholds:
-        """Get current alert thresholds."""
-        return cls._thresholds
+        """Get alert thresholds from database or return cached defaults."""
+
+        # Try to load from database first
+        def _load_thresholds():
+            conn = get_db_connection()
+            try:
+                cursor = conn.cursor()
+                cursor.execute("SELECT key, value FROM alert_thresholds")
+                rows = cursor.fetchall()
+
+                if rows:
+                    threshold_dict = {row[0]: row[1] for row in rows}
+                    cls._thresholds = AlertThresholds.from_dict(threshold_dict)
+                    logger.debug(f"Loaded thresholds from database: {threshold_dict}")
+                    return cls._thresholds
+
+                return cls._thresholds
+            finally:
+                conn.close()
+
+        try:
+            return _execute_with_retry(_load_thresholds)
+        except Exception as e:
+            logger.warning(
+                f"Failed to load thresholds from database: {e}, using defaults"
+            )
+            return cls._thresholds
 
     @classmethod
     def add_alert(cls, alert: Alert) -> None:
@@ -201,7 +252,7 @@ class AlertService:
                 cursor.execute(
                     """
                     SELECT id FROM alerts
-                    WHERE alert_type = ? AND node_id = ? AND resolved = 0
+                    WHERE alert_type = ? AND COALESCE(node_id, -1) = COALESCE(?, -1) AND resolved = 0
                     LIMIT 1
                 """,
                     (alert.alert_type.value, alert.node_id),
@@ -267,7 +318,7 @@ class AlertService:
                     """
                     UPDATE alerts
                     SET resolved = 1, resolved_at = ?
-                    WHERE alert_type = ? AND node_id = ? AND resolved = 0
+                    WHERE alert_type = ? AND COALESCE(node_id, -1) = COALESCE(?, -1) AND resolved = 0
                 """,
                     (time.time(), alert_type.value, node_id),
                 )

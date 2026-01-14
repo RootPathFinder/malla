@@ -9,63 +9,40 @@
 <link rel="stylesheet" href="{{ url_for('static', filename='css/modern-table.css') }}">
 {{ table_layout_styles() }}
 <style>
-    /* Smooth row insertion animation */
-    @keyframes slideInAndPulse {
-        0% {
+    /* ==================== Animations ==================== */
+    @keyframes slideInDown {
+        from {
             opacity: 0;
-            transform: translateX(-20px);
-            background-color: rgba(13, 110, 253, 0.2);
+            transform: translateY(-30px);
+            max-height: 0;
+        }
+        to {
+            opacity: 1;
+            transform: translateY(0);
+            max-height: 100px;
+        }
+    }
+
+    @keyframes pulseRow {
+        0%, 100% {
+            background-color: rgba(13, 110, 253, 0.15);
+            box-shadow: inset 0 0 0 0 rgba(13, 110, 253, 0.3);
         }
         50% {
-            background-color: rgba(13, 110, 253, 0.1);
+            background-color: rgba(13, 110, 253, 0.25);
+            box-shadow: inset 0 0 0 2px rgba(13, 110, 253, 0.2);
         }
-        100% {
+    }
+
+    @keyframes fadeInRow {
+        from {
+            opacity: 0;
+            transform: translateX(-10px);
+        }
+        to {
             opacity: 1;
             transform: translateX(0);
-            background-color: transparent;
         }
-    }
-
-    .packet-row-new {
-        animation: slideInAndPulse 0.6s ease-out;
-    }
-
-    /* Relative time display */
-    .timestamp-relative {
-        display: block;
-        font-size: 0.75rem;
-        color: var(--bs-secondary);
-        margin-top: 0.25rem;
-        font-weight: 500;
-    }
-
-    /* Live PPM gauge styling */
-    .ppm-gauge-live {
-        position: relative;
-        display: inline-flex;
-        align-items: center;
-        justify-content: center;
-        width: 100%;
-        height: 100%;
-    }
-
-    .ppm-gauge-live .gauge-value {
-        position: absolute;
-        font-size: 1.5rem;
-        font-weight: bold;
-        color: #0d6efd;
-    }
-
-    .ppm-live-indicator {
-        position: absolute;
-        top: 50%;
-        right: 10px;
-        transform: translateY(-50%);
-        width: 10px;
-        height: 10px;
-        border-radius: 50%;
-        background-color: #28a745;
-        animation: livePulse 2s infinite;
     }
 
     @keyframes livePulse {
@@ -79,13 +56,122 @@
         }
     }
 
-    /* Table row hover effect - subtle */
-    .modern-table-container tbody tr {
-        transition: background-color 0.3s ease;
+    @keyframes scaleIn {
+        from {
+            transform: scale(0.95);
+            opacity: 0;
+        }
+        to {
+            transform: scale(1);
+            opacity: 1;
+        }
     }
 
-    .modern-table-container tbody tr.packet-row-new:hover {
+    /* ==================== New Packets Notification ==================== */
+    .new-packets-notification {
+        position: fixed;
+        top: 80px;
+        left: 50%;
+        transform: translateX(-50%);
+        background: linear-gradient(135deg, #0d6efd 0%, #0b5ed7 100%);
+        color: white;
+        padding: 12px 24px;
+        border-radius: 8px;
+        box-shadow: 0 8px 24px rgba(13, 110, 253, 0.3);
+        z-index: 1050;
+        cursor: pointer;
+        animation: slideInDown 0.4s ease-out;
+        display: flex;
+        align-items: center;
+        gap: 12px;
+        font-weight: 500;
+        transition: all 0.3s ease;
+    }
+
+    .new-packets-notification:hover {
+        transform: translateX(-50%) translateY(-2px);
+        box-shadow: 0 12px 32px rgba(13, 110, 253, 0.4);
+    }
+
+    .new-packets-notification .badge {
+        background-color: rgba(255, 255, 255, 0.3);
+        color: white;
+        padding: 4px 8px;
+        border-radius: 4px;
+        font-size: 0.85rem;
+        font-weight: 600;
+    }
+
+    .new-packets-notification i {
+        font-size: 1.2rem;
+        animation: scaleIn 0.6s ease-out;
+    }
+
+    /* ==================== Packet Row Styling ==================== */
+    .packet-row-new {
+        animation: pulseRow 0.8s ease-out forwards, fadeInRow 0.5s ease-out forwards !important;
+        background-color: rgba(13, 110, 253, 0.08) !important;
+    }
+
+    .modern-table-container tbody tr {
+        transition: all 0.3s ease;
+    }
+
+    .modern-table-container tbody tr:hover {
         background-color: rgba(13, 110, 253, 0.05);
+        box-shadow: inset 1px 0 0 rgba(13, 110, 253, 0.1);
+    }
+
+    /* ==================== Stats Cards - Enhanced ==================== */
+    .card {
+        border: 1px solid rgba(0, 0, 0, 0.08);
+    }
+
+    .card.shadow-sm {
+        transition: all 0.3s ease;
+    }
+
+    .card.shadow-sm:hover {
+        transform: translateY(-4px);
+        box-shadow: 0 12px 24px rgba(0, 0, 0, 0.12) !important;
+        border-color: rgba(13, 110, 253, 0.2);
+    }
+
+    .card-title {
+        display: flex;
+        align-items: center;
+        gap: 8px;
+    }
+
+    .ppm-live-indicator {
+        width: 10px;
+        height: 10px;
+        border-radius: 50%;
+        background-color: #28a745;
+        animation: livePulse 2s infinite;
+        display: inline-block;
+    }
+
+    /* ==================== Filter Section Enhancement ==================== */
+    .filter-section-header {
+        font-weight: 600;
+        color: var(--bs-primary);
+        margin-bottom: 1rem;
+        display: flex;
+        align-items: center;
+        gap: 8px;
+        font-size: 0.95rem;
+        text-transform: uppercase;
+        letter-spacing: 0.5px;
+    }
+
+    /* ==================== Responsive ==================== */
+    @media (max-width: 768px) {
+        .new-packets-notification {
+            font-size: 0.9rem;
+            padding: 10px 16px;
+            top: 70px;
+        }
     }
 </style>
 {% endblock %}
@@ -93,6 +179,13 @@
 {% block content %}
 <!-- Override the base template's container to make this page full-width/full-height -->
 </div> <!-- Close the base template's container -->
+
+<!-- New Packets Notification (hidden by default) -->
+<div id="newPacketsNotification" class="new-packets-notification" style="display: none;" role="button" tabindex="0" title="Click to refresh with new packets">
+    <i class="bi bi-arrow-down"></i>
+    <span id="newPacketsCount">1 new packet</span>
+    <span class="badge">Click to update</span>
+</div>
 
 <!-- High-Level Stats Cards -->
 <div class="container-fluid mb-3" style="padding: 1rem;">
@@ -296,7 +389,26 @@
 <script src="{{ url_for('static', filename='js/node-picker.js') }}"></script>
 <script src="{{ url_for('static', filename='js/modern-table.js') }}"></script>
 <script>
-// Stats update functions for high-level metrics
+// ==================== New Packets Notification System ====================
+let newPacketsCount = 0;
+let hasNewPackets = false;
+let lastPacketTimestamp = Math.floor(Date.now() / 1000);
+
+function showNewPacketsNotification(count) {
+    const notification = document.getElementById('newPacketsNotification');
+    const countEl = document.getElementById('newPacketsCount');
+
+    countEl.textContent = count + ' new packet' + (count > 1 ? 's' : '');
+    notification.style.display = 'flex';
+}
+
+function hideNewPacketsNotification() {
+    const notification = document.getElementById('newPacketsNotification');
+    notification.style.display = 'none';
+    newPacketsCount = 0;
+}
+
+// ==================== Stats Update Functions ====================
 async function updatePacketStats() {
     try {
         // Fetch packets per minute
@@ -429,6 +541,23 @@ document.addEventListener('DOMContentLoaded', function() {
     // Update stats immediately and then every 5 seconds
     updatePacketStats();
     setInterval(updatePacketStats, 5000);
+
+    // ==================== New Packets Notification Handler ====================
+    const notification = document.getElementById('newPacketsNotification');
+    notification?.addEventListener('click', function() {
+        if (window.controller) {
+            window.controller.applyCurrentFilters();
+            hideNewPacketsNotification();
+            hasNewPackets = false;
+        }
+    });
+
+    // Allow keyboard activation (Enter/Space)
+    notification?.addEventListener('keydown', function(e) {
+        if (e.key === 'Enter' || e.key === ' ') {
+            this.click();
+        }
+    });
 
     // Move sidebar content into the actual sidebar FIRST
     const sidebarContent = document.getElementById('sidebarContent');
@@ -853,10 +982,12 @@ document.addEventListener('DOMContentLoaded', function() {
                 const newestTimestamp = Math.max(...data.packets.map(p => p.timestamp));
                 lastPacketTimestamp = newestTimestamp;
 
-                // Mark that we have new packets but don't refresh yet
+                // Show the notification with elegant animation
+                newPacketsCount = data.packets.length;
                 hasNewPackets = true;
+                showNewPacketsNotification(newPacketsCount);
 
-                // Show visual indicator that new packets arrived (subtle pulse)
+                // Show visual indicator that new packets arrived
                 const lastUpdateEl = document.getElementById('statsLastUpdate');
                 if (lastUpdateEl) {
                     lastUpdateEl.classList.add('pulse-update');

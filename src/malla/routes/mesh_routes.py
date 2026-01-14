@@ -123,7 +123,9 @@ def api_links():
 
         if node_ids:
             # Get locations from repository
-            location_data = LocationRepository.get_bulk_locations(node_ids)
+            location_data = LocationRepository.get_node_locations(
+                filters={"node_ids": node_ids}
+            )
             for loc in location_data:
                 if loc.get("latitude") and loc.get("longitude"):
                     locations[loc["node_id"]] = {

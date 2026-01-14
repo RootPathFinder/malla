@@ -379,6 +379,13 @@
         // Tab change handlers
         document.getElementById('trends-tab').addEventListener('shown.bs.tab', loadTrend);
         document.getElementById('heatmap-tab').addEventListener('shown.bs.tab', loadHeatmap);
+
+        // Listen for theme changes to update charts
+        window.addEventListener('themeChanged', function() {
+            if (document.getElementById('trendChart').innerHTML) {
+                loadTrend();
+            }
+        });
     });
 
     async function loadAlerts() {
@@ -430,7 +437,7 @@
                             <span class="severity-badge severity-${alert.severity}">${alert.severity.toUpperCase()}</span>
                             <h6 class="mt-2 mb-1">${alert.title}</h6>
                             <p class="mb-1">${alert.message}</p>
-                            ${alert.node_name ? `<small class="text-muted">Node: <a href="/nodes/${alert.node_id}">${alert.node_name}</a></small>` : ''}
+                            ${alert.node_name ? `<small class="text-muted">Node: <a href="/node/${alert.node_id}">${alert.node_name}</a></small>` : ''}
                         </div>
                         <div class="text-end">
                             <div class="alert-timestamp">${formatTimeAgo(alert.timestamp)}</div>
@@ -508,6 +515,12 @@
             return;
         }
 
+        // Get theme-aware colors
+        const computedStyle = getComputedStyle(document.documentElement);
+        const isDark = document.documentElement.getAttribute('data-bs-theme') === 'dark';
+        const textColor = computedStyle.getPropertyValue('--bs-body-color').trim();
+        const gridColor = isDark ? 'rgba(255, 255, 255, 0.1)' : 'rgba(0, 0, 0, 0.1)';
+
         const timestamps = data.data.map(d => d.timestamp_str);
         const traces = [];
 
@@ -560,10 +573,21 @@
 
         const layout = {
             margin: { t: 30, r: 50, b: 50, l: 50 },
-            xaxis: { title: 'Time' },
-            yaxis: { title: data.metric === 'signal' ? 'RSSI (dBm)' : 'Count' },
-            legend: { orientation: 'h', y: 1.1 },
+            xaxis: {
+                title: 'Time',
+                color: textColor,
+                gridcolor: gridColor,
+            },
+            yaxis: {
+                title: data.metric === 'signal' ? 'RSSI (dBm)' : 'Count',
+                color: textColor,
+                gridcolor: gridColor,
+            },
+            legend: { orientation: 'h', y: 1.1, font: { color: textColor } },
             hovermode: 'x unified',
+            plot_bgcolor: 'rgba(0,0,0,0)',
+            paper_bgcolor: 'rgba(0,0,0,0)',
+            font: { color: textColor },
         };
 
         if (data.metric === 'signal') {
@@ -571,6 +595,8 @@
                 title: 'SNR (dB)',
                 overlaying: 'y',
                 side: 'right',
+                color: textColor,
+                gridcolor: gridColor,
             };
         }
 
@@ -619,10 +645,10 @@
     function getHeatmapColor(intensity) {
         if (intensity === 0) return '#e9ecef';
 
-        // Blue gradient from light to dark
-        const r = Math.round(224 - (224 - 24) * intensity);
-        const g = Math.round(224 - (224 - 100) * intensity);
-        const b = Math.round(224 - (224 - 171) * intensity);
+        // Red to blue gradient: red (high activity) to blue (low activity)
+        const r = Math.round(255 * intensity);
+        const g = Math.round(100 - (100 - 149) * intensity);
+        const b = Math.round(100 + (171 - 100) * intensity);
 
         return `rgb(${r}, ${g}, ${b})`;
     }
