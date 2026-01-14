@@ -141,6 +141,26 @@
             </div>
         </div>
 
+        <!-- Node Color Mode -->
+        <div class="sidebar-section">
+            <h6><i class="bi bi-palette"></i> Node Colors</h6>
+            <select class="form-select form-select-sm" id="colorModeSelect">
+                <option value="role" selected>By Role</option>
+                <option value="health">By Health Score</option>
+            </select>
+            <div id="healthLegend" class="mt-2" style="display: none;">
+                <small>
+                    <span class="role-color-indicator" style="background-color: #198754; width: 14px; height: 14px;"></span> Healthy (80-100)
+                    <br>
+                    <span class="role-color-indicator" style="background-color: #ffc107; width: 14px; height: 14px;"></span> Degraded (60-79)
+                    <br>
+                    <span class="role-color-indicator" style="background-color: #fd7e14; width: 14px; height: 14px;"></span> Poor (40-59)
+                    <br>
+                    <span class="role-color-indicator" style="background-color: #dc3545; width: 14px; height: 14px;"></span> Critical (&lt;40)
+                </small>
+            </div>
+        </div>
+
         <!-- Link visibility checkboxes -->
         <div class="sidebar-section">
             <h6><i class="bi bi-diagram-3"></i> Link Types</h6>
@@ -151,6 +171,10 @@
             <div class="form-check mt-1">
                 <input class="form-check-input" type="checkbox" id="packetLinksCheckbox">
                 <label class="form-check-label" for="packetLinksCheckbox">Packet Links</label>
+            </div>
+            <div class="form-check mt-1">
+                <input class="form-check-input" type="checkbox" id="neighborLinksCheckbox">
+                <label class="form-check-label" for="neighborLinksCheckbox">Neighbor Links (SNR)</label>
             </div>
         </div>
 
@@ -181,7 +205,8 @@
             {"type": "span", "class": "signal-indicator bg-warning", "content": "", "text": "Good coverage"},
             {"type": "span", "class": "signal-indicator bg-danger", "content": "", "text": "Limited coverage"},
             {"type": "span", "class": "legend-line", "style": "border-top: 4px solid #0d6efd;", "content": "", "text": "Traceroute link"},
-            {"type": "span", "class": "legend-line", "style": "border-top: 4px dashed #0d6efd;", "content": "", "text": "Packet link"}
+            {"type": "span", "class": "legend-line", "style": "border-top: 4px dashed #0d6efd;", "content": "", "text": "Packet link"},
+            {"type": "span", "class": "legend-line", "style": "border-top: 3px solid #20c997;", "content": "", "text": "Neighbor link"}
         ] %}
         {% call legend_section(map_legend_items) %}
             <div class="legend-item mt-2">
@@ -443,12 +468,17 @@ let allLinkData = [];
 let selectedNodeId = null;
 let showTracerouteLinks = true;
 let showPacketLinks = false;
+let showNeighborLinks = false;
 let precisionCircle = null;
 let searchResults = [];
 let allNodes = [];
 let linkData = [];
 let firstDisplay = true; // prevent recenter after initial load
 let currentHopDepth = 1; // max hop depth to display around selected node
+let nodeHealthScores = {}; // health scores for nodes
+let neighborLinkData = []; // neighbor links from NeighborInfo
+let neighborLinks = []; // Leaflet polylines for neighbor links
+let colorMode = 'role'; // 'role' or 'health'
 
 // Update map theme based on current theme setting
 function updateMapTheme() {
@@ -590,6 +620,31 @@ function initializeInterface() {
         const desiredState = this.checked;
         if (desiredState !== showPacketLinks) {
             togglePacketLinks();
+        }
+    });
+
+    // Neighbor links checkbox handler
+    $('#neighborLinksCheckbox').on('change', function() {
+        showNeighborLinks = this.checked;
+        if (showNeighborLinks) {
+            loadNeighborLinks();
+        } else {
+            clearNeighborLinks();
+        }
+    });
+
+    // Color mode selector handler
+    $('#colorModeSelect').on('change', function() {
+        colorMode = this.value;
+        const healthLegend = document.getElementById('healthLegend');
+        const roleLegend = document.querySelector('.sidebar-section:has(.legend-section)');
+
+        if (colorMode === 'health') {
+            healthLegend.style.display = 'block';
+            loadHealthScores().then(() => updateMapDisplay());
+        } else {
+            healthLegend.style.display = 'none';
+            updateMapDisplay();
         }
     });
 
@@ -743,6 +798,9 @@ function buildFilterParams() {
 async function loadNodeLocations() {
     try {
         showLoading();
+
+        // Load health scores if color mode is health (or for later use)
+        await loadHealthScores();
 
         const params = buildFilterParams();
         const response = await fetch(`/api/locations?${params.toString()}`);
@@ -948,8 +1006,8 @@ function updateMapDisplay() {
 
 // Add a marker for a node
 function addNodeMarker(node) {
-    // Create custom marker with role-based styling
-    const roleColor = getRoleColor(node.role);
+    // Create custom marker with role/health-based styling
+    const markerColor = getNodeColor(node);
 
     // Determine display text for the marker
     let displayText = node.short_name || node.display_name;
@@ -975,7 +1033,7 @@ function addNodeMarker(node) {
     const markerIcon = L.divIcon({
         className: 'custom-node-marker',
         html: `
-            <div class="node-marker-container" style="background-color: ${roleColor};">
+            <div class="node-marker-container" style="background-color: ${markerColor};">
                 <div class="node-marker-label">${displayText}</div>
                 ${temperatureHTML}
             </div>
@@ -1506,6 +1564,119 @@ function togglePacketLinks() {
             btn.innerHTML = '<i class="bi bi-envelope-open"></i> Show Packet Links';
             btn.className = 'btn btn-sm btn-outline-secondary';
         }
+    }
+}
+
+// Load health scores for all nodes
+async function loadHealthScores() {
+    try {
+        const response = await fetch('/mesh/api/health-scores?hours=24');
+        const data = await response.json();
+        nodeHealthScores = data.health_scores || {};
+        console.log(`Loaded health scores for ${Object.keys(nodeHealthScores).length} nodes`);
+    } catch (error) {
+        console.error('Failed to load health scores:', error);
+        nodeHealthScores = {};
+    }
+}
+
+// Load neighbor links from NeighborInfo
+async function loadNeighborLinks() {
+    try {
+        const response = await fetch('/mesh/api/links?hours=24');
+        const data = await response.json();
+        neighborLinkData = data.links || [];
+        console.log(`Loaded ${neighborLinkData.length} neighbor links`);
+        drawNeighborLinks();
+    } catch (error) {
+        console.error('Failed to load neighbor links:', error);
+        neighborLinkData = [];
+    }
+}
+
+// Draw neighbor links on the map
+function drawNeighborLinks() {
+    clearNeighborLinks();
+
+    if (!showNeighborLinks || neighborLinkData.length === 0) return;
+
+    neighborLinkData.forEach(link => {
+        const fromPos = [link.node_a_location.lat, link.node_a_location.lng];
+        const toPos = [link.node_b_location.lat, link.node_b_location.lng];
+
+        // Color based on SNR quality
+        let linkColor = '#20c997'; // Default teal
+        if (link.quality === 'excellent') {
+            linkColor = '#198754'; // Green
+        } else if (link.quality === 'good') {
+            linkColor = '#20c997'; // Teal
+        } else if (link.quality === 'fair') {
+            linkColor = '#ffc107'; // Yellow
+        } else if (link.quality === 'poor') {
+            linkColor = '#dc3545'; // Red
+        }
+
+        const weight = link.bidirectional ? 3 : 2;
+        const dashArray = link.bidirectional ? null : '5, 5';
+
+        const polyline = L.polyline([fromPos, toPos], {
+            color: linkColor,
+            weight: weight,
+            opacity: 0.7,
+            dashArray: dashArray,
+        });
+
+        // Add tooltip
+        const snrInfo = [];
+        if (link.snr_a_to_b !== null) snrInfo.push(`${link.node_a_name}→${link.node_b_name}: ${link.snr_a_to_b.toFixed(1)} dB`);
+        if (link.snr_b_to_a !== null) snrInfo.push(`${link.node_b_name}→${link.node_a_name}: ${link.snr_b_to_a.toFixed(1)} dB`);
+
+        polyline.bindTooltip(`
+            <div class="traceroute-link-info">
+                <div class="fw-bold">Neighbor Link</div>
+                <div><strong>${link.node_a_name}</strong> ↔ <strong>${link.node_b_name}</strong></div>
+                <div>${snrInfo.join('<br>')}</div>
+                <div>Quality: ${link.quality}</div>
+                <div>${link.bidirectional ? 'Bidirectional' : 'One-way'}</div>
+            </div>
+        `);
+
+        polyline.addTo(map);
+        neighborLinks.push(polyline);
+    });
+}
+
+// Clear neighbor links from map
+function clearNeighborLinks() {
+    neighborLinks.forEach(link => map.removeLayer(link));
+    neighborLinks = [];
+}
+
+// Get color for node based on health score
+function getHealthColor(nodeId) {
+    const healthData = nodeHealthScores[nodeId];
+    if (!healthData) {
+        return '#6c757d'; // Gray for unknown
+    }
+
+    const score = healthData.health_score;
+    if (score >= 80) {
+        return '#198754'; // Green - healthy
+    } else if (score >= 60) {
+        return '#ffc107'; // Yellow - degraded
+    } else if (score >= 40) {
+        return '#fd7e14'; // Orange - poor
+    } else {
+        return '#dc3545'; // Red - critical
+    }
+}
+
+// Get node color based on current color mode
+function getNodeColor(node) {
+    if (colorMode === 'health') {
+        return getHealthColor(node.node_id);
+    } else {
+        return getRoleColor(node.role);
     }
 }
 

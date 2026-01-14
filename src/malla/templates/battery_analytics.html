@@ -175,22 +175,45 @@
                 </div>
                 <div class="card-body">
                     {% if battery_health %}
+                    <div class="mb-2">
+                        <input type="text" id="battery-health-filter" class="form-control form-control-sm"
+                               placeholder="Filter nodes..." style="max-width: 300px;">
+                    </div>
                     <div class="table-responsive">
                         <table class="table table-hover table-sm" id="battery-health-table">
                             <thead>
                                 <tr>
-                                    <th>Node</th>
-                                    <th>Power Type</th>
-                                    <th>Battery %</th>
-                                    <th>Voltage</th>
-                                    <th>Health Score</th>
-                                    <th>Status</th>
+                                    <th class="sortable-col" data-sort="name" style="cursor: pointer;">
+                                        Node <i class="bi bi-arrow-down-up text-muted"></i>
+                                    </th>
+                                    <th class="sortable-col" data-sort="power_type" style="cursor: pointer;">
+                                        Power Type <i class="bi bi-arrow-down-up text-muted"></i>
+                                    </th>
+                                    <th class="sortable-col" data-sort="battery_level" style="cursor: pointer;">
+                                        Battery % <i class="bi bi-arrow-down-up text-muted"></i>
+                                    </th>
+                                    <th class="sortable-col" data-sort="voltage" style="cursor: pointer;">
+                                        Voltage <i class="bi bi-arrow-down-up text-muted"></i>
+                                    </th>
+                                    <th class="sortable-col" data-sort="health_score" style="cursor: pointer;">
+                                        Health Score <i class="bi bi-arrow-down-up text-muted"></i>
+                                    </th>
+                                    <th class="sortable-col" data-sort="status" style="cursor: pointer;">
+                                        Status <i class="bi bi-arrow-down-up text-muted"></i>
+                                    </th>
                                     <th>Last Telemetry</th>
                                 </tr>
                             </thead>
-                            <tbody>
+                            <tbody id="battery-health-tbody">
                                 {% for node in battery_health %}
-                                <tr style="{% if node.status_class == 'danger' %}background-color: rgba(220, 53, 69, 0.08);{% elif node.status_class == 'warning' %}background-color: rgba(255, 193, 7, 0.08);{% elif node.status_class == 'success' %}background-color: rgba(25, 135, 84, 0.05);{% endif %}">
+                                <tr class="battery-health-row"
+                                    data-name="{{ node.name|lower }}"
+                                    data-power_type="{{ node.power_type or 'unknown' }}"
+                                    data-battery_level="{{ node.battery_level or -1 }}"
+                                    data-voltage="{{ node.voltage or -1 }}"
+                                    data-health_score="{{ node.health_score or -1 }}"
+                                    data-status="{{ 'critical' if node.voltage and node.voltage < 3.3 else ('low' if node.voltage and node.voltage < 3.6 else ('issues' if node.health_score and node.health_score < 70 else 'good')) }}"
+                                    style="{% if node.status_class == 'danger' %}background-color: rgba(220, 53, 69, 0.08);{% elif node.status_class == 'warning' %}background-color: rgba(255, 193, 7, 0.08);{% elif node.status_class == 'success' %}background-color: rgba(25, 135, 84, 0.05);{% endif %}">
                                     <td>
                                         <a href="/node/{{ node.node_id }}" class="text-decoration-none">
                                             {{ node.name }}
@@ -202,8 +225,10 @@
                                             <i class="bi bi-sun-fill text-warning"></i> Solar
                                         {% elif node.power_type == 'battery' %}
                                             <i class="bi bi-battery-half text-info"></i> Battery
+                                        {% elif node.power_type == 'mains' %}
+                                            <i class="bi bi-plug-fill text-success"></i> Mains
                                         {% else %}
-                                            {{ node.power_type }}
+                                            <i class="bi bi-question-circle text-secondary"></i> {{ node.power_type or 'Unknown' }}
                                         {% endif %}
                                     </td>
                                     <td>
@@ -260,18 +285,100 @@
                     </div>
 
                     <script>
-                        // Make table sortable and searchable with DataTables (if available)
-                        document.addEventListener('DOMContentLoaded', function() {
-                            if (typeof $.fn.DataTable !== 'undefined') {
-                                $('#battery-health-table').DataTable({
-                                    pageLength: 25,
-                                    order: [[4, 'asc']],  // Sort by health score
-                                    language: {
-                                        search: "Filter nodes:"
+                        // Pure JavaScript sortable table implementation
+                        (function() {
+                            const table = document.getElementById('battery-health-table');
+                            const tbody = document.getElementById('battery-health-tbody');
+                            const filterInput = document.getElementById('battery-health-filter');
+                            const headers = table.querySelectorAll('.sortable-col');
+
+                            let currentSort = { column: null, direction: 'asc' };
+
+                            // Sorting logic
+                            function sortTable(column) {
+                                const rows = Array.from(tbody.querySelectorAll('.battery-health-row'));
+
+                                // Toggle direction if same column
+                                if (currentSort.column === column) {
+                                    currentSort.direction = currentSort.direction === 'asc' ? 'desc' : 'asc';
+                                } else {
+                                    currentSort.column = column;
+                                    currentSort.direction = 'asc';
+                                }
+
+                                rows.sort((a, b) => {
+                                    let aVal = a.dataset[column];
+                                    let bVal = b.dataset[column];
+
+                                    // Handle numeric sorting
+                                    if (['battery_level', 'voltage', 'health_score'].includes(column)) {
+                                        aVal = parseFloat(aVal) || -999;
+                                        bVal = parseFloat(bVal) || -999;
+                                        return currentSort.direction === 'asc' ? aVal - bVal : bVal - aVal;
+                                    }
+
+                                    // Handle status sorting (critical < low < issues < good)
+                                    if (column === 'status') {
+                                        const statusOrder = { 'critical': 0, 'low': 1, 'issues': 2, 'good': 3 };
+                                        aVal = statusOrder[aVal] ?? 4;
+                                        bVal = statusOrder[bVal] ?? 4;
+                                        return currentSort.direction === 'asc' ? aVal - bVal : bVal - aVal;
+                                    }
+
+                                    // String sorting
+                                    return currentSort.direction === 'asc'
+                                        ? aVal.localeCompare(bVal)
+                                        : bVal.localeCompare(aVal);
+                                });
+
+                                // Re-append sorted rows
+                                rows.forEach(row => tbody.appendChild(row));
+
+                                // Update header icons
+                                updateSortIcons();
+                            }
+
+                            function updateSortIcons() {
+                                headers.forEach(header => {
+                                    const icon = header.querySelector('i');
+                                    const col = header.dataset.sort;
+
+                                    if (col === currentSort.column) {
+                                        icon.className = currentSort.direction === 'asc'
+                                            ? 'bi bi-arrow-up'
+                                            : 'bi bi-arrow-down';
+                                        icon.classList.remove('text-muted');
+                                    } else {
+                                        icon.className = 'bi bi-arrow-down-up text-muted';
                                     }
                                 });
                             }
-                        });
+
+                            // Add click handlers to sortable headers
+                            headers.forEach(header => {
+                                header.addEventListener('click', () => {
+                                    sortTable(header.dataset.sort);
+                                });
+                            });
+
+                            // Filter logic
+                            if (filterInput) {
+                                filterInput.addEventListener('input', function() {
+                                    const filter = this.value.toLowerCase();
+                                    const rows = tbody.querySelectorAll('.battery-health-row');
+
+                                    rows.forEach(row => {
+                                        const name = row.dataset.name || '';
+                                        const powerType = row.dataset.power_type || '';
+                                        const visible = name.includes(filter) || powerType.includes(filter);
+                                        row.style.display = visible ? '' : 'none';
+                                    });
+                                });
+                            }
+
+                            // Initial sort by health score (ascending = worst first)
+                            sortTable('health_score');
+                        })();
                     </script>
                     {% else %}
                     <p class="text-muted mb-0">No battery-powered nodes found with telemetry data.</p>

@@ -1,0 +1,694 @@
+{% extends "base.html" %}
+
+{% block title %}Mesh Topology - {{ APP_NAME }}{% endblock %}
+
+{% block extra_css %}
+<style>
+    .topology-container {
+        display: flex;
+        flex-direction: column;
+        height: calc(100vh - 200px);
+        min-height: 600px;
+    }
+
+    .topology-graph {
+        flex: 1;
+        background: var(--bs-body-bg);
+        border: 1px solid var(--bs-border-color);
+        border-radius: 0.5rem;
+        position: relative;
+        overflow: hidden;
+    }
+
+    #topology-canvas {
+        width: 100%;
+        height: 100%;
+    }
+
+    .stats-card {
+        border-left: 4px solid var(--bs-primary);
+    }
+
+    .stats-card.excellent { border-left-color: #198754; }
+    .stats-card.good { border-left-color: #0dcaf0; }
+    .stats-card.warning { border-left-color: #ffc107; }
+    .stats-card.poor { border-left-color: #dc3545; }
+
+    .link-quality-excellent { color: #198754; }
+    .link-quality-good { color: #0dcaf0; }
+    .link-quality-fair { color: #ffc107; }
+    .link-quality-poor { color: #dc3545; }
+
+    .stability-score {
+        font-size: 1.5rem;
+        font-weight: bold;
+    }
+
+    .stability-high { color: #198754; }
+    .stability-medium { color: #ffc107; }
+    .stability-low { color: #dc3545; }
+
+    .node-badge {
+        display: inline-block;
+        padding: 0.25rem 0.5rem;
+        border-radius: 0.25rem;
+        font-size: 0.75rem;
+        font-weight: 500;
+    }
+
+    .node-badge.active { background-color: #198754; color: white; }
+    .node-badge.inactive { background-color: #6c757d; color: white; }
+
+    .neighbor-item {
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+        padding: 0.5rem;
+        border-bottom: 1px solid var(--bs-border-color);
+    }
+
+    .neighbor-item:last-child {
+        border-bottom: none;
+    }
+
+    .snr-badge {
+        padding: 0.25rem 0.5rem;
+        border-radius: 0.25rem;
+        font-size: 0.75rem;
+        font-weight: 600;
+    }
+
+    .snr-excellent { background-color: #d1e7dd; color: #0f5132; }
+    .snr-good { background-color: #cff4fc; color: #055160; }
+    .snr-fair { background-color: #fff3cd; color: #664d03; }
+    .snr-poor { background-color: #f8d7da; color: #842029; }
+
+    .change-gained { color: #198754; }
+    .change-lost { color: #dc3545; }
+
+    .filter-section {
+        background: var(--bs-tertiary-bg);
+        padding: 1rem;
+        border-radius: 0.5rem;
+        margin-bottom: 1rem;
+    }
+
+    /* Tab styles */
+    .nav-tabs .nav-link {
+        border: none;
+        border-bottom: 2px solid transparent;
+    }
+
+    .nav-tabs .nav-link.active {
+        border-bottom: 2px solid var(--bs-primary);
+        background: transparent;
+    }
+
+    .table-sortable th {
+        cursor: pointer;
+        user-select: none;
+    }
+
+    .table-sortable th:hover {
+        background-color: var(--bs-tertiary-bg);
+    }
+
+    .sort-icon {
+        margin-left: 0.25rem;
+        opacity: 0.3;
+    }
+
+    .sort-icon.active {
+        opacity: 1;
+    }
+</style>
+{% endblock %}
+
+{% block content %}
+<div class="container-fluid">
+    <div class="row mb-4">
+        <div class="col">
+            <h1><i class="bi bi-diagram-3"></i> Mesh Topology</h1>
+            <p class="text-muted">Visualize mesh network connections and analyze neighbor stability</p>
+        </div>
+    </div>
+
+    <!-- Filter Section -->
+    <div class="filter-section">
+        <div class="row align-items-end">
+            <div class="col-md-3">
+                <label for="hoursFilter" class="form-label">Analysis Period</label>
+                <select class="form-select" id="hoursFilter">
+                    <option value="6">Last 6 hours</option>
+                    <option value="24" selected>Last 24 hours</option>
+                    <option value="72">Last 3 days</option>
+                    <option value="168">Last 7 days</option>
+                </select>
+            </div>
+            <div class="col-md-3">
+                <label for="qualityFilter" class="form-label">Link Quality</label>
+                <select class="form-select" id="qualityFilter">
+                    <option value="all">All Links</option>
+                    <option value="excellent">Excellent Only (SNR ≥10)</option>
+                    <option value="good">Good+ (SNR ≥5)</option>
+                    <option value="fair">Fair+ (SNR ≥0)</option>
+                </select>
+            </div>
+            <div class="col-md-3">
+                <label for="nodeSearch" class="form-label">Search Node</label>
+                <input type="text" class="form-control" id="nodeSearch" placeholder="Node name or ID...">
+            </div>
+            <div class="col-md-3">
+                <button class="btn btn-primary" id="refreshBtn">
+                    <i class="bi bi-arrow-clockwise"></i> Refresh
+                </button>
+            </div>
+        </div>
+    </div>
+
+    <!-- Statistics Overview -->
+    <div class="row mb-4" id="statsRow">
+        <div class="col-md-2">
+            <div class="card stats-card h-100">
+                <div class="card-body text-center">
+                    <div class="h3 mb-0" id="statNodes">-</div>
+                    <small class="text-muted">Nodes in Topology</small>
+                </div>
+            </div>
+        </div>
+        <div class="col-md-2">
+            <div class="card stats-card excellent h-100">
+                <div class="card-body text-center">
+                    <div class="h3 mb-0" id="statEdges">-</div>
+                    <small class="text-muted">Total Links</small>
+                </div>
+            </div>
+        </div>
+        <div class="col-md-2">
+            <div class="card stats-card good h-100">
+                <div class="card-body text-center">
+                    <div class="h3 mb-0" id="statBidirectional">-</div>
+                    <small class="text-muted">Bidirectional Links</small>
+                </div>
+            </div>
+        </div>
+        <div class="col-md-2">
+            <div class="card stats-card warning h-100">
+                <div class="card-body text-center">
+                    <div class="h3 mb-0" id="statAvgNeighbors">-</div>
+                    <small class="text-muted">Avg Neighbors/Node</small>
+                </div>
+            </div>
+        </div>
+        <div class="col-md-2">
+            <div class="card stats-card h-100">
+                <div class="card-body text-center">
+                    <div class="h3 mb-0" id="statDensity">-</div>
+                    <small class="text-muted">Mesh Density</small>
+                </div>
+            </div>
+        </div>
+        <div class="col-md-2">
+            <div class="card stats-card poor h-100">
+                <div class="card-body text-center">
+                    <div class="h3 mb-0" id="statUnidirectional">-</div>
+                    <small class="text-muted">One-way Links</small>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Tabs for different views -->
+    <ul class="nav nav-tabs mb-3" id="topologyTabs" role="tablist">
+        <li class="nav-item" role="presentation">
+            <button class="nav-link active" id="links-tab" data-bs-toggle="tab" data-bs-target="#links-pane" type="button" role="tab">
+                <i class="bi bi-link-45deg"></i> Link Table
+            </button>
+        </li>
+        <li class="nav-item" role="presentation">
+            <button class="nav-link" id="nodes-tab" data-bs-toggle="tab" data-bs-target="#nodes-pane" type="button" role="tab">
+                <i class="bi bi-circle"></i> Node Table
+            </button>
+        </li>
+        <li class="nav-item" role="presentation">
+            <button class="nav-link" id="stability-tab" data-bs-toggle="tab" data-bs-target="#stability-pane" type="button" role="tab">
+                <i class="bi bi-activity"></i> Neighbor Stability
+            </button>
+        </li>
+    </ul>
+
+    <div class="tab-content" id="topologyTabsContent">
+        <!-- Links Table -->
+        <div class="tab-pane fade show active" id="links-pane" role="tabpanel">
+            <div class="card">
+                <div class="card-body">
+                    <div class="table-responsive">
+                        <table class="table table-hover table-sortable" id="linksTable">
+                            <thead>
+                                <tr>
+                                    <th data-sort="node_a">Node A</th>
+                                    <th data-sort="node_b">Node B</th>
+                                    <th data-sort="snr_a_to_b">SNR A→B <i class="bi bi-arrow-down-up sort-icon"></i></th>
+                                    <th data-sort="snr_b_to_a">SNR B→A <i class="bi bi-arrow-down-up sort-icon"></i></th>
+                                    <th data-sort="avg_snr">Avg SNR <i class="bi bi-arrow-down-up sort-icon"></i></th>
+                                    <th data-sort="quality">Quality <i class="bi bi-arrow-down-up sort-icon"></i></th>
+                                    <th data-sort="bidirectional">Direction <i class="bi bi-arrow-down-up sort-icon"></i></th>
+                                </tr>
+                            </thead>
+                            <tbody id="linksTableBody">
+                                <tr>
+                                    <td colspan="7" class="text-center">
+                                        <div class="spinner-border spinner-border-sm" role="status"></div>
+                                        Loading...
+                                    </td>
+                                </tr>
+                            </tbody>
+                        </table>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- Nodes Table -->
+        <div class="tab-pane fade" id="nodes-pane" role="tabpanel">
+            <div class="card">
+                <div class="card-body">
+                    <div class="table-responsive">
+                        <table class="table table-hover table-sortable" id="nodesTable">
+                            <thead>
+                                <tr>
+                                    <th data-sort="name">Node Name</th>
+                                    <th data-sort="hex_id">Node ID</th>
+                                    <th data-sort="neighbor_count">Neighbors <i class="bi bi-arrow-down-up sort-icon"></i></th>
+                                    <th data-sort="last_seen">Last Report <i class="bi bi-arrow-down-up sort-icon"></i></th>
+                                    <th data-sort="broadcast_interval">Broadcast Interval <i class="bi bi-arrow-down-up sort-icon"></i></th>
+                                    <th>Actions</th>
+                                </tr>
+                            </thead>
+                            <tbody id="nodesTableBody">
+                                <tr>
+                                    <td colspan="6" class="text-center">
+                                        <div class="spinner-border spinner-border-sm" role="status"></div>
+                                        Loading...
+                                    </td>
+                                </tr>
+                            </tbody>
+                        </table>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- Stability Analysis -->
+        <div class="tab-pane fade" id="stability-pane" role="tabpanel">
+            <div class="card">
+                <div class="card-header">
+                    <h5 class="mb-0"><i class="bi bi-graph-up"></i> Neighbor Stability Analysis (7 days)</h5>
+                </div>
+                <div class="card-body">
+                    <div class="table-responsive">
+                        <table class="table table-hover table-sortable" id="stabilityTable">
+                            <thead>
+                                <tr>
+                                    <th data-sort="name">Node Name</th>
+                                    <th data-sort="stability_score">Stability Score <i class="bi bi-arrow-down-up sort-icon"></i></th>
+                                    <th data-sort="current_neighbors">Current Neighbors <i class="bi bi-arrow-down-up sort-icon"></i></th>
+                                    <th data-sort="stable_neighbors">Stable <i class="bi bi-arrow-down-up sort-icon"></i></th>
+                                    <th data-sort="unstable_neighbors">Unstable <i class="bi bi-arrow-down-up sort-icon"></i></th>
+                                    <th data-sort="neighbors_gained_count">Gained <i class="bi bi-arrow-down-up sort-icon"></i></th>
+                                    <th data-sort="neighbors_lost_count">Lost <i class="bi bi-arrow-down-up sort-icon"></i></th>
+                                    <th data-sort="report_count">Reports <i class="bi bi-arrow-down-up sort-icon"></i></th>
+                                </tr>
+                            </thead>
+                            <tbody id="stabilityTableBody">
+                                <tr>
+                                    <td colspan="8" class="text-center">
+                                        <div class="spinner-border spinner-border-sm" role="status"></div>
+                                        Loading stability data...
+                                    </td>
+                                </tr>
+                            </tbody>
+                        </table>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+
+<!-- Node Detail Modal -->
+<div class="modal fade" id="nodeDetailModal" tabindex="-1">
+    <div class="modal-dialog modal-lg">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h5 class="modal-title"><i class="bi bi-broadcast"></i> Node Neighbors</h5>
+                <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+            </div>
+            <div class="modal-body" id="nodeDetailBody">
+                <div class="text-center">
+                    <div class="spinner-border" role="status"></div>
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+{% endblock %}
+
+{% block extra_js %}
+<script>
+(function() {
+    let topologyData = null;
+    let stabilityData = null;
+    let currentSort = { column: 'avg_snr', direction: 'desc' };
+
+    // Initialize
+    document.addEventListener('DOMContentLoaded', function() {
+        loadTopology();
+        loadStability();
+
+        document.getElementById('refreshBtn').addEventListener('click', function() {
+            loadTopology();
+            loadStability();
+        });
+
+        document.getElementById('hoursFilter').addEventListener('change', loadTopology);
+        document.getElementById('qualityFilter').addEventListener('change', renderLinks);
+        document.getElementById('nodeSearch').addEventListener('input', debounce(filterTables, 300));
+
+        // Tab change handlers
+        document.getElementById('stability-tab').addEventListener('shown.bs.tab', function() {
+            if (!stabilityData) loadStability();
+        });
+
+        // Sortable table headers
+        document.querySelectorAll('.table-sortable th[data-sort]').forEach(th => {
+            th.addEventListener('click', function() {
+                const column = this.dataset.sort;
+                const table = this.closest('table').id;
+                sortTable(table, column);
+            });
+        });
+    });
+
+    function debounce(func, wait) {
+        let timeout;
+        return function(...args) {
+            clearTimeout(timeout);
+            timeout = setTimeout(() => func.apply(this, args), wait);
+        };
+    }
+
+    async function loadTopology() {
+        const hours = document.getElementById('hoursFilter').value;
+
+        try {
+            const response = await fetch(`/mesh/api/topology?hours=${hours}`);
+            topologyData = await response.json();
+
+            updateStats(topologyData.statistics);
+            renderLinks();
+            renderNodes();
+
+        } catch (error) {
+            console.error('Failed to load topology:', error);
+            document.getElementById('linksTableBody').innerHTML =
+                '<tr><td colspan="7" class="text-center text-danger">Failed to load data</td></tr>';
+        }
+    }
+
+    async function loadStability() {
+        try {
+            const response = await fetch('/mesh/api/stability?hours=168');
+            stabilityData = await response.json();
+            renderStability();
+        } catch (error) {
+            console.error('Failed to load stability:', error);
+            document.getElementById('stabilityTableBody').innerHTML =
+                '<tr><td colspan="8" class="text-center text-danger">Failed to load stability data</td></tr>';
+        }
+    }
+
+    function updateStats(stats) {
+        document.getElementById('statNodes').textContent = stats.total_nodes;
+        document.getElementById('statEdges').textContent = stats.total_edges;
+        document.getElementById('statBidirectional').textContent = stats.bidirectional_edges;
+        document.getElementById('statUnidirectional').textContent = stats.unidirectional_edges;
+        document.getElementById('statAvgNeighbors').textContent = stats.avg_neighbors_per_node;
+        document.getElementById('statDensity').textContent = stats.mesh_density + '%';
+    }
+
+    function renderLinks() {
+        if (!topologyData) return;
+
+        const qualityFilter = document.getElementById('qualityFilter').value;
+        const searchTerm = document.getElementById('nodeSearch').value.toLowerCase();
+
+        let edges = topologyData.edges.filter(edge => {
+            // Quality filter
+            if (qualityFilter !== 'all') {
+                const qualityOrder = { 'excellent': 3, 'good': 2, 'fair': 1, 'poor': 0, 'unknown': -1 };
+                const minQuality = qualityOrder[qualityFilter] || 0;
+                const edgeQuality = qualityOrder[edge.quality] || -1;
+                if (edgeQuality < minQuality) return false;
+            }
+
+            // Search filter
+            if (searchTerm) {
+                const matchA = edge.node_a_name.toLowerCase().includes(searchTerm) ||
+                              ('!' + edge.node_a.toString(16)).includes(searchTerm);
+                const matchB = edge.node_b_name.toLowerCase().includes(searchTerm) ||
+                              ('!' + edge.node_b.toString(16)).includes(searchTerm);
+                if (!matchA && !matchB) return false;
+            }
+
+            return true;
+        });
+
+        // Sort
+        edges.sort((a, b) => {
+            let aVal = a[currentSort.column];
+            let bVal = b[currentSort.column];
+
+            if (aVal === null || aVal === undefined) aVal = -999;
+            if (bVal === null || bVal === undefined) bVal = -999;
+
+            if (typeof aVal === 'string') {
+                return currentSort.direction === 'asc'
+                    ? aVal.localeCompare(bVal)
+                    : bVal.localeCompare(aVal);
+            }
+
+            return currentSort.direction === 'asc' ? aVal - bVal : bVal - aVal;
+        });
+
+        const tbody = document.getElementById('linksTableBody');
+
+        if (edges.length === 0) {
+            tbody.innerHTML = '<tr><td colspan="7" class="text-center text-muted">No links found</td></tr>';
+            return;
+        }
+
+        tbody.innerHTML = edges.map(edge => `
+            <tr>
+                <td>
+                    <a href="/nodes/${edge.node_a}" class="node-link">${edge.node_a_name}</a>
+                </td>
+                <td>
+                    <a href="/nodes/${edge.node_b}" class="node-link">${edge.node_b_name}</a>
+                </td>
+                <td>${edge.snr_a_to_b !== null ? edge.snr_a_to_b.toFixed(1) + ' dB' : '-'}</td>
+                <td>${edge.snr_b_to_a !== null ? edge.snr_b_to_a.toFixed(1) + ' dB' : '-'}</td>
+                <td>
+                    <span class="snr-badge snr-${edge.quality}">
+                        ${edge.avg_snr !== null ? edge.avg_snr.toFixed(1) + ' dB' : '-'}
+                    </span>
+                </td>
+                <td>
+                    <span class="link-quality-${edge.quality}">
+                        <i class="bi bi-${getQualityIcon(edge.quality)}"></i> ${capitalize(edge.quality)}
+                    </span>
+                </td>
+                <td>
+                    ${edge.bidirectional
+                        ? '<span class="text-success"><i class="bi bi-arrow-left-right"></i> Bidirectional</span>'
+                        : '<span class="text-warning"><i class="bi bi-arrow-right"></i> One-way</span>'}
+                </td>
+            </tr>
+        `).join('');
+    }
+
+    function renderNodes() {
+        if (!topologyData) return;
+
+        const searchTerm = document.getElementById('nodeSearch').value.toLowerCase();
+
+        let nodes = topologyData.nodes.filter(node => {
+            if (searchTerm) {
+                return node.name.toLowerCase().includes(searchTerm) ||
+                       node.hex_id.toLowerCase().includes(searchTerm);
+            }
+            return true;
+        });
+
+        const tbody = document.getElementById('nodesTableBody');
+
+        if (nodes.length === 0) {
+            tbody.innerHTML = '<tr><td colspan="6" class="text-center text-muted">No nodes found</td></tr>';
+            return;
+        }
+
+        tbody.innerHTML = nodes.map(node => `
+            <tr>
+                <td>
+                    <a href="/nodes/${node.node_id}" class="node-link">${node.name}</a>
+                </td>
+                <td><code>${node.hex_id}</code></td>
+                <td>
+                    <span class="badge ${node.neighbor_count > 0 ? 'bg-primary' : 'bg-secondary'}">
+                        ${node.neighbor_count}
+                    </span>
+                </td>
+                <td>${node.last_seen ? formatTimeAgo(node.last_seen) : 'No report'}</td>
+                <td>${node.broadcast_interval ? node.broadcast_interval + 's' : '-'}</td>
+                <td>
+                    <button class="btn btn-sm btn-outline-primary" onclick="showNodeNeighbors(${node.node_id})">
+                        <i class="bi bi-broadcast"></i> View Neighbors
+                    </button>
+                </td>
+            </tr>
+        `).join('');
+    }
+
+    function renderStability() {
+        if (!stabilityData) return;
+
+        const tbody = document.getElementById('stabilityTableBody');
+
+        if (stabilityData.nodes.length === 0) {
+            tbody.innerHTML = '<tr><td colspan="8" class="text-center text-muted">No stability data available</td></tr>';
+            return;
+        }
+
+        tbody.innerHTML = stabilityData.nodes.map(node => {
+            let scoreClass = 'stability-high';
+            if (node.stability_score < 50) scoreClass = 'stability-low';
+            else if (node.stability_score < 80) scoreClass = 'stability-medium';
+
+            return `
+                <tr>
+                    <td>
+                        <a href="/nodes/${node.node_id}" class="node-link">${node.node_name}</a>
+                        <br><small class="text-muted">${node.hex_id}</small>
+                    </td>
+                    <td>
+                        <span class="stability-score ${scoreClass}">${node.stability_score}%</span>
+                    </td>
+                    <td>${node.current_neighbors}</td>
+                    <td><span class="text-success">${node.stable_neighbors}</span></td>
+                    <td><span class="text-warning">${node.unstable_neighbors}</span></td>
+                    <td><span class="change-gained">+${node.neighbors_gained_count}</span></td>
+                    <td><span class="change-lost">-${node.neighbors_lost_count}</span></td>
+                    <td>${node.report_count}</td>
+                </tr>
+            `;
+        }).join('');
+    }
+
+    function sortTable(tableId, column) {
+        if (currentSort.column === column) {
+            currentSort.direction = currentSort.direction === 'asc' ? 'desc' : 'asc';
+        } else {
+            currentSort.column = column;
+            currentSort.direction = 'desc';
+        }
+
+        // Update sort icons
+        document.querySelectorAll(`#${tableId} .sort-icon`).forEach(icon => {
+            icon.classList.remove('active');
+        });
+        const activeHeader = document.querySelector(`#${tableId} th[data-sort="${column}"] .sort-icon`);
+        if (activeHeader) {
+            activeHeader.classList.add('active');
+            activeHeader.className = `bi bi-arrow-${currentSort.direction === 'asc' ? 'up' : 'down'} sort-icon active`;
+        }
+
+        // Re-render appropriate table
+        if (tableId === 'linksTable') renderLinks();
+        else if (tableId === 'nodesTable') renderNodes();
+        else if (tableId === 'stabilityTable') renderStability();
+    }
+
+    function filterTables() {
+        renderLinks();
+        renderNodes();
+    }
+
+    window.showNodeNeighbors = async function(nodeId) {
+        const modal = new bootstrap.Modal(document.getElementById('nodeDetailModal'));
+        const body = document.getElementById('nodeDetailBody');
+
+        body.innerHTML = '<div class="text-center"><div class="spinner-border" role="status"></div></div>';
+        modal.show();
+
+        try {
+            const response = await fetch(`/mesh/api/node/${nodeId}/neighbors`);
+            const data = await response.json();
+
+            if (!data.has_data) {
+                body.innerHTML = '<div class="alert alert-info">No neighbor data available for this node.</div>';
+                return;
+            }
+
+            body.innerHTML = `
+                <div class="mb-3">
+                    <h5>${data.node_name} <small class="text-muted">${data.hex_id}</small></h5>
+                    <p class="text-muted mb-2">
+                        Last report: ${formatTimeAgo(data.last_report)} |
+                        ${data.neighbor_count} neighbors
+                        ${data.broadcast_interval ? `| Broadcast interval: ${data.broadcast_interval}s` : ''}
+                    </p>
+                </div>
+                <div class="list-group">
+                    ${data.neighbors.map(n => `
+                        <div class="list-group-item d-flex justify-content-between align-items-center">
+                            <div>
+                                <a href="/nodes/${n.node_id}" class="node-link">${n.node_name}</a>
+                                <br><small class="text-muted">${n.hex_id}</small>
+                            </div>
+                            <span class="snr-badge snr-${n.quality}">${n.snr.toFixed(1)} dB</span>
+                        </div>
+                    `).join('')}
+                </div>
+            `;
+
+        } catch (error) {
+            body.innerHTML = '<div class="alert alert-danger">Failed to load neighbor data.</div>';
+        }
+    };
+
+    function getQualityIcon(quality) {
+        switch(quality) {
+            case 'excellent': return 'reception-4';
+            case 'good': return 'reception-3';
+            case 'fair': return 'reception-2';
+            case 'poor': return 'reception-1';
+            default: return 'question-circle';
+        }
+    }
+
+    function capitalize(str) {
+        return str.charAt(0).toUpperCase() + str.slice(1);
+    }
+
+    function formatTimeAgo(timestamp) {
+        const now = Date.now() / 1000;
+        const diff = now - timestamp;
+
+        if (diff < 60) return 'Just now';
+        if (diff < 3600) return Math.floor(diff / 60) + 'm ago';
+        if (diff < 86400) return Math.floor(diff / 3600) + 'h ago';
+        return Math.floor(diff / 86400) + 'd ago';
+    }
+})();
+</script>
+{% endblock %}

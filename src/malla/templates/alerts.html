@@ -1,0 +1,685 @@
+{% extends "base.html" %}
+
+{% block title %}Alerts & Trends - {{ APP_NAME }}{% endblock %}
+
+{% block extra_css %}
+<style>
+    .alert-card {
+        border-left: 4px solid;
+        margin-bottom: 0.5rem;
+    }
+
+    .alert-card.severity-critical { border-left-color: #dc3545; }
+    .alert-card.severity-warning { border-left-color: #ffc107; }
+    .alert-card.severity-info { border-left-color: #0dcaf0; }
+
+    .severity-badge {
+        font-size: 0.75rem;
+        padding: 0.25rem 0.5rem;
+        border-radius: 0.25rem;
+        font-weight: 600;
+    }
+
+    .severity-critical { background-color: #dc3545; color: white; }
+    .severity-warning { background-color: #ffc107; color: #000; }
+    .severity-info { background-color: #0dcaf0; color: #000; }
+
+    .summary-card {
+        text-align: center;
+        padding: 1.5rem;
+    }
+
+    .summary-card .count {
+        font-size: 2.5rem;
+        font-weight: bold;
+    }
+
+    .summary-card.critical .count { color: #dc3545; }
+    .summary-card.warning .count { color: #ffc107; }
+    .summary-card.info .count { color: #0dcaf0; }
+    .summary-card.total .count { color: #0d6efd; }
+
+    .heatmap-container {
+        overflow-x: auto;
+    }
+
+    .heatmap-grid {
+        display: grid;
+        grid-template-columns: 100px repeat(24, 1fr);
+        gap: 2px;
+        min-width: 800px;
+    }
+
+    .heatmap-cell {
+        height: 30px;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        font-size: 0.7rem;
+        border-radius: 2px;
+    }
+
+    .heatmap-header {
+        font-weight: 600;
+        font-size: 0.75rem;
+        color: var(--bs-secondary);
+    }
+
+    .heatmap-day-label {
+        font-weight: 500;
+        font-size: 0.8rem;
+        padding-right: 0.5rem;
+        text-align: right;
+    }
+
+    .trend-chart {
+        height: 300px;
+        width: 100%;
+    }
+
+    .threshold-input {
+        max-width: 150px;
+    }
+
+    .filter-section {
+        background: var(--bs-tertiary-bg);
+        padding: 1rem;
+        border-radius: 0.5rem;
+        margin-bottom: 1rem;
+    }
+
+    .alert-resolved {
+        opacity: 0.6;
+    }
+
+    .alert-timestamp {
+        font-size: 0.8rem;
+        color: var(--bs-secondary);
+    }
+
+    .tab-content {
+        padding-top: 1rem;
+    }
+</style>
+{% endblock %}
+
+{% block content %}
+<div class="container-fluid">
+    <div class="row mb-4">
+        <div class="col">
+            <h1><i class="bi bi-bell"></i> Alerts & Network Trends</h1>
+            <p class="text-muted">Monitor alerts, analyze trends, and view activity patterns</p>
+        </div>
+        <div class="col-auto">
+            <button class="btn btn-primary" id="runChecksBtn">
+                <i class="bi bi-arrow-clockwise"></i> Run Health Checks
+            </button>
+        </div>
+    </div>
+
+    <!-- Summary Cards -->
+    <div class="row mb-4" id="summaryRow">
+        <div class="col-md-3">
+            <div class="card summary-card total">
+                <div class="count" id="totalAlerts">-</div>
+                <div class="text-muted">Active Alerts</div>
+            </div>
+        </div>
+        <div class="col-md-3">
+            <div class="card summary-card critical">
+                <div class="count" id="criticalAlerts">-</div>
+                <div class="text-muted">Critical</div>
+            </div>
+        </div>
+        <div class="col-md-3">
+            <div class="card summary-card warning">
+                <div class="count" id="warningAlerts">-</div>
+                <div class="text-muted">Warnings</div>
+            </div>
+        </div>
+        <div class="col-md-3">
+            <div class="card summary-card info">
+                <div class="count" id="infoAlerts">-</div>
+                <div class="text-muted">Info</div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Tabs -->
+    <ul class="nav nav-tabs" id="alertTabs" role="tablist">
+        <li class="nav-item" role="presentation">
+            <button class="nav-link active" id="alerts-tab" data-bs-toggle="tab" data-bs-target="#alerts-pane" type="button" role="tab">
+                <i class="bi bi-exclamation-triangle"></i> Active Alerts
+            </button>
+        </li>
+        <li class="nav-item" role="presentation">
+            <button class="nav-link" id="trends-tab" data-bs-toggle="tab" data-bs-target="#trends-pane" type="button" role="tab">
+                <i class="bi bi-graph-up"></i> Trends
+            </button>
+        </li>
+        <li class="nav-item" role="presentation">
+            <button class="nav-link" id="heatmap-tab" data-bs-toggle="tab" data-bs-target="#heatmap-pane" type="button" role="tab">
+                <i class="bi bi-grid-3x3"></i> Activity Heatmap
+            </button>
+        </li>
+        <li class="nav-item" role="presentation">
+            <button class="nav-link" id="settings-tab" data-bs-toggle="tab" data-bs-target="#settings-pane" type="button" role="tab">
+                <i class="bi bi-gear"></i> Thresholds
+            </button>
+        </li>
+    </ul>
+
+    <div class="tab-content" id="alertTabsContent">
+        <!-- Alerts Tab -->
+        <div class="tab-pane fade show active" id="alerts-pane" role="tabpanel">
+            <div class="filter-section">
+                <div class="row align-items-end">
+                    <div class="col-md-3">
+                        <label class="form-label">Severity Filter</label>
+                        <select class="form-select" id="severityFilter">
+                            <option value="">All Severities</option>
+                            <option value="critical">Critical</option>
+                            <option value="warning">Warning</option>
+                            <option value="info">Info</option>
+                        </select>
+                    </div>
+                    <div class="col-md-3">
+                        <div class="form-check">
+                            <input class="form-check-input" type="checkbox" id="showResolved">
+                            <label class="form-check-label" for="showResolved">
+                                Include Resolved
+                            </label>
+                        </div>
+                    </div>
+                    <div class="col-md-3">
+                        <button class="btn btn-outline-primary" id="refreshAlerts">
+                            <i class="bi bi-arrow-clockwise"></i> Refresh
+                        </button>
+                    </div>
+                </div>
+            </div>
+
+            <div id="alertsList">
+                <div class="text-center p-4">
+                    <div class="spinner-border" role="status"></div>
+                    <p class="mt-2 text-muted">Loading alerts...</p>
+                </div>
+            </div>
+        </div>
+
+        <!-- Trends Tab -->
+        <div class="tab-pane fade" id="trends-pane" role="tabpanel">
+            <div class="filter-section">
+                <div class="row align-items-end">
+                    <div class="col-md-3">
+                        <label class="form-label">Metric</label>
+                        <select class="form-select" id="trendMetric">
+                            <option value="packets">Packet Count</option>
+                            <option value="nodes">Active Nodes</option>
+                            <option value="signal">Signal Quality</option>
+                        </select>
+                    </div>
+                    <div class="col-md-3">
+                        <label class="form-label">Time Range</label>
+                        <select class="form-select" id="trendHours">
+                            <option value="24">Last 24 hours</option>
+                            <option value="72">Last 3 days</option>
+                            <option value="168" selected>Last 7 days</option>
+                            <option value="336">Last 14 days</option>
+                            <option value="720">Last 30 days</option>
+                        </select>
+                    </div>
+                    <div class="col-md-3">
+                        <button class="btn btn-primary" id="loadTrend">
+                            <i class="bi bi-graph-up"></i> Load Trend
+                        </button>
+                    </div>
+                </div>
+            </div>
+
+            <div class="card">
+                <div class="card-body">
+                    <div id="trendChart" class="trend-chart"></div>
+                </div>
+            </div>
+        </div>
+
+        <!-- Heatmap Tab -->
+        <div class="tab-pane fade" id="heatmap-pane" role="tabpanel">
+            <div class="filter-section">
+                <div class="row align-items-end">
+                    <div class="col-md-4">
+                        <label class="form-label">Analysis Period</label>
+                        <select class="form-select" id="heatmapDays">
+                            <option value="7" selected>Last 7 days</option>
+                            <option value="14">Last 14 days</option>
+                            <option value="30">Last 30 days</option>
+                        </select>
+                    </div>
+                    <div class="col-md-4">
+                        <button class="btn btn-primary" id="loadHeatmap">
+                            <i class="bi bi-grid-3x3"></i> Load Heatmap
+                        </button>
+                    </div>
+                </div>
+            </div>
+
+            <div class="card">
+                <div class="card-header">
+                    <h5 class="mb-0"><i class="bi bi-calendar-week"></i> Network Activity by Day & Hour</h5>
+                </div>
+                <div class="card-body">
+                    <p class="text-muted mb-3">Shows packet activity distribution across the week. Darker colors indicate higher activity.</p>
+                    <div class="heatmap-container">
+                        <div id="heatmapGrid" class="heatmap-grid">
+                            <div class="text-center p-4">Loading heatmap...</div>
+                        </div>
+                    </div>
+                    <div class="mt-3 d-flex justify-content-center align-items-center gap-2">
+                        <span class="text-muted small">Low</span>
+                        <div style="width: 200px; height: 15px; background: linear-gradient(to right, #e0e0e0, #4dabf7, #1864ab); border-radius: 3px;"></div>
+                        <span class="text-muted small">High</span>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- Thresholds Tab -->
+        <div class="tab-pane fade" id="settings-pane" role="tabpanel">
+            <div class="card">
+                <div class="card-header">
+                    <h5 class="mb-0"><i class="bi bi-sliders"></i> Alert Thresholds</h5>
+                </div>
+                <div class="card-body">
+                    <form id="thresholdsForm">
+                        <h6 class="mb-3">Battery Alerts</h6>
+                        <div class="row mb-4">
+                            <div class="col-md-3">
+                                <label class="form-label">Warning Voltage (V)</label>
+                                <input type="number" class="form-control threshold-input" id="battery_warning_voltage" step="0.1" value="3.4">
+                            </div>
+                            <div class="col-md-3">
+                                <label class="form-label">Critical Voltage (V)</label>
+                                <input type="number" class="form-control threshold-input" id="battery_critical_voltage" step="0.1" value="3.2">
+                            </div>
+                            <div class="col-md-3">
+                                <label class="form-label">Warning Level (%)</label>
+                                <input type="number" class="form-control threshold-input" id="battery_warning_percent" min="1" max="100" value="20">
+                            </div>
+                            <div class="col-md-3">
+                                <label class="form-label">Critical Level (%)</label>
+                                <input type="number" class="form-control threshold-input" id="battery_critical_percent" min="1" max="100" value="10">
+                            </div>
+                        </div>
+
+                        <h6 class="mb-3">Activity Alerts</h6>
+                        <div class="row mb-4">
+                            <div class="col-md-4">
+                                <label class="form-label">Node Offline Threshold (minutes)</label>
+                                <input type="number" class="form-control threshold-input" id="node_offline_minutes" min="15" value="60">
+                                <small class="text-muted">Time without activity before offline alert</small>
+                            </div>
+                            <div class="col-md-4">
+                                <label class="form-label">Anomaly Threshold (%)</label>
+                                <input type="number" class="form-control threshold-input" id="activity_anomaly_threshold" min="1" max="100" value="30">
+                                <small class="text-muted">% of normal activity that triggers anomaly</small>
+                            </div>
+                        </div>
+
+                        <h6 class="mb-3">Signal Alerts</h6>
+                        <div class="row mb-4">
+                            <div class="col-md-4">
+                                <label class="form-label">RSSI Warning (dBm)</label>
+                                <input type="number" class="form-control threshold-input" id="rssi_warning" max="0" value="-110">
+                            </div>
+                            <div class="col-md-4">
+                                <label class="form-label">SNR Warning (dB)</label>
+                                <input type="number" class="form-control threshold-input" id="snr_warning" step="0.5" value="-5">
+                            </div>
+                        </div>
+
+                        <button type="submit" class="btn btn-primary">
+                            <i class="bi bi-check-lg"></i> Save Thresholds
+                        </button>
+                    </form>
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+{% endblock %}
+
+{% block extra_js %}
+<script>
+(function() {
+    // Initialize
+    document.addEventListener('DOMContentLoaded', function() {
+        loadAlerts();
+        loadThresholds();
+
+        // Event listeners
+        document.getElementById('runChecksBtn').addEventListener('click', runHealthChecks);
+        document.getElementById('refreshAlerts').addEventListener('click', loadAlerts);
+        document.getElementById('severityFilter').addEventListener('change', loadAlerts);
+        document.getElementById('showResolved').addEventListener('change', loadAlerts);
+        document.getElementById('loadTrend').addEventListener('click', loadTrend);
+        document.getElementById('loadHeatmap').addEventListener('click', loadHeatmap);
+        document.getElementById('thresholdsForm').addEventListener('submit', saveThresholds);
+
+        // Tab change handlers
+        document.getElementById('trends-tab').addEventListener('shown.bs.tab', loadTrend);
+        document.getElementById('heatmap-tab').addEventListener('shown.bs.tab', loadHeatmap);
+    });
+
+    async function loadAlerts() {
+        const severity = document.getElementById('severityFilter').value;
+        const includeResolved = document.getElementById('showResolved').checked;
+
+        try {
+            let url = `/alerts/api/list?include_resolved=${includeResolved}`;
+            if (severity) url += `&severity=${severity}`;
+
+            const response = await fetch(url);
+            const data = await response.json();
+
+            updateSummary(data.summary);
+            renderAlerts(data.alerts);
+
+        } catch (error) {
+            console.error('Failed to load alerts:', error);
+            document.getElementById('alertsList').innerHTML =
+                '<div class="alert alert-danger">Failed to load alerts</div>';
+        }
+    }
+
+    function updateSummary(summary) {
+        document.getElementById('totalAlerts').textContent = summary.total_active;
+        document.getElementById('criticalAlerts').textContent = summary.by_severity.critical || 0;
+        document.getElementById('warningAlerts').textContent = summary.by_severity.warning || 0;
+        document.getElementById('infoAlerts').textContent = summary.by_severity.info || 0;
+    }
+
+    function renderAlerts(alerts) {
+        const container = document.getElementById('alertsList');
+
+        if (alerts.length === 0) {
+            container.innerHTML = `
+                <div class="text-center p-4 text-muted">
+                    <i class="bi bi-check-circle" style="font-size: 3rem;"></i>
+                    <p class="mt-2">No active alerts</p>
+                </div>
+            `;
+            return;
+        }
+
+        container.innerHTML = alerts.map(alert => `
+            <div class="card alert-card severity-${alert.severity} ${alert.resolved ? 'alert-resolved' : ''}">
+                <div class="card-body">
+                    <div class="d-flex justify-content-between align-items-start">
+                        <div>
+                            <span class="severity-badge severity-${alert.severity}">${alert.severity.toUpperCase()}</span>
+                            <h6 class="mt-2 mb-1">${alert.title}</h6>
+                            <p class="mb-1">${alert.message}</p>
+                            ${alert.node_name ? `<small class="text-muted">Node: <a href="/nodes/${alert.node_id}">${alert.node_name}</a></small>` : ''}
+                        </div>
+                        <div class="text-end">
+                            <div class="alert-timestamp">${formatTimeAgo(alert.timestamp)}</div>
+                            ${alert.resolved
+                                ? `<span class="badge bg-secondary">Resolved</span>`
+                                : `<button class="btn btn-sm btn-outline-success mt-2" onclick="resolveAlert('${alert.alert_type}', ${alert.node_id})">
+                                    <i class="bi bi-check"></i> Resolve
+                                   </button>`
+                            }
+                        </div>
+                    </div>
+                </div>
+            </div>
+        `).join('');
+    }
+
+    window.resolveAlert = async function(alertType, nodeId) {
+        try {
+            const response = await fetch(`/alerts/api/resolve/${alertType}/${nodeId}`, {
+                method: 'POST',
+            });
+            const data = await response.json();
+
+            if (data.success) {
+                loadAlerts();
+            } else {
+                alert('Failed to resolve alert: ' + data.message);
+            }
+        } catch (error) {
+            console.error('Failed to resolve alert:', error);
+        }
+    };
+
+    async function runHealthChecks() {
+        const btn = document.getElementById('runChecksBtn');
+        btn.disabled = true;
+        btn.innerHTML = '<span class="spinner-border spinner-border-sm"></span> Running...';
+
+        try {
+            const response = await fetch('/alerts/api/run-checks', { method: 'POST' });
+            const data = await response.json();
+
+            loadAlerts();
+            alert(`Health checks complete: ${data.alerts_generated} alerts generated`);
+
+        } catch (error) {
+            console.error('Failed to run health checks:', error);
+            alert('Failed to run health checks');
+        } finally {
+            btn.disabled = false;
+            btn.innerHTML = '<i class="bi bi-arrow-clockwise"></i> Run Health Checks';
+        }
+    }
+
+    async function loadTrend() {
+        const metric = document.getElementById('trendMetric').value;
+        const hours = document.getElementById('trendHours').value;
+
+        try {
+            const response = await fetch(`/alerts/api/trends?metric=${metric}&hours=${hours}`);
+            const data = await response.json();
+
+            renderTrendChart(data);
+
+        } catch (error) {
+            console.error('Failed to load trend:', error);
+        }
+    }
+
+    function renderTrendChart(data) {
+        const container = document.getElementById('trendChart');
+
+        if (!data.data || data.data.length === 0) {
+            container.innerHTML = '<div class="text-center text-muted p-4">No trend data available</div>';
+            return;
+        }
+
+        const timestamps = data.data.map(d => d.timestamp_str);
+        const traces = [];
+
+        if (data.metric === 'packets') {
+            traces.push({
+                x: timestamps,
+                y: data.data.map(d => d.total),
+                name: 'Total Packets',
+                type: 'scatter',
+                mode: 'lines+markers',
+                line: { color: '#0d6efd' },
+            });
+            traces.push({
+                x: timestamps,
+                y: data.data.map(d => d.successful),
+                name: 'Successful',
+                type: 'scatter',
+                mode: 'lines',
+                line: { color: '#198754', dash: 'dot' },
+            });
+        } else if (data.metric === 'nodes') {
+            traces.push({
+                x: timestamps,
+                y: data.data.map(d => d.active_nodes),
+                name: 'Active Nodes',
+                type: 'scatter',
+                mode: 'lines+markers',
+                fill: 'tozeroy',
+                line: { color: '#6f42c1' },
+            });
+        } else if (data.metric === 'signal') {
+            traces.push({
+                x: timestamps,
+                y: data.data.map(d => d.avg_rssi),
+                name: 'Avg RSSI',
+                type: 'scatter',
+                mode: 'lines+markers',
+                line: { color: '#fd7e14' },
+            });
+            traces.push({
+                x: timestamps,
+                y: data.data.map(d => d.avg_snr),
+                name: 'Avg SNR',
+                type: 'scatter',
+                mode: 'lines+markers',
+                yaxis: 'y2',
+                line: { color: '#20c997' },
+            });
+        }
+
+        const layout = {
+            margin: { t: 30, r: 50, b: 50, l: 50 },
+            xaxis: { title: 'Time' },
+            yaxis: { title: data.metric === 'signal' ? 'RSSI (dBm)' : 'Count' },
+            legend: { orientation: 'h', y: 1.1 },
+            hovermode: 'x unified',
+        };
+
+        if (data.metric === 'signal') {
+            layout.yaxis2 = {
+                title: 'SNR (dB)',
+                overlaying: 'y',
+                side: 'right',
+            };
+        }
+
+        Plotly.newPlot(container, traces, layout, { responsive: true });
+    }
+
+    async function loadHeatmap() {
+        const days = document.getElementById('heatmapDays').value;
+
+        try {
+            const response = await fetch(`/alerts/api/heatmap?days=${days}`);
+            const data = await response.json();
+
+            renderHeatmap(data);
+
+        } catch (error) {
+            console.error('Failed to load heatmap:', error);
+        }
+    }
+
+    function renderHeatmap(data) {
+        const container = document.getElementById('heatmapGrid');
+        const maxValue = data.max_value || 1;
+
+        // Build header row
+        let html = '<div class="heatmap-cell"></div>'; // Empty corner
+        for (let h = 0; h < 24; h++) {
+            html += `<div class="heatmap-cell heatmap-header">${h}:00</div>`;
+        }
+
+        // Build data rows
+        for (let d = 0; d < 7; d++) {
+            html += `<div class="heatmap-cell heatmap-day-label">${data.day_names[d]}</div>`;
+            for (let h = 0; h < 24; h++) {
+                const value = data.heatmap[d][h];
+                const intensity = value / maxValue;
+                const color = getHeatmapColor(intensity);
+                const tooltip = `${data.day_names[d]} ${h}:00 - ${value} packets`;
+                html += `<div class="heatmap-cell" style="background-color: ${color};" title="${tooltip}">${value > 0 ? value : ''}</div>`;
+            }
+        }
+
+        container.innerHTML = html;
+    }
+
+    function getHeatmapColor(intensity) {
+        if (intensity === 0) return '#e9ecef';
+
+        // Blue gradient from light to dark
+        const r = Math.round(224 - (224 - 24) * intensity);
+        const g = Math.round(224 - (224 - 100) * intensity);
+        const b = Math.round(224 - (224 - 171) * intensity);
+
+        return `rgb(${r}, ${g}, ${b})`;
+    }
+
+    async function loadThresholds() {
+        try {
+            const response = await fetch('/alerts/api/thresholds');
+            const data = await response.json();
+
+            document.getElementById('battery_warning_voltage').value = data.battery_warning_voltage;
+            document.getElementById('battery_critical_voltage').value = data.battery_critical_voltage;
+            document.getElementById('battery_warning_percent').value = data.battery_warning_percent;
+            document.getElementById('battery_critical_percent').value = data.battery_critical_percent;
+            document.getElementById('node_offline_minutes').value = data.node_offline_minutes;
+            document.getElementById('activity_anomaly_threshold').value = data.activity_anomaly_threshold * 100;
+            document.getElementById('rssi_warning').value = data.rssi_warning;
+            document.getElementById('snr_warning').value = data.snr_warning;
+
+        } catch (error) {
+            console.error('Failed to load thresholds:', error);
+        }
+    }
+
+    async function saveThresholds(event) {
+        event.preventDefault();
+
+        const data = {
+            battery_warning_voltage: parseFloat(document.getElementById('battery_warning_voltage').value),
+            battery_critical_voltage: parseFloat(document.getElementById('battery_critical_voltage').value),
+            battery_warning_percent: parseInt(document.getElementById('battery_warning_percent').value),
+            battery_critical_percent: parseInt(document.getElementById('battery_critical_percent').value),
+            node_offline_minutes: parseInt(document.getElementById('node_offline_minutes').value),
+            activity_anomaly_threshold: parseFloat(document.getElementById('activity_anomaly_threshold').value) / 100,
+            rssi_warning: parseInt(document.getElementById('rssi_warning').value),
+            snr_warning: parseFloat(document.getElementById('snr_warning').value),
+        };
+
+        try {
+            const response = await fetch('/alerts/api/thresholds', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify(data),
+            });
+
+            const result = await response.json();
+
+            if (result.success) {
+                alert('Thresholds saved successfully');
+            } else {
+                alert('Failed to save thresholds: ' + result.error);
+            }
+
+        } catch (error) {
+            console.error('Failed to save thresholds:', error);
+            alert('Failed to save thresholds');
+        }
+    }
+
+    function formatTimeAgo(timestamp) {
+        const now = Date.now() / 1000;
+        const diff = now - timestamp;
+
+        if (diff < 60) return 'Just now';
+        if (diff < 3600) return Math.floor(diff / 60) + 'm ago';
+        if (diff < 86400) return Math.floor(diff / 3600) + 'h ago';
+        return Math.floor(diff / 86400) + 'd ago';
+    }
+})();
+</script>
+{% endblock %}
