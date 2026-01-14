@@ -383,6 +383,9 @@
 let newPacketsCount = 0;
 let hasNewPackets = false;
 let lastPacketTimestamp = Math.floor(Date.now() / 1000);
+let autoAddEnabled = false;
+let autoUpdateEnabled = true;
+let autoUpdateInterval = null;
 
 function updateAutoAddButtonState() {
     const button = document.getElementById('autoAddButton');
@@ -958,12 +961,6 @@ document.addEventListener('DOMContentLoaded', function() {
     }
 
     // Real-time auto-update functionality for new packets
-    let lastPacketTimestamp = Math.floor(Date.now() / 1000);
-    let autoUpdateInterval = null;
-    let autoUpdateEnabled = true;
-    let hasNewPackets = false;
-    let autoAddEnabled = false;
-
     async function checkForNewPackets() {
         if (!autoUpdateEnabled) return;
 

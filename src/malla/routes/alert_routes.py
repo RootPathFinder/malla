@@ -149,6 +149,7 @@ def api_heatmap():
     Query parameters:
         node_id: Optional node to analyze (omit for network-wide)
         days: Number of days to analyze (default: 7)
+        timezone: 'utc' or 'local' (default: local)
 
     Returns:
         Heatmap data structure
@@ -157,8 +158,12 @@ def api_heatmap():
         node_id = request.args.get("node_id", type=int)
         days = request.args.get("days", 7, type=int)
         days = min(max(days, 1), 30)
+        timezone = request.args.get("timezone", "local")
+        use_utc = timezone.lower() == "utc"
 
-        heatmap = AlertService.get_activity_heatmap(node_id=node_id, days=days)
+        heatmap = AlertService.get_activity_heatmap(
+            node_id=node_id, days=days, use_utc=use_utc
+        )
         return jsonify(heatmap)
 
     except Exception as e:
@@ -174,6 +179,7 @@ def api_trends():
     Query parameters:
         metric: What to trend (packets, nodes, signal) - default: packets
         hours: Number of hours to analyze (default: 168 = 7 days)
+        timezone: 'utc' or 'local' (default: local)
 
     Returns:
         Time-series data for charting
@@ -182,11 +188,15 @@ def api_trends():
         metric = request.args.get("metric", "packets")
         hours = request.args.get("hours", 168, type=int)
         hours = min(max(hours, 1), 720)
+        timezone = request.args.get("timezone", "local")
+        use_utc = timezone.lower() == "utc"
 
         if metric not in ["packets", "nodes", "signal"]:
             return jsonify({"error": "Invalid metric"}), 400
 
-        trend_data = AlertService.get_trend_data(metric=metric, hours=hours)
+        trend_data = AlertService.get_trend_data(
+            metric=metric, hours=hours, use_utc=use_utc
+        )
         return jsonify(trend_data)
 
     except Exception as e:

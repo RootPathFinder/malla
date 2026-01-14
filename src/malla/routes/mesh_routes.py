@@ -104,11 +104,25 @@ def api_topology():
                                 }
                             )
 
+                        # Create a node lookup map for resolving names
+                        node_lookup = {n["node_id"]: n for n in converted_nodes}
+
                         # Convert edges: traceroute uses {source, target, avg_snr}
-                        # Need to convert to: {node_a, node_b, snr_a_to_b, quality, ...}
+                        # Need to convert to: {node_a, node_b, node_a_name, node_b_name, snr_a_to_b, quality, ...}
                         converted_edges = []
                         for link in traceroute_graph.get("links", []):
                             avg_snr = link.get("avg_snr")
+                            node_a = link.get("source")
+                            node_b = link.get("target")
+
+                            # Resolve node names from lookup
+                            node_a_name = node_lookup.get(node_a, {}).get(
+                                "name", f"!{node_a:08x}" if node_a else "Unknown"
+                            )
+                            node_b_name = node_lookup.get(node_b, {}).get(
+                                "name", f"!{node_b:08x}" if node_b else "Unknown"
+                            )
+
                             # Determine quality from SNR
                             quality = "unknown"
                             if avg_snr is not None:
@@ -123,8 +137,10 @@ def api_topology():
 
                             converted_edges.append(
                                 {
-                                    "node_a": link.get("source"),
-                                    "node_b": link.get("target"),
+                                    "node_a": node_a,
+                                    "node_b": node_b,
+                                    "node_a_name": node_a_name,
+                                    "node_b_name": node_b_name,
                                     "snr_a_to_b": avg_snr,
                                     "snr_b_to_a": None,
                                     "avg_snr": avg_snr,
@@ -135,10 +151,41 @@ def api_topology():
                                 }
                             )
 
+                        # Build proper statistics
+                        total_nodes = len(converted_nodes)
+                        total_edges = len(converted_edges)
+                        bidirectional_edges = sum(
+                            1 for e in converted_edges if e.get("bidirectional", False)
+                        )
+
                         topology = {
                             "nodes": converted_nodes,
                             "edges": converted_edges,
-                            "statistics": traceroute_graph.get("stats", {}),
+                            "statistics": {
+                                "total_nodes": total_nodes,
+                                "total_edges": total_edges,
+                                "bidirectional_edges": bidirectional_edges,
+                                "unidirectional_edges": total_edges
+                                - bidirectional_edges,
+                                "avg_neighbors_per_node": round(
+                                    sum(
+                                        n.get("neighbor_count", 0)
+                                        for n in converted_nodes
+                                    )
+                                    / total_nodes,
+                                    1,
+                                )
+                                if total_nodes > 0
+                                else 0,
+                                "mesh_density": round(
+                                    (2 * total_edges)
+                                    / (total_nodes * (total_nodes - 1))
+                                    * 100,
+                                    1,
+                                )
+                                if total_nodes > 1
+                                else 0,
+                            },
                             "source": "traceroute",
                         }
                         logger.info(
@@ -204,6 +251,9 @@ def api_node_neighbors(node_id: int):
     """
     Get neighbors for a specific node.
 
+    Tries NeighborInfo packets first, falls back to traceroute-based
+    connections if NeighborInfo is not available.
+
     Args:
         node_id: The node ID
 
@@ -211,7 +261,89 @@ def api_node_neighbors(node_id: int):
         JSON with node's neighbors and quality metrics
     """
     try:
+        # Try NeighborInfo first
         neighbors = NeighborService.get_node_neighbors(node_id)
+
+        # If NeighborInfo has data, return it
+        if neighbors.get("has_data", False):
+            return jsonify(neighbors)
+
+        # Fallback to traceroute-based connections
+        try:
+            from ..utils.node_utils import get_bulk_node_names
+
+            hours = request.args.get("hours", 24, type=int)
+            traceroute_graph = TracerouteService.get_network_graph_data(hours=hours)
+
+            if traceroute_graph and traceroute_graph.get("links"):
+                # Find all links involving this node
+                node_neighbors = []
+                for link in traceroute_graph.get("links", []):
+                    source = link.get("source")
+                    target = link.get("target")
+
+                    if source == node_id:
+                        neighbor_id = target
+                    elif target == node_id:
+                        neighbor_id = source
+                    else:
+                        continue
+
+                    avg_snr = link.get("avg_snr", 0)
+                    quality = "unknown"
+                    if avg_snr is not None:
+                        if avg_snr >= 10:
+                            quality = "excellent"
+                        elif avg_snr >= 5:
+                            quality = "good"
+                        elif avg_snr >= 0:
+                            quality = "fair"
+                        else:
+                            quality = "poor"
+
+                    node_neighbors.append(
+                        {
+                            "node_id": neighbor_id,
+                            "snr": avg_snr or 0,
+                            "quality": quality,
+                            "last_rx_time": link.get("last_seen"),
+                        }
+                    )
+
+                if node_neighbors:
+                    # Get node names
+                    all_ids = [node_id] + [n["node_id"] for n in node_neighbors]
+                    node_names = get_bulk_node_names(all_ids)
+
+                    # Enhance with names
+                    for n in node_neighbors:
+                        n["node_name"] = node_names.get(
+                            n["node_id"], f"!{n['node_id']:08x}"
+                        )
+                        n["hex_id"] = f"!{n['node_id']:08x}"
+
+                    # Sort by SNR (best first)
+                    node_neighbors.sort(key=lambda x: x["snr"], reverse=True)
+
+                    return jsonify(
+                        {
+                            "node_id": node_id,
+                            "node_name": node_names.get(node_id, f"!{node_id:08x}"),
+                            "hex_id": f"!{node_id:08x}",
+                            "has_data": True,
+                            "last_report": None,
+                            "neighbor_count": len(node_neighbors),
+                            "neighbors": node_neighbors,
+                            "broadcast_interval": None,
+                            "source": "traceroute",
+                        }
+                    )
+        except Exception as e:
+            logger.warning(
+                f"Failed to get traceroute neighbors for node {node_id}: {e}"
+            )
+
+        # No data from either source
         return jsonify(neighbors)
 
     except Exception as e:

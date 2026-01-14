@@ -386,6 +386,16 @@
                 loadTrend();
             }
         });
+
+        // Listen for timezone changes to update heatmap and trends
+        window.addEventListener('timezoneChanged', function() {
+            if (document.getElementById('heatmapGrid').innerHTML) {
+                loadHeatmap();
+            }
+            if (document.getElementById('trendChart').innerHTML) {
+                loadTrend();
+            }
+        });
     });
 
     async function loadAlerts() {
@@ -495,9 +505,10 @@
     async function loadTrend() {
         const metric = document.getElementById('trendMetric').value;
         const hours = document.getElementById('trendHours').value;
+        const timezone = getTimezonePreference();
 
         try {
-            const response = await fetch(`/alerts/api/trends?metric=${metric}&hours=${hours}`);
+            const response = await fetch(`/alerts/api/trends?metric=${metric}&hours=${hours}&timezone=${timezone}`);
             const data = await response.json();
 
             renderTrendChart(data);
@@ -605,9 +616,10 @@
 
     async function loadHeatmap() {
         const days = document.getElementById('heatmapDays').value;
+        const timezone = getTimezonePreference();
 
         try {
-            const response = await fetch(`/alerts/api/heatmap?days=${days}`);
+            const response = await fetch(`/alerts/api/heatmap?days=${days}&timezone=${timezone}`);
             const data = await response.json();
 
             renderHeatmap(data);

@@ -849,7 +849,7 @@ class AlertService:
 
     @classmethod
     def get_activity_heatmap(
-        cls, node_id: int | None = None, days: int = 7
+        cls, node_id: int | None = None, days: int = 7, use_utc: bool = False
     ) -> dict[str, Any]:
         """
         Get activity heatmap data (packets by hour of day).
@@ -857,6 +857,7 @@ class AlertService:
         Args:
             node_id: Optional specific node (None for all)
             days: Number of days to analyze
+            use_utc: If True, use UTC timestamps; if False, use localtime
 
         Returns:
             Heatmap data structure
@@ -867,12 +868,15 @@ class AlertService:
 
             cutoff = time.time() - (days * 86400)
 
+            # Choose timezone modifier based on preference
+            tz_modifier = "" if use_utc else ", 'localtime'"
+
             if node_id:
                 cursor.execute(
-                    """
+                    f"""
                     SELECT
-                        strftime('%w', timestamp, 'unixepoch', 'localtime') as day_of_week,
-                        strftime('%H', timestamp, 'unixepoch', 'localtime') as hour,
+                        strftime('%w', timestamp, 'unixepoch'{tz_modifier}) as day_of_week,
+                        strftime('%H', timestamp, 'unixepoch'{tz_modifier}) as hour,
                         COUNT(*) as packet_count
                     FROM packet_history
                     WHERE from_node_id = ?
@@ -884,10 +888,10 @@ class AlertService:
                 )
             else:
                 cursor.execute(
-                    """
+                    f"""
                     SELECT
-                        strftime('%w', timestamp, 'unixepoch', 'localtime') as day_of_week,
-                        strftime('%H', timestamp, 'unixepoch', 'localtime') as hour,
+                        strftime('%w', timestamp, 'unixepoch'{tz_modifier}) as day_of_week,
+                        strftime('%H', timestamp, 'unixepoch'{tz_modifier}) as hour,
                         COUNT(*) as packet_count
                     FROM packet_history
                     WHERE timestamp >= ?
@@ -929,6 +933,7 @@ class AlertService:
                 "max_value": max_value,
                 "node_id": node_id,
                 "days_analyzed": days,
+                "timezone": "utc" if use_utc else "local",
             }
 
         except Exception as e:
@@ -937,7 +942,7 @@ class AlertService:
 
     @classmethod
     def get_trend_data(
-        cls, metric: str = "packets", hours: int = 168
+        cls, metric: str = "packets", hours: int = 168, use_utc: bool = False
     ) -> dict[str, Any]:
         """
         Get time-series trend data for a metric.
@@ -945,6 +950,7 @@ class AlertService:
         Args:
             metric: The metric to trend (packets, nodes, signal)
             hours: Number of hours to analyze
+            use_utc: If True, format timestamps in UTC; if False, use local time
 
         Returns:
             Time-series data for charting
@@ -966,6 +972,13 @@ class AlertService:
                 bucket_seconds = 86400  # Daily buckets
                 bucket_format = "%Y-%m-%d"
 
+            # Helper to format timestamp based on timezone preference
+            def format_ts(ts):
+                if use_utc:
+                    return datetime.utcfromtimestamp(ts).strftime(bucket_format)
+                else:
+                    return datetime.fromtimestamp(ts).strftime(bucket_format)
+
             if metric == "packets":
                 cursor.execute(
                     f"""
@@ -986,9 +999,7 @@ class AlertService:
                     data.append(
                         {
                             "timestamp": row["bucket"],
-                            "timestamp_str": datetime.fromtimestamp(
-                                row["bucket"]
-                            ).strftime(bucket_format),
+                            "timestamp_str": format_ts(row["bucket"]),
                             "total": row["value"],
                             "successful": row["successful"],
                             "success_rate": round(
@@ -1019,9 +1030,7 @@ class AlertService:
                     data.append(
                         {
                             "timestamp": row["bucket"],
-                            "timestamp_str": datetime.fromtimestamp(
-                                row["bucket"]
-                            ).strftime(bucket_format),
+                            "timestamp_str": format_ts(row["bucket"]),
                             "active_nodes": row["active_nodes"],
                         }
                     )
@@ -1049,9 +1058,7 @@ class AlertService:
                     data.append(
                         {
                             "timestamp": row["bucket"],
-                            "timestamp_str": datetime.fromtimestamp(
-                                row["bucket"]
-                            ).strftime(bucket_format),
+                            "timestamp_str": format_ts(row["bucket"]),
                             "avg_rssi": round(row["avg_rssi"], 1)
                             if row["avg_rssi"]
                             else None,
@@ -1074,6 +1081,7 @@ class AlertService:
                 "bucket_seconds": bucket_seconds,
                 "data": data,
                 "generated_at": time.time(),
+                "timezone": "utc" if use_utc else "local",
             }
 
         except Exception as e:
