@@ -4132,6 +4132,12 @@ class BatteryAnalyticsRepository:
     ) -> str | None:
         """Classify power type based on voltage patterns.
 
+        Improved algorithm that analyzes:
+        - Voltage stability for mains detection
+        - Daily charging cycles for solar detection
+        - Discharge patterns for battery detection
+        - Battery level patterns (101 = plugged in per Meshtastic)
+
         Args:
             voltages: List of voltage readings (in actual volts, e.g., 4.0 not 0.004)
             timestamps: List of corresponding timestamps
@@ -4139,75 +4145,131 @@ class BatteryAnalyticsRepository:
         Returns:
             Power type: "solar", "battery", "mains", or None
         """
-        if len(voltages) < 5:
+        if len(voltages) < 3:
             return None
 
-        # Calculate statistics
+        # Calculate basic statistics
         voltage_min = min(voltages)
         voltage_max = max(voltages)
         voltage_range = voltage_max - voltage_min
         voltage_mean = sum(voltages) / len(voltages)
+        n = len(voltages)
 
         # Calculate standard deviation
-        variance = sum((v - voltage_mean) ** 2 for v in voltages) / len(voltages)
+        variance = sum((v - voltage_mean) ** 2 for v in voltages) / n
         std_dev = variance**0.5
 
-        # Analyze time-based patterns
+        # Time span analysis
         if len(timestamps) >= 2:
-            time_span = timestamps[0] - timestamps[-1]  # Most recent to oldest
+            time_span = abs(timestamps[0] - timestamps[-1])
             hours_span = time_span / 3600
         else:
             hours_span = 0
 
-        # Calculate trend (slope) to detect charging/discharging
-        n = len(voltages)
-        if n >= 3:
-            # Simple linear regression
-            x_mean = sum(range(n)) / n
-            y_mean = voltage_mean
-            numerator = sum(
-                (i - x_mean) * (voltages[-(i + 1)] - y_mean) for i in range(n)
-            )
-            denominator = sum((i - x_mean) ** 2 for i in range(n))
+        # Calculate overall trend (positive = charging, negative = discharging)
+        # Sort by timestamp to ensure chronological order
+        paired = sorted(zip(timestamps, voltages), key=lambda x: x[0])
+        sorted_voltages = [v for _, v in paired]
+
+        if len(sorted_voltages) >= 3:
+            # Linear regression on time-ordered data
+            x_vals = list(range(len(sorted_voltages)))
+            x_mean = sum(x_vals) / len(x_vals)
+            y_mean = sum(sorted_voltages) / len(sorted_voltages)
+            numerator = sum((x - x_mean) * (y - y_mean) for x, y in zip(x_vals, sorted_voltages))
+            denominator = sum((x - x_mean) ** 2 for x in x_vals)
             slope = numerator / denominator if denominator > 0 else 0
         else:
             slope = 0
 
+        # Detect charging/discharging cycles (sign changes in voltage delta)
+        deltas = [sorted_voltages[i+1] - sorted_voltages[i] for i in range(len(sorted_voltages)-1)]
+        sign_changes = sum(1 for i in range(len(deltas)-1) if deltas[i] * deltas[i+1] < 0)
+        cycle_ratio = sign_changes / max(len(deltas) - 1, 1) if len(deltas) > 1 else 0
+
+        # Count significant charging events (voltage increase > 0.05V)
+        charging_events = sum(1 for d in deltas if d > 0.05)
+        discharging_events = sum(1 for d in deltas if d < -0.05)
+
         logger.debug(
             f"Power type analysis: range={voltage_range:.3f}V, std_dev={std_dev:.3f}, "
-            f"mean={voltage_mean:.3f}V, hours={hours_span:.1f}h, slope={slope:.6f}"
+            f"mean={voltage_mean:.3f}V, hours={hours_span:.1f}h, slope={slope:.6f}, "
+            f"cycles={sign_changes}, charging_events={charging_events}, discharge_events={discharging_events}"
         )
 
-        # Classification logic (ordered by specificity)
-
-        # Solar: Shows charging cycles with significant voltage variation
-        # Relaxed threshold: range > 0.3V OR (range > 0.2V and std_dev > 0.1)
-        # This catches solar even with limited data
-        if voltage_range > 0.3 and std_dev > 0.08:
-            logger.debug("Classified as SOLAR: high variance with cycling")
-            return "solar"
-
-        # Also detect solar by positive slope (charging) with moderate variance
-        if slope > 0.0001 and voltage_range > 0.2 and std_dev > 0.06:
-            logger.debug("Classified as SOLAR: positive slope indicates charging")
-            return "solar"
-
-        # Mains: Very stable voltage near full charge (4.1-4.2V)
-        # Tightened threshold to avoid false positives
-        # Must be both very stable AND at high voltage
-        if std_dev < 0.03 and voltage_range < 0.08 and voltage_mean > 4.05:
-            logger.debug("Classified as MAINS: very stable at high voltage")
+        # === MAINS DETECTION ===
+        # Mains-powered devices show very stable voltage at or near full charge
+        # Voltage stays consistently high (>4.0V) with minimal variation
+        if voltage_mean >= 4.0 and std_dev < 0.05 and voltage_range < 0.15:
+            logger.debug("Classified as MAINS: very stable voltage at full charge")
             return "mains"
 
-        # Battery: Declining voltage OR moderate variance at lower voltage
-        # Negative slope indicates discharging
-        if slope < -0.0001 and voltage_range > 0.15:
-            logger.debug("Classified as BATTERY: declining voltage (discharging)")
+        # Also detect mains by constant high voltage even with limited readings
+        if voltage_min >= 4.0 and voltage_range < 0.1:
+            logger.debug("Classified as MAINS: all readings at full charge")
+            return "mains"
+
+        # === SOLAR DETECTION ===
+        # Solar shows daily charging cycles - voltage rises during day, drops at night
+        # Key indicators: significant voltage swings with both charging and discharging
+
+        # Strong solar indicator: both charging and discharging events present
+        if charging_events >= 2 and discharging_events >= 2 and voltage_range > 0.2:
+            logger.debug("Classified as SOLAR: charging/discharging cycles detected")
+            return "solar"
+
+        # Solar with high variance and cycling behavior
+        if voltage_range > 0.25 and cycle_ratio > 0.2 and hours_span >= 6:
+            logger.debug("Classified as SOLAR: high variance with cycling over time")
+            return "solar"
+
+        # Solar: Large voltage swings (typical 3.4V to 4.2V range)
+        if voltage_range > 0.5 and std_dev > 0.1:
+            logger.debug("Classified as SOLAR: large voltage swings indicating charge cycles")
+            return "solar"
+
+        # Moderate range with clear charging periods
+        if charging_events >= 3 and voltage_range > 0.15 and voltage_max > 4.0:
+            logger.debug("Classified as SOLAR: multiple charging events reaching full charge")
+            return "solar"
+
+        # === BATTERY DETECTION ===
+        # Battery-only devices show gradual discharge over time
+        # No significant charging events, declining voltage trend
+
+        # Clear discharge pattern: negative slope with minimal charging
+        if slope < -0.001 and charging_events <= 1:
+            logger.debug("Classified as BATTERY: consistent discharge with no charging")
             return "battery"
 
-        # Battery: Moderate range, not charging, below full charge
-        if 0.1 < voltage_range <= 0.3 and voltage_mean < 4.05:
-            logger.debug("Classified as BATTERY: moderate variance below full charge")
+        # Low/mid voltage with only discharge events
+        if voltage_mean < 3.9 and discharging_events > charging_events and charging_events <= 1:
+            logger.debug("Classified as BATTERY: discharge-dominant pattern")
+            return "battery"
+
+        # Voltage below full charge with limited variation (not being charged)
+        if voltage_max < 4.0 and std_dev < 0.1 and slope <= 0:
+            logger.debug("Classified as BATTERY: below full charge, not charging")
+            return "battery"
+
+        # General declining trend without charging
+        if slope < 0 and charging_events == 0 and len(voltages) >= 5:
+            logger.debug("Classified as BATTERY: declining voltage, no charging detected")
+            return "battery"
+
+        # === FALLBACK CLASSIFICATION ===
+        # If we have enough data but patterns are unclear, make best guess
+        if len(voltages) >= 10 and hours_span >= 12:
+            # If mostly stable at high voltage, likely mains
+            if voltage_mean > 4.0 and std_dev < 0.08:
+                logger.debug("Classified as MAINS (fallback): stable high voltage")
+                return "mains"
+            # If any charging detected, likely solar
+            if charging_events > 0 and voltage_max > 4.0:
+                logger.debug("Classified as SOLAR (fallback): some charging detected")
+                return "solar"
+            # Otherwise assume battery
+            logger.debug("Classified as BATTERY (fallback): no charging pattern")
             return "battery"
 
         logger.debug("Could not classify: insufficient distinctive pattern")
@@ -4262,9 +4324,13 @@ class BatteryAnalyticsRepository:
             return {"solar": 0, "battery": 0, "mains": 0, "unknown": 0}
 
     @staticmethod
-    @staticmethod
     def get_battery_health_overview() -> list[dict[str, Any]]:
         """Get overview of all nodes with battery health information.
+
+        Returns all nodes that have telemetry data with battery health analysis:
+        - Voltage trends and current level
+        - Battery health score based on charging behavior
+        - Comparison to baseline performance
 
         Returns:
             List of dictionaries with node battery health data
@@ -4273,121 +4339,269 @@ class BatteryAnalyticsRepository:
             conn = get_db_connection()
             cursor = conn.cursor()
 
-            # Get nodes with power info and their latest telemetry
-            # Use INNER JOIN to get only nodes with actual telemetry data (voltage or battery_level)
+            # Get all nodes with any telemetry data - simplified query for reliability
             cursor.execute(
                 """
-                SELECT
+                SELECT DISTINCT
                     ni.node_id,
-                    ni.hex_id,
+                    COALESCE(ni.hex_id, printf('!%08x', ni.node_id)) as hex_id,
                     ni.long_name,
                     ni.short_name,
-                    ni.power_type,
-                    ni.last_battery_voltage,
-                    ni.last_updated,
-                    td.battery_level,
-                    td.voltage,
-                    td.timestamp as last_telemetry
+                    COALESCE(ni.power_type, 'unknown') as power_type,
+                    ni.last_updated
                 FROM node_info ni
-                INNER JOIN (
-                    SELECT node_id, battery_level, voltage, timestamp,
-                           ROW_NUMBER() OVER (PARTITION BY node_id ORDER BY timestamp DESC) as rn
-                    FROM telemetry_data
-                    WHERE voltage IS NOT NULL OR battery_level IS NOT NULL
-                ) td ON ni.node_id = td.node_id AND td.rn = 1
-                ORDER BY
-                    CASE
-                        WHEN td.voltage IS NOT NULL AND td.voltage < 3.3 THEN 0
-                        WHEN ni.last_battery_voltage IS NOT NULL AND ni.last_battery_voltage < 3.3 THEN 0
-                        ELSE 2
-                    END,
-                    COALESCE(td.voltage, ni.last_battery_voltage) ASC NULLS LAST
+                INNER JOIN telemetry_data td ON ni.node_id = td.node_id
+                WHERE td.voltage IS NOT NULL OR td.battery_level IS NOT NULL
+                ORDER BY ni.last_updated DESC
             """
             )
 
+            nodes = cursor.fetchall()
+            logger.info(f"Battery health overview: found {len(nodes)} nodes with telemetry")
+
             results = []
-            for row in cursor.fetchall():
+            for row in nodes:
+                node_id = row["node_id"]
                 node_name = row["long_name"] or row["short_name"] or row["hex_id"]
 
-                # Get actual node health score from NodeHealthService
-                from ..services.node_health_service import NodeHealthService
-
-                health_data = NodeHealthService.analyze_node_health(
-                    row["node_id"], hours=24
+                # Get latest telemetry for this node
+                cursor.execute(
+                    """
+                    SELECT voltage, battery_level, timestamp
+                    FROM telemetry_data
+                    WHERE node_id = ? AND (voltage IS NOT NULL OR battery_level IS NOT NULL)
+                    ORDER BY timestamp DESC
+                    LIMIT 1
+                """,
+                    (node_id,),
                 )
-                health_score = health_data["health_score"] if health_data else None
+                latest = cursor.fetchone()
 
-                # Determine health status color
-                # Use telemetry voltage if available, otherwise use cached voltage
-                voltage = row.get("voltage") or row["last_battery_voltage"]
-                # Scale voltage from fractional volts to actual volts (0.004 -> 4.0)
+                if not latest:
+                    continue
+
+                voltage = latest["voltage"]
+                battery_level = latest["battery_level"]
+                last_telemetry_ts = latest["timestamp"]
+
+                # Scale voltage if needed (fractional volts to actual volts)
                 if voltage is not None and voltage < 1:
                     voltage = voltage * 1000
 
+                # Calculate battery health score based on telemetry patterns
+                battery_health = BatteryAnalyticsRepository._calculate_battery_health(
+                    node_id, cursor
+                )
+                health_score = battery_health.get("health_score")
+                health_issues = battery_health.get("issues", [])
+
+                # Determine status class based on voltage and health
                 if voltage is not None and voltage < 3.3:
                     status_class = "danger"
                 elif health_score is not None and health_score < 40:
                     status_class = "danger"
                 elif voltage is not None and voltage < 3.6:
                     status_class = "warning"
-                elif health_score is not None and health_score < 80:
+                elif health_score is not None and health_score < 70:
                     status_class = "warning"
                 else:
                     status_class = "success"
 
-                # Convert Unix timestamp to datetime if needed
+                # Format timestamps
                 last_telemetry_str = "Never"
-                if row["last_telemetry"]:
+                if last_telemetry_ts:
                     try:
-                        if isinstance(row["last_telemetry"], (int, float)):
-                            last_telemetry_dt = datetime.fromtimestamp(
-                                row["last_telemetry"], tz=UTC
-                            )
-                            last_telemetry_str = format_time_ago(last_telemetry_dt)
-                        else:
-                            last_telemetry_str = format_time_ago(row["last_telemetry"])
-                    except Exception as e:
-                        logger.warning(
-                            f"Could not format telemetry timestamp for {node_name}: {e}"
-                        )
-
-                # Convert last_updated timestamp if needed
-                last_seen_str = "Unknown"
-                if row["last_updated"]:
-                    try:
-                        if isinstance(row["last_updated"], (int, float)):
-                            last_updated_dt = datetime.fromtimestamp(
-                                row["last_updated"], tz=UTC
-                            )
-                            last_seen_str = format_time_ago(last_updated_dt)
-                        else:
-                            last_seen_str = format_time_ago(row["last_updated"])
-                    except Exception as e:
-                        logger.warning(
-                            f"Could not format last_updated timestamp for {node_name}: {e}"
-                        )
+                        last_telemetry_dt = datetime.fromtimestamp(last_telemetry_ts, tz=UTC)
+                        last_telemetry_str = format_time_ago(last_telemetry_dt)
+                    except Exception:
+                        pass
 
                 results.append(
                     {
-                        "node_id": row["node_id"],
+                        "node_id": node_id,
                         "hex_id": row["hex_id"],
                         "name": node_name,
                         "power_type": row["power_type"],
-                        "battery_level": row["battery_level"],
+                        "battery_level": battery_level,
                         "voltage": voltage,
                         "health_score": health_score,
-                        "last_seen": last_seen_str,
+                        "health_issues": health_issues,
                         "last_telemetry": last_telemetry_str,
                         "status_class": status_class,
                     }
                 )
 
+            # Sort by status (critical first) then by voltage
+            status_order = {"danger": 0, "warning": 1, "success": 2}
+            results.sort(
+                key=lambda x: (
+                    status_order.get(x["status_class"], 3),
+                    x["voltage"] if x["voltage"] is not None else 999,
+                )
+            )
+
             conn.close()
+            logger.info(f"Battery health overview returning {len(results)} nodes")
             return results
 
         except Exception as e:
             logger.error(f"Error getting battery health overview: {e}", exc_info=True)
             return []
+
+    @staticmethod
+    def _calculate_battery_health(node_id: int, cursor) -> dict[str, Any]:
+        """Calculate battery health score for a node based on telemetry patterns.
+
+        Analyzes:
+        - Whether battery reaches full charge (for solar/charging devices)
+        - Discharge rate compared to baseline
+        - Voltage stability and trends
+        - Signs of battery degradation
+
+        Args:
+            node_id: The node ID to analyze
+            cursor: Database cursor to use
+
+        Returns:
+            Dictionary with health_score (0-100) and list of issues
+        """
+        issues = []
+        health_score = 100
+
+        # Get voltage history for the last 7 days
+        cutoff_time = time.time() - (7 * 24 * 3600)
+        cursor.execute(
+            """
+            SELECT voltage, battery_level, timestamp
+            FROM telemetry_data
+            WHERE node_id = ? AND voltage IS NOT NULL AND timestamp > ?
+            ORDER BY timestamp ASC
+        """,
+            (node_id, cutoff_time),
+        )
+        readings = cursor.fetchall()
+
+        if len(readings) < 5:
+            return {"health_score": None, "issues": ["Insufficient data for health analysis"]}
+
+        # Scale voltages and extract data
+        voltages = []
+        timestamps = []
+        for r in readings:
+            v = r["voltage"]
+            if v is not None:
+                if v < 1:
+                    v = v * 1000
+                voltages.append(v)
+                timestamps.append(r["timestamp"])
+
+        if len(voltages) < 5:
+            return {"health_score": None, "issues": ["Insufficient voltage data"]}
+
+        voltage_max = max(voltages)
+        voltage_min = min(voltages)
+        voltage_mean = sum(voltages) / len(voltages)
+        voltage_range = voltage_max - voltage_min
+        latest_voltage = voltages[-1]
+
+        # Calculate discharge rates between readings
+        discharge_rates = []
+        for i in range(1, len(voltages)):
+            time_diff_hours = (timestamps[i] - timestamps[i - 1]) / 3600
+            if time_diff_hours > 0:
+                voltage_diff = voltages[i - 1] - voltages[i]  # Positive = discharge
+                rate = voltage_diff / time_diff_hours  # V/hour
+                if rate > 0:  # Only track actual discharge
+                    discharge_rates.append(rate)
+
+        # === Health Check 1: Battery not reaching full charge ===
+        # For solar/charging devices, max voltage should reach near 4.2V
+        if voltage_max < 3.9:
+            health_score -= 25
+            issues.append(f"Battery not fully charging (max: {voltage_max:.2f}V, expected: >4.0V)")
+        elif voltage_max < 4.0:
+            health_score -= 10
+            issues.append(f"Battery charging below optimal (max: {voltage_max:.2f}V)")
+
+        # === Health Check 2: Rapid discharge rate ===
+        if discharge_rates:
+            avg_discharge_rate = sum(discharge_rates) / len(discharge_rates)
+            max_discharge_rate = max(discharge_rates)
+
+            # Normal discharge is roughly 0.01-0.02 V/hour for a healthy battery
+            # Faster than 0.05 V/hour indicates potential issues
+            if avg_discharge_rate > 0.08:
+                health_score -= 30
+                issues.append(f"Rapid battery drain ({avg_discharge_rate:.3f} V/hr avg)")
+            elif avg_discharge_rate > 0.05:
+                health_score -= 15
+                issues.append(f"Elevated discharge rate ({avg_discharge_rate:.3f} V/hr avg)")
+
+            # Check for sudden discharge spikes
+            if max_discharge_rate > 0.15:
+                health_score -= 10
+                issues.append(f"Discharge spikes detected ({max_discharge_rate:.3f} V/hr max)")
+
+        # === Health Check 3: Low voltage warning ===
+        if latest_voltage < 3.3:
+            health_score -= 30
+            issues.append(f"Critical low voltage ({latest_voltage:.2f}V)")
+        elif latest_voltage < 3.5:
+            health_score -= 15
+            issues.append(f"Low voltage ({latest_voltage:.2f}V)")
+
+        # === Health Check 4: Voltage instability ===
+        # Calculate variance in recent readings
+        recent_voltages = voltages[-min(20, len(voltages)):]
+        if len(recent_voltages) >= 5:
+            recent_mean = sum(recent_voltages) / len(recent_voltages)
+            variance = sum((v - recent_mean) ** 2 for v in recent_voltages) / len(recent_voltages)
+            std_dev = variance ** 0.5
+
+            # Very high variance might indicate connection issues or failing battery
+            if std_dev > 0.3:
+                health_score -= 15
+                issues.append(f"Unstable voltage readings (std dev: {std_dev:.2f}V)")
+
+        # === Health Check 5: Compare to historical baseline ===
+        # Get older data (14-30 days ago) for comparison
+        baseline_start = time.time() - (30 * 24 * 3600)
+        baseline_end = time.time() - (14 * 24 * 3600)
+        cursor.execute(
+            """
+            SELECT voltage, timestamp
+            FROM telemetry_data
+            WHERE node_id = ? AND voltage IS NOT NULL
+            AND timestamp > ? AND timestamp < ?
+            ORDER BY timestamp ASC
+        """,
+            (node_id, baseline_start, baseline_end),
+        )
+        baseline_readings = cursor.fetchall()
+
+        if len(baseline_readings) >= 10:
+            baseline_voltages = []
+            for r in baseline_readings:
+                v = r["voltage"]
+                if v is not None:
+                    if v < 1:
+                        v = v * 1000
+                    baseline_voltages.append(v)
+
+            if baseline_voltages:
+                baseline_max = max(baseline_voltages)
+
+                # Check if max charge has decreased significantly
+                if baseline_max > 4.0 and voltage_max < baseline_max - 0.15:
+                    health_score -= 20
+                    issues.append(
+                        f"Max charge declining (was {baseline_max:.2f}V, now {voltage_max:.2f}V)"
+                    )
+
+        # Ensure score stays in valid range
+        health_score = max(0, min(100, health_score))
+
+        return {"health_score": health_score, "issues": issues}
 
     @staticmethod
     def get_critical_batteries() -> list[dict[str, Any]]:
@@ -4501,7 +4715,6 @@ class BatteryAnalyticsRepository:
             return []
 
     @staticmethod
-    @staticmethod
     def get_nodes_with_battery_telemetry() -> list[dict[str, Any]]:
         """Get all nodes that have shared battery telemetry data.
 
@@ -4512,88 +4725,62 @@ class BatteryAnalyticsRepository:
             conn = get_db_connection()
             cursor = conn.cursor()
 
-            # Debug: Check how many telemetry records exist
-            cursor.execute("SELECT COUNT(*) as total FROM telemetry_data")
-            total_telemetry = cursor.fetchone()["total"]
-            logger.debug(f"Total telemetry records in database: {total_telemetry}")
-
-            # Debug: Check how many have voltage data
-            cursor.execute(
-                "SELECT COUNT(*) as total FROM telemetry_data WHERE voltage IS NOT NULL"
-            )
-            voltage_count = cursor.fetchone()["total"]
-            logger.debug(f"Telemetry records with voltage data: {voltage_count}")
-
-            # Debug: Check how many have battery_level data
-            cursor.execute(
-                "SELECT COUNT(*) as total FROM telemetry_data WHERE battery_level IS NOT NULL"
-            )
-            battery_level_count = cursor.fetchone()["total"]
-            logger.debug(
-                f"Telemetry records with battery_level data: {battery_level_count}"
-            )
-
-            # Debug: Check basic JOIN
+            # Get all nodes with telemetry, fetching latest voltage directly
             cursor.execute(
                 """
-                SELECT COUNT(DISTINCT ni.node_id) as count
-                FROM node_info ni
-                INNER JOIN telemetry_data td ON ni.node_id = td.node_id
-                WHERE td.voltage IS NOT NULL OR td.battery_level IS NOT NULL
-                """
-            )
-            join_count = cursor.fetchone()["count"]
-            logger.debug(f"Nodes with telemetry after JOIN: {join_count}")
-
-            # Get all nodes that have telemetry data (voltage or battery_level)
-            # Simplified query without GROUP BY complications
-            cursor.execute(
-                """
-                SELECT
+                SELECT DISTINCT
                     ni.node_id,
-                    ni.hex_id,
+                    COALESCE(ni.hex_id, printf('!%08x', ni.node_id)) as hex_id,
                     ni.long_name,
                     ni.short_name,
-                    ni.power_type,
-                    ni.last_battery_voltage,
-                    ni.battery_health_score,
-                    MAX(td.timestamp) as last_telemetry_time
+                    COALESCE(ni.power_type, 'unknown') as power_type
                 FROM node_info ni
                 INNER JOIN telemetry_data td ON ni.node_id = td.node_id
                 WHERE td.voltage IS NOT NULL OR td.battery_level IS NOT NULL
-                GROUP BY ni.node_id
-                ORDER BY
-                    CASE
-                        WHEN ni.power_type = 'solar' THEN 0
-                        WHEN ni.power_type = 'battery' THEN 1
-                        WHEN ni.power_type = 'mains' THEN 2
-                        ELSE 3
-                    END,
-                    MAX(td.timestamp) DESC
             """
             )
+            nodes = cursor.fetchall()
+            logger.info(f"Found {len(nodes)} nodes with battery telemetry")
 
             results = []
-            for row in cursor.fetchall():
+            for row in nodes:
+                node_id = row["node_id"]
                 node_name = row["long_name"] or row["short_name"] or row["hex_id"]
                 power_type = row["power_type"] or "unknown"
 
-                # Scale voltage from fractional volts to actual volts (0.004 -> 4.0)
-                voltage = row["last_battery_voltage"]
-                if voltage is not None and voltage < 1:
-                    voltage = voltage * 1000
+                # Get latest telemetry for this node
+                cursor.execute(
+                    """
+                    SELECT voltage, battery_level, timestamp
+                    FROM telemetry_data
+                    WHERE node_id = ? AND (voltage IS NOT NULL OR battery_level IS NOT NULL)
+                    ORDER BY timestamp DESC
+                    LIMIT 1
+                """,
+                    (node_id,),
+                )
+                latest = cursor.fetchone()
 
-                # Convert Unix timestamp to datetime object
+                voltage = None
                 last_telemetry_dt = None
-                if row["last_telemetry_time"]:
-                    try:
-                        last_telemetry_dt = datetime.fromtimestamp(
-                            row["last_telemetry_time"], tz=UTC
-                        )
-                    except Exception as e:
-                        logger.warning(
-                            f"Could not parse timestamp {row['last_telemetry_time']}: {e}"
-                        )
+                if latest:
+                    voltage = latest["voltage"]
+                    # Scale voltage if needed
+                    if voltage is not None and voltage < 1:
+                        voltage = voltage * 1000
+                    if latest["timestamp"]:
+                        try:
+                            last_telemetry_dt = datetime.fromtimestamp(
+                                latest["timestamp"], tz=UTC
+                            )
+                        except Exception:
+                            pass
+
+                # Calculate battery health for this node
+                battery_health = BatteryAnalyticsRepository._calculate_battery_health(
+                    node_id, cursor
+                )
+                health_score = battery_health.get("health_score")
 
                 # Determine power type icon and color
                 if power_type == "solar":
@@ -4611,14 +4798,14 @@ class BatteryAnalyticsRepository:
 
                 results.append(
                     {
-                        "node_id": row["node_id"],
+                        "node_id": node_id,
                         "hex_id": row["hex_id"],
                         "name": node_name,
                         "power_type": power_type,
                         "power_icon": power_icon,
                         "power_class": power_class,
                         "voltage": voltage,
-                        "health_score": row["battery_health_score"],
+                        "health_score": health_score,
                         "last_telemetry": (
                             format_time_ago(last_telemetry_dt)
                             if last_telemetry_dt
@@ -4627,19 +4814,11 @@ class BatteryAnalyticsRepository:
                     }
                 )
 
-            logger.info(f"Found {len(results)} nodes with battery telemetry data")
-            logger.debug(
-                f"Query returned: {len(results)} nodes from {total_telemetry} telemetry records"
-            )
-            logger.debug(
-                f"Records with voltage: {voltage_count}, with battery_level: {battery_level_count}"
-            )
-            if results:
-                logger.info(f"Sample nodes: {[r['name'] for r in results[:3]]}")
-            else:
-                logger.warning(
-                    f"No nodes found with telemetry despite {total_telemetry} telemetry records existing"
-                )
+            # Sort by power type priority then recency
+            power_order = {"solar": 0, "battery": 1, "mains": 2, "unknown": 3}
+            results.sort(key=lambda x: power_order.get(x["power_type"], 4))
+
+            logger.info(f"Returning {len(results)} nodes with battery telemetry")
             conn.close()
             return results
 

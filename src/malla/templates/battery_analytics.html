@@ -241,8 +241,15 @@
                                             <span class="badge bg-danger">Critical</span>
                                         {% elif node.voltage and node.voltage < 3.6 %}
                                             <span class="badge bg-warning">Low</span>
+                                        {% elif node.health_score and node.health_score < 70 %}
+                                            <span class="badge bg-warning">Issues</span>
                                         {% else %}
                                             <span class="badge bg-success">Good</span>
+                                        {% endif %}
+                                        {% if node.health_issues %}
+                                        <small class="text-muted d-block" style="font-size: 0.75rem;">
+                                            {{ node.health_issues[0] if node.health_issues else '' }}
+                                        </small>
                                         {% endif %}
                                     </td>
                                     <td>{{ node.last_telemetry }}</td>
