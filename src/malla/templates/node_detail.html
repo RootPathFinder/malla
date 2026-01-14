@@ -44,6 +44,18 @@
         font-size: 0.75rem;
     }
     .matrix-table td { text-align: center; }
+    .hw-thumbnail {
+        max-height: 48px;
+        max-width: 80px;
+        margin-left: 12px;
+        border-radius: 4px;
+        vertical-align: middle;
+        box-shadow: 0 1px 3px rgba(0,0,0,0.1);
+    }
+    .hw-model-container {
+        display: flex;
+        align-items: center;
+    }
 </style>
 {% endblock %}
 
@@ -143,7 +155,16 @@
                                 {% if node.hw_model %}
                                 <tr>
                                     <th>Hardware Model:</th>
-                                    <td>{{ node.hw_model }}</td>
+                                    <td>
+                                        <div class="hw-model-container">
+                                            <span>{{ node.hw_model }}</span>
+                                            <img src="https://flasher.meshtastic.org/img/devices/{{ node.hw_model | replace('_', '-') | lower }}.svg"
+                                                 alt="{{ node.hw_model }}"
+                                                 class="hw-thumbnail"
+                                                 onerror="this.src='https://flasher.meshtastic.org/img/devices/unknown.svg'"
+                                                 loading="lazy">
+                                        </div>
+                                    </td>
                                 </tr>
                                 {% endif %}
                                 {% if node.role %}
