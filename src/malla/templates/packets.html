@@ -8,6 +8,86 @@
 <link rel="stylesheet" href="{{ url_for('static', filename='css/node-picker.css') }}">
 <link rel="stylesheet" href="{{ url_for('static', filename='css/modern-table.css') }}">
 {{ table_layout_styles() }}
+<style>
+    /* Smooth row insertion animation */
+    @keyframes slideInAndPulse {
+        0% {
+            opacity: 0;
+            transform: translateX(-20px);
+            background-color: rgba(13, 110, 253, 0.2);
+        }
+        50% {
+            background-color: rgba(13, 110, 253, 0.1);
+        }
+        100% {
+            opacity: 1;
+            transform: translateX(0);
+            background-color: transparent;
+        }
+    }
+
+    .packet-row-new {
+        animation: slideInAndPulse 0.6s ease-out;
+    }
+
+    /* Relative time display */
+    .timestamp-relative {
+        display: block;
+        font-size: 0.75rem;
+        color: var(--bs-secondary);
+        margin-top: 0.25rem;
+        font-weight: 500;
+    }
+
+    /* Live PPM gauge styling */
+    .ppm-gauge-live {
+        position: relative;
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        width: 100%;
+        height: 100%;
+    }
+
+    .ppm-gauge-live .gauge-value {
+        position: absolute;
+        font-size: 1.5rem;
+        font-weight: bold;
+        color: #0d6efd;
+    }
+
+    .ppm-live-indicator {
+        position: absolute;
+        top: 50%;
+        right: 10px;
+        transform: translateY(-50%);
+        width: 10px;
+        height: 10px;
+        border-radius: 50%;
+        background-color: #28a745;
+        animation: livePulse 2s infinite;
+    }
+
+    @keyframes livePulse {
+        0%, 100% {
+            opacity: 1;
+            box-shadow: 0 0 0 0 rgba(40, 167, 69, 0.7);
+        }
+        50% {
+            opacity: 0.8;
+            box-shadow: 0 0 0 6px rgba(40, 167, 69, 0.3);
+        }
+    }
+
+    /* Table row hover effect - subtle */
+    .modern-table-container tbody tr {
+        transition: background-color 0.3s ease;
+    }
+
+    .modern-table-container tbody tr.packet-row-new:hover {
+        background-color: rgba(13, 110, 253, 0.05);
+    }
+</style>
 {% endblock %}
 
 {% block content %}
@@ -23,10 +103,11 @@
                     <div class="d-flex justify-content-between align-items-start mb-2">
                         <h6 class="card-title mb-0">
                             <i class="bi bi-speedometer2"></i> Packets/Min
+                            <span class="ppm-live-indicator" title="Live updating"></span>
                         </h6>
-                        <small class="text-muted">24h avg</small>
+                        <small class="text-muted">live + 24h avg</small>
                     </div>
-                    <div id="gauge-ppm" style="height: 120px; display: flex; align-items: center; justify-content: center;">
+                    <div id="gauge-ppm" style="height: 120px; display: flex; align-items: center; justify-content: center; position: relative;">
                         <div class="spinner-border spinner-border-sm text-primary" role="status">
                             <span class="visually-hidden">Loading...</span>
                         </div>
@@ -827,6 +908,84 @@ document.addEventListener('DOMContentLoaded', function() {
 
     document.addEventListener('click', handleTableInteraction, true);
     document.addEventListener('scroll', handleTableInteraction, true);
+
+    // Live Packets Per Minute (PPM) tracking
+    let packetTimestamps = [];
+    const TRACKING_WINDOW = 60000; // 1 minute in milliseconds
+
+    function trackPacketArrival() {
+        const now = Date.now();
+        packetTimestamps.push(now);
+
+        // Remove timestamps older than 1 minute
+        packetTimestamps = packetTimestamps.filter(t => now - t < TRACKING_WINDOW);
+
+        updateLivePPMGauge();
+    }
+
+    function calculateLivePPM() {
+        const now = Date.now();
+        // Count packets in the last minute
+        const recentPackets = packetTimestamps.filter(t => now - t < TRACKING_WINDOW);
+        return recentPackets.length;
+    }
+
+    function updateLivePPMGauge() {
+        const ppm = calculateLivePPM();
+        const maxPPM = 120; // Adjust based on expected max PPM
+        const percentage = Math.min(100, (ppm / maxPPM) * 100);
+
+        const ppmValueEl = document.getElementById('ppm-value');
+        if (ppmValueEl) {
+            ppmValueEl.textContent = ppm.toFixed(1) + ' packets/min';
+        }
+
+        // Update gauge (if it exists and is already rendered)
+        if (window.updateCircleGauge) {
+            window.updateCircleGauge('gauge-ppm', percentage);
+        }
+    }
+
+    // Update time-ago displays every 30 seconds
+    function updateTimeAgoDisplays() {
+        if (window.updateAllTimeAgoDisplays) {
+            updateAllTimeAgoDisplays();
+        }
+    }
+
+    setInterval(updateTimeAgoDisplays, 30000);
+
+    // Smooth row insertion with animation
+    const originalRenderTableBody = table.renderTableBody;
+    const renderedRows = new Set();
+
+    table.renderTableBody = function() {
+        // Call original render
+        const result = originalRenderTableBody.call(this);
+
+        // Add animation to new rows
+        const tbody = table.container.querySelector('tbody');
+        if (tbody) {
+            const currentRows = Array.from(tbody.querySelectorAll('tr'));
+            currentRows.forEach(row => {
+                const rowId = row.getAttribute('data-id') || row.dataset.id;
+                if (rowId && !renderedRows.has(rowId)) {
+                    renderedRows.add(rowId);
+                    row.classList.add('packet-row-new');
+
+                    // Track packet arrival for PPM
+                    trackPacketArrival();
+
+                    // Remove animation class after animation completes
+                    setTimeout(() => {
+                        row.classList.remove('packet-row-new');
+                    }, 600);
+                }
+            });
+        }
+
+        return result;
+    };
 
     // Initialize the filter controller
     const controller = new TableFilterController({

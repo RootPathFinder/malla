@@ -10,6 +10,7 @@ Provides:
 
 import json
 import logging
+import sqlite3
 import time
 from collections import defaultdict
 from dataclasses import dataclass, field
@@ -21,6 +22,39 @@ from ..database.connection import get_db_connection
 from ..utils.node_utils import get_bulk_node_names
 
 logger = logging.getLogger(__name__)
+
+
+def _execute_with_retry(func, max_retries: int = 3, initial_delay: float = 0.1):
+    """Execute a database operation with exponential backoff retry logic.
+
+    Args:
+        func: Callable that performs the database operation
+        max_retries: Maximum number of retry attempts
+        initial_delay: Initial delay in seconds between retries
+
+    Returns:
+        Result from func
+
+    Raises:
+        sqlite3.OperationalError: If all retries fail
+    """
+    delay = initial_delay
+    last_error = None
+
+    for attempt in range(max_retries):
+        try:
+            return func()
+        except sqlite3.OperationalError as e:
+            if "database is locked" not in str(e).lower():
+                raise
+            last_error = e
+            if attempt < max_retries - 1:
+                logger.debug(f"Database locked, retrying in {delay}s (attempt {attempt + 1}/{max_retries})")
+                time.sleep(delay)
+                delay *= 2  # Exponential backoff
+
+    logger.error(f"Database operation failed after {max_retries} retries")
+    raise last_error
 
 
 class AlertSeverity(Enum):
@@ -149,79 +183,87 @@ class AlertService:
 
     @classmethod
     def add_alert(cls, alert: Alert) -> None:
-        """Add a new alert to the database."""
-        try:
+        """Add a new alert to the database with retry logic."""
+        def _insert_alert():
             conn = get_db_connection()
-            cursor = conn.cursor()
+            try:
+                cursor = conn.cursor()
 
-            # Check for existing active alert of the same type and node
-            cursor.execute("""
-                SELECT id FROM alerts
-                WHERE alert_type = ? AND node_id IS ? AND resolved = 0
-                LIMIT 1
-            """, (alert.alert_type.value, alert.node_id))
-
-            existing = cursor.fetchone()
-
-            if existing:
-                # Update existing alert instead of creating duplicate
+                # Check for existing active alert of the same type and node
                 cursor.execute("""
-                    UPDATE alerts
-                    SET timestamp = ?, message = ?, metadata = ?
-                    WHERE id = ?
-                """, (
-                    alert.timestamp,
-                    alert.message,
-                    json.dumps(alert.metadata),
-                    existing["id"],
-                ))
-                logger.debug(f"Updated existing alert: {alert.title}")
-            else:
-                # Insert new alert
-                cursor.execute("""
-                    INSERT INTO alerts
-                    (alert_type, severity, node_id, title, message, timestamp, resolved, metadata)
-                    VALUES (?, ?, ?, ?, ?, ?, 0, ?)
-                """, (
-                    alert.alert_type.value,
-                    alert.severity.value,
-                    alert.node_id,
-                    alert.title,
-                    alert.message,
-                    alert.timestamp,
-                    json.dumps(alert.metadata),
-                ))
-                logger.info(f"New alert: [{alert.severity.value}] {alert.title}")
+                    SELECT id FROM alerts
+                    WHERE alert_type = ? AND node_id IS ? AND resolved = 0
+                    LIMIT 1
+                """, (alert.alert_type.value, alert.node_id))
 
-            conn.commit()
-            conn.close()
+                existing = cursor.fetchone()
 
+                if existing:
+                    # Update existing alert instead of creating duplicate
+                    cursor.execute("""
+                        UPDATE alerts
+                        SET timestamp = ?, message = ?, metadata = ?
+                        WHERE id = ?
+                    """, (
+                        alert.timestamp,
+                        alert.message,
+                        json.dumps(alert.metadata),
+                        existing["id"],
+                    ))
+                    logger.debug(f"Updated existing alert: {alert.title}")
+                else:
+                    # Insert new alert
+                    cursor.execute("""
+                        INSERT INTO alerts
+                        (alert_type, severity, node_id, title, message, timestamp, resolved, metadata)
+                        VALUES (?, ?, ?, ?, ?, ?, 0, ?)
+                    """, (
+                        alert.alert_type.value,
+                        alert.severity.value,
+                        alert.node_id,
+                        alert.title,
+                        alert.message,
+                        alert.timestamp,
+                        json.dumps(alert.metadata),
+                    ))
+                    logger.info(f"New alert: [{alert.severity.value}] {alert.title}")
+
+                conn.commit()
+            finally:
+                conn.close()
+
+        try:
+            _execute_with_retry(_insert_alert, max_retries=3, initial_delay=0.05)
         except Exception as e:
-            logger.error(f"Error adding alert: {e}", exc_info=True)
+            logger.error(f"Error adding alert after retries: {e}", exc_info=True)
 
     @classmethod
     def resolve_alert(cls, alert_type: AlertType, node_id: int | None) -> bool:
-        """Resolve an active alert in the database."""
-        try:
+        """Resolve an active alert in the database with retry logic."""
+        def _resolve():
             conn = get_db_connection()
-            cursor = conn.cursor()
+            try:
+                cursor = conn.cursor()
 
-            cursor.execute("""
-                UPDATE alerts
-                SET resolved = 1, resolved_at = ?
-                WHERE alert_type = ? AND node_id IS ? AND resolved = 0
-            """, (time.time(), alert_type.value, node_id))
+                cursor.execute("""
+                    UPDATE alerts
+                    SET resolved = 1, resolved_at = ?
+                    WHERE alert_type = ? AND node_id IS ? AND resolved = 0
+                """, (time.time(), alert_type.value, node_id))
 
-            success = cursor.rowcount > 0
-            conn.commit()
-            conn.close()
+                success = cursor.rowcount > 0
+                conn.commit()
 
-            if success:
-                logger.info(f"Alert resolved: {alert_type.value} for node {node_id}")
-            return success
+                if success:
+                    logger.info(f"Alert resolved: {alert_type.value} for node {node_id}")
+                return success
+            finally:
+                conn.close()
 
+        try:
+            return _execute_with_retry(_resolve, max_retries=3, initial_delay=0.05)
         except Exception as e:
-            logger.error(f"Error resolving alert: {e}", exc_info=True)
+            logger.error(f"Error resolving alert after retries: {e}", exc_info=True)
             return False
 
     @classmethod
@@ -246,107 +288,114 @@ class AlertService:
         Returns:
             List of alert dictionaries
         """
-        try:
+        def _fetch_alerts():
             conn = get_db_connection()
-            cursor = conn.cursor()
+            try:
+                cursor = conn.cursor()
 
-            # Build query
-            query = "SELECT * FROM alerts WHERE 1=1"
-            params = []
+                # Build query
+                query = "SELECT * FROM alerts WHERE 1=1"
+                params = []
 
-            if not include_resolved:
-                query += " AND resolved = 0"
+                if not include_resolved:
+                    query += " AND resolved = 0"
 
-            if severity:
-                query += " AND severity = ?"
-                params.append(severity.value)
+                if severity:
+                    query += " AND severity = ?"
+                    params.append(severity.value)
 
-            if node_id is not None:
-                query += " AND node_id = ?"
-                params.append(node_id)
+                if node_id is not None:
+                    query += " AND node_id = ?"
+                    params.append(node_id)
 
-            if alert_type:
-                query += " AND alert_type = ?"
-                params.append(alert_type.value)
+                if alert_type:
+                    query += " AND alert_type = ?"
+                    params.append(alert_type.value)
 
-            # Sort by timestamp (newest first) and limit
-            query += " ORDER BY timestamp DESC LIMIT ?"
-            params.append(limit)
+                # Sort by timestamp (newest first) and limit
+                query += " ORDER BY timestamp DESC LIMIT ?"
+                params.append(limit)
 
-            cursor.execute(query, params)
-            rows = cursor.fetchall()
-            conn.close()
+                cursor.execute(query, params)
+                rows = cursor.fetchall()
 
-            # Get node names for display
-            node_ids = [row["node_id"] for row in rows if row["node_id"] is not None]
-            node_names = get_bulk_node_names(node_ids) if node_ids else {}
+                # Get node names for display
+                node_ids = [row["node_id"] for row in rows if row["node_id"] is not None]
+                node_names = get_bulk_node_names(node_ids) if node_ids else {}
 
-            # Convert rows to dictionaries
-            result = []
-            for row in rows:
-                alert_dict = {
-                    "alert_type": row["alert_type"],
-                    "severity": row["severity"],
-                    "node_id": row["node_id"],
-                    "title": row["title"],
-                    "message": row["message"],
-                    "timestamp": row["timestamp"],
-                    "timestamp_iso": datetime.fromtimestamp(row["timestamp"]).isoformat(),
-                    "resolved": bool(row["resolved"]),
-                    "resolved_at": row["resolved_at"],
-                    "resolved_at_iso": datetime.fromtimestamp(row["resolved_at"]).isoformat() if row["resolved_at"] else None,
-                    "metadata": json.loads(row["metadata"]) if row["metadata"] else {},
-                }
-                if row["node_id"]:
-                    alert_dict["node_name"] = node_names.get(row["node_id"], f"!{row['node_id']:08x}")
-                    alert_dict["node_hex"] = f"!{row['node_id']:08x}"
-                result.append(alert_dict)
+                # Convert rows to dictionaries
+                result = []
+                for row in rows:
+                    alert_dict = {
+                        "alert_type": row["alert_type"],
+                        "severity": row["severity"],
+                        "node_id": row["node_id"],
+                        "title": row["title"],
+                        "message": row["message"],
+                        "timestamp": row["timestamp"],
+                        "timestamp_iso": datetime.fromtimestamp(row["timestamp"]).isoformat(),
+                        "resolved": bool(row["resolved"]),
+                        "resolved_at": row["resolved_at"],
+                        "resolved_at_iso": datetime.fromtimestamp(row["resolved_at"]).isoformat() if row["resolved_at"] else None,
+                        "metadata": json.loads(row["metadata"]) if row["metadata"] else {},
+                    }
+                    if row["node_id"]:
+                        alert_dict["node_name"] = node_names.get(row["node_id"], f"!{row['node_id']:08x}")
+                        alert_dict["node_hex"] = f"!{row['node_id']:08x}"
+                    result.append(alert_dict)
 
-            return result
+                return result
+            finally:
+                conn.close()
 
+        try:
+            return _execute_with_retry(_fetch_alerts, max_retries=3, initial_delay=0.05)
         except Exception as e:
-            logger.error(f"Error getting alerts: {e}", exc_info=True)
+            logger.error(f"Error getting alerts after retries: {e}", exc_info=True)
             return []
 
     @classmethod
     def get_alert_summary(cls) -> dict[str, Any]:
         """Get summary of current alert state from database."""
-        try:
+        def _fetch_summary():
             conn = get_db_connection()
-            cursor = conn.cursor()
+            try:
+                cursor = conn.cursor()
 
-            # Get counts by severity for active alerts
-            cursor.execute("""
-                SELECT severity, COUNT(*) as count
-                FROM alerts
-                WHERE resolved = 0
-                GROUP BY severity
-            """)
+                # Get counts by severity for active alerts
+                cursor.execute("""
+                    SELECT severity, COUNT(*) as count
+                    FROM alerts
+                    WHERE resolved = 0
+                    GROUP BY severity
+                """)
 
-            by_severity = {}
-            for row in cursor.fetchall():
-                by_severity[row["severity"]] = row["count"]
+                by_severity = {}
+                for row in cursor.fetchall():
+                    by_severity[row["severity"]] = row["count"]
 
-            # Get total active alerts
-            cursor.execute("SELECT COUNT(*) as count FROM alerts WHERE resolved = 0")
-            total_active = cursor.fetchone()["count"]
+                # Get total active alerts
+                cursor.execute("SELECT COUNT(*) as count FROM alerts WHERE resolved = 0")
+                total_active = cursor.fetchone()["count"]
 
-            # Get total resolved alerts
-            cursor.execute("SELECT COUNT(*) as count FROM alerts WHERE resolved = 1")
-            total_resolved = cursor.fetchone()["count"]
+                # Get total resolved alerts
+                cursor.execute("SELECT COUNT(*) as count FROM alerts WHERE resolved = 1")
+                total_resolved = cursor.fetchone()["count"]
 
-            conn.close()
+                return {
+                    "total_active": total_active,
+                    "total_resolved": total_resolved,
+                    "by_severity": by_severity,
+                    "by_type": {},  # Could add if needed
+                    "last_check": cls._last_check,
+                }
+            finally:
+                conn.close()
 
-            return {
-                "total_active": total_active,
-                "total_resolved": total_resolved,
-                "by_severity": by_severity,
-                "by_type": {},  # Could add if needed
-                "last_check": cls._last_check,
-            }
-
+        try:
+            return _execute_with_retry(_fetch_summary, max_retries=3, initial_delay=0.05)
         except Exception as e:
-            logger.error(f"Error getting alert summary: {e}", exc_info=True)
+            logger.error(f"Error getting alert summary after retries: {e}", exc_info=True)
             return {
                 "total_active": 0,
                 "total_resolved": 0,

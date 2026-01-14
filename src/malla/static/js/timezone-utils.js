@@ -155,6 +155,43 @@ function escapeHtml(str) {
 }
 
 /**
+ * Format a timestamp into human-readable time ago format
+ * @param {number} timestamp - Unix timestamp in seconds
+ * @returns {string} Time ago string (e.g., "2 minutes ago")
+ */
+function formatTimeAgo(timestamp) {
+    const now = Math.floor(Date.now() / 1000);
+    const diffSeconds = now - Math.floor(timestamp);
+
+    if (diffSeconds < 60) {
+        return diffSeconds + ' second' + (diffSeconds !== 1 ? 's' : '') + ' ago';
+    }
+    const diffMinutes = Math.floor(diffSeconds / 60);
+    if (diffMinutes < 60) {
+        return diffMinutes + ' minute' + (diffMinutes !== 1 ? 's' : '') + ' ago';
+    }
+    const diffHours = Math.floor(diffMinutes / 60);
+    if (diffHours < 24) {
+        return diffHours + ' hour' + (diffHours !== 1 ? 's' : '') + ' ago';
+    }
+    const diffDays = Math.floor(diffHours / 24);
+    return diffDays + ' day' + (diffDays !== 1 ? 's' : '') + ' ago';
+}
+
+/**
+ * Update all "time ago" displays on the page
+ */
+function updateAllTimeAgoDisplays() {
+    const timeAgoElements = document.querySelectorAll('[data-timestamp-ago]');
+    timeAgoElements.forEach(element => {
+        const timestamp = element.getAttribute('data-timestamp-ago');
+        if (timestamp) {
+            element.textContent = formatTimeAgo(parseFloat(timestamp));
+        }
+    });
+}
+
+/**
  * Render a timestamp column for tables
  * Use this in ModernTable column render functions
  * @param {object} row - Table row data
@@ -174,9 +211,11 @@ function renderTimestampColumn(row, timestampField = 'timestamp', idField = 'id'
     const escapedTimestamp = escapeHtml(timestamp);
 
     const link = linkPath.replace('{id}', escapedId);
+    const timeAgoText = formatTimeAgo(timestamp);
 
     return `<a href="${link}" class="text-decoration-none" title="View details">
                 <small class="timestamp-display" data-timestamp="${escapedTimestamp}">${escapedFormattedTime}</small>
+                <small class="timestamp-relative" data-timestamp-ago="${escapedTimestamp}">${timeAgoText}</small>
             </a>`;
 }
 
@@ -228,6 +267,8 @@ if (typeof module !== 'undefined' && module.exports) {
         datetimeLocalToTimestamp,
         timestampToDatetimeLocal,
         escapeHtml,
+        formatTimeAgo,
+        updateAllTimeAgoDisplays,
         renderTimestampColumn,
         updateAllTimestamps
     };
