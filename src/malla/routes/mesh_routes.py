@@ -14,6 +14,7 @@ from flask import Blueprint, jsonify, render_template, request
 
 from ..services.neighbor_service import NeighborService
 from ..services.node_health_service import NodeHealthService
+from ..services.traceroute_service import TracerouteService
 
 logger = logging.getLogger(__name__)
 
@@ -31,8 +32,12 @@ def api_topology():
     """
     Get mesh topology data.
 
+    Attempts to build topology from NeighborInfo packets first, then falls back to
+    traceroute-based network graphs if NeighborInfo data is insufficient.
+
     Query parameters:
         hours: Number of hours to analyze (default: 24)
+        source: Force data source - 'neighbor', 'traceroute', or 'combined' (default: auto)
 
     Returns:
         JSON with nodes, edges, and topology statistics
@@ -40,8 +45,87 @@ def api_topology():
     try:
         hours = request.args.get("hours", 24, type=int)
         hours = min(max(hours, 1), 720)  # Clamp between 1 hour and 30 days
+        source = request.args.get(
+            "source", "auto"
+        )  # auto, neighbor, traceroute, combined
 
-        topology = NeighborService.get_mesh_topology(hours=hours)
+        topology = None
+        source_used = None
+
+        # Try NeighborInfo first if not forcing traceroute
+        if source in ("auto", "neighbor", "combined"):
+            try:
+                topology = NeighborService.get_mesh_topology(hours=hours)
+                if topology and topology.get("nodes") and len(topology["nodes"]) > 0:
+                    source_used = "neighbor"
+                    logger.info(
+                        f"Built topology from {len(topology['nodes'])} NeighborInfo reports"
+                    )
+            except Exception as e:
+                logger.warning(f"Failed to get NeighborInfo topology: {e}")
+
+        # Fallback to traceroute-based topology if NeighborInfo insufficient
+        if (
+            not topology
+            or not topology.get("nodes")
+            or len(topology.get("nodes", [])) == 0
+        ):
+            if source in ("auto", "traceroute", "combined"):
+                try:
+                    logger.info(
+                        "NeighborInfo data insufficient, using traceroute-based topology"
+                    )
+                    traceroute_graph = TracerouteService.get_network_graph_data(
+                        hours=hours
+                    )
+                    if traceroute_graph and (
+                        traceroute_graph.get("nodes") or traceroute_graph.get("links")
+                    ):
+                        source_used = "traceroute"
+                        # Convert traceroute graph to neighbor service format for compatibility
+                        topology = {
+                            "nodes": traceroute_graph.get("nodes", []),
+                            "edges": [
+                                {
+                                    "node_a": link.get("from"),
+                                    "node_b": link.get("to"),
+                                    "snr_a_to_b": link.get("snr"),
+                                    "snr_b_to_a": None,
+                                    "avg_snr": link.get("snr"),
+                                    "quality": link.get("quality", "unknown"),
+                                    "bidirectional": False,
+                                    "last_seen": link.get("last_seen"),
+                                }
+                                for link in traceroute_graph.get("links", [])
+                            ],
+                            "statistics": traceroute_graph.get("statistics", {}),
+                            "source": "traceroute",
+                        }
+                        logger.info(
+                            f"Built topology from {len(topology['nodes'])} traceroute nodes"
+                        )
+                except Exception as e:
+                    logger.warning(f"Failed to get traceroute topology: {e}")
+
+        # If we still don't have data, return empty topology
+        if not topology:
+            topology = {
+                "nodes": [],
+                "edges": [],
+                "statistics": {
+                    "total_nodes": 0,
+                    "total_edges": 0,
+                    "bidirectional_edges": 0,
+                    "unidirectional_edges": 0,
+                },
+                "source": "none",
+            }
+            source_used = "none"
+
+        # Add source information to response
+        if source_used:
+            topology["source"] = source_used
+
         return jsonify(topology)
 
     except Exception as e:
@@ -101,7 +185,8 @@ def api_links():
     Get link data for map overlay.
 
     This endpoint returns edges in a format suitable for drawing
-    on the map between nodes.
+    on the map between nodes. Uses NeighborInfo if available,
+    falls back to traceroute-based topology.
 
     Query parameters:
         hours: Number of hours to analyze (default: 24)
@@ -115,7 +200,59 @@ def api_links():
         hours = request.args.get("hours", 24, type=int)
         hours = min(max(hours, 1), 720)
 
-        topology = NeighborService.get_mesh_topology(hours=hours)
+        # Get topology with fallback logic (same as /api/topology endpoint)
+        topology = None
+
+        # Try NeighborInfo first
+        try:
+            topology = NeighborService.get_mesh_topology(hours=hours)
+            if topology and topology.get("nodes") and len(topology["nodes"]) > 0:
+                logger.info("Using NeighborInfo topology for links endpoint")
+        except Exception as e:
+            logger.warning(f"Failed to get NeighborInfo topology for links: {e}")
+
+        # Fallback to traceroute-based topology
+        if (
+            not topology
+            or not topology.get("nodes")
+            or len(topology.get("nodes", [])) == 0
+        ):
+            try:
+                logger.info(
+                    "NeighborInfo data insufficient for links, using traceroute-based topology"
+                )
+                traceroute_graph = TracerouteService.get_network_graph_data(hours=hours)
+                if traceroute_graph and (
+                    traceroute_graph.get("nodes") or traceroute_graph.get("links")
+                ):
+                    # Convert traceroute graph to neighbor service format
+                    topology = {
+                        "nodes": traceroute_graph.get("nodes", []),
+                        "edges": [
+                            {
+                                "node_a": link.get("from"),
+                                "node_b": link.get("to"),
+                                "node_a_name": link.get(
+                                    "from_name", f"!{link.get('from'):08x}"
+                                ),
+                                "node_b_name": link.get(
+                                    "to_name", f"!{link.get('to'):08x}"
+                                ),
+                                "snr_a_to_b": link.get("snr"),
+                                "snr_b_to_a": None,
+                                "avg_snr": link.get("snr"),
+                                "quality": link.get("quality", "unknown"),
+                                "bidirectional": False,
+                            }
+                            for link in traceroute_graph.get("links", [])
+                        ],
+                    }
+            except Exception as e:
+                logger.warning(f"Failed to get traceroute topology for links: {e}")
+
+        # If still no topology, return empty
+        if not topology:
+            topology = {"nodes": [], "edges": []}
 
         # Get locations for all nodes
         node_ids = [n["node_id"] for n in topology["nodes"]]
@@ -145,15 +282,15 @@ def api_links():
                     {
                         "node_a": node_a,
                         "node_b": node_b,
-                        "node_a_name": edge["node_a_name"],
-                        "node_b_name": edge["node_b_name"],
+                        "node_a_name": edge.get("node_a_name", f"!{node_a:08x}"),
+                        "node_b_name": edge.get("node_b_name", f"!{node_b:08x}"),
                         "node_a_location": locations[node_a],
                         "node_b_location": locations[node_b],
-                        "snr_a_to_b": edge["snr_a_to_b"],
-                        "snr_b_to_a": edge["snr_b_to_a"],
-                        "avg_snr": edge["avg_snr"],
-                        "quality": edge["quality"],
-                        "bidirectional": edge["bidirectional"],
+                        "snr_a_to_b": edge.get("snr_a_to_b"),
+                        "snr_b_to_a": edge.get("snr_b_to_a"),
+                        "avg_snr": edge.get("avg_snr"),
+                        "quality": edge.get("quality"),
+                        "bidirectional": edge.get("bidirectional"),
                     }
                 )
 

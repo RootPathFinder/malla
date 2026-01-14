@@ -107,6 +107,14 @@
         animation: scaleIn 0.6s ease-out;
     }
 
+    /* ==================== Timestamp Styling ==================== */
+    .timestamp-relative {
+        display: block;
+        font-size: 0.75rem !important;
+        opacity: 0.85;
+        margin-top: 2px;
+    }
+
     /* ==================== Packet Row Styling ==================== */
     .packet-row-new {
         animation: pulseRow 0.8s ease-out forwards, fadeInRow 0.5s ease-out forwards !important;
@@ -165,6 +173,20 @@
         letter-spacing: 0.5px;
     }
 
+    /* ==================== Auto-Add Toggle ==================== */
+    #autoAddToggle {
+        transition: all 0.3s ease;
+    }
+
+    #autoAddToggle:hover {
+        background-color: rgba(255, 255, 255, 0.9) !important;
+    }
+
+    #autoAddToggle.active {
+        background-color: #28a745 !important;
+        color: white;
+    }
+
     /* ==================== Responsive ==================== */
     @media (max-width: 768px) {
         .new-packets-notification {
@@ -185,6 +207,9 @@
     <i class="bi bi-arrow-down"></i>
     <span id="newPacketsCount">1 new packet</span>
     <span class="badge">Click to update</span>
+    <button id="autoAddToggle" class="btn btn-sm btn-light ms-2" title="Enable auto-refresh" style="padding: 4px 8px; font-size: 0.85rem; border: none;">
+        <i class="bi bi-play-fill"></i> Auto
+    </button>
 </div>
 
 <!-- High-Level Stats Cards -->
@@ -544,11 +569,30 @@ document.addEventListener('DOMContentLoaded', function() {
 
     // ==================== New Packets Notification Handler ====================
     const notification = document.getElementById('newPacketsNotification');
-    notification?.addEventListener('click', function() {
+    const autoAddToggle = document.getElementById('autoAddToggle');
+
+    notification?.addEventListener('click', function(e) {
+        // Don't trigger refresh if clicking the toggle button
+        if (e.target.closest('#autoAddToggle')) {
+            return;
+        }
         if (window.controller) {
             window.controller.applyCurrentFilters();
             hideNewPacketsNotification();
             hasNewPackets = false;
+        }
+    });
+
+    // Auto-add toggle handler
+    autoAddToggle?.addEventListener('click', function(e) {
+        e.stopPropagation(); // Prevent notification click handler from firing
+        autoAddEnabled = !autoAddEnabled;
+        this.classList.toggle('active', autoAddEnabled);
+        this.title = autoAddEnabled ? 'Auto-refresh enabled - disable to stop' : 'Enable auto-refresh';
+        if (autoAddEnabled) {
+            this.innerHTML = '<i class="bi bi-pause-fill"></i> Auto';
+        } else {
+            this.innerHTML = '<i class="bi bi-play-fill"></i> Auto';
         }
     });
 
@@ -966,6 +1010,7 @@ document.addEventListener('DOMContentLoaded', function() {
     let autoUpdateInterval = null;
     let autoUpdateEnabled = true;
     let hasNewPackets = false;
+    let autoAddEnabled = false;
 
     async function checkForNewPackets() {
         if (!autoUpdateEnabled) return;
@@ -986,6 +1031,12 @@ document.addEventListener('DOMContentLoaded', function() {
                 newPacketsCount = data.packets.length;
                 hasNewPackets = true;
                 showNewPacketsNotification(newPacketsCount);
+
+                // If auto-add is enabled, automatically refresh the table
+                if (autoAddEnabled && window.controller) {
+                    window.controller.applyCurrentFilters();
+                    hasNewPackets = false;
+                }
 
                 // Show visual indicator that new packets arrived
                 const lastUpdateEl = document.getElementById('statsLastUpdate');
