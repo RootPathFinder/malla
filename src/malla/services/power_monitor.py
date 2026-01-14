@@ -13,15 +13,15 @@ logger = logging.getLogger(__name__)
 # Global state for the background monitor
 _monitor_thread = None
 _monitor_stop_event = threading.Event()
-_monitor_interval_seconds = 3600  # Default: run every hour
+_monitor_interval_seconds = 1800  # Default: run every 30 minutes
 
 
-def start_power_monitor(interval_seconds: int = 3600) -> None:
+def start_power_monitor(interval_seconds: int = 1800) -> None:
     """
     Start background thread for periodic power type detection.
 
     Args:
-        interval_seconds: How often to run detection (default: 3600 = 1 hour)
+        interval_seconds: How often to run detection (default: 1800 = 30 minutes)
     """
     global _monitor_thread, _monitor_interval_seconds
 
@@ -57,12 +57,12 @@ def stop_power_monitor() -> None:
 def _power_monitor_worker() -> None:
     """
     Background worker that periodically detects and updates power types.
-    Runs every hour by default.
+    Runs every 30 minutes by default (configurable).
     """
     logger.info("Power monitor worker started")
 
-    # Run immediately on startup (after a short delay)
-    time.sleep(60)  # Wait 1 minute after startup
+    # Run shortly after startup (after a brief delay for system to stabilize)
+    time.sleep(30)  # Wait 30 seconds after startup
 
     while not _monitor_stop_event.is_set():
         try:

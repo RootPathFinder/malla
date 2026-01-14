@@ -4051,14 +4051,20 @@ class BatteryAnalyticsRepository:
         try:
             conn = get_db_connection()
             cursor = conn.cursor()
+            current_time = time.time()
 
-            # Get all nodes with telemetry data
-            # Optionally filter to only unknown power types
+            # Re-analyze nodes that:
+            # 1. Have unknown/null power type
+            # 2. Haven't been analyzed in last 24 hours (periodic re-check)
+            # 3. Force update is enabled
+            reanalysis_threshold = current_time - (24 * 3600)  # 24 hours ago
+
             if force_update:
                 logger.info("Force mode: Re-detecting power types for all nodes")
                 cursor.execute(
                     """
-                    SELECT DISTINCT ni.node_id, ni.long_name, ni.power_type
+                    SELECT DISTINCT ni.node_id, ni.long_name, ni.power_type,
+                           ni.power_analysis_timestamp
                     FROM node_info ni
                     INNER JOIN telemetry_data td ON ni.node_id = td.node_id
                     WHERE td.voltage IS NOT NULL
@@ -4066,39 +4072,58 @@ class BatteryAnalyticsRepository:
                     """
                 )
             else:
-                logger.info("Detecting power types only for unknown nodes")
+                logger.info(
+                    "Detecting power types for unknown nodes and nodes needing re-analysis"
+                )
                 cursor.execute(
                     """
-                    SELECT DISTINCT ni.node_id, ni.long_name, ni.power_type
+                    SELECT DISTINCT ni.node_id, ni.long_name, ni.power_type,
+                           ni.power_analysis_timestamp
                     FROM node_info ni
                     INNER JOIN telemetry_data td ON ni.node_id = td.node_id
                     WHERE td.voltage IS NOT NULL
-                      AND (ni.power_type IS NULL OR ni.power_type = 'unknown')
+                      AND (
+                        ni.power_type IS NULL
+                        OR ni.power_type = 'unknown'
+                        OR ni.power_analysis_timestamp IS NULL
+                        OR ni.power_analysis_timestamp < ?
+                      )
                     GROUP BY ni.node_id
-                    """
+                    """,
+                    (reanalysis_threshold,),
                 )
 
             nodes = cursor.fetchall()
             updated_counts = {"solar": 0, "battery": 0, "mains": 0}
 
+            logger.info(f"Analyzing power types for {len(nodes)} nodes")
+
             for node_row in nodes:
                 node_id = node_row["node_id"]
                 node_name = node_row["long_name"]
+                old_power_type = node_row.get("power_type", "unknown")
 
-                # Get voltage history for this node
+                # Get voltage history from last 7 days (or more if available)
+                # This ensures we capture daily patterns for solar detection
+                seven_days_ago = current_time - (7 * 24 * 3600)
                 cursor.execute(
                     """
                     SELECT voltage, timestamp
                     FROM telemetry_data
-                    WHERE node_id = ? AND voltage IS NOT NULL
-                    ORDER BY timestamp DESC
-                    LIMIT 100
+                    WHERE node_id = ?
+                      AND voltage IS NOT NULL
+                      AND timestamp > ?
+                    ORDER BY timestamp ASC
                     """,
-                    (node_id,),
+                    (node_id, seven_days_ago),
                 )
 
                 voltage_data = cursor.fetchall()
-                if len(voltage_data) < 5:
+                if len(voltage_data) < 10:
+                    logger.debug(
+                        f"Insufficient data for {node_name} ({node_id}): "
+                        f"only {len(voltage_data)} readings in last 7 days"
+                    )
                     continue  # Not enough data
 
                 # Analyze voltage patterns
@@ -4113,28 +4138,48 @@ class BatteryAnalyticsRepository:
                     else:
                         scaled_voltages.append(v)
 
+                # Calculate time span
+                if len(timestamps) >= 2:
+                    time_span_hours = (timestamps[-1] - timestamps[0]) / 3600
+                else:
+                    time_span_hours = 0
+
                 logger.debug(
                     f"Analyzing {node_name} ({node_id}): {len(voltage_data)} readings, "
-                    f"range {min(scaled_voltages):.2f}-{max(scaled_voltages):.2f}V"
+                    f"range {min(scaled_voltages):.2f}-{max(scaled_voltages):.2f}V, "
+                    f"time span {time_span_hours:.1f}h"
                 )
 
                 power_type = BatteryAnalyticsRepository._classify_power_type(
                     scaled_voltages, timestamps
                 )
 
-                if power_type:
-                    # Update the database
+                if power_type and power_type != old_power_type:
+                    # Update the database with timestamp
                     cursor.execute(
                         """
                         UPDATE node_info
-                        SET power_type = ?
+                        SET power_type = ?, power_analysis_timestamp = ?
                         WHERE node_id = ?
                         """,
-                        (power_type, node_id),
+                        (power_type, current_time, node_id),
                     )
                     updated_counts[power_type] += 1
                     logger.info(
-                        f"Updated {node_name} ({node_id}) to power_type: {power_type}"
+                        f"Updated {node_name} ({node_id}): {old_power_type} -> {power_type}"
+                    )
+                elif power_type == old_power_type:
+                    # Same classification, just update timestamp
+                    cursor.execute(
+                        """
+                        UPDATE node_info
+                        SET power_analysis_timestamp = ?
+                        WHERE node_id = ?
+                        """,
+                        (current_time, node_id),
+                    )
+                    logger.debug(
+                        f"Confirmed {node_name} ({node_id}): power_type={power_type}"
                     )
                 else:
                     logger.debug(
@@ -4233,12 +4278,12 @@ class BatteryAnalyticsRepository:
         # === MAINS DETECTION ===
         # Mains-powered devices show very stable voltage at or near full charge
         # Voltage stays consistently high (>4.0V) with minimal variation
-        if voltage_mean >= 4.0 and std_dev < 0.05 and voltage_range < 0.15:
+        if voltage_mean >= 3.95 and std_dev < 0.08 and voltage_range < 0.2:
             logger.debug("Classified as MAINS: very stable voltage at full charge")
             return "mains"
 
         # Also detect mains by constant high voltage even with limited readings
-        if voltage_min >= 4.0 and voltage_range < 0.1:
+        if voltage_min >= 3.95 and voltage_range < 0.15:
             logger.debug("Classified as MAINS: all readings at full charge")
             return "mains"
 
@@ -4252,22 +4297,32 @@ class BatteryAnalyticsRepository:
             return "solar"
 
         # Solar with high variance and cycling behavior
-        if voltage_range > 0.25 and cycle_ratio > 0.2 and hours_span >= 6:
+        if voltage_range > 0.25 and cycle_ratio > 0.15 and hours_span >= 6:
             logger.debug("Classified as SOLAR: high variance with cycling over time")
             return "solar"
 
         # Solar: Large voltage swings (typical 3.4V to 4.2V range)
-        if voltage_range > 0.5 and std_dev > 0.1:
+        if voltage_range > 0.4 and std_dev > 0.08:
             logger.debug(
                 "Classified as SOLAR: large voltage swings indicating charge cycles"
             )
             return "solar"
 
         # Moderate range with clear charging periods
-        if charging_events >= 3 and voltage_range > 0.15 and voltage_max > 4.0:
+        if charging_events >= 2 and voltage_range > 0.15 and voltage_max > 3.9:
             logger.debug(
-                "Classified as SOLAR: multiple charging events reaching full charge"
+                "Classified as SOLAR: multiple charging events reaching high charge"
             )
+            return "solar"
+
+        # Detect solar with lower charging events but clear cycle pattern
+        if charging_events >= 1 and voltage_range > 0.3 and cycle_ratio > 0.1:
+            logger.debug("Classified as SOLAR: charging event with cycling pattern")
+            return "solar"
+
+        # Solar nodes that don't fully charge but show cycling
+        if charging_events >= 2 and voltage_range > 0.2 and discharging_events >= 1:
+            logger.debug("Classified as SOLAR: charge/discharge pattern detected")
             return "solar"
 
         # === BATTERY DETECTION ===
@@ -4275,13 +4330,13 @@ class BatteryAnalyticsRepository:
         # No significant charging events, declining voltage trend
 
         # Clear discharge pattern: negative slope with minimal charging
-        if slope < -0.001 and charging_events <= 1:
+        if slope < -0.0008 and charging_events <= 1:
             logger.debug("Classified as BATTERY: consistent discharge with no charging")
             return "battery"
 
         # Low/mid voltage with only discharge events
         if (
-            voltage_mean < 3.9
+            voltage_mean < 3.85
             and discharging_events > charging_events
             and charging_events <= 1
         ):
@@ -4289,12 +4344,12 @@ class BatteryAnalyticsRepository:
             return "battery"
 
         # Voltage below full charge with limited variation (not being charged)
-        if voltage_max < 4.0 and std_dev < 0.1 and slope <= 0:
+        if voltage_max < 3.95 and std_dev < 0.12 and slope <= 0:
             logger.debug("Classified as BATTERY: below full charge, not charging")
             return "battery"
 
         # General declining trend without charging
-        if slope < 0 and charging_events == 0 and len(voltages) >= 5:
+        if slope < -0.0001 and charging_events == 0 and len(voltages) >= 5:
             logger.debug(
                 "Classified as BATTERY: declining voltage, no charging detected"
             )
@@ -4304,15 +4359,33 @@ class BatteryAnalyticsRepository:
         # If we have enough data but patterns are unclear, make best guess
         if len(voltages) >= 10 and hours_span >= 12:
             # If mostly stable at high voltage, likely mains
-            if voltage_mean > 4.0 and std_dev < 0.08:
+            if voltage_mean > 3.95 and std_dev < 0.1:
                 logger.debug("Classified as MAINS (fallback): stable high voltage")
                 return "mains"
             # If any charging detected, likely solar
-            if charging_events > 0 and voltage_max > 4.0:
+            if charging_events > 0 and voltage_max > 3.9:
                 logger.debug("Classified as SOLAR (fallback): some charging detected")
                 return "solar"
             # Otherwise assume battery
             logger.debug("Classified as BATTERY (fallback): no charging pattern")
+            return "battery"
+
+        # For nodes with substantial data (multiple days), be more aggressive
+        if len(voltages) >= 50 and hours_span >= 48:
+            # Any sign of charging cycles suggests solar
+            if charging_events > 0 or voltage_range > 0.2:
+                logger.debug(
+                    "Classified as SOLAR (extended fallback): charging or variation detected"
+                )
+                return "solar"
+            # High stable voltage = mains
+            if voltage_mean > 3.9 and voltage_range < 0.2:
+                logger.debug("Classified as MAINS (extended fallback): stable voltage")
+                return "mains"
+            # Everything else is likely battery
+            logger.debug(
+                "Classified as BATTERY (extended fallback): no clear charging pattern"
+            )
             return "battery"
 
         logger.debug("Could not classify: insufficient distinctive pattern")
