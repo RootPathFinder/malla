@@ -83,22 +83,62 @@ def api_topology():
                     ):
                         source_used = "traceroute"
                         # Convert traceroute graph to neighbor service format for compatibility
-                        topology = {
-                            "nodes": traceroute_graph.get("nodes", []),
-                            "edges": [
+                        # Traceroute nodes have: {id, name, ...}
+                        # Need to convert to: {node_id, name, hex_id, neighbor_count, ...}
+                        converted_nodes = []
+                        for node in traceroute_graph.get("nodes", []):
+                            node_id = node.get("id")
+                            converted_nodes.append(
                                 {
-                                    "node_a": link.get("from"),
-                                    "node_b": link.get("to"),
-                                    "snr_a_to_b": link.get("snr"),
+                                    "node_id": node_id,
+                                    "name": node.get(
+                                        "name",
+                                        f"!{node_id:08x}" if node_id else "Unknown",
+                                    ),
+                                    "hex_id": f"!{node_id:08x}"
+                                    if node_id
+                                    else "!00000000",
+                                    "neighbor_count": node.get("connections", 0),
+                                    "last_seen": node.get("last_seen"),
+                                    "broadcast_interval": None,
+                                }
+                            )
+
+                        # Convert edges: traceroute uses {source, target, avg_snr}
+                        # Need to convert to: {node_a, node_b, snr_a_to_b, quality, ...}
+                        converted_edges = []
+                        for link in traceroute_graph.get("links", []):
+                            avg_snr = link.get("avg_snr")
+                            # Determine quality from SNR
+                            quality = "unknown"
+                            if avg_snr is not None:
+                                if avg_snr >= 10:
+                                    quality = "excellent"
+                                elif avg_snr >= 5:
+                                    quality = "good"
+                                elif avg_snr >= 0:
+                                    quality = "fair"
+                                else:
+                                    quality = "poor"
+
+                            converted_edges.append(
+                                {
+                                    "node_a": link.get("source"),
+                                    "node_b": link.get("target"),
+                                    "snr_a_to_b": avg_snr,
                                     "snr_b_to_a": None,
-                                    "avg_snr": link.get("snr"),
-                                    "quality": link.get("quality", "unknown"),
-                                    "bidirectional": False,
+                                    "avg_snr": avg_snr,
+                                    "quality": quality,
+                                    "bidirectional": link.get("type")
+                                    == "bidirectional",
                                     "last_seen": link.get("last_seen"),
                                 }
-                                for link in traceroute_graph.get("links", [])
-                            ],
-                            "statistics": traceroute_graph.get("statistics", {}),
+                            )
+
+                        topology = {
+                            "nodes": converted_nodes,
+                            "edges": converted_edges,
+                            "statistics": traceroute_graph.get("stats", {}),
                             "source": "traceroute",
                         }
                         logger.info(
@@ -225,27 +265,73 @@ def api_links():
                 if traceroute_graph and (
                     traceroute_graph.get("nodes") or traceroute_graph.get("links")
                 ):
-                    # Convert traceroute graph to neighbor service format
-                    topology = {
-                        "nodes": traceroute_graph.get("nodes", []),
-                        "edges": [
+                    # Convert traceroute graph nodes to neighbor service format
+                    converted_nodes = []
+                    for node in traceroute_graph.get("nodes", []):
+                        node_id = node.get("id")
+                        converted_nodes.append(
                             {
-                                "node_a": link.get("from"),
-                                "node_b": link.get("to"),
-                                "node_a_name": link.get(
-                                    "from_name", f"!{link.get('from'):08x}"
+                                "node_id": node_id,
+                                "name": node.get(
+                                    "name", f"!{node_id:08x}" if node_id else "Unknown"
                                 ),
-                                "node_b_name": link.get(
-                                    "to_name", f"!{link.get('to'):08x}"
-                                ),
-                                "snr_a_to_b": link.get("snr"),
-                                "snr_b_to_a": None,
-                                "avg_snr": link.get("snr"),
-                                "quality": link.get("quality", "unknown"),
-                                "bidirectional": False,
+                                "hex_id": f"!{node_id:08x}" if node_id else "!00000000",
+                                "neighbor_count": node.get("connections", 0),
                             }
-                            for link in traceroute_graph.get("links", [])
-                        ],
+                        )
+
+                    # Convert traceroute links to edge format
+                    converted_edges = []
+                    for link in traceroute_graph.get("links", []):
+                        # Get node names from the converted nodes
+                        node_a = link.get("source")
+                        node_b = link.get("target")
+                        node_a_name = next(
+                            (
+                                n["name"]
+                                for n in converted_nodes
+                                if n["node_id"] == node_a
+                            ),
+                            f"!{node_a:08x}" if node_a else "Unknown",
+                        )
+                        node_b_name = next(
+                            (
+                                n["name"]
+                                for n in converted_nodes
+                                if n["node_id"] == node_b
+                            ),
+                            f"!{node_b:08x}" if node_b else "Unknown",
+                        )
+
+                        avg_snr = link.get("avg_snr")
+                        quality = "unknown"
+                        if avg_snr is not None:
+                            if avg_snr >= 10:
+                                quality = "excellent"
+                            elif avg_snr >= 5:
+                                quality = "good"
+                            elif avg_snr >= 0:
+                                quality = "fair"
+                            else:
+                                quality = "poor"
+
+                        converted_edges.append(
+                            {
+                                "node_a": node_a,
+                                "node_b": node_b,
+                                "node_a_name": node_a_name,
+                                "node_b_name": node_b_name,
+                                "snr_a_to_b": avg_snr,
+                                "snr_b_to_a": None,
+                                "avg_snr": avg_snr,
+                                "quality": quality,
+                                "bidirectional": link.get("type") == "bidirectional",
+                            }
+                        )
+
+                    topology = {
+                        "nodes": converted_nodes,
+                        "edges": converted_edges,
                     }
             except Exception as e:
                 logger.warning(f"Failed to get traceroute topology for links: {e}")

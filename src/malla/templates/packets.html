@@ -68,45 +68,6 @@
     }
 
     /* ==================== New Packets Notification ==================== */
-    .new-packets-notification {
-        position: fixed;
-        top: 80px;
-        left: 50%;
-        transform: translateX(-50%);
-        background: linear-gradient(135deg, #0d6efd 0%, #0b5ed7 100%);
-        color: white;
-        padding: 12px 24px;
-        border-radius: 8px;
-        box-shadow: 0 8px 24px rgba(13, 110, 253, 0.3);
-        z-index: 1050;
-        cursor: pointer;
-        animation: slideInDown 0.4s ease-out;
-        display: flex;
-        align-items: center;
-        gap: 12px;
-        font-weight: 500;
-        transition: all 0.3s ease;
-    }
-
-    .new-packets-notification:hover {
-        transform: translateX(-50%) translateY(-2px);
-        box-shadow: 0 12px 32px rgba(13, 110, 253, 0.4);
-    }
-
-    .new-packets-notification .badge {
-        background-color: rgba(255, 255, 255, 0.3);
-        color: white;
-        padding: 4px 8px;
-        border-radius: 4px;
-        font-size: 0.85rem;
-        font-weight: 600;
-    }
-
-    .new-packets-notification i {
-        font-size: 1.2rem;
-        animation: scaleIn 0.6s ease-out;
-    }
-
     /* ==================== Timestamp Styling ==================== */
     .timestamp-relative {
         display: block;
@@ -173,18 +134,32 @@
         letter-spacing: 0.5px;
     }
 
-    /* ==================== Auto-Add Toggle ==================== */
-    #autoAddToggle {
+    /* ==================== Auto-Add Button ==================== */
+    #autoAddButton {
         transition: all 0.3s ease;
+        font-size: 0.9rem;
     }
 
-    #autoAddToggle:hover {
-        background-color: rgba(255, 255, 255, 0.9) !important;
-    }
-
-    #autoAddToggle.active {
-        background-color: #28a745 !important;
+    #autoAddButton[data-state="playing"] {
+        background-color: #28a745;
+        border-color: #28a745;
         color: white;
+    }
+
+    #autoAddButton[data-state="playing"]:hover {
+        background-color: #218838;
+        border-color: #218838;
+    }
+
+    #autoAddButton[data-state="paused"] {
+        background-color: transparent;
+        border-color: #6c757d;
+        color: #6c757d;
+    }
+
+    #autoAddButton[data-state="paused"]:hover {
+        background-color: #f8f9fa;
+        border-color: #6c757d;
     }
 
     /* ==================== Responsive ==================== */
@@ -201,16 +176,6 @@
 {% block content %}
 <!-- Override the base template's container to make this page full-width/full-height -->
 </div> <!-- Close the base template's container -->
-
-<!-- New Packets Notification (hidden by default) -->
-<div id="newPacketsNotification" class="new-packets-notification" style="display: none;" role="button" tabindex="0" title="Click to refresh with new packets">
-    <i class="bi bi-arrow-down"></i>
-    <span id="newPacketsCount">1 new packet</span>
-    <span class="badge">Click to update</span>
-    <button id="autoAddToggle" class="btn btn-sm btn-light ms-2" title="Enable auto-refresh" style="padding: 4px 8px; font-size: 0.85rem; border: none;">
-        <i class="bi bi-play-fill"></i> Auto
-    </button>
-</div>
 
 <!-- High-Level Stats Cards -->
 <div class="container-fluid mb-3" style="padding: 1rem;">
@@ -281,7 +246,7 @@
     </div>
 </div>
 
-{% call fullscreen_table_container("packetsTable", "Packets", "bi bi-envelope", "toggleSidebar") %}
+{% call fullscreen_table_container("packetsTable", "Packets", "bi bi-envelope", "toggleSidebar", show_auto_add=true) %}
     <!-- Main table content -->
     <div id="packetsTable" class="modern-table-container"></div>
 {% endcall %}
@@ -414,23 +379,24 @@
 <script src="{{ url_for('static', filename='js/node-picker.js') }}"></script>
 <script src="{{ url_for('static', filename='js/modern-table.js') }}"></script>
 <script>
-// ==================== New Packets Notification System ====================
+// ==================== Auto-Add Button System ====================
 let newPacketsCount = 0;
 let hasNewPackets = false;
 let lastPacketTimestamp = Math.floor(Date.now() / 1000);
 
-function showNewPacketsNotification(count) {
-    const notification = document.getElementById('newPacketsNotification');
-    const countEl = document.getElementById('newPacketsCount');
+function updateAutoAddButtonState() {
+    const button = document.getElementById('autoAddButton');
+    if (!button) return;
 
-    countEl.textContent = count + ' new packet' + (count > 1 ? 's' : '');
-    notification.style.display = 'flex';
-}
-
-function hideNewPacketsNotification() {
-    const notification = document.getElementById('newPacketsNotification');
-    notification.style.display = 'none';
-    newPacketsCount = 0;
+    if (autoAddEnabled) {
+        button.setAttribute('data-state', 'playing');
+        button.innerHTML = '<i class="bi bi-pause-fill"></i> <span id="autoAddButtonText">Pause</span>';
+        button.title = 'Auto-add enabled - click to disable';
+    } else {
+        button.setAttribute('data-state', 'paused');
+        button.innerHTML = '<i class="bi bi-play-fill"></i> <span id="autoAddButtonText">Play</span>';
+        button.title = 'Auto-add disabled - click to enable';
+    }
 }
 
 // ==================== Stats Update Functions ====================
@@ -567,41 +533,27 @@ document.addEventListener('DOMContentLoaded', function() {
     updatePacketStats();
     setInterval(updatePacketStats, 5000);
 
-    // ==================== New Packets Notification Handler ====================
-    const notification = document.getElementById('newPacketsNotification');
-    const autoAddToggle = document.getElementById('autoAddToggle');
+    // ==================== Auto-Add Button Handler ====================
+    const autoAddButton = document.getElementById('autoAddButton');
 
-    notification?.addEventListener('click', function(e) {
-        // Don't trigger refresh if clicking the toggle button
-        if (e.target.closest('#autoAddToggle')) {
-            return;
-        }
-        if (window.controller) {
-            window.controller.applyCurrentFilters();
-            hideNewPacketsNotification();
-            hasNewPackets = false;
-        }
-    });
+    // Initialize button state on load
+    updateAutoAddButtonState();
 
-    // Auto-add toggle handler
-    autoAddToggle?.addEventListener('click', function(e) {
-        e.stopPropagation(); // Prevent notification click handler from firing
+    autoAddButton?.addEventListener('click', function(e) {
+        e.stopPropagation();
         autoAddEnabled = !autoAddEnabled;
-        this.classList.toggle('active', autoAddEnabled);
-        this.title = autoAddEnabled ? 'Auto-refresh enabled - disable to stop' : 'Enable auto-refresh';
-        if (autoAddEnabled) {
-            this.innerHTML = '<i class="bi bi-pause-fill"></i> Auto';
-        } else {
-            this.innerHTML = '<i class="bi bi-play-fill"></i> Auto';
-        }
+        updateAutoAddButtonState();
+
+        // Save preference to localStorage
+        localStorage.setItem('autoAddEnabled', autoAddEnabled);
     });
 
-    // Allow keyboard activation (Enter/Space)
-    notification?.addEventListener('keydown', function(e) {
-        if (e.key === 'Enter' || e.key === ' ') {
-            this.click();
-        }
-    });
+    // Restore auto-add preference from localStorage
+    const savedAutoAdd = localStorage.getItem('autoAddEnabled');
+    if (savedAutoAdd === 'false') {
+        autoAddEnabled = false;
+        updateAutoAddButtonState();
+    }
 
     // Move sidebar content into the actual sidebar FIRST
     const sidebarContent = document.getElementById('sidebarContent');
@@ -1027,10 +979,9 @@ document.addEventListener('DOMContentLoaded', function() {
                 const newestTimestamp = Math.max(...data.packets.map(p => p.timestamp));
                 lastPacketTimestamp = newestTimestamp;
 
-                // Show the notification with elegant animation
+                // Track that we have new packets
                 newPacketsCount = data.packets.length;
                 hasNewPackets = true;
-                showNewPacketsNotification(newPacketsCount);
 
                 // If auto-add is enabled, automatically refresh the table
                 if (autoAddEnabled && window.controller) {

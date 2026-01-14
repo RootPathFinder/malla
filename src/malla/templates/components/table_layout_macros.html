@@ -1,16 +1,23 @@
 {# Table layout macros for full-screen views with collapsible sidebar #}
 
 {# Full-screen table container #}
-{% macro fullscreen_table_container(table_id, title, icon_class, toggle_button_id) %}
+{% macro fullscreen_table_container(table_id, title, icon_class, toggle_button_id, show_auto_add=false) %}
 <div class="table-container">
     <!-- Main Table Area -->
     <div class="table-main">
         <div class="table-header">
             <div class="d-flex justify-content-between align-items-center">
                 <h2><i class="{{ icon_class }}"></i> {{ title }}</h2>
-                <button type="button" class="btn btn-outline-secondary" id="{{ toggle_button_id }}">
-                    <i class="bi bi-layout-sidebar-inset-reverse"></i> Filters
-                </button>
+                <div class="d-flex gap-2">
+                    {% if show_auto_add %}
+                    <button type="button" class="btn btn-outline-secondary" id="autoAddButton" title="Toggle auto-add for new packets" data-state="paused">
+                        <i class="bi bi-play-fill"></i> <span id="autoAddButtonText">Play</span>
+                    </button>
+                    {% endif %}
+                    <button type="button" class="btn btn-outline-secondary" id="{{ toggle_button_id }}">
+                        <i class="bi bi-layout-sidebar-inset-reverse"></i> Filters
+                    </button>
+                </div>
             </div>
         </div>
         <div class="table-content">
