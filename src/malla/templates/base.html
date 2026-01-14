@@ -185,7 +185,7 @@
 
                     <!-- Network dropdown (Traceroutes, Network Graph & Mesh Topology) -->
                     <li class="nav-item dropdown">
-                        {% set network_active = request.endpoint in ['traceroute.traceroute', 'traceroute.traceroute_graph', 'mesh.mesh_topology'] %}
+                        {% set network_active = request.endpoint in ['traceroute.traceroute', 'traceroute.traceroute_graph', 'mesh.topology_page'] %}
                         <a class="nav-link dropdown-toggle {{ 'active' if network_active }}" href="#" id="networkDropdown" role="button" data-bs-toggle="dropdown">
                             <i class="bi bi-diagram-3"></i> Network
                         </a>
@@ -201,7 +201,7 @@
                                 </a>
                             </li>
                             <li>
-                                <a class="dropdown-item {{ 'active' if request.endpoint == 'mesh.mesh_topology' }}" href="{{ url_for('mesh.mesh_topology') }}">
+                                <a class="dropdown-item {{ 'active' if request.endpoint == 'mesh.topology_page' }}" href="{{ url_for('mesh.topology_page') }}">
                                     <i class="bi bi-bezier2"></i> Mesh Topology
                                 </a>
                             </li>
@@ -217,7 +217,7 @@
 
                     <!-- Monitoring dropdown (Power, Node Health & Alerts) -->
                     <li class="nav-item dropdown">
-                        {% set monitoring_active = request.endpoint in ['battery.battery_analytics', 'main.node_health', 'alert.alerts_dashboard'] %}
+                        {% set monitoring_active = request.endpoint in ['battery.battery_analytics', 'main.node_health', 'alerts.alerts_page'] %}
                         <a class="nav-link dropdown-toggle {{ 'active' if monitoring_active }}" href="#" id="monitoringDropdown" role="button" data-bs-toggle="dropdown">
                             <i class="bi bi-activity"></i> Monitoring
                         </a>
@@ -233,7 +233,7 @@
                                 </a>
                             </li>
                             <li>
-                                <a class="dropdown-item {{ 'active' if request.endpoint == 'alert.alerts_dashboard' }}" href="{{ url_for('alert.alerts_dashboard') }}">
+                                <a class="dropdown-item {{ 'active' if request.endpoint == 'alerts.alerts_page' }}" href="{{ url_for('alerts.alerts_page') }}">
                                     <i class="bi bi-bell"></i> Alerts
                                 </a>
                             </li>
