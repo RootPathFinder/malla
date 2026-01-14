@@ -1406,12 +1406,36 @@ async function loadTelemetryData() {
         }
 
         // Power Metrics Section
-        if (telemetry.power_metrics) {
-            const pm = telemetry.power_metrics;
+        if (telemetry.power_metrics || telemetry.power_type) {
+            const pm = telemetry.power_metrics || {};
             html += '<div class="col-lg-6">';
             html += '<h6 class="text-secondary mb-2"><i class="bi bi-lightning-charge"></i> Power Metrics</h6>';
             html += '<div class="table-responsive">';
             html += '<table class="table table-sm table-borderless mb-0" style="font-size: 0.9rem;">';
+
+            if (telemetry.power_type) {
+                let badgeClass = 'bg-secondary';
+                if (telemetry.power_type === 'solar') badgeClass = 'bg-warning text-dark';
+                else if (telemetry.power_type === 'mains') badgeClass = 'bg-danger';
+                else if (telemetry.power_type === 'battery') badgeClass = 'bg-success';
+
+                let tooltipAttr = '';
+                if (telemetry.power_type_reason) {
+                    let tooltipText = telemetry.power_type_reason;
+                    tooltipText = tooltipText.replace(/"/g, '&quot;');
+
+                    if (telemetry.power_analysis_timestamp) {
+                         const nextEval = new Date((telemetry.power_analysis_timestamp + 3600) * 1000);
+                         tooltipText += '. Re-evaluation scheduled around ' + nextEval.toLocaleTimeString();
+                    }
+                    tooltipAttr = `data-bs-toggle="tooltip" data-bs-placement="top" title="${tooltipText}"`;
+                }
+
+                html += '<tr>';
+                html += '<td class="text-muted" style="width: 50%;">Power Source</td>';
+                html += `<td class="text-end"><span class="badge ${badgeClass}" ${tooltipAttr} style="cursor:help;">${telemetry.power_type.toUpperCase()}</span></td>`;
+                html += '</tr>';
+            }
 
             if (pm.ch1_voltage !== undefined) {
                 html += '<tr>';

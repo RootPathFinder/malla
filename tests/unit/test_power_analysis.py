@@ -5,6 +5,7 @@ Unit tests for power analysis module
 import sqlite3
 import tempfile
 import time
+from datetime import UTC, datetime
 
 import pytest
 
@@ -79,7 +80,10 @@ def test_detect_solar_power_type(db_with_telemetry):
     )
 
     # Create solar charging pattern: higher voltage during day (6am-6pm)
-    current_time = time.time()
+    # Align to start of day UTC to ensure hour logic matches
+    current_dt = datetime.now(UTC).replace(hour=0, minute=0, second=0, microsecond=0)
+    current_time = current_dt.timestamp()
+
     for day in range(7):
         base_time = current_time - ((6 - day) * 24 * 3600)
 
@@ -122,7 +126,7 @@ def test_detect_solar_power_type(db_with_telemetry):
     db_with_telemetry.commit()
 
     # Test detection
-    power_type = detect_power_type(node_id, db_with_telemetry)
+    power_type, _ = detect_power_type(node_id, db_with_telemetry)
     assert power_type == "solar", f"Expected 'solar' but got '{power_type}'"
 
 
@@ -156,7 +160,7 @@ def test_detect_battery_power_type(db_with_telemetry):
     db_with_telemetry.commit()
 
     # Test detection
-    power_type = detect_power_type(node_id, db_with_telemetry)
+    power_type, _ = detect_power_type(node_id, db_with_telemetry)
     assert power_type == "battery", f"Expected 'battery' but got '{power_type}'"
 
 
@@ -189,7 +193,7 @@ def test_detect_mains_power_type(db_with_telemetry):
     db_with_telemetry.commit()
 
     # Test detection
-    power_type = detect_power_type(node_id, db_with_telemetry)
+    power_type, _ = detect_power_type(node_id, db_with_telemetry)
     assert power_type == "mains", f"Expected 'mains' but got '{power_type}'"
 
 
@@ -218,7 +222,7 @@ def test_detect_unknown_power_type(db_with_telemetry):
     db_with_telemetry.commit()
 
     # Test detection
-    power_type = detect_power_type(node_id, db_with_telemetry)
+    power_type, _ = detect_power_type(node_id, db_with_telemetry)
     assert power_type == "unknown", f"Expected 'unknown' but got '{power_type}'"
 
 

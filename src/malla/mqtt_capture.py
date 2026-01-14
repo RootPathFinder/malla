@@ -427,6 +427,8 @@ def init_database() -> None:
         ("power_type", "TEXT DEFAULT 'unknown'"),
         ("battery_health_score", "INTEGER"),
         ("last_battery_voltage", "REAL"),
+        ("power_type_reason", "TEXT"),
+        ("power_analysis_timestamp", "REAL"),
     ]
 
     for column_name, column_type in power_columns:

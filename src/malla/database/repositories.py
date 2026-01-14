@@ -1903,6 +1903,19 @@ class NodeRepository:
 
             cursor.execute(query, (node_id,))
             result = cursor.fetchone()
+
+            # Get power analysis info
+            power_info = None
+            try:
+                cursor.execute(
+                    "SELECT power_type, power_type_reason, power_analysis_timestamp FROM node_info WHERE node_id = ?",
+                    (node_id,),
+                )
+                power_info = cursor.fetchone()
+            except Exception:
+                # Columns might not exist yet if migration hasn't run or old DB
+                pass
+
             conn.close()
 
             if not result or not result["raw_payload"]:
@@ -1914,6 +1927,18 @@ class NodeRepository:
                 telemetry_data.ParseFromString(result["raw_payload"])
 
                 telemetry_dict = {}
+
+                # Add power analysis info if available
+                if power_info:
+                    telemetry_dict["power_type"] = power_info["power_type"]
+                    telemetry_dict["power_type_reason"] = power_info[
+                        "power_type_reason"
+                    ]
+                    if power_info["power_analysis_timestamp"]:
+                        telemetry_dict["power_analysis_timestamp"] = power_info[
+                            "power_analysis_timestamp"
+                        ]
+
                 timestamp = datetime.fromtimestamp(result["timestamp"], UTC)
                 telemetry_dict["timestamp"] = timestamp.strftime(
                     "%Y-%m-%d %H:%M:%S UTC"

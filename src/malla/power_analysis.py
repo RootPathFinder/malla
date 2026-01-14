@@ -16,7 +16,7 @@ from typing import Any
 logger = logging.getLogger(__name__)
 
 
-def detect_power_type(node_id: int, db_connection: Any) -> str:
+def detect_power_type(node_id: int, db_connection: Any) -> tuple[str, str]:
     """
     Analyze voltage patterns over last 7 days to determine power type.
 
@@ -31,7 +31,9 @@ def detect_power_type(node_id: int, db_connection: Any) -> str:
         db_connection: SQLite database connection
 
     Returns:
+        Tuple of (Power type, Reason)
         Power type: 'solar', 'battery', 'mains', or 'unknown'
+        Reason: Explanation of the detection logic
     """
     cursor = db_connection.cursor()
 
@@ -52,7 +54,10 @@ def detect_power_type(node_id: int, db_connection: Any) -> str:
 
     if len(voltage_data) < 10:
         # Insufficient data
-        return "unknown"
+        return (
+            "unknown",
+            f"Insufficient telemetry data ({len(voltage_data)} packets) in last 7 days",
+        )
 
     voltages = [row["voltage"] for row in voltage_data]
     timestamps = [row["timestamp"] for row in voltage_data]
@@ -66,7 +71,10 @@ def detect_power_type(node_id: int, db_connection: Any) -> str:
     # Check if voltage is very stable (mains power characteristic)
     # Mains-powered devices typically stay at 4.1-4.2V with minimal variation
     if voltage_range < 0.1 and avg_voltage > 4.0:
-        return "mains"
+        return (
+            "mains",
+            f"Voltage is stable (avg {avg_voltage:.2f}V, range {voltage_range:.2f}V)",
+        )
 
     # Analyze daily patterns for solar detection
     # Group by hour of day and check for charging patterns
@@ -102,7 +110,10 @@ def detect_power_type(node_id: int, db_connection: Any) -> str:
 
             # Solar nodes show higher voltage during day (charging)
             if daytime_avg > nighttime_avg + 0.15:
-                return "solar"
+                return (
+                    "solar",
+                    f"Daytime voltage ({daytime_avg:.2f}V) significantly higher than nighttime ({nighttime_avg:.2f}V)",
+                )
 
     # Check overall trend: if voltage only decreases, it's battery
     # Calculate linear trend
@@ -119,9 +130,12 @@ def detect_power_type(node_id: int, db_connection: Any) -> str:
         # Negative slope indicates declining voltage (battery discharge)
         # Positive slope might indicate charging or mains
         if slope < -0.0001 and voltage_range > 0.2:
-            return "battery"
+            return (
+                "battery",
+                f"Voltage shows downward trend (discharge pattern, slope {slope:.5f})",
+            )
 
-    return "unknown"
+    return "unknown", "No distinct power pattern detected"
 
 
 def calculate_battery_health_score(node_id: int, db_connection: Any) -> int | None:
@@ -351,27 +365,29 @@ def update_power_analysis_for_node(node_id: int, db_connection: Any) -> None:
 
     try:
         # Detect power type
-        power_type = detect_power_type(node_id, db_connection)
+        power_type, reason = detect_power_type(node_id, db_connection)
 
         # Calculate health score if battery-powered
         health_score = None
         if power_type in ("solar", "battery"):
             health_score = calculate_battery_health_score(node_id, db_connection)
 
+        current_time = time.time()
+
         # Update node_info
         cursor.execute(
             """
             UPDATE node_info
-            SET power_type = ?, battery_health_score = ?
+            SET power_type = ?, battery_health_score = ?, power_type_reason = ?, power_analysis_timestamp = ?
             WHERE node_id = ?
         """,
-            (power_type, health_score, node_id),
+            (power_type, health_score, reason, current_time, node_id),
         )
 
         db_connection.commit()
 
         logger.debug(
-            f"Updated power analysis for node {node_id}: type={power_type}, health={health_score}"
+            f"Updated power analysis for node {node_id}: type={power_type}, health={health_score}, reason={reason}"
         )
 
     except Exception as e:
