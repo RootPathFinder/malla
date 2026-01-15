@@ -225,3 +225,104 @@ def api_resolve_alert(alert_type: str, node_id: int):
     except Exception as e:
         logger.error(f"Error resolving alert: {e}", exc_info=True)
         return jsonify({"error": str(e)}), 500
+
+
+@alert_bp.route("/api/stale-nodes")
+def api_stale_nodes():
+    """
+    Get nodes that haven't transmitted within the stale threshold.
+
+    Query parameters:
+        days: Override threshold (default: 14 days)
+
+    Returns:
+        List of stale nodes eligible for archival
+    """
+    try:
+        days = request.args.get("days", type=int)
+        stale_nodes = AlertService.get_stale_nodes(days)
+        thresholds = AlertService.get_thresholds()
+
+        return jsonify(
+            {
+                "stale_nodes": stale_nodes,
+                "count": len(stale_nodes),
+                "threshold_days": days or thresholds.stale_node_days,
+            }
+        )
+
+    except Exception as e:
+        logger.error(f"Error getting stale nodes: {e}", exc_info=True)
+        return jsonify({"error": str(e)}), 500
+
+
+@alert_bp.route("/api/archived-nodes")
+def api_archived_nodes():
+    """Get all archived nodes."""
+    try:
+        archived_nodes = AlertService.get_archived_nodes()
+        return jsonify(
+            {
+                "archived_nodes": archived_nodes,
+                "count": len(archived_nodes),
+            }
+        )
+
+    except Exception as e:
+        logger.error(f"Error getting archived nodes: {e}", exc_info=True)
+        return jsonify({"error": str(e)}), 500
+
+
+@alert_bp.route("/api/archive-node/<int:node_id>", methods=["POST"])
+def api_archive_node(node_id: int):
+    """Archive a single node."""
+    try:
+        success = AlertService.archive_node(node_id)
+        return jsonify(
+            {
+                "success": success,
+                "message": "Node archived" if success else "Failed to archive node",
+            }
+        )
+
+    except Exception as e:
+        logger.error(f"Error archiving node: {e}", exc_info=True)
+        return jsonify({"error": str(e)}), 500
+
+
+@alert_bp.route("/api/unarchive-node/<int:node_id>", methods=["POST"])
+def api_unarchive_node(node_id: int):
+    """Unarchive a node (restore to active)."""
+    try:
+        success = AlertService.unarchive_node(node_id)
+        return jsonify(
+            {
+                "success": success,
+                "message": "Node restored" if success else "Failed to restore node",
+            }
+        )
+
+    except Exception as e:
+        logger.error(f"Error unarchiving node: {e}", exc_info=True)
+        return jsonify({"error": str(e)}), 500
+
+
+@alert_bp.route("/api/archive-stale-nodes", methods=["POST"])
+def api_archive_stale_nodes():
+    """
+    Archive all stale nodes at once.
+
+    Query parameters:
+        days: Override threshold (default: 14 days)
+
+    Returns:
+        Summary of archived nodes
+    """
+    try:
+        days = request.args.get("days", type=int)
+        result = AlertService.archive_stale_nodes(days)
+        return jsonify(result)
+
+    except Exception as e:
+        logger.error(f"Error archiving stale nodes: {e}", exc_info=True)
+        return jsonify({"error": str(e)}), 500

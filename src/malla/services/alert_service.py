@@ -116,18 +116,29 @@ class Alert:
         }
 
 
+# Node role classification for monitoring purposes
+INFRASTRUCTURE_ROLES = {"ROUTER", "ROUTER_CLIENT", "ROUTER_LATE"}
+CLIENT_ROLES = {"CLIENT", "CLIENT_MUTE", "CLIENT_BASE", "SENSOR", "TRACKER", None}
+
+# Stale node threshold (2 weeks in seconds)
+STALE_NODE_THRESHOLD_SECONDS = 14 * 24 * 60 * 60  # 2 weeks
+
+
 @dataclass
 class AlertThresholds:
     """Configurable thresholds for alert generation."""
 
-    # Battery thresholds
+    # Battery thresholds - 40% warning since batteries drop fast below that
     battery_warning_voltage: float = 3.4
     battery_critical_voltage: float = 3.2
-    battery_warning_percent: int = 20
-    battery_critical_percent: int = 10
+    battery_warning_percent: int = 40
+    battery_critical_percent: int = 20
 
-    # Activity thresholds
-    node_offline_minutes: int = 60  # Minutes of silence before "offline" alert
+    # Activity thresholds - differentiated by node role
+    # Client nodes: 6 hours (360 minutes) - they may not transmit often
+    node_offline_minutes: int = 360
+    # Infrastructure nodes (routers/gateways): 2 hours (120 minutes) - must be always on
+    infrastructure_offline_minutes: int = 120
     activity_anomaly_threshold: float = 0.3  # 30% of expected activity = anomaly
 
     # Signal thresholds
@@ -137,19 +148,26 @@ class AlertThresholds:
     # Packet thresholds
     packet_loss_warning_percent: int = 20
 
+    # Stale node threshold (days) - nodes inactive longer are archived
+    stale_node_days: int = 14
+
     @classmethod
     def from_dict(cls, data: dict) -> "AlertThresholds":
         """Create thresholds from dictionary."""
         return cls(
             battery_warning_voltage=data.get("battery_warning_voltage", 3.4),
             battery_critical_voltage=data.get("battery_critical_voltage", 3.2),
-            battery_warning_percent=data.get("battery_warning_percent", 20),
-            battery_critical_percent=data.get("battery_critical_percent", 10),
-            node_offline_minutes=data.get("node_offline_minutes", 60),
+            battery_warning_percent=data.get("battery_warning_percent", 40),
+            battery_critical_percent=data.get("battery_critical_percent", 20),
+            node_offline_minutes=data.get("node_offline_minutes", 360),
+            infrastructure_offline_minutes=data.get(
+                "infrastructure_offline_minutes", 120
+            ),
             activity_anomaly_threshold=data.get("activity_anomaly_threshold", 0.3),
             rssi_warning=data.get("rssi_warning", -110),
             snr_warning=data.get("snr_warning", -5.0),
             packet_loss_warning_percent=data.get("packet_loss_warning_percent", 20),
+            stale_node_days=data.get("stale_node_days", 14),
         )
 
     def to_dict(self) -> dict:
@@ -160,10 +178,12 @@ class AlertThresholds:
             "battery_warning_percent": self.battery_warning_percent,
             "battery_critical_percent": self.battery_critical_percent,
             "node_offline_minutes": self.node_offline_minutes,
+            "infrastructure_offline_minutes": self.infrastructure_offline_minutes,
             "activity_anomaly_threshold": self.activity_anomaly_threshold,
             "rssi_warning": self.rssi_warning,
             "snr_warning": self.snr_warning,
             "packet_loss_warning_percent": self.packet_loss_warning_percent,
+            "stale_node_days": self.stale_node_days,
         }
 
 
@@ -178,6 +198,52 @@ class AlertService:
 
     # Track node baselines for anomaly detection
     _node_baselines: dict[int, dict[str, Any]] = {}
+
+    @classmethod
+    def is_infrastructure_node(cls, role: str | None) -> bool:
+        """
+        Determine if a node is infrastructure (router/gateway) vs client.
+
+        Infrastructure nodes have stricter monitoring requirements.
+        """
+        return role in INFRASTRUCTURE_ROLES
+
+    @classmethod
+    def get_node_category(cls, role: str | None) -> str:
+        """
+        Get human-readable category for a node role.
+
+        Returns:
+            'Mesh Infrastructure' for routers/gateways
+            'Client' for other nodes
+        """
+        if role in INFRASTRUCTURE_ROLES:
+            return "Mesh Infrastructure"
+        return "Client"
+
+    @classmethod
+    def get_node_roles(cls) -> dict[int, str]:
+        """
+        Get role for all nodes from the database.
+
+        Returns:
+            Dictionary mapping node_id to role string
+        """
+
+        def _fetch_roles():
+            conn = get_db_connection()
+            try:
+                cursor = conn.cursor()
+                cursor.execute("SELECT node_id, role FROM node_info")
+                return {row["node_id"]: row["role"] for row in cursor.fetchall()}
+            finally:
+                conn.close()
+
+        try:
+            return _execute_with_retry(_fetch_roles)
+        except Exception as e:
+            logger.warning(f"Failed to get node roles: {e}")
+            return {}
 
     @classmethod
     def set_thresholds(cls, thresholds: AlertThresholds) -> None:
@@ -654,7 +720,13 @@ class AlertService:
 
     @classmethod
     def _check_node_activity(cls) -> dict[str, Any]:
-        """Check for nodes that have gone offline or come back online."""
+        """
+        Check for nodes that have gone offline or come back online.
+
+        Uses role-based thresholds:
+        - Infrastructure nodes (routers/gateways): 2 hours
+        - Client nodes: 6 hours
+        """
         alerts_generated = 0
         alerts_resolved = 0
 
@@ -662,12 +734,19 @@ class AlertService:
             conn = get_db_connection()
             cursor = conn.cursor()
 
-            offline_threshold = time.time() - (
+            # Get node roles for role-based threshold checking
+            node_roles = cls.get_node_roles()
+
+            # Use client threshold (6 hours) as the base - we'll filter by role after
+            client_offline_threshold = time.time() - (
                 cls._thresholds.node_offline_minutes * 60
+            )
+            infra_offline_threshold = time.time() - (
+                cls._thresholds.infrastructure_offline_minutes * 60
             )
             active_threshold = time.time() - 3600  # Active in last hour
 
-            # Get nodes that were active before but haven't been seen recently
+            # Get all nodes with their last seen time (went inactive in last 24h)
             cursor.execute(
                 """
                 SELECT DISTINCT from_node_id, MAX(timestamp) as last_seen
@@ -676,30 +755,52 @@ class AlertService:
                 GROUP BY from_node_id
                 HAVING last_seen < ? AND last_seen > ?
             """,
-                (offline_threshold, offline_threshold - 86400),
-            )  # Went offline in last 24h
+                (client_offline_threshold, client_offline_threshold - 86400),
+            )
 
-            offline_nodes = cursor.fetchall()
+            potentially_offline_nodes = cursor.fetchall()
 
-            for row in offline_nodes:
+            for row in potentially_offline_nodes:
                 node_id = row["from_node_id"]
                 last_seen = row["last_seen"]
                 hours_offline = (time.time() - last_seen) / 3600
 
-                cls.add_alert(
-                    Alert(
-                        alert_type=AlertType.NODE_OFFLINE,
-                        severity=AlertSeverity.WARNING,
-                        node_id=node_id,
-                        title=f"Node Offline ({hours_offline:.1f}h)",
-                        message=f"Node has not transmitted for {hours_offline:.1f} hours.",
-                        metadata={
-                            "last_seen": last_seen,
-                            "hours_offline": hours_offline,
-                        },
+                # Get node role and determine appropriate threshold
+                role = node_roles.get(node_id)
+                is_infrastructure = cls.is_infrastructure_node(role)
+                node_category = cls.get_node_category(role)
+
+                # Apply role-based threshold
+                if is_infrastructure:
+                    # Infrastructure: offline if not seen for 2+ hours
+                    threshold = infra_offline_threshold
+                    severity = (
+                        AlertSeverity.CRITICAL
+                    )  # Infrastructure offline is critical
+                else:
+                    # Client: offline if not seen for 6+ hours
+                    threshold = client_offline_threshold
+                    severity = AlertSeverity.WARNING
+
+                # Only alert if the node is past its role-specific threshold
+                if last_seen < threshold:
+                    cls.add_alert(
+                        Alert(
+                            alert_type=AlertType.NODE_OFFLINE,
+                            severity=severity,
+                            node_id=node_id,
+                            title=f"{node_category} Offline ({hours_offline:.1f}h)",
+                            message=f"{node_category} node has not transmitted for {hours_offline:.1f} hours.",
+                            metadata={
+                                "last_seen": last_seen,
+                                "hours_offline": hours_offline,
+                                "node_role": role,
+                                "node_category": node_category,
+                                "is_infrastructure": is_infrastructure,
+                            },
+                        )
                     )
-                )
-                alerts_generated += 1
+                    alerts_generated += 1
 
             # Check for nodes that have come back online
             cursor.execute(
@@ -1087,3 +1188,263 @@ class AlertService:
         except Exception as e:
             logger.error(f"Error getting trend data: {e}", exc_info=True)
             raise
+
+    @classmethod
+    def _ensure_archived_column(cls) -> None:
+        """Ensure the archived column exists in node_info table."""
+
+        def _add_column():
+            conn = get_db_connection()
+            try:
+                cursor = conn.cursor()
+                # Add archived column if it doesn't exist
+                cursor.execute(
+                    """
+                    ALTER TABLE node_info ADD COLUMN archived INTEGER DEFAULT 0
+                """
+                )
+                conn.commit()
+                logger.info("Added 'archived' column to node_info table")
+            except Exception as e:
+                if "duplicate column name" in str(e).lower():
+                    pass  # Column already exists
+                else:
+                    logger.debug(f"Could not add archived column: {e}")
+            finally:
+                conn.close()
+
+        try:
+            _execute_with_retry(_add_column)
+        except Exception:
+            pass  # Ignore if column already exists
+
+    @classmethod
+    def get_stale_nodes(cls, days: int | None = None) -> list[dict]:
+        """
+        Get nodes that haven't transmitted within the threshold.
+
+        Args:
+            days: Override threshold days (default from settings)
+
+        Returns:
+            List of stale node dictionaries
+        """
+        threshold_days = days or cls._thresholds.stale_node_days
+        threshold_seconds = threshold_days * 24 * 60 * 60
+        cutoff = time.time() - threshold_seconds
+
+        def _fetch_stale():
+            conn = get_db_connection()
+            try:
+                cursor = conn.cursor()
+
+                cursor.execute(
+                    """
+                    SELECT
+                        n.node_id,
+                        COALESCE(n.long_name, n.short_name, printf('!%08x', n.node_id)) as name,
+                        n.role,
+                        n.hex_id,
+                        n.last_updated,
+                        MAX(p.timestamp) as last_packet
+                    FROM node_info n
+                    LEFT JOIN packet_history p ON p.from_node_id = n.node_id
+                    WHERE COALESCE(n.archived, 0) = 0
+                    GROUP BY n.node_id
+                    HAVING last_packet < ? OR last_packet IS NULL
+                    ORDER BY last_packet DESC NULLS LAST
+                """,
+                    (cutoff,),
+                )
+
+                nodes = []
+                for row in cursor.fetchall():
+                    last_seen = row["last_packet"] or row["last_updated"]
+                    days_stale = (
+                        (time.time() - last_seen) / 86400 if last_seen else None
+                    )
+                    nodes.append(
+                        {
+                            "node_id": row["node_id"],
+                            "name": row["name"],
+                            "hex_id": row["hex_id"],
+                            "role": row["role"],
+                            "category": cls.get_node_category(row["role"]),
+                            "last_seen": last_seen,
+                            "days_stale": round(days_stale, 1) if days_stale else None,
+                        }
+                    )
+
+                return nodes
+            finally:
+                conn.close()
+
+        try:
+            cls._ensure_archived_column()
+            return _execute_with_retry(_fetch_stale)
+        except Exception as e:
+            logger.error(f"Error getting stale nodes: {e}")
+            return []
+
+    @classmethod
+    def archive_node(cls, node_id: int) -> bool:
+        """
+        Archive a stale node (hide from active views but preserve data).
+
+        Args:
+            node_id: The node to archive
+
+        Returns:
+            True if successful
+        """
+
+        def _archive():
+            conn = get_db_connection()
+            try:
+                cursor = conn.cursor()
+                cursor.execute(
+                    """
+                    UPDATE node_info SET archived = 1 WHERE node_id = ?
+                """,
+                    (node_id,),
+                )
+                conn.commit()
+                success = cursor.rowcount > 0
+                if success:
+                    logger.info(f"Archived node {node_id}")
+                return success
+            finally:
+                conn.close()
+
+        try:
+            cls._ensure_archived_column()
+            return _execute_with_retry(_archive)
+        except Exception as e:
+            logger.error(f"Error archiving node: {e}")
+            return False
+
+    @classmethod
+    def unarchive_node(cls, node_id: int) -> bool:
+        """
+        Restore an archived node to active status.
+
+        Args:
+            node_id: The node to unarchive
+
+        Returns:
+            True if successful
+        """
+
+        def _unarchive():
+            conn = get_db_connection()
+            try:
+                cursor = conn.cursor()
+                cursor.execute(
+                    """
+                    UPDATE node_info SET archived = 0 WHERE node_id = ?
+                """,
+                    (node_id,),
+                )
+                conn.commit()
+                success = cursor.rowcount > 0
+                if success:
+                    logger.info(f"Unarchived node {node_id}")
+                return success
+            finally:
+                conn.close()
+
+        try:
+            cls._ensure_archived_column()
+            return _execute_with_retry(_unarchive)
+        except Exception as e:
+            logger.error(f"Error unarchiving node: {e}")
+            return False
+
+    @classmethod
+    def archive_stale_nodes(cls, days: int | None = None) -> dict:
+        """
+        Archive all nodes that haven't transmitted within threshold.
+
+        Args:
+            days: Override threshold days (default: 14 days)
+
+        Returns:
+            Summary of archived nodes
+        """
+        stale_nodes = cls.get_stale_nodes(days)
+        archived = []
+        failed = []
+
+        for node in stale_nodes:
+            if cls.archive_node(node["node_id"]):
+                archived.append(node)
+            else:
+                failed.append(node)
+
+        logger.info(f"Archived {len(archived)} stale nodes, {len(failed)} failures")
+
+        return {
+            "archived_count": len(archived),
+            "failed_count": len(failed),
+            "archived_nodes": archived,
+            "threshold_days": days or cls._thresholds.stale_node_days,
+        }
+
+    @classmethod
+    def get_archived_nodes(cls) -> list[dict]:
+        """
+        Get all archived nodes.
+
+        Returns:
+            List of archived node dictionaries
+        """
+
+        def _fetch_archived():
+            conn = get_db_connection()
+            try:
+                cursor = conn.cursor()
+                cursor.execute(
+                    """
+                    SELECT
+                        n.node_id,
+                        COALESCE(n.long_name, n.short_name, printf('!%08x', n.node_id)) as name,
+                        n.role,
+                        n.hex_id,
+                        n.last_updated,
+                        MAX(p.timestamp) as last_packet
+                    FROM node_info n
+                    LEFT JOIN packet_history p ON p.from_node_id = n.node_id
+                    WHERE n.archived = 1
+                    GROUP BY n.node_id
+                    ORDER BY last_packet DESC NULLS LAST
+                """
+                )
+
+                nodes = []
+                for row in cursor.fetchall():
+                    last_seen = row["last_packet"] or row["last_updated"]
+                    days_stale = (
+                        (time.time() - last_seen) / 86400 if last_seen else None
+                    )
+                    nodes.append(
+                        {
+                            "node_id": row["node_id"],
+                            "name": row["name"],
+                            "hex_id": row["hex_id"],
+                            "role": row["role"],
+                            "category": cls.get_node_category(row["role"]),
+                            "last_seen": last_seen,
+                            "days_stale": round(days_stale, 1) if days_stale else None,
+                        }
+                    )
+
+                return nodes
+            finally:
+                conn.close()
+
+        try:
+            cls._ensure_archived_column()
+            return _execute_with_retry(_fetch_archived)
+        except Exception as e:
+            logger.error(f"Error getting archived nodes: {e}")
+            return []
