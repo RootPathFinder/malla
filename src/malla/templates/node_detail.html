@@ -135,6 +135,7 @@
             <div class="card mb-4">
                 <div class="card-header">
                     <h5><i class="bi bi-info-circle"></i> Node Information</h5>
+                    <span class="badge bg-light text-dark ms-2" id="timezone-label" style="font-size: 0.8em;">Time: <span id="timezone-label-value">Local</span></span>
                 </div>
                 <div class="card-body">
                     <div class="row">
@@ -1011,6 +1012,22 @@ document.addEventListener('DOMContentLoaded', function() {
     // This ensures timestamps on the detail page respect the timezone setting
     if (typeof updateAllTimestamps === 'function') {
         updateAllTimestamps();
+    }
+
+    // Set timezone label
+    function setTimezoneLabel() {
+        const label = document.getElementById('timezone-label-value');
+        if (!label) return;
+        if (typeof getTimezonePreference === 'function') {
+            const pref = getTimezonePreference();
+            label.textContent = pref === 'utc' ? 'UTC' : 'Local';
+        }
+    }
+    setTimezoneLabel();
+
+    // Listen for timezone changes if toggle exists
+    if (window.timezoneToggle && typeof window.timezoneToggle.onPreferenceChange === 'function') {
+        window.timezoneToggle.onPreferenceChange(setTimezoneLabel);
     }
 
     // Load telemetry data
