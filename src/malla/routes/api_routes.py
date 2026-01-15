@@ -2117,6 +2117,62 @@ def api_network_health_summary():
         return jsonify({"error": str(e)}), 500
 
 
+@api_bp.route("/health/uptime/<node_id>")
+@cache_response(ttl_seconds=300)  # Cache for 5 minutes
+def api_node_uptime(node_id):
+    """API endpoint for node uptime/availability data."""
+    logger.info(f"API node uptime endpoint accessed for node {node_id}")
+    try:
+        from ..services.node_health_service import NodeHealthService
+
+        # Convert node_id to int
+        node_id_int = convert_node_id(node_id)
+
+        # Get analysis period from query params (default 7 days)
+        days = request.args.get("days", 7, type=int)
+        days = min(max(days, 1), 30)  # Clamp between 1 and 30 days
+
+        # Get uptime data
+        uptime_data = NodeHealthService.get_node_uptime_data(node_id_int, days)
+
+        if not uptime_data:
+            return jsonify({"error": "Node not found or no data available"}), 404
+
+        response = safe_jsonify(uptime_data)
+        response.headers["Cache-Control"] = "public, max-age=300"
+        return response
+    except ValueError as e:
+        return jsonify({"error": str(e)}), 400
+    except Exception as e:
+        logger.error(f"Error in API node uptime: {e}")
+        return jsonify({"error": str(e)}), 500
+
+
+@api_bp.route("/health/uptime-overview")
+@cache_response(ttl_seconds=300)  # Cache for 5 minutes
+def api_network_uptime_overview():
+    """API endpoint for network-wide uptime overview."""
+    logger.info("API network uptime overview endpoint accessed")
+    try:
+        from ..services.node_health_service import NodeHealthService
+
+        # Get query parameters
+        days = request.args.get("days", 7, type=int)
+        days = min(max(days, 1), 30)
+        limit = request.args.get("limit", 50, type=int)
+        limit = min(max(limit, 10), 200)
+
+        # Get uptime overview
+        overview = NodeHealthService.get_network_uptime_overview(days, limit)
+
+        response = safe_jsonify(overview)
+        response.headers["Cache-Control"] = "public, max-age=300"
+        return response
+    except Exception as e:
+        logger.error(f"Error in API network uptime overview: {e}")
+        return jsonify({"error": str(e)}), 500
+
+
 @api_bp.route("/performance/metrics")
 def api_performance_metrics():
     """

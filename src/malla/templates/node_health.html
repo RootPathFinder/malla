@@ -140,6 +140,69 @@
         </div>
     </div>
 
+    <!-- Uptime Overview (7-Day Availability) -->
+    <div class="row mb-4">
+        <div class="col-12">
+            <div class="card">
+                <div class="card-header d-flex justify-content-between align-items-center">
+                    <h5 class="mb-0">
+                        <i class="bi bi-clock-history"></i> 7-Day Uptime Overview
+                        <i class="bi bi-info-circle text-muted" data-bs-toggle="tooltip" data-bs-placement="top"
+                           title="Node availability based on each node's baseline behavior. A node is 'available' when transmitting at or above its normal rate."></i>
+                    </h5>
+                    <div>
+                        <span class="badge bg-success me-1">●</span><small class="text-muted me-3">Available</small>
+                        <span class="badge bg-warning me-1">●</span><small class="text-muted me-3">Degraded</small>
+                        <span class="badge bg-danger me-1">●</span><small class="text-muted">Unavailable</small>
+                    </div>
+                </div>
+                <div class="card-body">
+                    <div id="uptime-loading" class="text-center p-3">
+                        <div class="spinner-border text-primary" role="status">
+                            <span class="visually-hidden">Loading uptime data...</span>
+                        </div>
+                    </div>
+                    <div id="uptime-content" style="display: none;">
+                        <div class="row mb-3">
+                            <div class="col-md-4 text-center">
+                                <div class="metric-card">
+                                    <div class="metric-label">Network Avg Uptime</div>
+                                    <div class="metric-value" id="network-uptime">--%</div>
+                                </div>
+                            </div>
+                            <div class="col-md-4 text-center">
+                                <div class="metric-card">
+                                    <div class="metric-label">Nodes Analyzed</div>
+                                    <div class="metric-value" id="uptime-nodes-count">--</div>
+                                </div>
+                            </div>
+                            <div class="col-md-4 text-center">
+                                <div class="metric-card">
+                                    <div class="metric-label">Nodes Below 90%</div>
+                                    <div class="metric-value text-warning" id="low-uptime-count">--</div>
+                                </div>
+                            </div>
+                        </div>
+                        <div class="table-responsive" style="max-height: 400px; overflow-y: auto;">
+                            <table class="table table-sm table-striped">
+                                <thead class="sticky-top bg-body">
+                                    <tr>
+                                        <th style="min-width: 180px;">Node</th>
+                                        <th class="text-center" style="width: 80px;">Uptime</th>
+                                        <th>7-Day Availability</th>
+                                    </tr>
+                                </thead>
+                                <tbody id="uptime-tbody">
+                                    <!-- Populated by JavaScript -->
+                                </tbody>
+                            </table>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
     <!-- Filters -->
     <div class="row mb-3">
         <div class="col-md-4">
@@ -434,6 +497,95 @@ async function loadProblematicNodes() {
     }
 }
 
+// Load uptime overview data
+async function loadUptimeOverview() {
+    document.getElementById('uptime-loading').style.display = 'block';
+    document.getElementById('uptime-content').style.display = 'none';
+
+    try {
+        const response = await fetch('/api/health/uptime-overview?days=7&limit=50');
+        if (!response.ok) throw new Error('Failed to load uptime data');
+
+        const data = await response.json();
+
+        // Update summary metrics
+        document.getElementById('network-uptime').textContent = `${data.network_avg_uptime}%`;
+        document.getElementById('uptime-nodes-count').textContent = data.nodes_analyzed;
+
+        // Count nodes below 90% uptime
+        const lowUptimeNodes = data.nodes.filter(n => n.uptime_percentage < 90).length;
+        document.getElementById('low-uptime-count').textContent = lowUptimeNodes;
+
+        // Render the uptime table
+        const tbody = document.getElementById('uptime-tbody');
+        tbody.innerHTML = '';
+
+        // Sort nodes: show worst uptime first (already sorted in API)
+        data.nodes.forEach(node => {
+            const row = document.createElement('tr');
+
+            // Determine uptime color class
+            let uptimeClass = 'text-success';
+            if (node.uptime_percentage < 70) {
+                uptimeClass = 'text-danger';
+            } else if (node.uptime_percentage < 90) {
+                uptimeClass = 'text-warning';
+            }
+
+            // Build 7-day visual bar
+            const dayBars = node.daily_summary.map(day => {
+                let barClass = 'bg-success';
+                let tooltip = `${day.date}: ${day.uptime_percentage}% (${day.available_hours}h available)`;
+
+                if (day.uptime_percentage < 50) {
+                    barClass = 'bg-danger';
+                } else if (day.uptime_percentage < 80) {
+                    barClass = 'bg-warning';
+                }
+
+                return `<div class="uptime-day-bar ${barClass}" title="${tooltip}" style="flex: 1; height: 20px; margin: 0 1px; border-radius: 2px;"></div>`;
+            }).join('');
+
+            // Format node name with role badge
+            const roleLabel = node.role ? `<span class="badge bg-secondary ms-1" style="font-size: 0.65em;">${node.role}</span>` : '';
+            const nodeIdHex = node.node_id.toString(16).padStart(8, '0');
+
+            row.innerHTML = `
+                <td>
+                    <a href="/nodes?highlight=${node.node_id}" class="text-decoration-none">
+                        ${node.node_name}${roleLabel}
+                    </a>
+                    <br><small class="text-muted">!${nodeIdHex}</small>
+                </td>
+                <td class="text-center ${uptimeClass}" style="font-weight: bold;">
+                    ${node.uptime_percentage}%
+                </td>
+                <td>
+                    <div style="display: flex; align-items: center; gap: 2px;" title="Last 7 days (oldest to newest)">
+                        ${dayBars}
+                    </div>
+                    <div style="display: flex; justify-content: space-between; font-size: 0.7em;" class="text-muted mt-1">
+                        <span>${node.daily_summary[0]?.date || ''}</span>
+                        <span>${node.daily_summary[node.daily_summary.length - 1]?.date || ''}</span>
+                    </div>
+                </td>
+            `;
+
+            tbody.appendChild(row);
+        });
+
+        document.getElementById('uptime-loading').style.display = 'none';
+        document.getElementById('uptime-content').style.display = 'block';
+
+        // Initialize tooltips for the new content
+        initializeTooltips();
+
+    } catch (error) {
+        console.error('Error loading uptime overview:', error);
+        document.getElementById('uptime-loading').innerHTML = '<div class="text-muted">Unable to load uptime data</div>';
+    }
+}
+
 function handleSortClick(e) {
     const column = e.currentTarget.getAttribute('data-sort');
     if (healthCurrentSort.column === column) {
@@ -678,6 +830,7 @@ document.getElementById('limit-filter').addEventListener('change', (e) => {
 document.getElementById('refresh-btn').addEventListener('click', () => {
     loadNetworkSummary();
     loadProblematicNodes();
+    loadUptimeOverview();
 });
 
 // Delegated event listener for view details buttons
@@ -691,6 +844,7 @@ document.getElementById('problematic-nodes-tbody').addEventListener('click', (e)
 // Initial load
 loadNetworkSummary();
 loadProblematicNodes();
+loadUptimeOverview();
 
 // Initialize tooltips on page load
 document.addEventListener('DOMContentLoaded', initializeTooltips);
