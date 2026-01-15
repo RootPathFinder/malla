@@ -11,25 +11,39 @@ import json
 import logging
 import os
 import sys
+import threading
+import time
 from pathlib import Path
 
 from flask import Flask
 
-# Import application configuration loader
 from .config import AppConfig, get_config
-
-# Optional CORS support will be checked inline
-# Import configuration and database setup
 from .database.connection import init_database
 from .routes import register_routes
+from .services.alert_service import AlertService
 from .services.power_monitor import start_power_monitor, stop_power_monitor
-
-# Import utility functions for template filters
 from .utils.formatting import format_node_id, format_time_ago
-from .utils.node_utils import (
-    start_cache_cleanup,
-    stop_cache_cleanup,
-)
+from .utils.node_utils import start_cache_cleanup, stop_cache_cleanup
+
+
+def start_auto_archive_stale_nodes(interval_seconds=86400):
+    """Start a background thread to auto-archive stale nodes periodically."""
+
+    def archive_loop():
+        while True:
+            try:
+                logger.info("Auto-archiving stale nodes...")
+                result = AlertService.archive_stale_nodes()
+                logger.info(
+                    f"Auto-archived {result['archived_count']} nodes (failures: {result['failed_count']})"
+                )
+            except Exception as e:
+                logger.error(f"Error in auto-archive thread: {e}")
+            time.sleep(interval_seconds)
+
+    t = threading.Thread(target=archive_loop, daemon=True)
+    t.start()
+
 
 # Configure logging
 logging.basicConfig(
@@ -245,6 +259,10 @@ def create_app(cfg: AppConfig | None = None):  # noqa: D401
     # Start periodic power type detection (runs every 30 minutes)
     logger.info("Starting power type monitor background thread")
     start_power_monitor(interval_seconds=1800)  # Run every 30 minutes
+
+    # Start auto-archive background thread (every 24 hours)
+    logger.info("Starting auto-archive stale nodes background thread")
+    start_auto_archive_stale_nodes(interval_seconds=86400)
 
     # Register cleanup on app shutdown
     atexit.register(stop_cache_cleanup)

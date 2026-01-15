@@ -1,0 +1,88 @@
+{% extends "base.html" %}
+{% block title %}Archived Nodes - Malla{% endblock %}
+
+{% block content %}
+<div class="container mt-4">
+    <h2><i class="bi bi-archive"></i> Archived Nodes</h2>
+    <div id="archived-nodes-loading" class="text-center p-3">
+        <div class="spinner-border text-primary" role="status">
+            <span class="visually-hidden">Loading archived nodes...</span>
+        </div>
+    </div>
+    <div id="archived-nodes-content" style="display: none;">
+        <table class="table table-sm table-striped">
+            <thead>
+                <tr>
+                    <th>Node Name</th>
+                    <th>Role</th>
+                    <th>Last Seen</th>
+                    <th>Days Stale</th>
+                    <th>Action</th>
+                </tr>
+            </thead>
+            <tbody id="archived-nodes-tbody">
+                <!-- Populated by JS -->
+            </tbody>
+        </table>
+    </div>
+</div>
+{% endblock %}
+
+{% block extra_js %}
+<script>
+document.addEventListener('DOMContentLoaded', function() {
+    async function loadArchivedNodes() {
+        document.getElementById('archived-nodes-loading').style.display = 'block';
+        document.getElementById('archived-nodes-content').style.display = 'none';
+        try {
+            const response = await fetch('/api/archived-nodes');
+            const data = await response.json();
+            const tbody = document.getElementById('archived-nodes-tbody');
+            tbody.innerHTML = '';
+            data.archived_nodes.forEach(node => {
+                const row = document.createElement('tr');
+                row.innerHTML = `
+                    <td><a href="/nodes?highlight=${node.node_id}">${node.name}</a></td>
+                    <td>${node.role || ''}</td>
+                    <td>${node.last_seen ? new Date(node.last_seen * 1000).toLocaleString() : 'Never'}</td>
+                    <td>${node.days_stale ?? ''}</td>
+                    <td><button class="btn btn-sm btn-success unarchive-btn" data-node-id="${node.node_id}"><i class="bi bi-arrow-up-circle"></i> Unarchive</button></td>
+                `;
+                tbody.appendChild(row);
+            });
+            document.getElementById('archived-nodes-loading').style.display = 'none';
+            document.getElementById('archived-nodes-content').style.display = 'block';
+        } catch (error) {
+            document.getElementById('archived-nodes-loading').innerHTML = '<div class="text-danger">Failed to load archived nodes</div>';
+        }
+    }
+
+    // Unarchive handler
+    document.addEventListener('click', async function(e) {
+        if (e.target.closest('.unarchive-btn')) {
+            const btn = e.target.closest('.unarchive-btn');
+            const nodeId = btn.getAttribute('data-node-id');
+            btn.disabled = true;
+            btn.innerHTML = '<span class="spinner-border spinner-border-sm"></span> Unarchiving...';
+            try {
+                const resp = await fetch(`/api/unarchive-node/${nodeId}`, { method: 'POST' });
+                const result = await resp.json();
+                if (result.success) {
+                    btn.closest('tr').remove();
+                } else {
+                    btn.innerHTML = '<i class="bi bi-arrow-up-circle"></i> Unarchive';
+                    btn.disabled = false;
+                    alert(result.message || 'Failed to unarchive node');
+                }
+            } catch (err) {
+                btn.innerHTML = '<i class="bi bi-arrow-up-circle"></i> Unarchive';
+                btn.disabled = false;
+                alert('Failed to unarchive node');
+            }
+        }
+    });
+
+    loadArchivedNodes();
+});
+</script>
+{% endblock %}

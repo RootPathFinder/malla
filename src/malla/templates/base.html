@@ -237,6 +237,11 @@
                                     <i class="bi bi-bell"></i> Alerts
                                 </a>
                             </li>
+                            <li>
+                                <a class="dropdown-item {{ 'active' if request.endpoint == 'alerts.archived_nodes_page' }}" href="{{ url_for('alerts.archived_nodes_page') }}">
+                                    <i class="bi bi-archive"></i> Archived Nodes
+                                </a>
+                            </li>
                         </ul>
                     </li>
 

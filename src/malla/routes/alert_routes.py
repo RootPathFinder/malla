@@ -23,6 +23,12 @@ logger = logging.getLogger(__name__)
 alert_bp = Blueprint("alerts", __name__, url_prefix="/alerts")
 
 
+@alert_bp.route("/archived")
+def archived_nodes_page():
+    """Render the archived nodes page."""
+    return render_template("archived_nodes.html")
+
+
 @alert_bp.route("/")
 def alerts_page():
     """Render the alerts dashboard page."""
