@@ -1132,38 +1132,38 @@ class NodeRepository:
                 return None
 
             # Get basic node information from packet_history with node_info join
-              query = """
-              SELECT
-                 p.from_node_id as node_id,
-                 COALESCE(n.long_name, n.short_name, 'Node ' || p.from_node_id) as node_name,
-                 n.long_name,
-                 n.short_name,
-                 n.hw_model,
-                 n.role,
-                 n.primary_channel,
-                 COUNT(*) as total_packets,
-                 MAX(p.timestamp) as last_seen,
-                 MIN(p.timestamp) as first_seen,
-                 COUNT(DISTINCT p.to_node_id) as unique_destinations,
-                 COUNT(DISTINCT p.gateway_id) as unique_gateways,
-                 AVG(CASE WHEN (p.hop_start IS NULL OR p.hop_limit IS NULL OR (p.hop_start - p.hop_limit) = 0)
+            query = """
+            SELECT
+                p.from_node_id as node_id,
+                COALESCE(n.long_name, n.short_name, 'Node ' || p.from_node_id) as node_name,
+                n.long_name,
+                n.short_name,
+                n.hw_model,
+                n.role,
+                n.primary_channel,
+                COUNT(*) as total_packets,
+                MAX(p.timestamp) as last_seen,
+                MIN(p.timestamp) as first_seen,
+                COUNT(DISTINCT p.to_node_id) as unique_destinations,
+                COUNT(DISTINCT p.gateway_id) as unique_gateways,
+                AVG(CASE WHEN (p.hop_start IS NULL OR p.hop_limit IS NULL OR (p.hop_start - p.hop_limit) = 0)
                      THEN CAST(p.rssi AS FLOAT) END) as avg_rssi,
-                 AVG(CASE WHEN (p.hop_start IS NULL OR p.hop_limit IS NULL OR (p.hop_start - p.hop_limit) = 0)
+                AVG(CASE WHEN (p.hop_start IS NULL OR p.hop_limit IS NULL OR (p.hop_start - p.hop_limit) = 0)
                      THEN CAST(p.snr AS FLOAT) END) as avg_snr,
-                 AVG(CASE WHEN p.hop_start IS NOT NULL AND p.hop_limit IS NOT NULL
+                AVG(CASE WHEN p.hop_start IS NOT NULL AND p.hop_limit IS NOT NULL
                     THEN (p.hop_start - p.hop_limit) ELSE NULL END) as avg_hops
-              FROM packet_history p
-              LEFT JOIN node_info n ON p.from_node_id = n.node_id
-              WHERE p.from_node_id = ? AND COALESCE(n.archived, 0) = 0
-              GROUP BY p.from_node_id, n.long_name, n.short_name, n.hw_model, n.role, n.primary_channel
-              """
+            FROM packet_history p
+            LEFT JOIN node_info n ON p.from_node_id = n.node_id
+            WHERE p.from_node_id = ?
+            GROUP BY p.from_node_id, n.long_name, n.short_name, n.hw_model, n.role, n.primary_channel
+            """
 
             cursor.execute(query, (node_id,))
             node_row = cursor.fetchone()
 
             if not node_row:
                 # Check if node exists in node_info but has no packets
-                cursor.execute("SELECT * FROM node_info WHERE node_id = ? AND COALESCE(archived, 0) = 0", (node_id,))
+                cursor.execute("SELECT * FROM node_info WHERE node_id = ?", (node_id,))
                 node_info_row = cursor.fetchone()
                 if not node_info_row:
                     conn.close()
