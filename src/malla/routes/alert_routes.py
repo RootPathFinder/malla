@@ -210,8 +210,8 @@ def api_trends():
         return jsonify({"error": str(e)}), 500
 
 
-@alert_bp.route("/api/resolve/<alert_type>/<int:node_id>", methods=["POST"])
-def api_resolve_alert(alert_type: str, node_id):
+@alert_bp.route("/api/resolve/<alert_type>/<node_id>", methods=["POST"])
+def api_resolve_alert(alert_type: str, node_id: str):
     """Manually resolve an alert."""
     try:
         try:
@@ -220,14 +220,15 @@ def api_resolve_alert(alert_type: str, node_id):
             return jsonify({"error": "Invalid alert type"}), 400
 
         # Handle 'null' string from frontend for alerts with node_id=NULL
-        if isinstance(node_id, str) and node_id.lower() == "null":
-            node_id = None
+        if node_id.lower() == "null":
+            parsed_node_id: int | None = None
         else:
             try:
-                node_id = int(node_id)
-            except (TypeError, ValueError):
-                pass
-        resolved = AlertService.resolve_alert(at, node_id)
+                parsed_node_id = int(node_id)
+            except ValueError:
+                return jsonify({"error": "Invalid node_id"}), 400
+
+        resolved = AlertService.resolve_alert(at, parsed_node_id)
 
         return jsonify(
             {

@@ -215,7 +215,7 @@ function renderTimestampColumn(row, timestampField = 'timestamp', idField = 'id'
 
     return `<a href="${link}" class="text-decoration-none" title="View details">
                 <small class="timestamp-display" data-timestamp="${escapedTimestamp}">${escapedFormattedTime}</small>
-                <small class="timestamp-relative" data-timestamp-ago="${escapedTimestamp}">${timeAgoText}</small>
+                <span class="timestamp-relative" data-timestamp-ago="${escapedTimestamp}">${timeAgoText}</span>
             </a>`;
 }
 
