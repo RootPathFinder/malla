@@ -4369,6 +4369,7 @@ class BatteryAnalyticsRepository:
 
         return None
 
+    @staticmethod
     def get_power_source_summary() -> dict[str, int]:
         """Get summary of nodes by power source type.
 
@@ -4441,6 +4442,7 @@ class BatteryAnalyticsRepository:
                     ni.long_name,
                     ni.short_name,
                     COALESCE(ni.power_type, 'unknown') as power_type,
+                    ni.power_type_reason,
                     ni.last_updated
                 FROM node_info ni
                 INNER JOIN telemetry_data td ON ni.node_id = td.node_id
@@ -4519,6 +4521,7 @@ class BatteryAnalyticsRepository:
                         "hex_id": row["hex_id"],
                         "name": node_name,
                         "power_type": row["power_type"],
+                        "power_type_reason": row["power_type_reason"],
                         "battery_level": battery_level,
                         "voltage": voltage,
                         "health_score": health_score,
@@ -4729,6 +4732,7 @@ class BatteryAnalyticsRepository:
                     ni.long_name,
                     ni.short_name,
                     ni.power_type,
+                    ni.power_type_reason,
                     ni.last_battery_voltage,
                     ni.battery_health_score,
                     ni.last_updated
@@ -4759,6 +4763,7 @@ class BatteryAnalyticsRepository:
                             "hex_id": row["hex_id"],
                             "name": node_name,
                             "power_type": row["power_type"],
+                            "power_type_reason": row["power_type_reason"],
                             "voltage": voltage,
                             "health_score": row["battery_health_score"],
                             "last_seen": format_time_ago(row["last_updated"]),
@@ -4840,7 +4845,8 @@ class BatteryAnalyticsRepository:
                     COALESCE(ni.hex_id, printf('!%08x', ni.node_id)) as hex_id,
                     ni.long_name,
                     ni.short_name,
-                    COALESCE(ni.power_type, 'unknown') as power_type
+                    COALESCE(ni.power_type, 'unknown') as power_type,
+                    ni.power_type_reason
                 FROM node_info ni
                 INNER JOIN telemetry_data td ON ni.node_id = td.node_id
                 WHERE td.voltage IS NOT NULL OR td.battery_level IS NOT NULL
@@ -4909,6 +4915,7 @@ class BatteryAnalyticsRepository:
                         "hex_id": row["hex_id"],
                         "name": node_name,
                         "power_type": power_type,
+                        "power_type_reason": row.get("power_type_reason"),
                         "power_icon": power_icon,
                         "power_class": power_class,
                         "voltage": voltage,

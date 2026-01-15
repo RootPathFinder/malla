@@ -101,7 +101,12 @@ class DatabaseFixtures:
                 mac_address TEXT,
                 first_seen REAL,
                 last_updated REAL,
-                created_at REAL DEFAULT (strftime('%s', 'now'))
+                created_at REAL DEFAULT (strftime('%s', 'now')),
+                power_type TEXT DEFAULT 'unknown',
+                battery_health_score INTEGER,
+                last_battery_voltage REAL,
+                power_type_reason TEXT,
+                power_analysis_timestamp REAL
             )
         """)
 

@@ -166,7 +166,9 @@ class NodeHealthService:
         # Get node basic info
         cursor.execute(
             """
-            SELECT node_id, long_name, short_name, hw_model, role
+            SELECT node_id, long_name, short_name, hw_model, role,
+                   COALESCE(power_type, 'unknown') as power_type,
+                   power_type_reason
             FROM node_info
             WHERE node_id = ?
         """,
@@ -201,6 +203,8 @@ class NodeHealthService:
                 "short_name": f"!{node_id:08x}",
                 "hw_model": None,
                 "role": None,
+                "power_type": "unknown",
+                "power_type_reason": None,
             }
         else:
             node_info = dict(node_row)

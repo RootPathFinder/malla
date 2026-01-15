@@ -221,6 +221,7 @@
                                         <small class="text-muted d-block">{{ node.hex_id }}</small>
                                     </td>
                                     <td>
+                                        <span {% if node.power_type_reason %}data-bs-toggle="tooltip" data-bs-placement="top" title="{{ node.power_type_reason }}" style="cursor:help; border-bottom: 1px dotted #ccc;"{% endif %}>
                                         {% if node.power_type == 'solar' %}
                                             <i class="bi bi-sun-fill text-warning"></i> Solar
                                         {% elif node.power_type == 'battery' %}
@@ -230,6 +231,7 @@
                                         {% else %}
                                             <i class="bi bi-question-circle text-secondary"></i> {{ node.power_type or 'Unknown' }}
                                         {% endif %}
+                                        </span>
                                     </td>
                                     <td>
                                         {% if node.battery_level %}
