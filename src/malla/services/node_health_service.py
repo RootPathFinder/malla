@@ -452,8 +452,8 @@ class NodeHealthService:
                     {
                         "start_timestamp": gap["start"],
                         "end_timestamp": gap["end"],
-                        "start_time": start_time.strftime("%Y-%m-%d %H:%M:%S UTC"),
-                        "end_time": end_time.strftime("%Y-%m-%d %H:%M:%S UTC"),
+                        "start_time": start_time.strftime("%Y-%m-%d %H:%M:%S"),
+                        "end_time": end_time.strftime("%Y-%m-%d %H:%M:%S"),
                         "duration_minutes": gap["duration_minutes"],
                         "duration_hours": duration_hours,
                         "duration_formatted": f"{int(duration_hours)}h {int(gap['duration_minutes'] % 60)}m"

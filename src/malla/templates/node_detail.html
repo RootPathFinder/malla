@@ -1273,7 +1273,14 @@ async function loadTelemetryData() {
                     html += '<div class="mt-2 small alert alert-warning mb-0">';
                     html += '<strong>' + issue.category + ' Details:</strong><ul class="mt-1 mb-0">';
                     issue.outage_details.forEach(outage => {
-                        html += '<li>' + outage.duration_formatted + ' - ' + outage.start_time + ' to ' + outage.end_time + '</li>';
+                        // Format timestamps based on timezone preference
+                        const startTime = typeof formatTimestamp === 'function'
+                            ? formatTimestamp(outage.start_timestamp, 'time')
+                            : outage.start_time;
+                        const endTime = typeof formatTimestamp === 'function'
+                            ? formatTimestamp(outage.end_timestamp, 'time')
+                            : outage.end_time;
+                        html += '<li>' + outage.duration_formatted + ' - ' + startTime + ' to ' + endTime + '</li>';
                     });
                     html += '</ul></div>';
                 }
@@ -1557,7 +1564,11 @@ async function loadTelemetryData() {
         // Update timestamp
         if (telemetry.timestamp_relative) {
             document.getElementById('telemetry-timestamp').textContent = telemetry.timestamp_relative;
-            document.getElementById('telemetry-timestamp-small').textContent = telemetry.timestamp;
+            // Format timestamp_unix if available, otherwise use timestamp string
+            const timestampText = telemetry.timestamp_unix && typeof formatTimestamp === 'function'
+                ? formatTimestamp(telemetry.timestamp_unix, 'datetime')
+                : telemetry.timestamp;
+            document.getElementById('telemetry-timestamp-small').textContent = timestampText;
         }
 
         // Render sparklines for metrics with history data
