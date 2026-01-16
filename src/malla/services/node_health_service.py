@@ -1084,6 +1084,9 @@ class NodeHealthService:
 
                 day_available = sum(1 for h in day_data if h["status"] == "available")
                 day_degraded = sum(1 for h in day_data if h["status"] == "degraded")
+                day_unavailable = sum(
+                    1 for h in day_data if h["status"] == "unavailable"
+                )
                 day_packets = sum(h["packets"] for h in day_data)
 
                 day_uptime = (
@@ -1098,6 +1101,12 @@ class NodeHealthService:
                     block_hours = day_data[block_start:block_end]
                     block_available = sum(
                         1 for h in block_hours if h["status"] == "available"
+                    )
+                    block_degraded = sum(
+                        1 for h in block_hours if h["status"] == "degraded"
+                    )
+                    block_unavailable = sum(
+                        1 for h in block_hours if h["status"] == "unavailable"
                     )
                     block_total = len(block_hours)
 
@@ -1115,14 +1124,24 @@ class NodeHealthService:
                             "label": block_label,
                             "status": block_status,
                             "available_hours": block_available,
+                            "degraded_hours": block_degraded,
+                            "unavailable_hours": block_unavailable,
                             "total_hours": block_total,
                         }
                     )
 
+                # Format date for display
+                day_timestamp = cutoff_time + (day * 24 * 3600)
+                day_date = time.strftime("%Y-%m-%d", time.localtime(day_timestamp))
+
                 daily_summary.append(
                     {
                         "day_offset": day,
-                        "timestamp": cutoff_time + (day * 24 * 3600),
+                        "date": day_date,
+                        "timestamp": day_timestamp,
+                        "available_hours": day_available,
+                        "degraded_hours": day_degraded,
+                        "unavailable_hours": day_unavailable,
                         "uptime_percentage": round(day_uptime, 1),
                         "packets": day_packets,
                         "time_blocks": block_statuses,

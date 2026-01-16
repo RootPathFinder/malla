@@ -44,7 +44,7 @@ document.addEventListener('DOMContentLoaded', function() {
                 row.innerHTML = `
                     <td><a href="/nodes?highlight=${node.node_id}">${node.name}</a></td>
                     <td>${node.role || ''}</td>
-                    <td>${node.last_seen ? new Date(node.last_seen * 1000).toLocaleString() : 'Never'}</td>
+                    <td>${node.last_seen ? (typeof formatTimestamp === 'function' ? formatTimestamp(node.last_seen) : new Date(node.last_seen * 1000).toLocaleString()) : 'Never'}</td>
                     <td>${node.days_stale ?? ''}</td>
                     <td><button class="btn btn-sm btn-success unarchive-btn" data-node-id="${node.node_id}"><i class="bi bi-arrow-up-circle"></i> Unarchive</button></td>
                 `;

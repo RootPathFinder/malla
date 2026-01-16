@@ -1479,7 +1479,7 @@ function showSelectedNodeDetails(node) {
             </div>
             <div class="col-6">
                 <strong>Last Seen:</strong><br>
-                <small class="text-muted">${new Date(node.last_seen * 1000).toLocaleString()}</small>
+                <small class="text-muted">${typeof formatTimestamp === 'function' ? formatTimestamp(node.last_seen) : new Date(node.last_seen * 1000).toLocaleString()}</small>
             </div>
         </div>
         <div class="row mt-2">
@@ -1737,7 +1737,7 @@ function showSelectedLinkDetails(link) {
         <div class="row mt-2">
             <div class="col-6">
                 <strong>Last Seen:</strong><br>
-                <small class="text-muted">${new Date(link.last_seen * 1000).toLocaleString()}</small>
+                <small class="text-muted">${typeof formatTimestamp === 'function' ? formatTimestamp(link.last_seen) : new Date(link.last_seen * 1000).toLocaleString()}</small>
             </div>
             <div class="col-6">
                 <a href="/traceroute-hops?from_node=${link.source.id}&to_node=${link.target.id}" class="btn btn-outline-primary btn-sm">
@@ -1794,7 +1794,7 @@ function showNodeHoverDetails(node) {
         <div><strong>Packets:</strong> ${node.packet_count}</div>
         <div><strong>Avg SNR:</strong> ${node.avg_snr ? node.avg_snr + ' dB' : 'N/A'}</div>
         <div><strong>Last Seen:</strong><br>
-        <small>${new Date(node.last_seen * 1000).toLocaleString()}</small></div>
+        <small>${typeof formatTimestamp === 'function' ? formatTimestamp(node.last_seen) : new Date(node.last_seen * 1000).toLocaleString()}</small></div>
     `;
 
     document.getElementById('hoverDetails').innerHTML = content;
@@ -1813,7 +1813,7 @@ function showLinkHoverDetails(link) {
         <div><strong>Packets:</strong> ${link.packet_count || link.path_count || 0}</div>
         ${link.hop_count ? `<div><strong>Hops:</strong> ${link.hop_count}</div>` : ''}
         <div><strong>Last Seen:</strong><br>
-        <small>${new Date(link.last_seen * 1000).toLocaleString()}</small></div>
+        <small>${typeof formatTimestamp === 'function' ? formatTimestamp(link.last_seen) : new Date(link.last_seen * 1000).toLocaleString()}</small></div>
     `;
 
     document.getElementById('hoverDetails').innerHTML = content;
@@ -2031,7 +2031,7 @@ function showError(message) {
 }
 
 function updateStats(stats) {
-    const now = new Date().toLocaleTimeString();
+    const now = typeof formatTimestamp === 'function' ? formatTimestamp(Math.floor(Date.now() / 1000), 'time') : new Date().toLocaleTimeString();
     const statsContent = `
         <div><strong>Nodes:</strong> ${currentGraph && currentGraph.nodes ? currentGraph.nodes.length : 0}</div>
         <div><strong>Links:</strong> ${stats.links_found}</div>

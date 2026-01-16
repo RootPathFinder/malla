@@ -1367,7 +1367,7 @@ function updateStats() {
     document.getElementById('statsNodes').textContent = nodeData.length;
     document.getElementById('statsWithLocation').textContent = nodeData.length;
     document.getElementById('statsLinks').textContent = tracerouteLinkData.length + packetLinkData.length;
-    document.getElementById('statsLastUpdate').textContent = new Date().toLocaleTimeString();
+    document.getElementById('statsLastUpdate').textContent = typeof formatTimestamp === 'function' ? formatTimestamp(Math.floor(Date.now() / 1000), 'time') : new Date().toLocaleTimeString();
 }
 
 // Show precision circle

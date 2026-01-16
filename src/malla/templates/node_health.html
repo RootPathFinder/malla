@@ -535,25 +535,47 @@ async function loadUptimeOverview() {
             // Build 7-day visual grid with time-of-day blocks
             let dayGridHtml = '<div style="display: flex; gap: 4px; align-items: flex-end;">';
 
+            // Get current date and hour for future block detection
+            const now = new Date();
+            const currentDateStr = now.toISOString().split('T')[0];
+            const currentHour = now.getHours();
+
             node.daily_summary.forEach(day => {
                 dayGridHtml += '<div style="display: flex; flex-direction: column-reverse; gap: 2px; flex: 1; min-width: 0;">';
 
-                // Add 5 time blocks per day (from bottom to top: 00-04, 05-09, 10-14, 15-19, 20-23)
+                const isToday = day.date === currentDateStr;
+
+                // Add 5 time blocks per day - render in REVERSE order to align with column-reverse
+                // Order: Late (20-23), Evening (15-19), Midday (10-14), Morning (05-09), Night (00-04)
                 if (day.time_blocks && day.time_blocks.length > 0) {
-                    day.time_blocks.forEach(block => {
+                    const blockStartHours = [0, 5, 10, 15, 20];
+
+                    // Reverse iterate through blocks
+                    for (let blockIdx = day.time_blocks.length - 1; blockIdx >= 0; blockIdx--) {
+                        const block = day.time_blocks[blockIdx];
+                        const blockStartHour = blockStartHours[blockIdx];
+
+                        // Check if this is a future block on today
+                        const isFutureBlock = isToday && blockStartHour > currentHour;
+
                         let blockClass = 'bg-success';
-                        if (block.status === 'unavailable') {
+                        if (isFutureBlock) {
+                            blockClass = 'bg-secondary';
+                        } else if (block.status === 'unavailable') {
                             blockClass = 'bg-danger';
                         } else if (block.status === 'degraded') {
                             blockClass = 'bg-warning';
                         }
 
-                        const tooltipText = `${day.date} ${block.label}h: ${block.status}\\n` +
-                            `Available: ${block.available_hours}h, Degraded: ${block.degraded_hours}h, Unavailable: ${block.unavailable_hours}h`;
+                        const tooltipText = isFutureBlock
+                            ? `${day.date} ${block.label}h: Future`
+                            : `${day.date} ${block.label}h: ${block.status}\\n` +
+                              `Available: ${block.available_hours}h, Degraded: ${block.degraded_hours}h, Unavailable: ${block.unavailable_hours}h`;
 
+                        const opacity = isFutureBlock ? 'opacity: 0.4;' : '';
                         dayGridHtml += `<div class="${blockClass}" title="${tooltipText}"
-                            style="height: 20px; border-radius: 3px; cursor: help;"></div>`;
-                    });
+                            style="height: 20px; border-radius: 3px; cursor: help; ${opacity}"></div>`;
+                    }
                 } else {
                     // Fallback: single color for whole day based on uptime percentage
                     let barClass = 'bg-success';
@@ -563,8 +585,8 @@ async function loadUptimeOverview() {
                         barClass = 'bg-warning';
                     }
 
-                    // Create 5 blocks with same color
-                    for (let i = 0; i < 5; i++) {
+                    // Create 5 blocks with same color - in reverse order
+                    for (let i = 4; i >= 0; i--) {
                         dayGridHtml += `<div class="${barClass}" title="${day.date}: ${day.uptime_percentage}%"
                             style="height: 20px; border-radius: 3px;"></div>`;
                     }

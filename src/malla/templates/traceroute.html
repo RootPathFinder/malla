@@ -426,7 +426,7 @@ document.addEventListener('DOMContentLoaded', function() {
         document.getElementById('statsTotal').textContent = table.state.totalCount || '0';
         document.getElementById('statsFiltered').textContent = table.state.data.length || '0';
         document.getElementById('statsGrouped').textContent = groupPacketsCheckbox.checked ? 'Yes' : 'No';
-        document.getElementById('statsLastUpdate').textContent = new Date().toLocaleTimeString();
+        document.getElementById('statsLastUpdate').textContent = typeof formatTimestamp === 'function' ? formatTimestamp(Math.floor(Date.now() / 1000), 'time') : new Date().toLocaleTimeString();
     }
 
     // Initialize the filter controller

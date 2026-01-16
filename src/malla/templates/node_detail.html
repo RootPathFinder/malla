@@ -1458,7 +1458,7 @@ async function loadTelemetryData() {
 
                     if (telemetry.power_analysis_timestamp) {
                          const nextEval = new Date((telemetry.power_analysis_timestamp + 3600) * 1000);
-                         tooltipText += '. Re-evaluation scheduled around ' + nextEval.toLocaleTimeString();
+                         tooltipText += '. Re-evaluation scheduled around ' + (typeof formatTimestamp === 'function' ? formatTimestamp(Math.floor(nextEval.getTime() / 1000), 'time') : nextEval.toLocaleTimeString());
                     }
                     tooltipAttr = `data-bs-toggle="tooltip" data-bs-placement="top" title="${tooltipText}"`;
                 }

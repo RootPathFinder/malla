@@ -434,7 +434,7 @@
             const lastUpdateEl = document.getElementById('last-update-time');
             if (lastUpdateEl) {
                 const now = new Date();
-                const timeStr = now.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+                const timeStr = typeof formatTimestamp === 'function' ? formatTimestamp(Math.floor(now.getTime() / 1000), 'time') : now.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
                 lastUpdateEl.textContent = `(Updated: ${timeStr})`;
             }
         }
