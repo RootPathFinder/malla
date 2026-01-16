@@ -491,10 +491,10 @@
         tbody.innerHTML = edges.map(edge => `
             <tr>
                 <td>
-                    <a href="/nodes/${edge.node_a}" class="node-link">${edge.node_a_name}</a>
+                    <a href="/node/${edge.node_a}" class="node-link">${edge.node_a_name}</a>
                 </td>
                 <td>
-                    <a href="/nodes/${edge.node_b}" class="node-link">${edge.node_b_name}</a>
+                    <a href="/node/${edge.node_b}" class="node-link">${edge.node_b_name}</a>
                 </td>
                 <td>${edge.snr_a_to_b !== null ? edge.snr_a_to_b.toFixed(1) + ' dB' : '-'}</td>
                 <td>${edge.snr_b_to_a !== null ? edge.snr_b_to_a.toFixed(1) + ' dB' : '-'}</td>
@@ -540,7 +540,7 @@
         tbody.innerHTML = nodes.map(node => `
             <tr>
                 <td>
-                    <a href="/nodes/${node.node_id}" class="node-link">${node.name}</a>
+                    <a href="/node/${node.node_id}" class="node-link">${node.name}</a>
                 </td>
                 <td><code>${node.hex_id}</code></td>
                 <td>
@@ -577,7 +577,7 @@
             return `
                 <tr>
                     <td>
-                        <a href="/nodes/${node.node_id}" class="node-link">${node.node_name}</a>
+                        <a href="/node/${node.node_id}" class="node-link">${node.node_name}</a>
                         <br><small class="text-muted">${node.hex_id}</small>
                     </td>
                     <td>
@@ -652,7 +652,7 @@
                     ${data.neighbors.map(n => `
                         <div class="list-group-item d-flex justify-content-between align-items-center">
                             <div>
-                                <a href="/nodes/${n.node_id}" class="node-link">${n.node_name}</a>
+                                <a href="/node/${n.node_id}" class="node-link">${n.node_name}</a>
                                 <br><small class="text-muted">${n.hex_id}</small>
                             </div>
                             <span class="snr-badge snr-${n.quality}">${n.snr.toFixed(1)} dB</span>

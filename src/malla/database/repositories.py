@@ -1941,7 +1941,7 @@ class NodeRepository:
 
                 timestamp = datetime.fromtimestamp(result["timestamp"], UTC)
                 telemetry_dict["timestamp"] = timestamp.strftime(
-                    "%Y-%m-%d %H:%M:%S"
+                    "%Y-%m-%d %H:%M:%S UTC"
                 )
                 telemetry_dict["timestamp_unix"] = result["timestamp"]
                 telemetry_dict["timestamp_relative"] = format_time_ago(timestamp)
