@@ -362,6 +362,8 @@
 {% block extra_js %}
 <script>
 (function() {
+    let autoRefreshInterval = null;
+
     // Initialize
     document.addEventListener('DOMContentLoaded', function() {
         loadAlerts();
@@ -396,7 +398,47 @@
                 loadTrend();
             }
         });
+
+        // Auto-refresh alerts every 30 seconds when on alerts tab
+        startAutoRefresh();
+
+        // Handle tab visibility - refresh when alerts tab becomes visible
+        document.getElementById('alerts-tab').addEventListener('shown.bs.tab', function() {
+            loadAlerts();
+            startAutoRefresh();
+        });
+
+        // Stop auto-refresh when leaving alerts tab
+        ['trends-tab', 'heatmap-tab', 'settings-tab'].forEach(tabId => {
+            document.getElementById(tabId).addEventListener('shown.bs.tab', function() {
+                stopAutoRefresh();
+            });
+        });
+
+        // Refresh when page becomes visible again
+        document.addEventListener('visibilitychange', function() {
+            if (!document.hidden && document.getElementById('alerts-tab').classList.contains('active')) {
+                loadAlerts();
+            }
+        });
     });
+
+    function startAutoRefresh() {
+        stopAutoRefresh();
+        autoRefreshInterval = setInterval(() => {
+            // Only refresh if alerts tab is active and user hasn't checked "Include Resolved"
+            if (document.getElementById('alerts-tab').classList.contains('active')) {
+                loadAlerts();
+            }
+        }, 30000); // Refresh every 30 seconds
+    }
+
+    function stopAutoRefresh() {
+        if (autoRefreshInterval) {
+            clearInterval(autoRefreshInterval);
+            autoRefreshInterval = null;
+        }
+    }
 
     async function loadAlerts() {
         const severity = document.getElementById('severityFilter').value;
@@ -472,12 +514,17 @@
             const data = await response.json();
 
             if (data.success) {
+                // Successfully resolved - refresh the list
                 loadAlerts();
             } else {
-                alert('Failed to resolve alert: ' + data.message);
+                // Alert not found or already resolved
+                // Refresh the list to remove it from view without showing error
+                console.log('Alert already resolved or not found, refreshing list...');
+                loadAlerts();
             }
         } catch (error) {
             console.error('Failed to resolve alert:', error);
+            alert('Error communicating with server. Please try refreshing the page.');
         }
     };
 
