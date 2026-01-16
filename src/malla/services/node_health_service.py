@@ -970,6 +970,10 @@ class NodeHealthService:
         # PERFORMANCE OPTIMIZATION: Get all hourly packet counts in a single batch query
         # instead of making N separate database calls
         placeholders = ",".join("?" * len(node_ids))
+
+        # Build the query parameters: cutoff_time first, then node_ids, then cutoff_time again
+        params = [cutoff_time] + node_ids + [cutoff_time]
+
         cursor.execute(
             f"""
             SELECT
@@ -981,7 +985,7 @@ class NodeHealthService:
             AND timestamp >= ?
             GROUP BY from_node_id, hour_offset
         """,
-            [cutoff_time] + node_ids + [cutoff_time],
+            params,
         )
 
         # Group packets by node and hour
@@ -992,26 +996,22 @@ class NodeHealthService:
                 packets_by_node[node_id] = {}
             packets_by_node[node_id][row["hour_offset"]] = row["packet_count"]
 
-        # Get baseline behavior for all nodes in one batch query
+        # Get baseline behavior for all nodes - simpler query without nested SELECT
+        # Calculate average packets per day for the last 30 days
+        baseline_cutoff = int(time.time()) - (30 * 24 * 3600)
+
         cursor.execute(
             f"""
             SELECT
                 from_node_id,
-                COUNT(DISTINCT DATE(timestamp, 'unixepoch')) as active_days,
-                COUNT(*) as total_packets,
-                AVG(packets_per_day) as avg_packets_per_day
-            FROM (
-                SELECT
-                    from_node_id,
-                    DATE(timestamp, 'unixepoch') as day,
-                    COUNT(*) as packets_per_day
-                FROM packet_history
-                WHERE from_node_id IN ({placeholders})
-                GROUP BY from_node_id, day
-            )
+                COUNT(*) * 1.0 / 30.0 as avg_packets_per_day,
+                COUNT(DISTINCT DATE(timestamp, 'unixepoch')) as active_days
+            FROM packet_history
+            WHERE from_node_id IN ({placeholders})
+            AND timestamp >= ?
             GROUP BY from_node_id
         """,
-            node_ids,
+            node_ids + [baseline_cutoff],
         )
 
         baselines = {

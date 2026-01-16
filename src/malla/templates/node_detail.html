@@ -333,6 +333,9 @@
                 </div>
                 <div class="card-body">
                     {% set container_id = "node-uptime-viz-" ~ node.node_id %}
+                    {% set node_id = node.node_id %}
+                    {% set days = 7 %}
+                    {% set show_labels = True %}
                     {% include "components/uptime_visualization.html" %}
                 </div>
             </div>
