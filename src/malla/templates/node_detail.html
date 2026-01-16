@@ -1140,21 +1140,27 @@ async function loadTelemetryData() {
     const telemetryContent = document.getElementById('telemetry-content');
 
     try {
-        // Fetch both current telemetry and history data (168 hours = 7 days for sparklines)
-        const [telemetryResponse, historyResponse] = await Promise.all([
+        // Fetch current telemetry, 24h history (for sparklines), and 7-day history (for hover overlay)
+        const [telemetryResponse, history24hResponse, history7dResponse] = await Promise.all([
             fetch(`/api/node/${nodeId}/telemetry`),
+            fetch(`/api/node/${nodeId}/telemetry/history?hours=24`),
             fetch(`/api/node/${nodeId}/telemetry/history?hours=168`)
         ]);
 
         const data = await telemetryResponse.json();
-        const historyData = await historyResponse.json();
+        const history24hData = await history24hResponse.json();
+        const history7dData = await history7dResponse.json();
 
         if (data.error) {
             throw new Error(data.error);
         }
 
         const telemetry = data.telemetry;
-        const history = historyData.history || {};
+        const history = history24hData.history || {};
+        const history7d = history7dData.history || {};
+
+        // Store 7-day history globally for sparkline hover
+        window.telemetryHistory7d = history7d;
 
         if (!telemetry) {
             // No telemetry data available, hide the card
@@ -1661,10 +1667,10 @@ function renderSparkline(container, data, config) {
     const trend = lastValue > firstValue ? '↗' : lastValue < firstValue ? '↘' : '→';
     const trendColor = lastValue > firstValue ? '#28a745' : lastValue < firstValue ? '#dc3545' : '#6c757d';
 
-    // Store data for expanded view
-    container.dataset.sparkData = JSON.stringify(processedData);
+    // Store config and suffix for expanded view (7d data will be fetched from global)
     container.dataset.sparkConfig = JSON.stringify(config);
     container.dataset.sparkSuffix = suffix;
+    container.dataset.sparkMetric = metricName;
 
     container.innerHTML = `
         <span class="sparkline-wrapper" style="cursor: pointer; position: relative; display: inline-block;">
@@ -1690,11 +1696,25 @@ function renderSparkline(container, data, config) {
 let expandedSparklineOverlay = null;
 
 function showExpandedSparkline(event, container, metricName) {
-    const data = JSON.parse(container.dataset.sparkData || '[]');
     const config = JSON.parse(container.dataset.sparkConfig || '{}');
     const suffix = container.dataset.sparkSuffix || '';
 
+    // Get 7-day data from global storage
+    const history7d = window.telemetryHistory7d || {};
+    let data = history7d[metricName] || [];
+
     if (data.length < 2) return;
+
+    // Convert temperature data if needed
+    if (config.isTemperature && typeof TemperatureToggle !== 'undefined' && TemperatureToggle.celsiusToFahrenheit) {
+        const unit = TemperatureToggle.getUnit();
+        if (unit === 'F') {
+            data = data.map(d => ({
+                x: d.x,
+                y: TemperatureToggle.celsiusToFahrenheit(d.y)
+            }));
+        }
+    }
 
     // Remove existing overlay
     hideExpandedSparkline();
@@ -1710,13 +1730,13 @@ function showExpandedSparkline(event, container, metricName) {
         border-radius: 8px;
         box-shadow: 0 4px 20px rgba(0,0,0,0.25);
         padding: 12px;
-        min-width: 320px;
+        min-width: 340px;
         pointer-events: none;
     `;
 
     // Position overlay
     const rect = container.getBoundingClientRect();
-    expandedSparklineOverlay.style.left = Math.max(10, rect.left - 110) + 'px';
+    expandedSparklineOverlay.style.left = Math.max(10, rect.left - 120) + 'px';
     expandedSparklineOverlay.style.top = (rect.bottom + 8) + 'px';
 
     // Make sure it doesn't go off-screen
@@ -1737,7 +1757,7 @@ function showExpandedSparkline(event, container, metricName) {
     const lastVal = values[values.length - 1];
 
     // Create expanded chart
-    const chartWidth = 300;
+    const chartWidth = 320;
     const chartHeight = 80;
     const color = config.color || '#007bff';
 
@@ -1755,6 +1775,20 @@ function showExpandedSparkline(event, container, metricName) {
     // Create area fill points
     const areaPoints = `0,${chartHeight} ${points} ${chartWidth},${chartHeight}`;
 
+    // Generate time axis labels (7 days)
+    const now = new Date();
+    const tzPref = typeof getTimezonePreference === 'function' ? getTimezonePreference() : 'local';
+    const tzOption = tzPref === 'utc' ? 'UTC' : undefined;
+
+    const timeLabels = [];
+    for (let i = 6; i >= 0; i--) {
+        const date = new Date(now);
+        date.setDate(date.getDate() - i);
+        const dayName = i === 0 ? 'Today' : date.toLocaleDateString(undefined, { weekday: 'short', timeZone: tzOption });
+        const monthDay = date.toLocaleDateString(undefined, { month: 'numeric', day: 'numeric', timeZone: tzOption });
+        timeLabels.push({ dayName, monthDay, position: ((6 - i) / 6) * chartWidth });
+    }
+
     // Format metric name for display
     const metricLabels = {
         'battery_level': 'Battery Level',
@@ -1766,6 +1800,17 @@ function showExpandedSparkline(event, container, metricName) {
         'barometric_pressure': 'Pressure'
     };
     const label = metricLabels[metricName] || metricName;
+
+    // Build time axis HTML
+    const timeAxisHtml = timeLabels.map((t, idx) => {
+        const left = t.position;
+        const align = idx === 0 ? 'left' : idx === 6 ? 'right' : 'center';
+        const transform = idx === 0 ? 'translateX(0)' : idx === 6 ? 'translateX(-100%)' : 'translateX(-50%)';
+        return `<div style="position: absolute; left: ${left}px; transform: ${transform}; text-align: ${align}; white-space: nowrap;">
+            <div style="font-weight: 500;">${t.dayName}</div>
+            <div style="opacity: 0.7;">${t.monthDay}</div>
+        </div>`;
+    }).join('');
 
     expandedSparklineOverlay.innerHTML = `
         <div style="font-size: 0.75rem; color: var(--bs-secondary); margin-bottom: 8px; font-weight: 600;">
@@ -1781,7 +1826,10 @@ function showExpandedSparkline(event, container, metricName) {
             <polygon fill="url(#grad-${metricName})" points="${areaPoints}" />
             <polyline fill="none" stroke="${color}" stroke-width="2" points="${points}" />
         </svg>
-        <div style="display: flex; justify-content: space-between; margin-top: 8px; font-size: 0.7rem; color: var(--bs-secondary);">
+        <div style="position: relative; height: 28px; margin-top: 4px; font-size: 0.6rem; color: var(--bs-secondary);">
+            ${timeAxisHtml}
+        </div>
+        <div style="display: flex; justify-content: space-between; margin-top: 6px; padding-top: 6px; border-top: 1px solid var(--bs-border-color-translucent); font-size: 0.7rem; color: var(--bs-secondary);">
             <span>Min: <strong style="color: var(--bs-body-color);">${minVal.toFixed(1)}${suffix}</strong></span>
             <span>Avg: <strong style="color: var(--bs-body-color);">${avgVal.toFixed(1)}${suffix}</strong></span>
             <span>Max: <strong style="color: var(--bs-body-color);">${maxVal.toFixed(1)}${suffix}</strong></span>
