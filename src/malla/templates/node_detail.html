@@ -1140,10 +1140,10 @@ async function loadTelemetryData() {
     const telemetryContent = document.getElementById('telemetry-content');
 
     try {
-        // Fetch both current telemetry and history data
+        // Fetch both current telemetry and history data (168 hours = 7 days for sparklines)
         const [telemetryResponse, historyResponse] = await Promise.all([
             fetch(`/api/node/${nodeId}/telemetry`),
-            fetch(`/api/node/${nodeId}/telemetry/history`)
+            fetch(`/api/node/${nodeId}/telemetry/history?hours=168`)
         ]);
 
         const data = await telemetryResponse.json();
@@ -1618,6 +1618,7 @@ function renderSparkline(container, data, config) {
     const width = 100;
     const height = 20;
     const color = config.color || '#007bff';
+    const metricName = container.id.replace('spark-', '');
 
     // Determine temperature suffix at runtime if this is a temperature metric
     let suffix = config.suffix;
@@ -1660,17 +1661,140 @@ function renderSparkline(container, data, config) {
     const trend = lastValue > firstValue ? '↗' : lastValue < firstValue ? '↘' : '→';
     const trendColor = lastValue > firstValue ? '#28a745' : lastValue < firstValue ? '#dc3545' : '#6c757d';
 
+    // Store data for expanded view
+    container.dataset.sparkData = JSON.stringify(processedData);
+    container.dataset.sparkConfig = JSON.stringify(config);
+    container.dataset.sparkSuffix = suffix;
+
     container.innerHTML = `
-        <svg width="${width}" height="${height}" style="vertical-align: middle;">
-            <polyline
-                fill="none"
-                stroke="${color}"
-                stroke-width="1.5"
-                points="${points}"
-            />
-        </svg>
-        <span style="color: ${trendColor}; font-size: 12px; margin-left: 4px;" title="24h trend">${trend}</span>
+        <span class="sparkline-wrapper" style="cursor: pointer; position: relative; display: inline-block;">
+            <svg width="${width}" height="${height}" style="vertical-align: middle;">
+                <polyline
+                    fill="none"
+                    stroke="${color}"
+                    stroke-width="1.5"
+                    points="${points}"
+                />
+            </svg>
+            <span style="color: ${trendColor}; font-size: 12px; margin-left: 4px;" title="24h trend">${trend}</span>
+        </span>
     `;
+
+    // Add hover event for expanded chart
+    const wrapper = container.querySelector('.sparkline-wrapper');
+    wrapper.addEventListener('mouseenter', (e) => showExpandedSparkline(e, container, metricName));
+    wrapper.addEventListener('mouseleave', hideExpandedSparkline);
+}
+
+// Expanded sparkline overlay functions
+let expandedSparklineOverlay = null;
+
+function showExpandedSparkline(event, container, metricName) {
+    const data = JSON.parse(container.dataset.sparkData || '[]');
+    const config = JSON.parse(container.dataset.sparkConfig || '{}');
+    const suffix = container.dataset.sparkSuffix || '';
+
+    if (data.length < 2) return;
+
+    // Remove existing overlay
+    hideExpandedSparkline();
+
+    // Create overlay
+    expandedSparklineOverlay = document.createElement('div');
+    expandedSparklineOverlay.className = 'sparkline-expanded-overlay';
+    expandedSparklineOverlay.style.cssText = `
+        position: fixed;
+        z-index: 9999;
+        background: var(--bs-body-bg, #fff);
+        border: 1px solid var(--bs-border-color, #dee2e6);
+        border-radius: 8px;
+        box-shadow: 0 4px 20px rgba(0,0,0,0.25);
+        padding: 12px;
+        min-width: 320px;
+        pointer-events: none;
+    `;
+
+    // Position overlay
+    const rect = container.getBoundingClientRect();
+    expandedSparklineOverlay.style.left = Math.max(10, rect.left - 110) + 'px';
+    expandedSparklineOverlay.style.top = (rect.bottom + 8) + 'px';
+
+    // Make sure it doesn't go off-screen
+    document.body.appendChild(expandedSparklineOverlay);
+    const overlayRect = expandedSparklineOverlay.getBoundingClientRect();
+    if (overlayRect.right > window.innerWidth - 10) {
+        expandedSparklineOverlay.style.left = (window.innerWidth - overlayRect.width - 10) + 'px';
+    }
+    if (overlayRect.bottom > window.innerHeight - 10) {
+        expandedSparklineOverlay.style.top = (rect.top - overlayRect.height - 8) + 'px';
+    }
+
+    // Calculate stats
+    const values = data.map(d => d.y);
+    const minVal = Math.min(...values);
+    const maxVal = Math.max(...values);
+    const avgVal = values.reduce((a, b) => a + b, 0) / values.length;
+    const lastVal = values[values.length - 1];
+
+    // Create expanded chart
+    const chartWidth = 300;
+    const chartHeight = 80;
+    const color = config.color || '#007bff';
+
+    const displayMin = config.min !== undefined ? config.min : minVal;
+    const displayMax = config.max !== undefined ? config.max : maxVal;
+    const range = displayMax - displayMin || 1;
+
+    // Create SVG points
+    const points = data.map((d, i) => {
+        const x = (i / (data.length - 1)) * chartWidth;
+        const y = chartHeight - ((d.y - displayMin) / range) * chartHeight;
+        return `${x},${y}`;
+    }).join(' ');
+
+    // Create area fill points
+    const areaPoints = `0,${chartHeight} ${points} ${chartWidth},${chartHeight}`;
+
+    // Format metric name for display
+    const metricLabels = {
+        'battery_level': 'Battery Level',
+        'voltage': 'Voltage',
+        'channel_utilization': 'Channel Utilization',
+        'air_util_tx': 'TX Air Utilization',
+        'temperature': 'Temperature',
+        'relative_humidity': 'Humidity',
+        'barometric_pressure': 'Pressure'
+    };
+    const label = metricLabels[metricName] || metricName;
+
+    expandedSparklineOverlay.innerHTML = `
+        <div style="font-size: 0.75rem; color: var(--bs-secondary); margin-bottom: 8px; font-weight: 600;">
+            ${label} - Last 7 Days
+        </div>
+        <svg width="${chartWidth}" height="${chartHeight}" style="display: block;">
+            <defs>
+                <linearGradient id="grad-${metricName}" x1="0%" y1="0%" x2="0%" y2="100%">
+                    <stop offset="0%" style="stop-color:${color};stop-opacity:0.3" />
+                    <stop offset="100%" style="stop-color:${color};stop-opacity:0.05" />
+                </linearGradient>
+            </defs>
+            <polygon fill="url(#grad-${metricName})" points="${areaPoints}" />
+            <polyline fill="none" stroke="${color}" stroke-width="2" points="${points}" />
+        </svg>
+        <div style="display: flex; justify-content: space-between; margin-top: 8px; font-size: 0.7rem; color: var(--bs-secondary);">
+            <span>Min: <strong style="color: var(--bs-body-color);">${minVal.toFixed(1)}${suffix}</strong></span>
+            <span>Avg: <strong style="color: var(--bs-body-color);">${avgVal.toFixed(1)}${suffix}</strong></span>
+            <span>Max: <strong style="color: var(--bs-body-color);">${maxVal.toFixed(1)}${suffix}</strong></span>
+            <span>Now: <strong style="color: ${color};">${lastVal.toFixed(1)}${suffix}</strong></span>
+        </div>
+    `;
+}
+
+function hideExpandedSparkline() {
+    if (expandedSparklineOverlay) {
+        expandedSparklineOverlay.remove();
+        expandedSparklineOverlay = null;
+    }
 }
 
 function formatUptime(seconds) {

@@ -971,14 +971,18 @@ def api_node_telemetry(node_id):
 
 @api_bp.route("/node/<node_id>/telemetry/history")
 def api_node_telemetry_history(node_id):
-    """API endpoint for node telemetry history over last 24 hours."""
+    """API endpoint for node telemetry history over specified time period."""
     logger.info(f"API node telemetry history endpoint accessed for node {node_id}")
     try:
         # Convert node_id to int
         node_id_int = convert_node_id(node_id)
 
+        # Get hours parameter (default 24, max 168 = 7 days)
+        hours = request.args.get("hours", 24, type=int)
+        hours = max(1, min(168, hours))
+
         # Get telemetry history using repository
-        history = NodeRepository.get_telemetry_history(node_id_int, hours=24)
+        history = NodeRepository.get_telemetry_history(node_id_int, hours=hours)
 
         return safe_jsonify({"history": history})
     except ValueError as e:
