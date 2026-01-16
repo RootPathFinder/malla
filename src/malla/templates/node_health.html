@@ -32,6 +32,59 @@
     .activity-chart {
         height: 200px;
     }
+
+    /* Compact uptime visualization (matches node detail) */
+    .uptime-compact-inline {
+        display: flex;
+        align-items: flex-start;
+        gap: 3px;
+    }
+
+    .uptime-compact-inline .uptime-day {
+        flex: 1;
+        min-width: 0;
+        display: flex;
+        flex-direction: column;
+    }
+
+    .uptime-compact-inline .uptime-day-blocks {
+        display: flex;
+        flex-direction: column;
+        gap: 2px;
+    }
+
+    .uptime-compact-inline .uptime-block {
+        height: 7px;
+        border-radius: 2px;
+        transition: opacity 0.15s, transform 0.15s;
+        cursor: help;
+    }
+
+    .uptime-compact-inline .uptime-block:hover {
+        opacity: 0.85;
+        transform: scaleY(1.4);
+    }
+
+    .uptime-compact-inline .uptime-block.available { background: #198754; }
+    .uptime-compact-inline .uptime-block.degraded { background: #ffc107; }
+    .uptime-compact-inline .uptime-block.unavailable { background: #dc3545; }
+    .uptime-compact-inline .uptime-block.future {
+        background: var(--bs-secondary);
+        opacity: 0.25;
+        cursor: default;
+    }
+    .uptime-compact-inline .uptime-block.future:hover { transform: none; }
+
+    .uptime-compact-inline .uptime-day-label {
+        text-align: center;
+        font-size: 0.55rem;
+        color: var(--bs-secondary);
+        margin-top: 3px;
+        line-height: 1.1;
+    }
+
+    .uptime-compact-inline .uptime-day-label .day-name { font-weight: 600; }
+    .uptime-compact-inline .uptime-day.today .day-name { color: var(--bs-primary); }
 </style>
 {% endblock %}
 
@@ -189,7 +242,7 @@
                                     <tr>
                                         <th style="min-width: 180px;">Node</th>
                                         <th class="text-center" style="width: 80px;">Uptime</th>
-                                        <th>7-Day Availability (Time-of-Day View)</th>
+                                        <th style="min-width: 200px;">7-Day Availability</th>
                                     </tr>
                                 </thead>
                                 <tbody id="uptime-tbody">
@@ -520,6 +573,13 @@ async function loadUptimeOverview() {
         const tbody = document.getElementById('uptime-tbody');
         tbody.innerHTML = '';
 
+        // Get current date info for future block detection and timezone handling
+        const now = new Date();
+        const tzPref = typeof getTimezonePreference === 'function' ? getTimezonePreference() : 'local';
+        const tzOption = tzPref === 'utc' ? 'UTC' : undefined;
+        const todayStr = now.toISOString().split('T')[0];
+        const currentHour = tzPref === 'utc' ? now.getUTCHours() : now.getHours();
+
         // Sort nodes: show worst uptime first (already sorted in API)
         data.nodes.forEach(node => {
             const row = document.createElement('tr');
@@ -532,78 +592,66 @@ async function loadUptimeOverview() {
                 uptimeClass = 'text-warning';
             }
 
-            // Build 7-day visual grid with time-of-day blocks
-            let dayGridHtml = '<div style="display: flex; gap: 4px; align-items: flex-end;">';
-
-            // Get current date and hour for future block detection
-            const now = new Date();
-            const currentDateStr = now.toISOString().split('T')[0];
-            const currentHour = now.getHours();
+            // Build compact 7-day visual grid (4 blocks per day = 6-hour periods)
+            let dayGridHtml = '<div class="uptime-compact-inline">';
 
             node.daily_summary.forEach(day => {
-                dayGridHtml += '<div style="display: flex; flex-direction: column-reverse; gap: 2px; flex: 1; min-width: 0;">';
+                const dayDate = new Date(day.date + 'T12:00:00Z');
+                const dayName = dayDate.toLocaleDateString(undefined, { weekday: 'short', timeZone: tzOption });
+                const monthDay = dayDate.toLocaleDateString(undefined, { month: 'numeric', day: 'numeric', timeZone: tzOption });
+                const isToday = day.date === todayStr;
 
-                const isToday = day.date === currentDateStr;
+                // Aggregate time blocks into 4 periods (6-hour each)
+                const blocks = day.time_blocks || [];
+                const periods = [
+                    { blocks: blocks.slice(0, 3), startHour: 0, label: '12am-6am' },
+                    { blocks: blocks.slice(3, 6), startHour: 6, label: '6am-12pm' },
+                    { blocks: blocks.slice(6, 9), startHour: 12, label: '12pm-6pm' },
+                    { blocks: blocks.slice(9, 12), startHour: 18, label: '6pm-12am' }
+                ];
 
-                // Add 5 time blocks per day - render in REVERSE order to align with column-reverse
-                // Order: Late (20-23), Evening (15-19), Midday (10-14), Morning (05-09), Night (00-04)
-                if (day.time_blocks && day.time_blocks.length > 0) {
-                    const blockStartHours = [0, 5, 10, 15, 20];
+                dayGridHtml += `<div class="uptime-day${isToday ? ' today' : ''}">`;
+                dayGridHtml += '<div class="uptime-day-blocks">';
 
-                    // Reverse iterate through blocks
-                    for (let blockIdx = day.time_blocks.length - 1; blockIdx >= 0; blockIdx--) {
-                        const block = day.time_blocks[blockIdx];
-                        const blockStartHour = blockStartHours[blockIdx];
+                periods.forEach(period => {
+                    // Calculate period status from sub-blocks
+                    let avail = 0, deg = 0;
+                    period.blocks.forEach(b => {
+                        if (b.status === 'available') avail++;
+                        else if (b.status === 'degraded') deg++;
+                    });
 
-                        // Check if this is a future block on today
-                        const isFutureBlock = isToday && blockStartHour > currentHour;
+                    // Determine if this period is in the future (for today)
+                    const isFuture = isToday && period.startHour > currentHour;
 
-                        let blockClass = 'bg-success';
-                        if (isFutureBlock) {
-                            blockClass = 'bg-secondary';
-                        } else if (block.status === 'unavailable') {
-                            blockClass = 'bg-danger';
-                        } else if (block.status === 'degraded') {
-                            blockClass = 'bg-warning';
-                        }
-
-                        const tooltipText = isFutureBlock
-                            ? `${day.date} ${block.label}h: Future`
-                            : `${day.date} ${block.label}h: ${block.status}\\n` +
-                              `Available: ${block.available_hours}h, Degraded: ${block.degraded_hours}h, Unavailable: ${block.unavailable_hours}h`;
-
-                        const opacity = isFutureBlock ? 'opacity: 0.4;' : '';
-                        dayGridHtml += `<div class="${blockClass}" title="${tooltipText}"
-                            style="height: 20px; border-radius: 3px; cursor: help; ${opacity}"></div>`;
+                    let status;
+                    if (isFuture) {
+                        status = 'future';
+                    } else if (period.blocks.length === 0) {
+                        // No block data, use day uptime
+                        status = day.uptime_percentage >= 80 ? 'available' :
+                                 day.uptime_percentage >= 50 ? 'degraded' : 'unavailable';
+                    } else if (avail >= 2) {
+                        status = 'available';
+                    } else if (avail + deg >= 2) {
+                        status = 'degraded';
+                    } else {
+                        status = 'unavailable';
                     }
-                } else {
-                    // Fallback: single color for whole day based on uptime percentage
-                    let barClass = 'bg-success';
-                    if (day.uptime_percentage < 50) {
-                        barClass = 'bg-danger';
-                    } else if (day.uptime_percentage < 80) {
-                        barClass = 'bg-warning';
-                    }
 
-                    // Create 5 blocks with same color - in reverse order
-                    for (let i = 4; i >= 0; i--) {
-                        dayGridHtml += `<div class="${barClass}" title="${day.date}: ${day.uptime_percentage}%"
-                            style="height: 20px; border-radius: 3px;"></div>`;
-                    }
-                }
+                    const tooltip = isFuture ? `${period.label}: Future` :
+                        `${dayName} ${monthDay} ${period.label}`;
+
+                    dayGridHtml += `<div class="uptime-block ${status}" title="${tooltip}"></div>`;
+                });
 
                 dayGridHtml += '</div>';
+                dayGridHtml += `<div class="uptime-day-label">`;
+                dayGridHtml += `<span class="day-name">${isToday ? 'Tdy' : dayName}</span>`;
+                dayGridHtml += '</div></div>';
             });
 
             dayGridHtml += '</div>';
-
-            // Add date labels below the grid
-            const dateLabels = `
-                <div style="display: flex; justify-content: space-between; font-size: 0.7em; margin-top: 4px;" class="text-muted">
-                    <span>${node.daily_summary[0]?.date.substring(5) || ''}</span>
-                    <span>${node.daily_summary[node.daily_summary.length - 1]?.date.substring(5) || ''}</span>
-                </div>
-            `;
 
             // Format node name with role badge
             const roleLabel = node.role ? `<span class="badge bg-secondary ms-1" style="font-size: 0.65em;">${node.role}</span>` : '';
@@ -621,7 +669,6 @@ async function loadUptimeOverview() {
                 </td>
                 <td>
                     ${dayGridHtml}
-                    ${dateLabels}
                 </td>
             `;
 
