@@ -611,7 +611,7 @@ async function loadUptimeOverview() {
 
             row.innerHTML = `
                 <td>
-                    <a href="/nodes?highlight=${node.node_id}" class="text-decoration-none">
+                    <a href="/node/${node.node_id}" class="text-decoration-none">
                         ${node.node_name}${roleLabel}
                     </a>
                     <br><small class="text-muted">!${nodeIdHex}</small>
