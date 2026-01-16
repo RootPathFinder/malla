@@ -15,33 +15,58 @@
         padding: 16px;
     }
 
-    .uptime-grid {
-        display: flex;
-        gap: 6px;
+    .uptime-grid-wrapper {
         margin: 16px 0;
         padding: 12px;
         background: rgba(0,0,0,0.1);
         border-radius: 6px;
-        width: 100%;
-        box-sizing: border-box;
+    }
+
+    .uptime-grid-container {
+        display: grid;
+        grid-template-columns: auto 1fr;
+        gap: 8px;
+        align-items: start;
+    }
+
+    .uptime-time-labels {
+        display: grid;
+        grid-template-rows: repeat(12, 24px);
+        gap: 2px;
+        padding-top: 0;
+    }
+
+    .uptime-time-label {
+        display: flex;
+        align-items: center;
+        justify-content: flex-end;
+        padding-right: 8px;
+        font-size: 0.65em;
+        color: #adb5bd;
+        font-weight: 500;
+        white-space: nowrap;
+        height: 24px;
+    }
+
+    .uptime-grid {
+        display: grid;
+        grid-template-columns: repeat(7, 1fr);
+        gap: 6px;
     }
 
     .uptime-day-column {
-        flex: 1;
-        display: flex;
-        flex-direction: column-reverse;
-        gap: 3px;
-        min-width: 0;
-        max-width: calc((100% - 48px) / 7);
+        display: grid;
+        grid-template-rows: repeat(12, 24px);
+        gap: 2px;
     }
 
     .uptime-time-block {
-        height: 28px;
-        border-radius: 4px;
+        border-radius: 3px;
         cursor: help;
-        transition: all 0.3s ease;
-        box-shadow: 0 1px 3px rgba(0,0,0,0.2);
+        transition: all 0.2s ease;
+        box-shadow: 0 1px 2px rgba(0,0,0,0.2);
         border: 1px solid rgba(255,255,255,0.1);
+        height: 24px;
     }
 
     .uptime-time-block:hover {
@@ -74,15 +99,20 @@
         box-shadow: 0 1px 3px rgba(0,0,0,0.2);
     }
 
+    .uptime-day-labels {
+        display: grid;
+        grid-template-columns: repeat(7, 1fr);
+        gap: 6px;
+        margin-top: 8px;
+        grid-column: 2;
+    }
+
     .uptime-day-label {
-        font-size: 0.7em;
         text-align: center;
+        font-size: 0.7em;
         color: #adb5bd;
-        margin-top: 6px;
-        white-space: nowrap;
         font-weight: 600;
         letter-spacing: 0.3px;
-        line-height: 1.2;
     }
 
     .uptime-day-date {
@@ -92,32 +122,6 @@
     .uptime-day-name {
         font-size: 0.75em;
         opacity: 0.7;
-    }
-
-    .uptime-time-labels {
-        display: flex;
-        flex-direction: column-reverse;
-        gap: 3px;
-        margin-right: 8px;
-        font-size: 0.65em;
-        color: #adb5bd;
-        font-weight: 500;
-        min-width: 60px;
-    }
-
-    .uptime-time-label {
-        height: 28px;
-        display: flex;
-        align-items: center;
-        justify-content: flex-end;
-        padding-right: 6px;
-        white-space: nowrap;
-    }
-
-    .uptime-grid-container {
-        display: flex;
-        align-items: flex-start;
-        width: 100%;
     }
 
     .uptime-legend {
@@ -230,26 +234,36 @@
             return;
         }
 
-        // Build the grid
-        let html = '<div class="uptime-grid-container">';
+        // Time block definitions (top to bottom order in the grid) - 2 hour blocks
+        const timeBlocks = [
+            {range: '22-23', name: '22-23', idx: 11},
+            {range: '20-21', name: '20-21', idx: 10},
+            {range: '18-19', name: '18-19', idx: 9},
+            {range: '16-17', name: '16-17', idx: 8},
+            {range: '14-15', name: '14-15', idx: 7},
+            {range: '12-13', name: '12-13', idx: 6},
+            {range: '10-11', name: '10-11', idx: 5},
+            {range: '08-09', name: '08-09', idx: 4},
+            {range: '06-07', name: '06-07', idx: 3},
+            {range: '04-05', name: '04-05', idx: 2},
+            {range: '02-03', name: '02-03', idx: 1},
+            {range: '00-01', name: '00-01', idx: 0}
+        ];
+        const blockNames = ['00-01', '02-03', '04-05', '06-07', '08-09', '10-11', '12-13', '14-15', '16-17', '18-19', '20-21', '22-23'];
+        const blockHours = [0, 2, 4, 6, 8, 10, 12, 14, 16, 18, 20, 22];
 
-        // Time labels (vertical) - in order from bottom to top to match column-reverse
+        let html = '<div class="uptime-grid-wrapper"><div class="uptime-grid-container">';
+
+        // Time labels column
         if (showLabels) {
             html += '<div class="uptime-time-labels">';
-            const timeLabels = [
-                {range: '00-04', name: 'Night'},
-                {range: '05-09', name: 'Morning'},
-                {range: '10-14', name: 'Midday'},
-                {range: '15-19', name: 'Evening'},
-                {range: '20-23', name: 'Late'}
-            ];
-            timeLabels.forEach(label => {
-                html += `<div class="uptime-time-label" title="${label.range}">${label.name}</div>`;
+            timeBlocks.forEach(block => {
+                html += `<div class="uptime-time-label" title="${block.range}">${block.name}</div>`;
             });
             html += '</div>';
         }
 
-        // Grid columns for each day
+        // Day columns grid
         html += '<div class="uptime-grid">';
 
         // Get current time for future block detection
@@ -258,8 +272,6 @@
         const currentHour = now.getHours();
 
         data.daily_summary.forEach(day => {
-            html += '<div class="uptime-day-column">';
-
             // Parse date and respect timezone preference
             const dayDate = new Date(day.date + 'T00:00:00Z');
             const tzPref = typeof getTimezonePreference === 'function' ? getTimezonePreference() : 'local';
@@ -268,17 +280,15 @@
             const monthDay = dayDate.toLocaleDateString(undefined, { month: 'numeric', day: 'numeric', timeZone: tzOption });
             const isToday = day.date === currentDateStr;
 
-            // Time blocks - render in REVERSE order to align with column-reverse layout
-            // Order from last to first: Late (20-23), Evening (15-19), Midday (10-14), Morning (05-09), Night (00-04)
-            if (day.time_blocks && day.time_blocks.length > 0) {
-                const blockNames = ['Night (00-04)', 'Morning (05-09)', 'Midday (10-14)', 'Evening (15-19)', 'Late (20-23)'];
-                const blockHours = [0, 5, 10, 15, 20]; // Starting hour of each block
+            html += '<div class="uptime-day-column">';
 
-                // Reverse iterate to render from top to bottom (Late → Night)
-                for (let idx = day.time_blocks.length - 1; idx >= 0; idx--) {
-                    const block = day.time_blocks[idx];
-                    const blockStartHour = blockHours[idx];
+            // Render time blocks in order: Late, Evening, Midday, Morning, Night (top to bottom)
+            timeBlocks.forEach(timeBlock => {
+                const idx = timeBlock.idx;
+                const block = day.time_blocks && day.time_blocks[idx];
+                const blockStartHour = blockHours[idx];
 
+                if (block) {
                     // Check if this is a future block on today
                     const isFutureBlock = isToday && blockStartHour > currentHour;
                     const blockStatus = isFutureBlock ? 'future' : block.status;
@@ -294,27 +304,37 @@
                               title="${tooltipText}"
                               data-bs-toggle="tooltip"
                               data-bs-placement="top"></div>`;
-                }
-            } else {
-                // Fallback: single block per day - reverse order
-                const status = day.uptime_percentage >= 80 ? 'available' :
-                              day.uptime_percentage >= 50 ? 'degraded' : 'unavailable';
-                for (let i = 4; i >= 0; i--) {
+                } else {
+                    // Fallback: use overall day status
+                    const status = day.uptime_percentage >= 80 ? 'available' :
+                                  day.uptime_percentage >= 50 ? 'degraded' : 'unavailable';
                     html += `<div class="uptime-time-block ${status}"
                               title="${dayOfWeek} ${monthDay}: ${day.uptime_percentage}%"></div>`;
                 }
-            }
+            });
 
-            // Day label with day of week and date
-            html += `<div class="uptime-day-label">`;
-            html += `<div class="uptime-day-name">${dayOfWeek}</div>`;
-            html += `<div class="uptime-day-date">${monthDay}</div>`;
-            html += `</div>`;
             html += '</div>';
         });
 
         html += '</div>'; // end uptime-grid
-        html += '</div>'; // end uptime-grid-container
+
+        // Day labels row
+        html += '<div class="uptime-day-labels">';
+        data.daily_summary.forEach(day => {
+            const dayDate = new Date(day.date + 'T00:00:00Z');
+            const tzPref = typeof getTimezonePreference === 'function' ? getTimezonePreference() : 'local';
+            const tzOption = tzPref === 'utc' ? 'UTC' : undefined;
+            const dayOfWeek = dayDate.toLocaleDateString(undefined, { weekday: 'short', timeZone: tzOption });
+            const monthDay = dayDate.toLocaleDateString(undefined, { month: 'numeric', day: 'numeric', timeZone: tzOption });
+
+            html += `<div class="uptime-day-label">`;
+            html += `<div class="uptime-day-name">${dayOfWeek}</div>`;
+            html += `<div class="uptime-day-date">${monthDay}</div>`;
+            html += `</div>`;
+        });
+        html += '</div>'; // end uptime-day-labels
+
+        html += '</div></div>'; // end uptime-grid-container and uptime-grid-wrapper
 
         // Legend
         html += `

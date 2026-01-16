@@ -822,13 +822,20 @@ class NodeHealthService:
         )
 
         # Group by day for summary with time-of-day blocks
-        # Time blocks: 0-4hr, 5-9hr, 10-14hr, 15-19hr, 20-23hr (5 blocks)
+        # Time blocks: 2-hour periods (12 blocks per day) for granular visualization
         time_blocks = [
-            (0, 5, "00-04"),
-            (5, 10, "05-09"),
-            (10, 15, "10-14"),
-            (15, 20, "15-19"),
-            (20, 24, "20-23"),
+            (0, 2, "00-01"),
+            (2, 4, "02-03"),
+            (4, 6, "04-05"),
+            (6, 8, "06-07"),
+            (8, 10, "08-09"),
+            (10, 12, "10-11"),
+            (12, 14, "12-13"),
+            (14, 16, "14-15"),
+            (16, 18, "16-17"),
+            (18, 20, "18-19"),
+            (20, 22, "20-21"),
+            (22, 24, "22-23"),
         ]
 
         daily_summary = []
