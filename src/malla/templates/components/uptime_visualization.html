@@ -233,15 +233,15 @@
         // Build the grid
         let html = '<div class="uptime-grid-container">';
 
-        // Time labels (vertical) - descriptive names, reversed to match column-reverse
+        // Time labels (vertical) - in order from bottom to top to match column-reverse
         if (showLabels) {
             html += '<div class="uptime-time-labels">';
             const timeLabels = [
-                {range: '20-23', name: 'Late'},
-                {range: '15-19', name: 'Evening'},
-                {range: '10-14', name: 'Midday'},
+                {range: '00-04', name: 'Night'},
                 {range: '05-09', name: 'Morning'},
-                {range: '00-04', name: 'Night'}
+                {range: '10-14', name: 'Midday'},
+                {range: '15-19', name: 'Evening'},
+                {range: '20-23', name: 'Late'}
             ];
             timeLabels.forEach(label => {
                 html += `<div class="uptime-time-label" title="${label.range}">${label.name}</div>`;
