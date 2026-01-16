@@ -327,11 +327,10 @@
 
             <!-- 7-Day Availability Visualization -->
             <div class="card mb-4">
-                <div class="card-header">
-                    <h5><i class="bi bi-clock-history"></i> 7-Day Availability</h5>
-                    <small class="text-muted">Node uptime based on expected activity patterns. Each column is a day, rows show 4-hour time blocks.</small>
+                <div class="card-header py-2">
+                    <h6 class="mb-0"><i class="bi bi-clock-history"></i> 7-Day Availability</h6>
                 </div>
-                <div class="card-body">
+                <div class="card-body py-2">
                     {% set container_id = "node-uptime-viz-" ~ node.node_id %}
                     {% set node_id = node.node_id %}
                     {% set days = 7 %}

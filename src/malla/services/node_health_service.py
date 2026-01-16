@@ -717,9 +717,29 @@ class NodeHealthService:
         conn = get_db_connection()
         cursor = conn.cursor()
 
-        # Calculate time range
+        # Calculate time range using calendar days (midnight to midnight)
+        # This ensures today is always included as the last day
+        now = time.time()
+        local_now = time.localtime(now)
+        # Get midnight of today in local time
+        today_midnight = time.mktime(
+            time.struct_time(
+                (
+                    local_now.tm_year,
+                    local_now.tm_mon,
+                    local_now.tm_mday,
+                    0,
+                    0,
+                    0,
+                    0,
+                    0,
+                    -1,
+                )
+            )
+        )
+        # Cutoff is midnight of (days-1) days ago (so we get 'days' calendar days including today)
+        cutoff_time = int(today_midnight - ((days - 1) * 86400))
         hours = days * 24
-        cutoff_time = int(time.time()) - (hours * 3600)
 
         # First, get baseline behavior for this node
         baseline = NodeHealthService._calculate_baseline_behavior(node_id, cursor)

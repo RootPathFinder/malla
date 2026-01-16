@@ -1,5 +1,5 @@
 {#
-    7-Day Availability Visualization Component with Time-of-Day Blocks
+    7-Day Availability Visualization Component - Compact Version
 
     Parameters:
         - container_id: Unique ID for this visualization container
@@ -9,180 +9,136 @@
 #}
 
 <style>
-    .uptime-visualization {
-        background: linear-gradient(135deg, rgba(255,255,255,0.05) 0%, rgba(255,255,255,0.02) 100%);
-        border-radius: 8px;
-        padding: 16px;
-    }
-
-    .uptime-grid-wrapper {
-        margin: 16px 0;
-        padding: 12px;
-        background: rgba(0,0,0,0.1);
+    .uptime-compact {
+        background: var(--bs-body-bg);
         border-radius: 6px;
     }
 
-    .uptime-grid-container {
-        display: grid;
-        grid-template-columns: auto 1fr;
-        gap: 8px;
-        align-items: start;
-    }
-
-    .uptime-time-labels {
-        display: grid;
-        grid-template-rows: repeat(12, 24px);
-        gap: 2px;
-        padding-top: 0;
-    }
-
-    .uptime-time-label {
+    .uptime-compact .uptime-row {
         display: flex;
-        align-items: center;
-        justify-content: flex-end;
-        padding-right: 8px;
-        font-size: 0.65em;
-        color: #adb5bd;
-        font-weight: 500;
-        white-space: nowrap;
-        height: 24px;
+        align-items: flex-start;
+        gap: 4px;
     }
 
-    .uptime-grid {
-        display: grid;
-        grid-template-columns: repeat(7, 1fr);
-        gap: 6px;
+    .uptime-compact .uptime-days {
+        display: flex;
+        gap: 4px;
+        flex: 1;
     }
 
-    .uptime-day-column {
-        display: grid;
-        grid-template-rows: repeat(12, 24px);
+    .uptime-compact .uptime-day {
+        flex: 1;
+        min-width: 0;
+    }
+
+    .uptime-compact .uptime-day-blocks {
+        display: flex;
+        flex-direction: column;
         gap: 2px;
     }
 
-    .uptime-time-block {
-        border-radius: 3px;
+    .uptime-compact .uptime-block {
+        height: 8px;
+        border-radius: 2px;
+        transition: opacity 0.15s, transform 0.15s;
         cursor: help;
-        transition: all 0.2s ease;
-        box-shadow: 0 1px 2px rgba(0,0,0,0.2);
-        border: 1px solid rgba(255,255,255,0.1);
-        height: 24px;
     }
 
-    .uptime-time-block:hover {
-        transform: scale(1.05);
-        box-shadow: 0 3px 8px rgba(0,0,0,0.3);
-        border-color: rgba(255,255,255,0.3);
-        z-index: 10;
+    .uptime-compact .uptime-block:hover {
+        opacity: 0.85;
+        transform: scaleY(1.3);
     }
 
-    .uptime-time-block.available {
-        background: linear-gradient(135deg, #28a745 0%, #20c997 100%);
+    .uptime-compact .uptime-block.available {
+        background: #198754;
     }
 
-    .uptime-time-block.degraded {
-        background: linear-gradient(135deg, #ffc107 0%, #fd7e14 100%);
+    .uptime-compact .uptime-block.degraded {
+        background: #ffc107;
     }
 
-    .uptime-time-block.unavailable {
-        background: linear-gradient(135deg, #dc3545 0%, #c82333 100%);
+    .uptime-compact .uptime-block.unavailable {
+        background: #dc3545;
     }
 
-    .uptime-time-block.future {
-        background: linear-gradient(135deg, #6c757d 0%, #5a6268 100%);
-        opacity: 0.4;
+    .uptime-compact .uptime-block.future {
+        background: var(--bs-secondary);
+        opacity: 0.25;
         cursor: default;
     }
 
-    .uptime-time-block.future:hover {
+    .uptime-compact .uptime-block.future:hover {
         transform: none;
-        box-shadow: 0 1px 3px rgba(0,0,0,0.2);
     }
 
-    .uptime-day-labels {
-        display: grid;
-        grid-template-columns: repeat(7, 1fr);
-        gap: 6px;
-        margin-top: 8px;
-        grid-column: 2;
-    }
-
-    .uptime-day-label {
+    .uptime-compact .uptime-day-label {
         text-align: center;
-        font-size: 0.7em;
-        color: #adb5bd;
+        font-size: 0.6rem;
+        color: var(--bs-secondary);
+        margin-top: 4px;
+        line-height: 1.2;
+    }
+
+    .uptime-compact .uptime-day-label .day-name {
         font-weight: 600;
-        letter-spacing: 0.3px;
     }
 
-    .uptime-day-date {
-        font-size: 0.85em;
+    .uptime-compact .uptime-day-label .day-date {
+        opacity: 0.75;
+        font-size: 0.55rem;
     }
 
-    .uptime-day-name {
-        font-size: 0.75em;
-        opacity: 0.7;
+    .uptime-compact .uptime-day.today .uptime-day-label .day-name {
+        color: var(--bs-primary);
     }
 
-    .uptime-legend {
-        display: flex;
-        gap: 20px;
-        justify-content: center;
-        margin-top: 16px;
-        padding: 12px;
-        background: rgba(0,0,0,0.1);
-        border-radius: 6px;
-        font-size: 0.8em;
-    }
-
-    .uptime-legend-item {
+    .uptime-compact .uptime-footer {
         display: flex;
         align-items: center;
-        gap: 6px;
-        font-weight: 500;
+        justify-content: space-between;
+        margin-top: 10px;
+        padding-top: 8px;
+        border-top: 1px solid var(--bs-border-color-translucent);
+        font-size: 0.7rem;
+        color: var(--bs-secondary);
     }
 
-    .uptime-legend-color {
-        width: 20px;
-        height: 20px;
-        border-radius: 4px;
-        box-shadow: 0 2px 4px rgba(0,0,0,0.2);
-        border: 1px solid rgba(255,255,255,0.1);
+    .uptime-compact .uptime-pct {
+        font-weight: 700;
+        font-size: 0.8rem;
     }
 
-    .uptime-legend-color.available {
-        background: linear-gradient(135deg, #28a745 0%, #20c997 100%);
+    .uptime-compact .uptime-pct.good { color: #198754; }
+    .uptime-compact .uptime-pct.warn { color: #fd7e14; }
+    .uptime-compact .uptime-pct.bad { color: #dc3545; }
+
+    .uptime-compact .uptime-legend {
+        display: flex;
+        gap: 10px;
+        font-size: 0.6rem;
     }
 
-    .uptime-legend-color.degraded {
-        background: linear-gradient(135deg, #ffc107 0%, #fd7e14 100%);
+    .uptime-compact .uptime-legend-item {
+        display: flex;
+        align-items: center;
+        gap: 3px;
     }
 
-    .uptime-legend-color.unavailable {
-        background: linear-gradient(135deg, #dc3545 0%, #c82333 100%);
+    .uptime-compact .uptime-legend-dot {
+        width: 8px;
+        height: 8px;
+        border-radius: 2px;
     }
 
-    .uptime-stats {
-        text-align: center;
-        margin-top: 12px;
-        padding: 10px;
-        background: rgba(0,0,0,0.05);
-        border-radius: 6px;
-        font-size: 0.85em;
-    }
-
-    .uptime-stats strong {
-        color: #20c997;
-        font-size: 1.1em;
-    }
+    .uptime-compact .uptime-legend-dot.available { background: #198754; }
+    .uptime-compact .uptime-legend-dot.degraded { background: #ffc107; }
+    .uptime-compact .uptime-legend-dot.unavailable { background: #dc3545; }
 </style>
 
-<div id="{{ container_id }}" class="uptime-visualization">
-    <div class="text-center text-muted py-3">
-        <div class="spinner-border spinner-border-sm" role="status">
-            <span class="visually-hidden">Loading...</span>
-        </div>
-        <small class="ms-2">Loading availability data...</small>
+<div id="{{ container_id }}" class="uptime-compact">
+    <div class="text-center text-muted py-2">
+        <div class="spinner-border spinner-border-sm" role="status"></div>
+        <small class="ms-2">Loading...</small>
     </div>
 </div>
 
@@ -191,193 +147,127 @@
     const containerId = '{{ container_id }}';
     const nodeId = '{{ node_id }}';
     const days = {{ days if days else 7 }};
-    const showLabels = {{ 'true' if show_labels != False else 'false' }};
 
-    async function loadUptimeVisualization() {
+    async function loadUptime() {
         try {
             const response = await fetch(`/api/health/uptime/${nodeId}?days=${days}`);
-            if (!response.ok) {
-                throw new Error(`HTTP ${response.status}`);
-            }
-
+            if (!response.ok) throw new Error(`HTTP ${response.status}`);
             const data = await response.json();
 
             if (data.error) {
                 document.getElementById(containerId).innerHTML = `
-                    <div class="alert alert-warning mb-0">
-                        <small><i class="bi bi-exclamation-triangle"></i> ${data.error}</small>
-                    </div>
-                `;
+                    <div class="text-muted small"><i class="bi bi-exclamation-triangle"></i> ${data.error}</div>`;
                 return;
             }
-
-            renderUptimeGrid(data);
-        } catch (error) {
-            console.error('Error loading uptime data:', error);
+            render(data);
+        } catch (e) {
             document.getElementById(containerId).innerHTML = `
-                <div class="alert alert-warning mb-0">
-                    <small><i class="bi bi-exclamation-triangle"></i> Unable to load availability data</small>
-                </div>
-            `;
+                <div class="text-muted small"><i class="bi bi-exclamation-triangle"></i> Unable to load</div>`;
         }
     }
 
-    function renderUptimeGrid(data) {
+    function render(data) {
         const container = document.getElementById(containerId);
-
         if (!data.daily_summary || data.daily_summary.length === 0) {
-            container.innerHTML = `
-                <div class="alert alert-info mb-0">
-                    <small><i class="bi bi-info-circle"></i> No availability data for this period</small>
-                </div>
-            `;
+            container.innerHTML = `<div class="text-muted small"><i class="bi bi-info-circle"></i> No data</div>`;
             return;
         }
 
-        // Time block definitions (top to bottom order in the grid) - 2 hour blocks
-        const timeBlocks = [
-            {range: '22-23', name: '22-23', idx: 11},
-            {range: '20-21', name: '20-21', idx: 10},
-            {range: '18-19', name: '18-19', idx: 9},
-            {range: '16-17', name: '16-17', idx: 8},
-            {range: '14-15', name: '14-15', idx: 7},
-            {range: '12-13', name: '12-13', idx: 6},
-            {range: '10-11', name: '10-11', idx: 5},
-            {range: '08-09', name: '08-09', idx: 4},
-            {range: '06-07', name: '06-07', idx: 3},
-            {range: '04-05', name: '04-05', idx: 2},
-            {range: '02-03', name: '02-03', idx: 1},
-            {range: '00-01', name: '00-01', idx: 0}
-        ];
-        const blockNames = ['00-01', '02-03', '04-05', '06-07', '08-09', '10-11', '12-13', '14-15', '16-17', '18-19', '20-21', '22-23'];
-        const blockHours = [0, 2, 4, 6, 8, 10, 12, 14, 16, 18, 20, 22];
-
-        let html = '<div class="uptime-grid-wrapper"><div class="uptime-grid-container">';
-
-        // Time labels column
-        if (showLabels) {
-            html += '<div class="uptime-time-labels">';
-            timeBlocks.forEach(block => {
-                html += `<div class="uptime-time-label" title="${block.range}">${block.name}</div>`;
-            });
-            html += '</div>';
-        }
-
-        // Day columns grid
-        html += '<div class="uptime-grid">';
-
-        // Get current time for future block detection
+        // Get current date info for "today" detection
         const now = new Date();
-        const currentDateStr = now.toISOString().split('T')[0];
-        const currentHour = now.getHours();
+        const tzPref = typeof getTimezonePreference === 'function' ? getTimezonePreference() : 'local';
+        const tzOption = tzPref === 'utc' ? 'UTC' : undefined;
+        const todayStr = now.toISOString().split('T')[0];
+        const currentHour = tzPref === 'utc' ? now.getUTCHours() : now.getHours();
+
+        // Build compact visualization - 4 blocks per day (6-hour periods)
+        let html = '<div class="uptime-row"><div class="uptime-days">';
 
         data.daily_summary.forEach(day => {
-            // Parse date and respect timezone preference
-            const dayDate = new Date(day.date + 'T00:00:00Z');
-            const tzPref = typeof getTimezonePreference === 'function' ? getTimezonePreference() : 'local';
-            const tzOption = tzPref === 'utc' ? 'UTC' : undefined;
-            const dayOfWeek = dayDate.toLocaleDateString(undefined, { weekday: 'short', timeZone: tzOption });
+            const dayDate = new Date(day.date + 'T12:00:00Z');
+            const dayName = dayDate.toLocaleDateString(undefined, { weekday: 'short', timeZone: tzOption });
             const monthDay = dayDate.toLocaleDateString(undefined, { month: 'numeric', day: 'numeric', timeZone: tzOption });
-            const isToday = day.date === currentDateStr;
+            const isToday = day.date === todayStr;
 
-            html += '<div class="uptime-day-column">';
+            // Aggregate 12 time blocks into 4 (6-hour periods)
+            const blocks = day.time_blocks || [];
+            const periods = [
+                { blocks: blocks.slice(0, 3), startHour: 0, label: '12am-6am' },
+                { blocks: blocks.slice(3, 6), startHour: 6, label: '6am-12pm' },
+                { blocks: blocks.slice(6, 9), startHour: 12, label: '12pm-6pm' },
+                { blocks: blocks.slice(9, 12), startHour: 18, label: '6pm-12am' }
+            ];
 
-            // Render time blocks in order: Late, Evening, Midday, Morning, Night (top to bottom)
-            timeBlocks.forEach(timeBlock => {
-                const idx = timeBlock.idx;
-                const block = day.time_blocks && day.time_blocks[idx];
-                const blockStartHour = blockHours[idx];
+            html += `<div class="uptime-day${isToday ? ' today' : ''}">`;
+            html += '<div class="uptime-day-blocks">';
 
-                if (block) {
-                    // Check if this is a future block on today
-                    const isFutureBlock = isToday && blockStartHour > currentHour;
-                    const blockStatus = isFutureBlock ? 'future' : block.status;
+            periods.forEach(period => {
+                // Calculate period status from sub-blocks
+                let avail = 0, deg = 0, unavail = 0;
+                period.blocks.forEach(b => {
+                    if (b.status === 'available') avail++;
+                    else if (b.status === 'degraded') deg++;
+                    else unavail++;
+                });
 
-                    const tooltipText = isFutureBlock
-                        ? `${dayOfWeek} ${monthDay} - ${blockNames[idx]}: Future`
-                        : `${dayOfWeek} ${monthDay} - ${blockNames[idx]}:\\n` +
-                          `Available: ${block.available_hours}h, ` +
-                          `Degraded: ${block.degraded_hours}h, ` +
-                          `Unavailable: ${block.unavailable_hours}h`;
+                // Determine if this period is in the future (for today)
+                const isFuture = isToday && period.startHour > currentHour;
 
-                    html += `<div class="uptime-time-block ${blockStatus}"
-                              title="${tooltipText}"
-                              data-bs-toggle="tooltip"
-                              data-bs-placement="top"></div>`;
+                let status;
+                if (isFuture) {
+                    status = 'future';
+                } else if (period.blocks.length === 0) {
+                    // No block data, use day uptime
+                    status = day.uptime_percentage >= 80 ? 'available' :
+                             day.uptime_percentage >= 50 ? 'degraded' : 'unavailable';
+                } else if (avail >= 2) {
+                    status = 'available';
+                } else if (avail + deg >= 2) {
+                    status = 'degraded';
                 } else {
-                    // Fallback: use overall day status
-                    const status = day.uptime_percentage >= 80 ? 'available' :
-                                  day.uptime_percentage >= 50 ? 'degraded' : 'unavailable';
-                    html += `<div class="uptime-time-block ${status}"
-                              title="${dayOfWeek} ${monthDay}: ${day.uptime_percentage}%"></div>`;
+                    status = 'unavailable';
                 }
+
+                const tooltip = isFuture ? `${period.label}: Future` :
+                    `${dayName} ${monthDay} ${period.label}`;
+
+                html += `<div class="uptime-block ${status}" title="${tooltip}"></div>`;
             });
 
             html += '</div>';
-        });
-
-        html += '</div>'; // end uptime-grid
-
-        // Day labels row
-        html += '<div class="uptime-day-labels">';
-        data.daily_summary.forEach(day => {
-            const dayDate = new Date(day.date + 'T00:00:00Z');
-            const tzPref = typeof getTimezonePreference === 'function' ? getTimezonePreference() : 'local';
-            const tzOption = tzPref === 'utc' ? 'UTC' : undefined;
-            const dayOfWeek = dayDate.toLocaleDateString(undefined, { weekday: 'short', timeZone: tzOption });
-            const monthDay = dayDate.toLocaleDateString(undefined, { month: 'numeric', day: 'numeric', timeZone: tzOption });
-
             html += `<div class="uptime-day-label">`;
-            html += `<div class="uptime-day-name">${dayOfWeek}</div>`;
-            html += `<div class="uptime-day-date">${monthDay}</div>`;
-            html += `</div>`;
+            html += `<div class="day-name">${isToday ? 'Today' : dayName}</div>`;
+            html += `<div class="day-date">${monthDay}</div>`;
+            html += '</div></div>';
         });
-        html += '</div>'; // end uptime-day-labels
 
-        html += '</div></div>'; // end uptime-grid-container and uptime-grid-wrapper
+        html += '</div></div>';
 
-        // Legend
-        html += `
-            <div class="uptime-legend">
-                <div class="uptime-legend-item">
-                    <div class="uptime-legend-color available"></div>
-                    <span>Available</span>
-                </div>
-                <div class="uptime-legend-item">
-                    <div class="uptime-legend-color degraded"></div>
-                    <span>Degraded</span>
-                </div>
-                <div class="uptime-legend-item">
-                    <div class="uptime-legend-color unavailable"></div>
-                    <span>Unavailable</span>
-                </div>
-            </div>
-        `;
+        // Footer with percentage and legend
+        const pct = data.uptime_percentage;
+        const pctClass = pct >= 80 ? 'good' : pct >= 50 ? 'warn' : 'bad';
 
-        // Summary stats
-        html += `
-            <div class="uptime-stats">
-                <span class="text-muted">
-                    Overall: <strong>${data.uptime_percentage}%</strong> uptime
-                    <span style="opacity: 0.7;">(${data.available_hours}h available of ${data.total_hours}h total)</span>
-                </span>
-            </div>
-        `;
+        html += `<div class="uptime-footer">`;
+        html += `<span class="uptime-pct ${pctClass}">${pct}% uptime</span>`;
+        html += `<div class="uptime-legend">`;
+        html += `<span class="uptime-legend-item"><span class="uptime-legend-dot available"></span>OK</span>`;
+        html += `<span class="uptime-legend-item"><span class="uptime-legend-dot degraded"></span>Degraded</span>`;
+        html += `<span class="uptime-legend-item"><span class="uptime-legend-dot unavailable"></span>Down</span>`;
+        html += `</div></div>`;
 
         container.innerHTML = html;
 
-        // Initialize Bootstrap tooltips
-        const tooltipTriggerList = container.querySelectorAll('[data-bs-toggle="tooltip"]');
-        tooltipTriggerList.forEach(el => {
-            new bootstrap.Tooltip(el);
+        // Initialize tooltips
+        container.querySelectorAll('[title]').forEach(el => {
+            new bootstrap.Tooltip(el, { placement: 'top' });
         });
     }
 
     // Auto-load when document is ready
     if (document.readyState === 'loading') {
-        document.addEventListener('DOMContentLoaded', loadUptimeVisualization);
+        document.addEventListener('DOMContentLoaded', loadUptime);
     } else {
-        loadUptimeVisualization();
+        loadUptime();
     }
 })();
 </script>
