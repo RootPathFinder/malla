@@ -821,7 +821,16 @@ class NodeHealthService:
             (available_hours / total_hours * 100) if total_hours > 0 else 0
         )
 
-        # Group by day for summary
+        # Group by day for summary with time-of-day blocks
+        # Time blocks: 0-4hr, 5-9hr, 10-14hr, 15-19hr, 20-23hr (5 blocks)
+        time_blocks = [
+            (0, 5, "00-04"),
+            (5, 10, "05-09"),
+            (10, 15, "10-14"),
+            (15, 20, "15-19"),
+            (20, 24, "20-23"),
+        ]
+
         daily_summary = []
         for day in range(days):
             start_hour = day * 24
@@ -839,6 +848,41 @@ class NodeHealthService:
                 else 0
             )
 
+            # Calculate availability for each time block
+            time_block_data = []
+            for block_start, block_end, block_label in time_blocks:
+                block_hours = day_data[block_start:block_end]
+                block_available = sum(
+                    1 for h in block_hours if h["status"] == "available"
+                )
+                block_degraded = sum(
+                    1 for h in block_hours if h["status"] == "degraded"
+                )
+                block_unavailable = sum(
+                    1 for h in block_hours if h["status"] == "unavailable"
+                )
+                block_total = len(block_hours)
+
+                # Calculate block status (majority wins)
+                if block_available >= block_total * 0.7:
+                    block_status = "available"
+                elif (
+                    block_available + block_degraded
+                ) >= block_total * 0.5 or block_available >= block_total * 0.3:
+                    block_status = "degraded"
+                else:
+                    block_status = "unavailable"
+
+                time_block_data.append(
+                    {
+                        "label": block_label,
+                        "status": block_status,
+                        "available_hours": block_available,
+                        "degraded_hours": block_degraded,
+                        "unavailable_hours": block_unavailable,
+                    }
+                )
+
             daily_summary.append(
                 {
                     "day_offset": day,
@@ -850,6 +894,7 @@ class NodeHealthService:
                     "unavailable_hours": day_unavailable,
                     "total_packets": day_packets,
                     "uptime_percentage": round(day_uptime, 1),
+                    "time_blocks": time_block_data,
                 }
             )
 
@@ -888,6 +933,7 @@ class NodeHealthService:
         cursor = conn.cursor()
 
         cutoff_time = int(time.time()) - (days * 24 * 3600)
+        hours = days * 24
 
         # Get nodes with activity in the period, ordered by packet count
         cursor.execute(
@@ -909,24 +955,191 @@ class NodeHealthService:
         )
 
         nodes_to_analyze = cursor.fetchall()
+        node_ids = [node["node_id"] for node in nodes_to_analyze]
+
+        if not node_ids:
+            conn.close()
+            return {
+                "days_analyzed": days,
+                "nodes_analyzed": 0,
+                "network_avg_uptime": 0,
+                "nodes": [],
+                "generated_at": int(time.time()),
+            }
+
+        # PERFORMANCE OPTIMIZATION: Get all hourly packet counts in a single batch query
+        # instead of making N separate database calls
+        placeholders = ",".join("?" * len(node_ids))
+        cursor.execute(
+            f"""
+            SELECT
+                from_node_id,
+                CAST((timestamp - ?) / 3600 AS INTEGER) as hour_offset,
+                COUNT(*) as packet_count
+            FROM packet_history
+            WHERE from_node_id IN ({placeholders})
+            AND timestamp >= ?
+            GROUP BY from_node_id, hour_offset
+        """,
+            [cutoff_time] + node_ids + [cutoff_time],
+        )
+
+        # Group packets by node and hour
+        packets_by_node = {}
+        for row in cursor.fetchall():
+            node_id = row["from_node_id"]
+            if node_id not in packets_by_node:
+                packets_by_node[node_id] = {}
+            packets_by_node[node_id][row["hour_offset"]] = row["packet_count"]
+
+        # Get baseline behavior for all nodes in one batch query
+        cursor.execute(
+            f"""
+            SELECT
+                from_node_id,
+                COUNT(DISTINCT DATE(timestamp, 'unixepoch')) as active_days,
+                COUNT(*) as total_packets,
+                AVG(packets_per_day) as avg_packets_per_day
+            FROM (
+                SELECT
+                    from_node_id,
+                    DATE(timestamp, 'unixepoch') as day,
+                    COUNT(*) as packets_per_day
+                FROM packet_history
+                WHERE from_node_id IN ({placeholders})
+                GROUP BY from_node_id, day
+            )
+            GROUP BY from_node_id
+        """,
+            node_ids,
+        )
+
+        baselines = {
+            row["from_node_id"]: {
+                "has_baseline": row["active_days"] >= 2,
+                "avg_packets_per_day": row["avg_packets_per_day"] or 1.0,
+            }
+            for row in cursor.fetchall()
+        }
+
         conn.close()
 
-        # Get uptime data for each node
+        # Time blocks: 0-4hr, 5-9hr, 10-14hr, 15-19hr, 20-23hr (5 blocks)
+        time_blocks = [
+            (0, 5, "00-04"),
+            (5, 10, "05-09"),
+            (10, 15, "10-14"),
+            (15, 20, "15-19"),
+            (20, 24, "20-23"),
+        ]
+
+        # Process uptime data for each node using the batched data
         uptime_data = []
         for node in nodes_to_analyze:
-            node_uptime = NodeHealthService.get_node_uptime_data(node["node_id"], days)
-            if node_uptime:
-                uptime_data.append(
+            node_id = node["node_id"]
+            baseline = baselines.get(
+                node_id, {"has_baseline": False, "avg_packets_per_day": 1.0}
+            )
+            packets_by_hour = packets_by_node.get(node_id, {})
+
+            # Calculate expected packets per hour based on baseline
+            expected_per_hour = baseline["avg_packets_per_day"] / 24
+            min_packets_for_available = max(1, expected_per_hour * 0.1)
+
+            # Build hourly data with availability status
+            hourly_data = []
+            available_hours = 0
+
+            for hour_offset in range(hours):
+                packets = packets_by_hour.get(hour_offset, 0)
+
+                # Determine availability status
+                if packets >= min_packets_for_available:
+                    status = "available"
+                    available_hours += 1
+                elif packets > 0:
+                    status = "degraded"
+                    available_hours += 0.5
+                else:
+                    status = "unavailable"
+
+                hourly_data.append(
                     {
-                        "node_id": node["node_id"],
-                        "node_name": node_uptime["node_name"],
-                        "role": node["role"],
-                        "uptime_percentage": node_uptime["uptime_percentage"],
-                        "available_hours": node_uptime["available_hours"],
-                        "total_hours": node_uptime["total_hours"],
-                        "daily_summary": node_uptime["daily_summary"],
+                        "hour_offset": hour_offset,
+                        "timestamp": cutoff_time + (hour_offset * 3600),
+                        "packets": packets,
+                        "status": status,
                     }
                 )
+
+            # Calculate overall uptime percentage
+            uptime_percentage = (available_hours / hours * 100) if hours > 0 else 0
+
+            # Group by day for summary with time-of-day blocks
+            daily_summary = []
+            for day in range(days):
+                start_hour = day * 24
+                end_hour = start_hour + 24
+                day_data = hourly_data[start_hour:end_hour]
+
+                day_available = sum(1 for h in day_data if h["status"] == "available")
+                day_degraded = sum(1 for h in day_data if h["status"] == "degraded")
+                day_packets = sum(h["packets"] for h in day_data)
+
+                day_uptime = (
+                    ((day_available + day_degraded * 0.5) / 24 * 100)
+                    if len(day_data) == 24
+                    else 0
+                )
+
+                # Calculate time block statuses
+                block_statuses = []
+                for block_start, block_end, block_label in time_blocks:
+                    block_hours = day_data[block_start:block_end]
+                    block_available = sum(
+                        1 for h in block_hours if h["status"] == "available"
+                    )
+                    block_total = len(block_hours)
+
+                    if block_total == 0:
+                        block_status = "unavailable"
+                    elif block_available / block_total >= 0.8:
+                        block_status = "available"
+                    elif block_available / block_total >= 0.3:
+                        block_status = "degraded"
+                    else:
+                        block_status = "unavailable"
+
+                    block_statuses.append(
+                        {
+                            "label": block_label,
+                            "status": block_status,
+                            "available_hours": block_available,
+                            "total_hours": block_total,
+                        }
+                    )
+
+                daily_summary.append(
+                    {
+                        "day_offset": day,
+                        "timestamp": cutoff_time + (day * 24 * 3600),
+                        "uptime_percentage": round(day_uptime, 1),
+                        "packets": day_packets,
+                        "time_blocks": block_statuses,
+                    }
+                )
+
+            uptime_data.append(
+                {
+                    "node_id": node_id,
+                    "node_name": node["name"],
+                    "role": node["role"],
+                    "uptime_percentage": round(uptime_percentage, 1),
+                    "available_hours": round(available_hours, 1),
+                    "total_hours": hours,
+                    "daily_summary": daily_summary,
+                }
+            )
 
         # Sort by uptime (worst first for problem identification)
         uptime_data.sort(key=lambda x: x["uptime_percentage"])

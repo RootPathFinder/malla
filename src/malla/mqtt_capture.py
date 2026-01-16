@@ -401,6 +401,11 @@ def init_database() -> None:
         "CREATE INDEX IF NOT EXISTS idx_packet_mesh_id ON packet_history(mesh_packet_id)"
     )
 
+    # Add index for node health queries (from_node_id first for IN clause efficiency)
+    cursor.execute(
+        "CREATE INDEX IF NOT EXISTS idx_packet_history_node_time ON packet_history(from_node_id, timestamp)"
+    )
+
     # Drop old redundant indexes (composite indexes above can serve the same queries via leftmost prefix)
     cursor.execute("DROP INDEX IF EXISTS idx_packet_timestamp")
     cursor.execute("DROP INDEX IF EXISTS idx_packet_from_node")

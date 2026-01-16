@@ -256,9 +256,9 @@ def create_app(cfg: AppConfig | None = None):  # noqa: D401
     logger.info("Starting node name cache cleanup background thread")
     start_cache_cleanup()
 
-    # Start periodic power type detection (runs every 30 minutes)
+    # Start periodic power type detection (runs every 10 minutes)
     logger.info("Starting power type monitor background thread")
-    start_power_monitor(interval_seconds=1800)  # Run every 30 minutes
+    start_power_monitor(interval_seconds=600)  # Run every 10 minutes
 
     # Start auto-archive background thread (every 24 hours)
     logger.info("Starting auto-archive stale nodes background thread")

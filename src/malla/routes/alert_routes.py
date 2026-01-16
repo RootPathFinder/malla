@@ -233,12 +233,37 @@ def api_resolve_alert(alert_type: str, node_id: str):
         return jsonify(
             {
                 "success": resolved,
-                "message": "Alert resolved" if resolved else "Alert not found",
+                "message": "Alert resolved"
+                if resolved
+                else "Alert not found or already resolved",
             }
         )
 
     except Exception as e:
         logger.error(f"Error resolving alert: {e}", exc_info=True)
+        return jsonify({"error": str(e)}), 500
+
+
+@alert_bp.route("/api/cleanup-resolved", methods=["POST"])
+def api_cleanup_resolved():
+    """Cleanup old resolved alerts."""
+    try:
+        days_to_keep = request.args.get("days", 30, type=int)
+        # Limit to reasonable range
+        days_to_keep = min(max(days_to_keep, 1), 365)
+
+        deleted = AlertService.cleanup_old_resolved_alerts(days_to_keep=days_to_keep)
+
+        return jsonify(
+            {
+                "success": True,
+                "deleted": deleted,
+                "message": f"Cleaned up {deleted} old resolved alerts",
+            }
+        )
+
+    except Exception as e:
+        logger.error(f"Error cleaning up resolved alerts: {e}", exc_info=True)
         return jsonify({"error": str(e)}), 500
 
 

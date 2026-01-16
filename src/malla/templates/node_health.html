@@ -189,7 +189,7 @@
                                     <tr>
                                         <th style="min-width: 180px;">Node</th>
                                         <th class="text-center" style="width: 80px;">Uptime</th>
-                                        <th>7-Day Availability</th>
+                                        <th>7-Day Availability (Time-of-Day View)</th>
                                     </tr>
                                 </thead>
                                 <tbody id="uptime-tbody">
@@ -532,19 +532,56 @@ async function loadUptimeOverview() {
                 uptimeClass = 'text-warning';
             }
 
-            // Build 7-day visual bar
-            const dayBars = node.daily_summary.map(day => {
-                let barClass = 'bg-success';
-                let tooltip = `${day.date}: ${day.uptime_percentage}% (${day.available_hours}h available)`;
+            // Build 7-day visual grid with time-of-day blocks
+            let dayGridHtml = '<div style="display: flex; gap: 4px; align-items: flex-end;">';
 
-                if (day.uptime_percentage < 50) {
-                    barClass = 'bg-danger';
-                } else if (day.uptime_percentage < 80) {
-                    barClass = 'bg-warning';
+            node.daily_summary.forEach(day => {
+                dayGridHtml += '<div style="display: flex; flex-direction: column-reverse; gap: 2px; flex: 1; min-width: 0;">';
+
+                // Add 5 time blocks per day (from bottom to top: 00-04, 05-09, 10-14, 15-19, 20-23)
+                if (day.time_blocks && day.time_blocks.length > 0) {
+                    day.time_blocks.forEach(block => {
+                        let blockClass = 'bg-success';
+                        if (block.status === 'unavailable') {
+                            blockClass = 'bg-danger';
+                        } else if (block.status === 'degraded') {
+                            blockClass = 'bg-warning';
+                        }
+
+                        const tooltipText = `${day.date} ${block.label}h: ${block.status}\\n` +
+                            `Available: ${block.available_hours}h, Degraded: ${block.degraded_hours}h, Unavailable: ${block.unavailable_hours}h`;
+
+                        dayGridHtml += `<div class="${blockClass}" title="${tooltipText}"
+                            style="height: 20px; border-radius: 3px; cursor: help;"></div>`;
+                    });
+                } else {
+                    // Fallback: single color for whole day based on uptime percentage
+                    let barClass = 'bg-success';
+                    if (day.uptime_percentage < 50) {
+                        barClass = 'bg-danger';
+                    } else if (day.uptime_percentage < 80) {
+                        barClass = 'bg-warning';
+                    }
+
+                    // Create 5 blocks with same color
+                    for (let i = 0; i < 5; i++) {
+                        dayGridHtml += `<div class="${barClass}" title="${day.date}: ${day.uptime_percentage}%"
+                            style="height: 20px; border-radius: 3px;"></div>`;
+                    }
                 }
 
-                return `<div class="uptime-day-bar ${barClass}" title="${tooltip}" style="flex: 1; height: 20px; margin: 0 1px; border-radius: 2px;"></div>`;
-            }).join('');
+                dayGridHtml += '</div>';
+            });
+
+            dayGridHtml += '</div>';
+
+            // Add date labels below the grid
+            const dateLabels = `
+                <div style="display: flex; justify-content: space-between; font-size: 0.7em; margin-top: 4px;" class="text-muted">
+                    <span>${node.daily_summary[0]?.date.substring(5) || ''}</span>
+                    <span>${node.daily_summary[node.daily_summary.length - 1]?.date.substring(5) || ''}</span>
+                </div>
+            `;
 
             // Format node name with role badge
             const roleLabel = node.role ? `<span class="badge bg-secondary ms-1" style="font-size: 0.65em;">${node.role}</span>` : '';
@@ -561,13 +598,8 @@ async function loadUptimeOverview() {
                     ${node.uptime_percentage}%
                 </td>
                 <td>
-                    <div style="display: flex; align-items: center; gap: 2px;" title="Last 7 days (oldest to newest)">
-                        ${dayBars}
-                    </div>
-                    <div style="display: flex; justify-content: space-between; font-size: 0.7em;" class="text-muted mt-1">
-                        <span>${node.daily_summary[0]?.date || ''}</span>
-                        <span>${node.daily_summary[node.daily_summary.length - 1]?.date || ''}</span>
-                    </div>
+                    ${dayGridHtml}
+                    ${dateLabels}
                 </td>
             `;
 

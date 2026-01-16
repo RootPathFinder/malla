@@ -2062,6 +2062,7 @@ def api_node_health(node_id):
 
 
 @api_bp.route("/health/problematic-nodes")
+@cache_response(ttl_seconds=60)  # Cache for 60 seconds
 def api_problematic_nodes():
     """API endpoint for identifying problematic nodes in the network."""
     logger.info("API problematic nodes endpoint accessed")
@@ -2078,7 +2079,7 @@ def api_problematic_nodes():
             hours=hours, min_health_score=min_health_score, limit=limit
         )
 
-        return safe_jsonify(
+        response = safe_jsonify(
             {
                 "problematic_nodes": problematic_nodes,
                 "total_count": len(problematic_nodes),
@@ -2089,6 +2090,9 @@ def api_problematic_nodes():
                 },
             }
         )
+        # Add cache headers for client-side caching
+        response.headers["Cache-Control"] = "public, max-age=60"
+        return response
     except Exception as e:
         logger.error(f"Error in API problematic nodes: {e}")
         return jsonify({"error": str(e)}), 500

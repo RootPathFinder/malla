@@ -1,0 +1,254 @@
+{#
+    7-Day Availability Visualization Component with Time-of-Day Blocks
+
+    Parameters:
+        - container_id: Unique ID for this visualization container
+        - node_id: Node ID to fetch uptime data for
+        - days: Number of days to show (default: 7)
+        - show_labels: Whether to show time block labels (default: true)
+#}
+
+<style>
+    .uptime-grid {
+        display: flex;
+        gap: 4px;
+        margin: 10px 0;
+    }
+
+    .uptime-day-column {
+        flex: 1;
+        display: flex;
+        flex-direction: column-reverse;
+        gap: 2px;
+        min-width: 0;
+    }
+
+    .uptime-time-block {
+        height: 24px;
+        border-radius: 3px;
+        cursor: help;
+        transition: opacity 0.2s;
+    }
+
+    .uptime-time-block:hover {
+        opacity: 0.8;
+    }
+
+    .uptime-time-block.available {
+        background-color: #28a745;
+    }
+
+    .uptime-time-block.degraded {
+        background-color: #ffc107;
+    }
+
+    .uptime-time-block.unavailable {
+        background-color: #dc3545;
+    }
+
+    .uptime-day-label {
+        font-size: 0.7em;
+        text-align: center;
+        color: #6c757d;
+        margin-top: 4px;
+        white-space: nowrap;
+        overflow: hidden;
+        text-overflow: ellipsis;
+    }
+
+    .uptime-time-labels {
+        display: flex;
+        flex-direction: column-reverse;
+        gap: 2px;
+        margin-right: 8px;
+        font-size: 0.65em;
+        color: #6c757d;
+    }
+
+    .uptime-time-label {
+        height: 24px;
+        display: flex;
+        align-items: center;
+        justify-content: flex-end;
+        padding-right: 4px;
+    }
+
+    .uptime-grid-container {
+        display: flex;
+        align-items: flex-start;
+    }
+
+    .uptime-legend {
+        display: flex;
+        gap: 12px;
+        justify-content: center;
+        margin-top: 8px;
+        font-size: 0.75em;
+    }
+
+    .uptime-legend-item {
+        display: flex;
+        align-items: center;
+        gap: 4px;
+    }
+
+    .uptime-legend-color {
+        width: 16px;
+        height: 16px;
+        border-radius: 3px;
+    }
+</style>
+
+<div id="{{ container_id }}" class="uptime-visualization">
+    <div class="text-center text-muted py-3">
+        <div class="spinner-border spinner-border-sm" role="status">
+            <span class="visually-hidden">Loading...</span>
+        </div>
+        <small class="ms-2">Loading availability data...</small>
+    </div>
+</div>
+
+<script>
+(function() {
+    const containerId = '{{ container_id }}';
+    const nodeId = '{{ node_id }}';
+    const days = {{ days if days else 7 }};
+    const showLabels = {{ 'true' if show_labels != False else 'false' }};
+
+    async function loadUptimeVisualization() {
+        try {
+            const response = await fetch(`/api/health/uptime/${nodeId}?days=${days}`);
+            if (!response.ok) {
+                throw new Error(`HTTP ${response.status}`);
+            }
+
+            const data = await response.json();
+
+            if (data.error) {
+                document.getElementById(containerId).innerHTML = `
+                    <div class="alert alert-warning mb-0">
+                        <small><i class="bi bi-exclamation-triangle"></i> ${data.error}</small>
+                    </div>
+                `;
+                return;
+            }
+
+            renderUptimeGrid(data);
+        } catch (error) {
+            console.error('Error loading uptime data:', error);
+            document.getElementById(containerId).innerHTML = `
+                <div class="alert alert-warning mb-0">
+                    <small><i class="bi bi-exclamation-triangle"></i> Unable to load availability data</small>
+                </div>
+            `;
+        }
+    }
+
+    function renderUptimeGrid(data) {
+        const container = document.getElementById(containerId);
+
+        if (!data.daily_summary || data.daily_summary.length === 0) {
+            container.innerHTML = `
+                <div class="alert alert-info mb-0">
+                    <small><i class="bi bi-info-circle"></i> No availability data for this period</small>
+                </div>
+            `;
+            return;
+        }
+
+        // Build the grid
+        let html = '<div class="uptime-grid-container">';
+
+        // Time labels (vertical)
+        if (showLabels) {
+            html += '<div class="uptime-time-labels">';
+            const timeLabels = ['00-04', '05-09', '10-14', '15-19', '20-23'];
+            timeLabels.forEach(label => {
+                html += `<div class="uptime-time-label">${label}</div>`;
+            });
+            html += '</div>';
+        }
+
+        // Grid columns for each day
+        html += '<div class="uptime-grid">';
+
+        data.daily_summary.forEach(day => {
+            html += '<div class="uptime-day-column">';
+
+            // Time blocks (bottom to top: 00-04, 05-09, etc.)
+            if (day.time_blocks && day.time_blocks.length > 0) {
+                day.time_blocks.forEach(block => {
+                    const tooltipText = `${day.date} ${block.label}h: ${block.status}\\n` +
+                        `Available: ${block.available_hours}h\\n` +
+                        `Degraded: ${block.degraded_hours}h\\n` +
+                        `Unavailable: ${block.unavailable_hours}h`;
+
+                    html += `<div class="uptime-time-block ${block.status}"
+                              title="${tooltipText}"
+                              data-bs-toggle="tooltip"
+                              data-bs-placement="top"></div>`;
+                });
+            } else {
+                // Fallback: single block per day
+                const status = day.uptime_percentage >= 80 ? 'available' :
+                              day.uptime_percentage >= 50 ? 'degraded' : 'unavailable';
+                for (let i = 0; i < 5; i++) {
+                    html += `<div class="uptime-time-block ${status}"
+                              title="${day.date}: ${day.uptime_percentage}%"></div>`;
+                }
+            }
+
+            // Day label (date)
+            const dateLabel = day.date.substring(5); // MM-DD
+            html += `<div class="uptime-day-label" title="${day.date}">${dateLabel}</div>`;
+            html += '</div>';
+        });
+
+        html += '</div>'; // end uptime-grid
+        html += '</div>'; // end uptime-grid-container
+
+        // Legend
+        html += `
+            <div class="uptime-legend">
+                <div class="uptime-legend-item">
+                    <div class="uptime-legend-color available"></div>
+                    <span>Available</span>
+                </div>
+                <div class="uptime-legend-item">
+                    <div class="uptime-legend-color degraded"></div>
+                    <span>Degraded</span>
+                </div>
+                <div class="uptime-legend-item">
+                    <div class="uptime-legend-color unavailable"></div>
+                    <span>Unavailable</span>
+                </div>
+            </div>
+        `;
+
+        // Summary stats
+        html += `
+            <div class="text-center mt-2">
+                <small class="text-muted">
+                    Overall: <strong>${data.uptime_percentage}%</strong> uptime
+                    (${data.available_hours}h available of ${data.total_hours}h total)
+                </small>
+            </div>
+        `;
+
+        container.innerHTML = html;
+
+        // Initialize Bootstrap tooltips
+        const tooltipTriggerList = container.querySelectorAll('[data-bs-toggle="tooltip"]');
+        tooltipTriggerList.forEach(el => {
+            new bootstrap.Tooltip(el);
+        });
+    }
+
+    // Auto-load when document is ready
+    if (document.readyState === 'loading') {
+        document.addEventListener('DOMContentLoaded', loadUptimeVisualization);
+    } else {
+        loadUptimeVisualization();
+    }
+})();
+</script>

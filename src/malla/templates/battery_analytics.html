@@ -19,13 +19,9 @@
             </h1>
         </div>
         <div class="col-md-4 text-end">
-            <div class="btn-group" role="group">
-                <button id="detect-power-btn" class="btn btn-primary" onclick="detectPowerTypes(false)">
-                    <i class="bi bi-lightning-fill"></i> Detect Power Types
-                </button>
-                <button class="btn btn-outline-primary" onclick="detectPowerTypes(true)" title="Re-detect all nodes, even those already classified">
-                    <i class="bi bi-arrow-clockwise"></i> Force Re-detect
-                </button>
+            <div class="text-muted">
+                <i class="bi bi-info-circle"></i> Auto-updates every 10 minutes
+                <span id="last-update-time" class="ms-2"></span>
             </div>
         </div>
     </div>
@@ -408,19 +404,18 @@
     </div>
 
     <script>
-        // Auto-detect power types if all are unknown
-        document.addEventListener('DOMContentLoaded', function() {
-            // Check if auto-detection is needed
-            const hasTelemetry = {{ (nodes_with_telemetry|length > 0)|tojson }};
-            const allUnknown = {{ power_summary.solar }} === 0 &&
-                              {{ power_summary.battery }} === 0 &&
-                              {{ power_summary.mains }} === 0 &&
-                              {{ power_summary.unknown }} > 0;
+        let autoRefreshInterval = null;
 
-            if (hasTelemetry && allUnknown) {
-                console.log('Auto-detecting power types on first load...');
-                setTimeout(() => detectPowerTypes(false, true), 500);
-            }
+        // Auto-refresh page every 10 minutes (600000ms)
+        document.addEventListener('DOMContentLoaded', function() {
+            // Update last update timestamp
+            updateLastUpdateTime();
+
+            // Set up auto-refresh every 10 minutes
+            autoRefreshInterval = setInterval(() => {
+                console.log('Auto-refreshing battery analytics...');
+                location.reload();
+            }, 600000); // 10 minutes in milliseconds
 
             // Load and render voltage trends chart
             fetch('/api/voltage-trends')
@@ -435,55 +430,13 @@
                 .catch(error => console.error('Error loading voltage trends:', error));
         });
 
-        function detectPowerTypes(force = false, autoDetect = false) {
-            const button = document.getElementById('detect-power-btn');
-            const statusDiv = document.getElementById('power-detection-status');
-            const messageSpan = document.getElementById('power-detection-message');
-
-            // Disable button and show status
-            if (button) button.disabled = true;
-            statusDiv.style.display = 'block';
-            statusDiv.className = 'alert alert-info';
-
-            if (force) {
-                messageSpan.textContent = 'Re-analyzing all nodes to detect power sources...';
-            } else if (autoDetect) {
-                messageSpan.textContent = 'Automatically detecting power types from voltage patterns...';
-            } else {
-                messageSpan.textContent = 'Analyzing voltage patterns to detect power sources...';
+        function updateLastUpdateTime() {
+            const lastUpdateEl = document.getElementById('last-update-time');
+            if (lastUpdateEl) {
+                const now = new Date();
+                const timeStr = now.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+                lastUpdateEl.textContent = `(Updated: ${timeStr})`;
             }
-
-            const url = force ? '/api/detect-power-types?force=true' : '/api/detect-power-types';
-
-            fetch(url, { method: 'POST' })
-                .then(response => response.json())
-                .then(data => {
-                    if (data.results) {
-                        const total = data.results.solar + data.results.battery + data.results.mains;
-                        statusDiv.className = 'alert alert-success';
-                        messageSpan.innerHTML = `
-                            <strong>Detection complete!</strong>
-                            Found ${data.results.solar} solar, ${data.results.battery} battery,
-                            and ${data.results.mains} mains-powered nodes.
-                            <a href="javascript:location.reload()" class="alert-link">Refresh page</a> to see updated counts.
-                        `;
-                        if (total > 0 && autoDetect) {
-                            // Auto-reload after successful auto-detection
-                            setTimeout(() => location.reload(), 2000);
-                        }
-                    } else {
-                        statusDiv.className = 'alert alert-warning';
-                        messageSpan.textContent = 'Detection completed but no power types were identified. More data may be needed.';
-                    }
-                })
-                .catch(error => {
-                    statusDiv.className = 'alert alert-danger';
-                    messageSpan.textContent = 'Error detecting power types: ' + error.message;
-                    console.error('Error:', error);
-                })
-                .finally(() => {
-                    if (button) button.disabled = false;
-                });
         }
 
         function renderVoltageTrendsChart(nodesData) {

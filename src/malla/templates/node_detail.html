@@ -325,6 +325,18 @@
                 </div>
             </div>
 
+            <!-- 7-Day Availability Visualization -->
+            <div class="card mb-4">
+                <div class="card-header">
+                    <h5><i class="bi bi-clock-history"></i> 7-Day Availability</h5>
+                    <small class="text-muted">Node uptime based on expected activity patterns. Each column is a day, rows show 4-hour time blocks.</small>
+                </div>
+                <div class="card-body">
+                    {% set container_id = "node-uptime-viz-" ~ node.node_id %}
+                    {% include "components/uptime_visualization.html" %}
+                </div>
+            </div>
+
             <!-- Location History Map -->
             <div class="card mb-4" id="location-history-card" style="display: none;">
                 <div class="card-header">

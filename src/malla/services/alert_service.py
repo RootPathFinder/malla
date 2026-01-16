@@ -380,6 +380,22 @@ class AlertService:
             try:
                 cursor = conn.cursor()
 
+                # First check if there's an active alert to resolve
+                cursor.execute(
+                    """
+                    SELECT id FROM alerts
+                    WHERE alert_type = ? AND COALESCE(node_id, -1) = COALESCE(?, -1) AND resolved = 0
+                    LIMIT 1
+                """,
+                    (alert_type.value, node_id),
+                )
+
+                active_alert = cursor.fetchone()
+
+                if not active_alert:
+                    # No active alert to resolve
+                    return False
+
                 cursor.execute(
                     """
                     UPDATE alerts
@@ -405,6 +421,47 @@ class AlertService:
         except Exception as e:
             logger.error(f"Error resolving alert after retries: {e}", exc_info=True)
             return False
+
+    @classmethod
+    def cleanup_old_resolved_alerts(cls, days_to_keep: int = 30) -> int:
+        """Remove resolved alerts older than specified days.
+
+        Args:
+            days_to_keep: Number of days to keep resolved alerts (default: 30)
+
+        Returns:
+            Number of alerts deleted
+        """
+
+        def _cleanup():
+            conn = get_db_connection()
+            try:
+                cursor = conn.cursor()
+                cutoff_time = time.time() - (days_to_keep * 24 * 3600)
+
+                cursor.execute(
+                    """
+                    DELETE FROM alerts
+                    WHERE resolved = 1 AND resolved_at < ?
+                """,
+                    (cutoff_time,),
+                )
+
+                deleted = cursor.rowcount
+                conn.commit()
+
+                if deleted > 0:
+                    logger.info(f"Cleaned up {deleted} old resolved alerts")
+
+                return deleted
+            finally:
+                conn.close()
+
+        try:
+            return _execute_with_retry(_cleanup, max_retries=3, initial_delay=0.05)
+        except Exception as e:
+            logger.error(f"Error cleaning up alerts: {e}", exc_info=True)
+            return 0
 
     @classmethod
     def get_alerts(
@@ -434,12 +491,13 @@ class AlertService:
             try:
                 cursor = conn.cursor()
 
-                # Build query
+                # Build query - explicitly filter resolved alerts unless requested
                 query = "SELECT * FROM alerts WHERE 1=1"
                 params = []
 
+                # CRITICAL: Always exclude resolved alerts unless explicitly requested
                 if not include_resolved:
-                    query += " AND resolved = 0"
+                    query += " AND (resolved = 0 OR resolved IS NULL)"
 
                 if severity:
                     query += " AND severity = ?"
@@ -588,9 +646,13 @@ class AlertService:
             "checks_run": [],
             "alerts_generated": 0,
             "alerts_resolved": 0,
+            "alerts_cleaned": 0,
         }
 
         try:
+            # Housekeeping: Clean up old resolved alerts (keep last 30 days)
+            results["alerts_cleaned"] = cls.cleanup_old_resolved_alerts(days_to_keep=30)
+
             # Run individual checks
             results["checks_run"].append("battery")
             battery_results = cls._check_battery_health()
@@ -607,7 +669,7 @@ class AlertService:
 
             logger.info(
                 f"Health checks complete: {results['alerts_generated']} alerts generated, "
-                f"{results['alerts_resolved']} resolved"
+                f"{results['alerts_resolved']} resolved, {results['alerts_cleaned']} old alerts cleaned"
             )
 
         except Exception as e:
