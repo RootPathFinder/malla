@@ -474,6 +474,8 @@
                                         <th>Node</th>
                                         <th>Hardware</th>
                                         <th>Firmware</th>
+                                        <th>Uptime</th>
+                                        <th>Capabilities</th>
                                         <th>Status</th>
                                         <th>Last Confirmed</th>
                                         <th>Actions</th>
@@ -491,6 +493,12 @@
                                         </td>
                                         <td id="admin-node-hw-{{ node.node_id }}">{{ node.hw_model or 'Unknown' }}</td>
                                         <td id="admin-node-fw-{{ node.node_id }}">{{ node.firmware_version or 'Unknown' }}</td>
+                                        <td id="admin-node-uptime-{{ node.node_id }}">
+                                            <span class="text-muted small">—</span>
+                                        </td>
+                                        <td id="admin-node-caps-{{ node.node_id }}">
+                                            <span class="text-muted small">—</span>
+                                        </td>
                                         <td id="admin-node-status-{{ node.node_id }}">
                                             <span class="badge bg-secondary">Not checked</span>
                                         </td>
@@ -1644,11 +1652,30 @@
         await getConfig(configType);
     }
 
-    // Refresh node admin info - tests admin access and fetches metadata
+    // Format uptime seconds to human readable string
+    function formatUptimeSeconds(seconds) {
+        if (!seconds || seconds <= 0) return '—';
+
+        const days = Math.floor(seconds / 86400);
+        const hours = Math.floor((seconds % 86400) / 3600);
+        const minutes = Math.floor((seconds % 3600) / 60);
+
+        const parts = [];
+        if (days > 0) parts.push(`${days}d`);
+        if (hours > 0) parts.push(`${hours}h`);
+        if (minutes > 0 || parts.length === 0) parts.push(`${minutes}m`);
+
+        return parts.join(' ');
+    }
+
+    // Refresh node admin info - tests admin access and fetches metadata + telemetry
     async function refreshNodeAdminInfo(nodeId) {
         const refreshBtn = document.getElementById(`admin-node-refresh-btn-${nodeId}`);
         const statusCell = document.getElementById(`admin-node-status-${nodeId}`);
         const fwCell = document.getElementById(`admin-node-fw-${nodeId}`);
+        const hwCell = document.getElementById(`admin-node-hw-${nodeId}`);
+        const capsCell = document.getElementById(`admin-node-caps-${nodeId}`);
+        const uptimeCell = document.getElementById(`admin-node-uptime-${nodeId}`);
         const confirmedCell = document.getElementById(`admin-node-confirmed-${nodeId}`);
 
         // Show loading state
@@ -1661,11 +1688,24 @@
         }
 
         try {
-            // Test admin access - this sends a device metadata request
-            const response = await fetch(`/api/admin/node/${encodeURIComponent(nodeId)}/test`, {
-                method: 'POST'
-            });
-            const data = await response.json();
+            // Fetch telemetry data in parallel with admin test
+            const [adminResponse, telemetryResponse] = await Promise.all([
+                fetch(`/api/admin/node/${encodeURIComponent(nodeId)}/test`, { method: 'POST' }),
+                fetch(`/api/node/${encodeURIComponent(nodeId)}/telemetry`)
+            ]);
+
+            const data = await adminResponse.json();
+            const telemetryData = await telemetryResponse.json();
+
+            // Update uptime from telemetry if available
+            if (uptimeCell && telemetryData.telemetry) {
+                const dm = telemetryData.telemetry.device_metrics;
+                if (dm && dm.uptime_seconds) {
+                    uptimeCell.innerHTML = `<span class="text-muted small" title="${dm.uptime_seconds} seconds">${formatUptimeSeconds(dm.uptime_seconds)}</span>`;
+                } else {
+                    uptimeCell.innerHTML = '<span class="text-muted small">—</span>';
+                }
+            }
 
             if (data.success && data.administrable) {
                 // Success - update the row with new info
@@ -1676,6 +1716,34 @@
                 // Update firmware version if returned
                 if (data.response && data.response.firmware_version && fwCell) {
                     fwCell.textContent = data.response.firmware_version;
+                }
+
+                // Update hardware model if returned
+                if (data.response && data.response.hw_model && hwCell) {
+                    hwCell.textContent = data.response.hw_model;
+                }
+
+                // Update capabilities icons
+                if (capsCell && data.response) {
+                    const caps = [];
+                    if (data.response.has_wifi) {
+                        caps.push('<i class="bi bi-wifi" title="WiFi"></i>');
+                    }
+                    if (data.response.has_bluetooth) {
+                        caps.push('<i class="bi bi-bluetooth" title="Bluetooth"></i>');
+                    }
+                    if (data.response.can_shutdown) {
+                        caps.push('<i class="bi bi-power" title="Can Shutdown"></i>');
+                    }
+                    if (data.response.role !== undefined && data.response.role !== null) {
+                        const roleNames = {
+                            0: 'Client', 1: 'Client Mute', 2: 'Router',
+                            3: 'Router Client', 4: 'Repeater', 5: 'Tracker', 6: 'Sensor'
+                        };
+                        const roleName = roleNames[data.response.role] || `Role ${data.response.role}`;
+                        caps.push(`<span class="badge bg-info text-dark" title="Device Role">${roleName}</span>`);
+                    }
+                    capsCell.innerHTML = caps.length > 0 ? caps.join(' ') : '<span class="text-muted small">—</span>';
                 }
 
                 // Update last confirmed time

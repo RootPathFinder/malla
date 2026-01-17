@@ -497,6 +497,11 @@ class AdminService:
             # Extract firmware version and metadata from device metadata response
             firmware_version = None
             device_metadata = None
+            hw_model = None
+            role = None
+            has_wifi = None
+            has_bluetooth = None
+            can_shutdown = None
             admin_msg = response.get("admin_message")
 
             if admin_msg and hasattr(admin_msg, "HasField"):
@@ -504,10 +509,15 @@ class AdminService:
                     if admin_msg.HasField("get_device_metadata_response"):
                         meta = admin_msg.get_device_metadata_response
                         firmware_version = meta.firmware_version
+                        hw_model = meta.hw_model
+                        role = meta.role
+                        has_wifi = meta.hasWifi
+                        has_bluetooth = meta.hasBluetooth
+                        can_shutdown = meta.canShutdown
                         device_metadata = str(meta)
                         logger.info(
                             f"Got device metadata from node {target_node_id}: "
-                            f"firmware={firmware_version}"
+                            f"firmware={firmware_version}, hw_model={hw_model}"
                         )
                 except Exception as e:
                     logger.warning(f"Failed to extract device metadata: {e}")
@@ -527,6 +537,8 @@ class AdminService:
                     {
                         "from_node": response.get("from_node"),
                         "firmware_version": firmware_version,
+                        "hw_model": hw_model,
+                        "role": role,
                     }
                 ),
             )
@@ -538,6 +550,11 @@ class AdminService:
                     "from_node": response.get("from_node"),
                     "administrable": True,
                     "firmware_version": firmware_version,
+                    "hw_model": hw_model,
+                    "role": role,
+                    "has_wifi": has_wifi,
+                    "has_bluetooth": has_bluetooth,
+                    "can_shutdown": can_shutdown,
                 },
             )
         else:
