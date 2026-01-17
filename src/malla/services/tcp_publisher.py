@@ -66,12 +66,40 @@ class TCPPublisher:
     @property
     def tcp_host(self) -> str:
         """Get the configured TCP host."""
+        if hasattr(self, "_override_host") and self._override_host:
+            return self._override_host
         return getattr(self._config, "admin_tcp_host", "192.168.1.1")
 
     @property
     def tcp_port(self) -> int:
         """Get the configured TCP port."""
+        if hasattr(self, "_override_port") and self._override_port:
+            return self._override_port
         return getattr(self._config, "admin_tcp_port", 4403)
+
+    def set_connection_params(
+        self, host: str | None = None, port: int | None = None
+    ) -> None:
+        """
+        Set TCP connection parameters.
+
+        Args:
+            host: IP address or hostname of the node
+            port: TCP port number
+        """
+        # Disconnect if currently connected with different params
+        if self._connected:
+            current_host = self.tcp_host
+            current_port = self.tcp_port
+            if (host and host != current_host) or (port and port != current_port):
+                self.disconnect()
+
+        if host:
+            self._override_host = host
+            logger.info(f"TCP host set to: {host}")
+        if port:
+            self._override_port = port
+            logger.info(f"TCP port set to: {port}")
 
     def connect(self) -> bool:
         """

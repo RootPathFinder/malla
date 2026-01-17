@@ -130,8 +130,12 @@ def api_tcp_connect():
 
         tcp_publisher = get_tcp_publisher()
 
-        # Update host/port if provided (this will require reinit in production)
-        # For now, just use configured values
+        # Update host/port if provided
+        if host or port:
+            tcp_publisher.set_connection_params(
+                host=host,
+                port=int(port) if port else None,
+            )
 
         if tcp_publisher.connect():
             local_node_id = tcp_publisher.get_local_node_id()
