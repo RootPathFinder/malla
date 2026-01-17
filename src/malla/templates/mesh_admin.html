@@ -1483,7 +1483,7 @@
                         <tr class="log-entry"
                             id="${entryId}"
                             data-bs-toggle="popover"
-                            data-bs-trigger="hover focus"
+                            data-bs-trigger="click"
                             data-bs-placement="left"
                             data-bs-html="true"
                             data-bs-custom-class="log-details-popover"
@@ -1497,7 +1497,7 @@
                                 ${entry.status}
                             </td>
                             <td>
-                                <i class="bi bi-info-circle text-muted" title="Hover for details"></i>
+                                <i class="bi bi-info-circle text-muted" title="Click for details"></i>
                             </td>
                         </tr>
                     `;
@@ -1508,12 +1508,23 @@
 
                 // Initialize popovers for the log entries
                 const popoverTriggerList = container.querySelectorAll('[data-bs-toggle="popover"]');
+                const popovers = [];
                 popoverTriggerList.forEach(el => {
-                    new bootstrap.Popover(el, {
+                    const popover = new bootstrap.Popover(el, {
                         container: 'body',
                         sanitize: false
                     });
+                    popovers.push(popover);
                 });
+
+                // Close popover when clicking outside
+                document.addEventListener('click', function closePopover(e) {
+                    // Check if click is outside any popover and its trigger
+                    const isPopoverClick = e.target.closest('.popover') || e.target.closest('[data-bs-toggle="popover"]');
+                    if (!isPopoverClick) {
+                        popovers.forEach(p => p.hide());
+                    }
+                }, { once: false });
             } else {
                 container.innerHTML = `
                     <div class="text-center py-5 text-muted">
@@ -1688,6 +1699,21 @@
         document.getElementById('log-tab').addEventListener('shown.bs.tab', function() {
             refreshLog();
         });
+
+        // Check for node parameter in URL and pre-fill the target node
+        const urlParams = new URLSearchParams(window.location.search);
+        const nodeParam = urlParams.get('node');
+        if (nodeParam) {
+            document.getElementById('targetNodeInput').value = nodeParam;
+            // Store the node ID for commands
+            window.selectedTargetNode = nodeParam;
+            // Switch to the Commands tab
+            const commandsTab = document.getElementById('commands-tab');
+            if (commandsTab) {
+                const tab = new bootstrap.Tab(commandsTab);
+                tab.show();
+            }
+        }
     });
 </script>
 {% endblock %}

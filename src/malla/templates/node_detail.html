@@ -83,6 +83,9 @@
                 <span id="adminBadge" class="badge bg-info d-none" title="This node is remotely administrable">
                     <i class="bi bi-gear-wide-connected"></i> Administrable
                 </span>
+                <a id="adminButton" href="/admin?node={{ node.hex_id }}" class="btn btn-sm btn-outline-info d-none ms-2" title="Administer this node">
+                    <i class="bi bi-sliders"></i> Admin
+                </a>
             </h1>
             <p class="text-muted">
                 Node ID: {{ node.hex_id }} ({{ node.node_id }})
@@ -827,9 +830,16 @@ async function checkAdminStatus() {
         const response = await fetch(`/api/admin/node/${nodeId}/check`);
         const data = await response.json();
         if (data.administrable) {
+            // Show the administrable badge
             const badge = document.getElementById('adminBadge');
             if (badge) {
                 badge.classList.remove('d-none');
+            }
+
+            // Show the admin button
+            const adminButton = document.getElementById('adminButton');
+            if (adminButton) {
+                adminButton.classList.remove('d-none');
             }
 
             // Display firmware version if available
