@@ -93,12 +93,17 @@
     .config-display {
         font-family: 'SF Mono', 'Monaco', 'Inconsolata', 'Fira Mono', monospace;
         font-size: 0.8rem;
-        background: var(--bs-dark);
-        color: #f8f9fa;
+        background: #1e1e1e;
+        color: #d4d4d4;
         padding: 1rem;
         border-radius: 0.5rem;
         max-height: 400px;
         overflow-y: auto;
+        border: 1px solid var(--bs-border-color);
+    }
+    [data-bs-theme="dark"] .config-display {
+        background: #0d1117;
+        border-color: #30363d;
     }
     .config-form {
         max-height: 500px;
