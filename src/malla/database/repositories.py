@@ -1177,6 +1177,12 @@ class NodeRepository:
                     return None
 
                 # Node exists but has no packets
+                # Access primary_channel safely in case column doesn't exist
+                try:
+                    primary_channel = node_info_row["primary_channel"]
+                except (KeyError, IndexError):
+                    primary_channel = None
+
                 node_info = {
                     "node_id": node_info_row["node_id"],
                     "hex_id": f"!{node_id:08x}",
@@ -1187,7 +1193,7 @@ class NodeRepository:
                     "short_name": node_info_row["short_name"],
                     "hw_model": node_info_row["hw_model"],
                     "role": node_info_row["role"],
-                    "primary_channel": node_info_row.get("primary_channel"),
+                    "primary_channel": primary_channel,
                     "total_packets": 0,
                     "last_seen": None,
                     "first_seen": None,
@@ -4996,7 +5002,7 @@ class BatteryAnalyticsRepository:
                         "hex_id": row["hex_id"],
                         "name": node_name,
                         "power_type": power_type,
-                        "power_type_reason": row.get("power_type_reason"),
+                        "power_type_reason": row["power_type_reason"],
                         "power_icon": power_icon,
                         "power_class": power_class,
                         "voltage": voltage,
