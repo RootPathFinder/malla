@@ -1988,9 +1988,15 @@
                     await refreshNodeAdminInfo(nodeId);
 
                     // Also refresh the admin status check for the selected node
-                    if (document.getElementById('targetNodeId') &&
-                        document.getElementById('targetNodeId').value == nodeId) {
+                    // Reset lastCheckedNodeId to force a refresh
+                    const targetNodeInput = document.getElementById('targetNodeInput');
+                    if (targetNodeInput && targetNodeInput.value.trim() == nodeId) {
+                        lastCheckedNodeId = null; // Force re-check
                         await checkAdminStatus(nodeId);
+                    } else {
+                        // If not the selected node, just update banner to success
+                        updateAdminStatusBanner('success', 'Session refreshed',
+                            'Admin session has been re-established with the rebooted node.');
                     }
 
                     showCommandResponse('Admin session refreshed. Node is ready for commands.');
