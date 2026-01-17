@@ -693,12 +693,22 @@
                 const value = data.heatmap[d][h];
                 const intensity = value / maxValue;
                 const color = getHeatmapColor(intensity);
+                const textColor = getHeatmapTextColor(intensity);
                 const tooltip = `${data.day_names[d]} ${h}:00 - ${value} packets`;
-                html += `<div class="heatmap-cell" style="background-color: ${color};" title="${tooltip}">${value > 0 ? value : ''}</div>`;
+                html += `<div class="heatmap-cell" style="background-color: ${color}; color: ${textColor};" title="${tooltip}">${value > 0 ? value : ''}</div>`;
             }
         }
 
         container.innerHTML = html;
+    }
+
+    function getHeatmapTextColor(intensity) {
+        // Use dark text for light backgrounds, white text for dark backgrounds
+        if (intensity < 0.4) {
+            return '#333';  // Dark text for light backgrounds
+        } else {
+            return '#fff';  // White text for dark backgrounds
+        }
     }
 
     function getHeatmapColor(intensity) {
