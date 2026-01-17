@@ -291,3 +291,24 @@ def _ensure_schema_migrations(cursor: sqlite3.Cursor) -> None:
             logging.error(f"Failed to migrate alerts table: {exc}")
             # Don't fail startup, just log the error
             _SCHEMA_MIGRATIONS_DONE.add("alerts_constraint_fix")
+
+    # Migration: Add 'archived' column to node_info table
+    if "node_info_archived" not in _SCHEMA_MIGRATIONS_DONE:
+        try:
+            cursor.execute("PRAGMA table_info(node_info)")
+            columns = [row[1] for row in cursor.fetchall()]
+
+            if "archived" not in columns:
+                cursor.execute(
+                    "ALTER TABLE node_info ADD COLUMN archived INTEGER DEFAULT 0"
+                )
+                logging.info(
+                    "Added archived column to node_info table via auto-migration"
+                )
+
+            _SCHEMA_MIGRATIONS_DONE.add("node_info_archived")
+        except sqlite3.OperationalError as exc:
+            if "duplicate column name" in str(exc).lower():
+                _SCHEMA_MIGRATIONS_DONE.add("node_info_archived")
+            else:
+                logging.warning(f"Failed to add archived column: {exc}")
