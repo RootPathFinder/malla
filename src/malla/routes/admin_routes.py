@@ -946,6 +946,128 @@ def api_create_template():
         return jsonify({"error": str(e)}), 500
 
 
+# Fields to exclude when creating templates from node configs
+# These are node-specific and shouldn't be templated
+TEMPLATE_EXCLUDED_FIELDS = {
+    "device": [],  # All device settings are templateable
+    "lora": [],  # All LoRa settings are templateable
+    "position": [
+        "latitude_i",
+        "longitude_i",
+        "altitude",
+        "fixed_position",
+    ],  # Location is node-specific
+    "power": [],  # All power settings are templateable
+    "network": [
+        "wifi_ssid",
+        "wifi_psk",
+        "ntp_server",
+    ],  # Credentials are node-specific
+    "display": [],  # All display settings are templateable
+    "bluetooth": ["fixed_pin"],  # PIN is node-specific
+    "channel": [],  # Channel settings can be templated (name, psk, etc.)
+}
+
+
+@admin_bp.route("/api/admin/templates/extract-from-node", methods=["POST"])
+def api_extract_template_from_node():
+    """
+    Extract configuration from a node to create a template.
+
+    This fetches the current config from a node and returns sanitized
+    config data suitable for templating (with node-specific fields removed).
+    """
+    try:
+        data = request.get_json()
+        if not data:
+            return jsonify({"error": "Request body required"}), 400
+
+        node_id_str = data.get("node_id")
+        config_type = data.get("config_type")
+        channel_index = data.get("channel_index", 0)
+
+        if not node_id_str:
+            return jsonify({"error": "node_id is required"}), 400
+        if not config_type:
+            return jsonify({"error": "config_type is required"}), 400
+
+        # Convert node ID
+        try:
+            node_id = convert_node_id(node_id_str)
+        except (ValueError, TypeError):
+            return jsonify({"error": f"Invalid node_id: {node_id_str}"}), 400
+
+        admin_service = get_admin_service()
+
+        # Handle channel config separately
+        if config_type == "channel":
+            result = admin_service.get_channel(
+                target_node_id=node_id,
+                channel_index=channel_index,
+            )
+        else:
+            # Map config_type string to ConfigType enum
+            config_type_map = {
+                "device": ConfigType.DEVICE,
+                "position": ConfigType.POSITION,
+                "power": ConfigType.POWER,
+                "network": ConfigType.NETWORK,
+                "display": ConfigType.DISPLAY,
+                "lora": ConfigType.LORA,
+                "bluetooth": ConfigType.BLUETOOTH,
+            }
+
+            if config_type not in config_type_map:
+                return jsonify({"error": f"Invalid config_type: {config_type}"}), 400
+
+            result = admin_service.get_config(
+                target_node_id=node_id,
+                config_type=config_type_map[config_type],
+            )
+
+        if not result.success:
+            return jsonify(
+                {
+                    "error": result.error or "Failed to get config from node",
+                    "attempts": result.attempts,
+                }
+            ), 500
+
+        # Extract the config data
+        raw_config = result.response
+
+        # For non-channel configs, extract the specific type's data
+        if config_type != "channel" and isinstance(raw_config, dict):
+            # The config response contains nested data for the config type
+            config_data = raw_config.get(config_type, raw_config)
+        else:
+            config_data = raw_config
+
+        # Sanitize the config - remove node-specific fields
+        excluded_fields = TEMPLATE_EXCLUDED_FIELDS.get(config_type, [])
+        if isinstance(config_data, dict):
+            sanitized_config = {
+                k: v for k, v in config_data.items() if k not in excluded_fields
+            }
+        else:
+            sanitized_config = config_data
+
+        return jsonify(
+            {
+                "success": True,
+                "config_type": config_type,
+                "config_data": sanitized_config,
+                "excluded_fields": excluded_fields,
+                "source_node_id": node_id,
+                "attempts": result.attempts,
+            }
+        )
+
+    except Exception as e:
+        logger.error(f"Error extracting template from node: {e}")
+        return jsonify({"error": str(e)}), 500
+
+
 @admin_bp.route("/api/admin/templates/<int:template_id>")
 def api_get_template(template_id):
     """Get a specific configuration template."""

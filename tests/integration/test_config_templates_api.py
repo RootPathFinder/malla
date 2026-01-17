@@ -254,3 +254,63 @@ class TestConfigTemplateDeploymentAPI:
         assert "deployments" in data
         assert "count" in data
         assert isinstance(data["deployments"], list)
+
+
+class TestExtractTemplateFromNode:
+    """Test extracting templates from nodes."""
+
+    @pytest.mark.integration
+    @pytest.mark.api
+    def test_extract_template_missing_node_id(self, client):
+        """Test extracting template without node_id fails."""
+        response = client.post(
+            "/api/admin/templates/extract-from-node",
+            json={"config_type": "lora"},
+        )
+        assert response.status_code == 400
+
+        data = response.get_json()
+        assert "error" in data
+        assert "node_id" in data["error"].lower()
+
+    @pytest.mark.integration
+    @pytest.mark.api
+    def test_extract_template_missing_config_type(self, client):
+        """Test extracting template without config_type fails."""
+        response = client.post(
+            "/api/admin/templates/extract-from-node",
+            json={"node_id": "12345678"},
+        )
+        assert response.status_code == 400
+
+        data = response.get_json()
+        assert "error" in data
+        assert "config_type" in data["error"].lower()
+
+    @pytest.mark.integration
+    @pytest.mark.api
+    def test_extract_template_invalid_config_type(self, client):
+        """Test extracting template with invalid config_type fails."""
+        response = client.post(
+            "/api/admin/templates/extract-from-node",
+            json={"node_id": "12345678", "config_type": "invalid"},
+        )
+        assert response.status_code == 400
+
+        data = response.get_json()
+        assert "error" in data
+        assert "invalid" in data["error"].lower()
+
+    @pytest.mark.integration
+    @pytest.mark.api
+    def test_extract_template_invalid_node_id(self, client):
+        """Test extracting template with invalid node_id format fails."""
+        response = client.post(
+            "/api/admin/templates/extract-from-node",
+            json={"node_id": "not-a-valid-id", "config_type": "lora"},
+        )
+        assert response.status_code == 400
+
+        data = response.get_json()
+        assert "error" in data
+        assert "invalid" in data["error"].lower()

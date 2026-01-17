@@ -747,9 +747,19 @@
                         <div class="col-md-5">
                             <div class="d-flex justify-content-between align-items-center mb-3">
                                 <h6 class="mb-0"><i class="bi bi-file-earmark-code"></i> Saved Templates</h6>
-                                <button class="btn btn-primary btn-sm" onclick="showCreateTemplateModal()">
-                                    <i class="bi bi-plus-lg"></i> New Template
-                                </button>
+                                <div class="dropdown">
+                                    <button class="btn btn-primary btn-sm dropdown-toggle" type="button" data-bs-toggle="dropdown">
+                                        <i class="bi bi-plus-lg"></i> New Template
+                                    </button>
+                                    <ul class="dropdown-menu dropdown-menu-end">
+                                        <li><a class="dropdown-item" href="#" onclick="showCreateTemplateModal(); return false;">
+                                            <i class="bi bi-pencil"></i> Create Empty Template
+                                        </a></li>
+                                        <li><a class="dropdown-item" href="#" onclick="showCreateFromNodeModal(); return false;">
+                                            <i class="bi bi-download"></i> Create from Node
+                                        </a></li>
+                                    </ul>
+                                </div>
                             </div>
                             <div class="mb-2">
                                 <select class="form-select form-select-sm" id="templateTypeFilter" onchange="loadTemplates()">
@@ -912,6 +922,111 @@
             <div class="modal-footer">
                 <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Cancel</button>
                 <button type="button" class="btn btn-danger" id="confirmModalBtn">Confirm</button>
+            </div>
+        </div>
+    </div>
+</div>
+
+<!-- Create Template from Node Modal -->
+<div class="modal fade" id="createFromNodeModal" tabindex="-1">
+    <div class="modal-dialog modal-lg">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h5 class="modal-title">
+                    <i class="bi bi-download"></i> Create Template from Node
+                </h5>
+                <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+            </div>
+            <div class="modal-body">
+                <p class="text-muted mb-3">
+                    Extract the current configuration from an existing node to use as a template.
+                    Node-specific settings (like location, credentials, etc.) will be automatically removed.
+                </p>
+
+                <!-- Step 1: Select Node and Config Type -->
+                <div id="extractStep1">
+                    <div class="row mb-3">
+                        <div class="col-md-6">
+                            <label class="form-label">Source Node</label>
+                            <select class="form-select" id="extractSourceNode">
+                                <option value="">Select an administrable node...</option>
+                            </select>
+                            <div class="form-text">Select a node to extract config from</div>
+                        </div>
+                        <div class="col-md-6">
+                            <label class="form-label">Config Type</label>
+                            <select class="form-select" id="extractConfigType">
+                                <option value="device">Device</option>
+                                <option value="lora" selected>LoRa</option>
+                                <option value="position">Position</option>
+                                <option value="power">Power</option>
+                                <option value="network">Network</option>
+                                <option value="display">Display</option>
+                                <option value="bluetooth">Bluetooth</option>
+                                <option value="channel">Channel</option>
+                            </select>
+                        </div>
+                    </div>
+                    <div class="mb-3" id="channelIndexRow" style="display: none;">
+                        <label class="form-label">Channel Index</label>
+                        <select class="form-select" id="extractChannelIndex">
+                            <option value="0">Primary (0)</option>
+                            <option value="1">Secondary (1)</option>
+                            <option value="2">Channel 2</option>
+                            <option value="3">Channel 3</option>
+                            <option value="4">Channel 4</option>
+                            <option value="5">Channel 5</option>
+                            <option value="6">Channel 6</option>
+                            <option value="7">Channel 7</option>
+                        </select>
+                    </div>
+                    <button class="btn btn-primary" onclick="extractConfigFromNode()" id="extractConfigBtn">
+                        <i class="bi bi-cloud-download"></i> Extract Configuration
+                    </button>
+                </div>
+
+                <!-- Step 2: Review and Name -->
+                <div id="extractStep2" style="display: none;">
+                    <div class="alert alert-success mb-3">
+                        <i class="bi bi-check-circle"></i>
+                        Configuration extracted successfully from node <strong id="extractedFromNode"></strong>
+                    </div>
+
+                    <div id="excludedFieldsWarning" class="alert alert-info mb-3" style="display: none;">
+                        <i class="bi bi-info-circle"></i>
+                        <strong>Note:</strong> The following node-specific fields were removed:
+                        <code id="excludedFieldsList"></code>
+                    </div>
+
+                    <div class="mb-3">
+                        <label class="form-label">Template Name</label>
+                        <input type="text" class="form-control" id="extractTemplateName"
+                               placeholder="e.g., Standard LoRa Settings">
+                    </div>
+                    <div class="mb-3">
+                        <label class="form-label">Description (optional)</label>
+                        <input type="text" class="form-control" id="extractTemplateDescription"
+                               placeholder="Describe what this template is for">
+                    </div>
+                    <div class="mb-3">
+                        <label class="form-label">Extracted Configuration</label>
+                        <textarea class="form-control font-monospace" id="extractedConfigData" rows="10" readonly></textarea>
+                        <div class="form-text">
+                            You can edit this configuration after creating the template.
+                        </div>
+                    </div>
+                </div>
+            </div>
+            <div class="modal-footer">
+                <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Cancel</button>
+                <button type="button" class="btn btn-outline-secondary" id="extractBackBtn" style="display: none;"
+                        onclick="resetExtractModal()">
+                    <i class="bi bi-arrow-left"></i> Back
+                </button>
+                <button type="button" class="btn btn-success" id="saveExtractedTemplateBtn" style="display: none;"
+                        onclick="saveExtractedTemplate()">
+                    <i class="bi bi-save"></i> Create Template
+                </button>
             </div>
         </div>
     </div>
@@ -3658,6 +3773,204 @@
             }
         } catch (error) {
             tbody.innerHTML = `<tr><td colspan="4" class="text-danger">Error: ${error.message}</td></tr>`;
+        }
+    }
+
+    // ============================================================================
+    // Create Template from Node
+    // ============================================================================
+
+    let extractedConfigType = null;
+    let extractedConfig = null;
+
+    function showCreateFromNodeModal() {
+        resetExtractModal();
+
+        // Populate node dropdown with administrable nodes
+        const nodeSelect = document.getElementById('extractSourceNode');
+        nodeSelect.innerHTML = '<option value="">Loading nodes...</option>';
+
+        fetch('/api/admin/nodes')
+            .then(r => r.json())
+            .then(data => {
+                if (data.nodes && data.nodes.length > 0) {
+                    let html = '<option value="">Select an administrable node...</option>';
+                    for (const node of data.nodes) {
+                        const displayName = node.long_name || node.short_name || node.node_hex;
+                        html += `<option value="${node.node_id}">${escapeHtml(displayName)} (${node.node_hex})</option>`;
+                    }
+                    nodeSelect.innerHTML = html;
+                } else {
+                    nodeSelect.innerHTML = '<option value="">No administrable nodes found</option>';
+                }
+            })
+            .catch(err => {
+                nodeSelect.innerHTML = '<option value="">Error loading nodes</option>';
+            });
+
+        // Show/hide channel index based on config type
+        document.getElementById('extractConfigType').addEventListener('change', function() {
+            document.getElementById('channelIndexRow').style.display =
+                this.value === 'channel' ? 'block' : 'none';
+        });
+
+        // Show the modal
+        const modal = new bootstrap.Modal(document.getElementById('createFromNodeModal'));
+        modal.show();
+    }
+
+    function resetExtractModal() {
+        // Reset to step 1
+        document.getElementById('extractStep1').style.display = 'block';
+        document.getElementById('extractStep2').style.display = 'none';
+        document.getElementById('extractBackBtn').style.display = 'none';
+        document.getElementById('saveExtractedTemplateBtn').style.display = 'none';
+
+        // Reset form
+        document.getElementById('extractSourceNode').value = '';
+        document.getElementById('extractConfigType').value = 'lora';
+        document.getElementById('extractChannelIndex').value = '0';
+        document.getElementById('channelIndexRow').style.display = 'none';
+        document.getElementById('extractTemplateName').value = '';
+        document.getElementById('extractTemplateDescription').value = '';
+        document.getElementById('extractedConfigData').value = '';
+
+        // Reset button state
+        const btn = document.getElementById('extractConfigBtn');
+        btn.disabled = false;
+        btn.innerHTML = '<i class="bi bi-cloud-download"></i> Extract Configuration';
+
+        extractedConfigType = null;
+        extractedConfig = null;
+    }
+
+    async function extractConfigFromNode() {
+        const nodeId = document.getElementById('extractSourceNode').value;
+        const configType = document.getElementById('extractConfigType').value;
+        const channelIndex = document.getElementById('extractChannelIndex').value;
+
+        if (!nodeId) {
+            showAlert('warning', 'Please select a source node');
+            return;
+        }
+
+        const btn = document.getElementById('extractConfigBtn');
+        btn.disabled = true;
+        btn.innerHTML = '<span class="spinner-border spinner-border-sm"></span> Extracting config (this may take up to 30s)...';
+
+        try {
+            const response = await fetch('/api/admin/templates/extract-from-node', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                    node_id: nodeId,
+                    config_type: configType,
+                    channel_index: parseInt(channelIndex),
+                }),
+            });
+
+            const data = await response.json();
+
+            if (response.ok && data.success) {
+                // Store extracted data
+                extractedConfigType = configType;
+                extractedConfig = data.config_data;
+
+                // Show extracted node info
+                const nodeName = document.getElementById('extractSourceNode').selectedOptions[0].text;
+                document.getElementById('extractedFromNode').textContent = nodeName;
+
+                // Show excluded fields warning if any
+                if (data.excluded_fields && data.excluded_fields.length > 0) {
+                    document.getElementById('excludedFieldsList').textContent = data.excluded_fields.join(', ');
+                    document.getElementById('excludedFieldsWarning').style.display = 'block';
+                } else {
+                    document.getElementById('excludedFieldsWarning').style.display = 'none';
+                }
+
+                // Populate config preview
+                document.getElementById('extractedConfigData').value = JSON.stringify(data.config_data, null, 2);
+
+                // Suggest a template name
+                const typeLabel = configType.charAt(0).toUpperCase() + configType.slice(1);
+                document.getElementById('extractTemplateName').value = `${typeLabel} Config from ${nodeName.split(' (')[0]}`;
+
+                // Switch to step 2
+                document.getElementById('extractStep1').style.display = 'none';
+                document.getElementById('extractStep2').style.display = 'block';
+                document.getElementById('extractBackBtn').style.display = 'inline-block';
+                document.getElementById('saveExtractedTemplateBtn').style.display = 'inline-block';
+
+            } else {
+                let errorMsg = data.error || 'Failed to extract configuration';
+                if (data.attempts) {
+                    errorMsg += ` (after ${data.attempts} attempt(s))`;
+                }
+                showAlert('danger', errorMsg);
+            }
+
+        } catch (error) {
+            showAlert('danger', `Error: ${error.message}`);
+        } finally {
+            btn.disabled = false;
+            btn.innerHTML = '<i class="bi bi-cloud-download"></i> Extract Configuration';
+        }
+    }
+
+    async function saveExtractedTemplate() {
+        const name = document.getElementById('extractTemplateName').value.trim();
+        const description = document.getElementById('extractTemplateDescription').value.trim();
+
+        if (!name) {
+            showAlert('warning', 'Please enter a template name');
+            return;
+        }
+
+        if (!extractedConfig) {
+            showAlert('danger', 'No configuration data to save');
+            return;
+        }
+
+        const btn = document.getElementById('saveExtractedTemplateBtn');
+        btn.disabled = true;
+        btn.innerHTML = '<span class="spinner-border spinner-border-sm"></span> Saving...';
+
+        try {
+            const response = await fetch('/api/admin/templates', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                    name: name,
+                    template_type: extractedConfigType,
+                    description: description,
+                    config_data: extractedConfig,
+                }),
+            });
+
+            const data = await response.json();
+
+            if (response.ok && data.success) {
+                // Close modal
+                bootstrap.Modal.getInstance(document.getElementById('createFromNodeModal')).hide();
+
+                // Refresh templates list
+                loadTemplates();
+
+                // Select the new template
+                setTimeout(() => {
+                    selectTemplate(data.template_id);
+                }, 500);
+
+                showAlert('success', `Template "${name}" created successfully`);
+            } else {
+                showAlert('danger', data.error || 'Failed to create template');
+            }
+
+        } catch (error) {
+            showAlert('danger', `Error: ${error.message}`);
+        } finally {
+            btn.disabled = false;
+            btn.innerHTML = '<i class="bi bi-save"></i> Create Template';
         }
     }
 </script>
