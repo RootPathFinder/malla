@@ -18,6 +18,7 @@ from enum import Enum
 from typing import Any
 
 from ..database.connection import get_db_connection
+from ..database.repositories import BatteryAnalyticsRepository
 from ..utils.node_utils import get_bulk_node_names
 
 logger = logging.getLogger(__name__)
@@ -81,6 +82,8 @@ class AlertType(Enum):
     ACTIVITY_ANOMALY = "activity_anomaly"
     GATEWAY_OFFLINE = "gateway_offline"
     HIGH_PACKET_LOSS = "high_packet_loss"
+    SOLAR_CHARGING_ISSUE = "solar_charging_issue"
+    SOLAR_CHARGING_CRITICAL = "solar_charging_critical"
 
 
 @dataclass
@@ -670,6 +673,10 @@ class AlertService:
             anomaly_results = cls._check_activity_anomalies()
             results["alerts_generated"] += anomaly_results.get("alerts", 0)
 
+            results["checks_run"].append("solar_charging")
+            solar_results = cls._check_solar_charging()
+            results["alerts_generated"] += solar_results.get("alerts", 0)
+
             logger.info(
                 f"Health checks complete: {results['alerts_generated']} alerts generated, "
                 f"{results['alerts_resolved']} resolved, {results['alerts_cleaned']} old alerts cleaned"
@@ -780,6 +787,76 @@ class AlertService:
 
         except Exception as e:
             logger.error(f"Error checking battery health: {e}")
+
+        return {"alerts": alerts_generated}
+
+    @classmethod
+    def _check_solar_charging(cls) -> dict[str, Any]:
+        """Check solar nodes for charging issues (cloudy conditions, panel problems).
+
+        This uses the BatteryAnalyticsRepository to identify solar nodes
+        that are experiencing reduced charging, which could indicate:
+        - Cloudy weather conditions
+        - Panel obstruction (leaves, snow, etc.)
+        - Panel degradation or damage
+        - Wiring issues
+        """
+        alerts_generated = 0
+
+        try:
+            # Get all solar nodes with charging issues
+            solar_issues = (
+                BatteryAnalyticsRepository.get_solar_nodes_with_charging_issues()
+            )
+
+            for node in solar_issues:
+                node_id = node["node_id"]
+                cloud_level = node["cloud_level"]
+                charging_status = node["charging_status"]
+                hours_without_charge = node["hours_without_charge"]
+                reason = node["reason"]
+                node_name = node["name"]
+                avg_charge = node.get("avg_charge_percent", 0)
+
+                if cloud_level >= 4 or charging_status == "critical":
+                    # Critical solar charging issue
+                    cls.add_alert(
+                        Alert(
+                            alert_type=AlertType.SOLAR_CHARGING_CRITICAL,
+                            severity=AlertSeverity.CRITICAL,
+                            node_id=node_id,
+                            title=f"Solar Critical: {node_name}",
+                            message=f"{reason}. Average charging at {avg_charge}% of normal.",
+                            metadata={
+                                "cloud_level": cloud_level,
+                                "charging_status": charging_status,
+                                "hours_without_charge": hours_without_charge,
+                                "avg_charge_percent": avg_charge,
+                            },
+                        )
+                    )
+                    alerts_generated += 1
+                elif cloud_level >= 2:
+                    # Warning level solar charging issue
+                    cls.add_alert(
+                        Alert(
+                            alert_type=AlertType.SOLAR_CHARGING_ISSUE,
+                            severity=AlertSeverity.WARNING,
+                            node_id=node_id,
+                            title=f"Solar Reduced: {node_name}",
+                            message=f"{reason}. Average charging at {avg_charge}% of normal.",
+                            metadata={
+                                "cloud_level": cloud_level,
+                                "charging_status": charging_status,
+                                "hours_without_charge": hours_without_charge,
+                                "avg_charge_percent": avg_charge,
+                            },
+                        )
+                    )
+                    alerts_generated += 1
+
+        except Exception as e:
+            logger.error(f"Error checking solar charging: {e}")
 
         return {"alerts": alerts_generated}
 

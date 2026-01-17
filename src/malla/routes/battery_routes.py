@@ -259,3 +259,91 @@ def voltage_trends():
     except Exception as e:
         logger.error(f"Error getting voltage trends: {e}", exc_info=True)
         return jsonify({"error": str(e), "nodes": {}, "count": 0}), 500
+
+
+@battery_bp.route("/api/solar-charging-status", methods=["GET"])
+def solar_charging_status():
+    """API endpoint to get solar charging status for all solar nodes.
+
+    Returns cloud level and charging status for each solar node.
+    Cloud levels indicate charging issues:
+    - 0: Good (>80% of normal charging)
+    - 1: Slightly reduced (60-80%)
+    - 2: Reduced (40-60%) - possible cloudy conditions
+    - 3: Poor (20-40%) - likely overcast/obstructed
+    - 4: Critical (<20%) - minimal/no charging
+    """
+    try:
+        # Get all solar nodes with charging issues
+        issues = BatteryAnalyticsRepository.get_solar_nodes_with_charging_issues()
+
+        # Also get all solar nodes for complete view
+        conn = get_db_connection()
+        cursor = conn.cursor()
+        cursor.execute(
+            """
+            SELECT node_id, hex_id, long_name, short_name
+            FROM node_info WHERE power_type = 'solar'
+            """
+        )
+        solar_nodes = cursor.fetchall()
+        conn.close()
+
+        # Build response with all solar nodes
+        results = []
+
+        for node in solar_nodes:
+            node_id = node["node_id"]
+            name = node["long_name"] or node["short_name"] or node["hex_id"]
+
+            # Check if this node has issues
+            issue = next((i for i in issues if i["node_id"] == node_id), None)
+
+            if issue:
+                results.append(
+                    {
+                        "node_id": node_id,
+                        "hex_id": node["hex_id"],
+                        "name": name,
+                        "cloud_level": issue["cloud_level"],
+                        "charging_status": issue["charging_status"],
+                        "hours_without_charge": issue["hours_without_charge"],
+                        "avg_charge_percent": issue.get("avg_charge_percent", 0),
+                        "reason": issue["reason"],
+                    }
+                )
+            else:
+                # Node has good charging
+                status = BatteryAnalyticsRepository.analyze_solar_charging_status(
+                    node_id, hours=72
+                )
+                results.append(
+                    {
+                        "node_id": node_id,
+                        "hex_id": node["hex_id"],
+                        "name": name,
+                        "cloud_level": status.get("cloud_level", 0),
+                        "charging_status": status.get("charging_status", "unknown"),
+                        "hours_without_charge": status.get("hours_without_charge", 0),
+                        "avg_charge_percent": status.get("avg_charge_percent", 0),
+                        "reason": status.get("reason", ""),
+                    }
+                )
+
+        # Sort by cloud level (most severe first)
+        results.sort(key=lambda x: -x["cloud_level"])
+
+        logger.info(
+            f"Solar charging status: {len(results)} nodes, {len(issues)} with issues"
+        )
+        return jsonify(
+            {
+                "nodes": results,
+                "count": len(results),
+                "issues_count": len(issues),
+            }
+        )
+
+    except Exception as e:
+        logger.error(f"Error getting solar charging status: {e}", exc_info=True)
+        return jsonify({"error": str(e), "nodes": [], "count": 0}), 500

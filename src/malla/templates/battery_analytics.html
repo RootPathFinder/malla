@@ -2,6 +2,25 @@
 
 {% block title %}Battery Analytics - {{ APP_NAME }}{% endblock %}
 
+{% block styles %}
+<style>
+    /* Solar cloud indicator styling */
+    .solar-clouds {
+        display: inline-flex;
+        align-items: center;
+        margin-left: 4px;
+        cursor: help;
+    }
+    .solar-clouds i {
+        font-size: 0.75rem;
+        margin-left: -2px;
+    }
+    .solar-clouds i:first-child {
+        margin-left: 4px;
+    }
+</style>
+{% endblock %}
+
 {% block content %}
 <div class="container-fluid">
     {% if error_message %}
@@ -220,6 +239,29 @@
                                         <span {% if node.power_type_reason %}data-bs-toggle="tooltip" data-bs-placement="top" title="{{ node.power_type_reason }}" style="cursor:help; border-bottom: 1px dotted #ccc;"{% endif %}>
                                         {% if node.power_type == 'solar' %}
                                             <i class="bi bi-sun-fill text-warning"></i> Solar
+                                            {% if node.cloud_level >= 4 %}
+                                                <span class="solar-clouds" data-bs-toggle="tooltip" data-bs-placement="top" title="{{ node.solar_charging_reason or 'Critical: No solar charging' }}">
+                                                    <i class="bi bi-cloud-fill text-secondary"></i>
+                                                    <i class="bi bi-cloud-fill text-secondary"></i>
+                                                    <i class="bi bi-cloud-fill text-secondary"></i>
+                                                    <i class="bi bi-cloud-fill text-danger"></i>
+                                                </span>
+                                            {% elif node.cloud_level >= 3 %}
+                                                <span class="solar-clouds" data-bs-toggle="tooltip" data-bs-placement="top" title="{{ node.solar_charging_reason or 'Poor solar charging' }}">
+                                                    <i class="bi bi-cloud-fill text-secondary"></i>
+                                                    <i class="bi bi-cloud-fill text-secondary"></i>
+                                                    <i class="bi bi-cloud-fill text-warning"></i>
+                                                </span>
+                                            {% elif node.cloud_level >= 2 %}
+                                                <span class="solar-clouds" data-bs-toggle="tooltip" data-bs-placement="top" title="{{ node.solar_charging_reason or 'Reduced solar charging' }}">
+                                                    <i class="bi bi-cloud-fill text-secondary"></i>
+                                                    <i class="bi bi-cloud text-secondary"></i>
+                                                </span>
+                                            {% elif node.cloud_level == 1 %}
+                                                <span class="solar-clouds" data-bs-toggle="tooltip" data-bs-placement="top" title="{{ node.solar_charging_reason or 'Slightly reduced charging' }}">
+                                                    <i class="bi bi-cloud text-secondary opacity-50"></i>
+                                                </span>
+                                            {% endif %}
                                         {% elif node.power_type == 'battery' %}
                                             <i class="bi bi-battery-half text-info"></i> Battery
                                         {% elif node.power_type == 'mains' %}

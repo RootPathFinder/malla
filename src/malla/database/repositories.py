@@ -4602,6 +4602,17 @@ class BatteryAnalyticsRepository:
                     except Exception:
                         pass
 
+                # Get solar charging status for solar nodes
+                solar_status = None
+                cloud_level = 0
+                if row["power_type"] == "solar":
+                    solar_status = (
+                        BatteryAnalyticsRepository.analyze_solar_charging_status(
+                            node_id, hours=72
+                        )
+                    )
+                    cloud_level = solar_status.get("cloud_level", 0)
+
                 results.append(
                     {
                         "node_id": node_id,
@@ -4615,6 +4626,13 @@ class BatteryAnalyticsRepository:
                         "health_issues": health_issues,
                         "last_telemetry": last_telemetry_str,
                         "status_class": status_class,
+                        "cloud_level": cloud_level,
+                        "solar_charging_status": solar_status.get("charging_status")
+                        if solar_status
+                        else None,
+                        "solar_charging_reason": solar_status.get("reason")
+                        if solar_status
+                        else None,
                     }
                 )
 
@@ -5027,4 +5045,280 @@ class BatteryAnalyticsRepository:
             logger.error(
                 f"Error getting nodes with battery telemetry: {e}", exc_info=True
             )
+            return []
+
+    @staticmethod
+    def analyze_solar_charging_status(node_id: int, hours: int = 72) -> dict[str, Any]:
+        """Analyze solar charging status for a node over recent days.
+
+        This detects when solar nodes are experiencing poor charging conditions
+        (cloudy weather, panel obstruction, etc.) by comparing recent charging
+        patterns to their historical baseline.
+
+        Args:
+            node_id: The node ID to analyze
+            hours: Number of hours to analyze (default 72 = 3 days)
+
+        Returns:
+            Dictionary with solar charging status:
+            - charging_status: 'good', 'reduced', 'poor', 'critical', 'unknown'
+            - cloud_level: 0-4 (0=sunny, 1-4=increasingly cloudy)
+            - hours_without_charge: Hours since meaningful charge detected
+            - daily_charge_percent: List of daily charge percentages
+            - reason: Human-readable explanation
+        """
+        try:
+            conn = get_db_connection()
+            cursor = conn.cursor()
+
+            # First check if this is actually a solar node
+            cursor.execute(
+                "SELECT power_type FROM node_info WHERE node_id = ?",
+                (node_id,),
+            )
+            node_row = cursor.fetchone()
+            if not node_row or node_row["power_type"] != "solar":
+                conn.close()
+                return {
+                    "charging_status": "not_solar",
+                    "cloud_level": 0,
+                    "hours_without_charge": 0,
+                    "daily_charge_percent": [],
+                    "reason": "Node is not classified as solar powered",
+                }
+
+            # Get battery telemetry for the analysis period
+            cutoff_time = time.time() - (hours * 3600)
+            cursor.execute(
+                """
+                SELECT voltage, battery_level, timestamp
+                FROM telemetry_data
+                WHERE node_id = ? AND timestamp > ?
+                AND (voltage IS NOT NULL OR battery_level IS NOT NULL)
+                ORDER BY timestamp ASC
+            """,
+                (node_id, cutoff_time),
+            )
+            readings = cursor.fetchall()
+            conn.close()
+
+            if len(readings) < 10:
+                return {
+                    "charging_status": "unknown",
+                    "cloud_level": 0,
+                    "hours_without_charge": 0,
+                    "daily_charge_percent": [],
+                    "reason": "Insufficient data for solar analysis",
+                }
+
+            # Analyze charging patterns by day
+            daily_data: dict[str, dict[str, Any]] = {}
+            last_charge_time = None
+
+            for reading in readings:
+                ts = reading["timestamp"]
+                battery_level = reading["battery_level"]
+                voltage = reading["voltage"]
+
+                # Scale voltage if needed
+                if voltage is not None and voltage < 1:
+                    voltage = voltage * 1000
+
+                # Group by date
+                dt = datetime.fromtimestamp(ts, tz=UTC)
+                date_key = dt.strftime("%Y-%m-%d")
+
+                if date_key not in daily_data:
+                    daily_data[date_key] = {
+                        "min_level": 100,
+                        "max_level": 0,
+                        "min_voltage": 5.0,
+                        "max_voltage": 0.0,
+                        "readings": 0,
+                        "daytime_increase": False,
+                    }
+
+                day = daily_data[date_key]
+                day["readings"] += 1
+
+                if battery_level is not None:
+                    if battery_level < day["min_level"]:
+                        day["min_level"] = battery_level
+                    if battery_level > day["max_level"]:
+                        day["max_level"] = battery_level
+                        # Track when charging occurred
+                        last_charge_time = ts
+
+                if voltage is not None:
+                    if voltage < day["min_voltage"]:
+                        day["min_voltage"] = voltage
+                    if voltage > day["max_voltage"]:
+                        day["max_voltage"] = voltage
+
+                # Check if this is a daytime reading with increasing level
+                hour = dt.hour
+                if 9 <= hour <= 17 and battery_level is not None:
+                    day["daytime_increase"] = True
+
+            # Calculate daily charge percentages
+            daily_charge_percent = []
+            for date_key in sorted(daily_data.keys()):
+                day = daily_data[date_key]
+                if day["readings"] >= 3 and day["max_level"] > 0:
+                    # Charge range as percentage of max possible range
+                    charge_range = day["max_level"] - day["min_level"]
+                    # For solar, we expect at least 10-20% swing on a good day
+                    # Normalize to 100% = 20%+ swing
+                    charge_pct = min(100, int((charge_range / 20.0) * 100))
+                    daily_charge_percent.append(
+                        {
+                            "date": date_key,
+                            "charge_percent": charge_pct,
+                            "range": charge_range,
+                            "min": day["min_level"],
+                            "max": day["max_level"],
+                        }
+                    )
+
+            # Calculate hours since last meaningful charge
+            hours_without_charge = 0
+            if last_charge_time:
+                hours_without_charge = int((time.time() - last_charge_time) / 3600)
+
+            # Determine charging status and cloud level
+            if not daily_charge_percent:
+                return {
+                    "charging_status": "unknown",
+                    "cloud_level": 0,
+                    "hours_without_charge": hours_without_charge,
+                    "daily_charge_percent": [],
+                    "reason": "No daily charging data available",
+                }
+
+            # Average charge percentage over recent days
+            recent_charges = [d["charge_percent"] for d in daily_charge_percent[-3:]]
+            avg_charge = (
+                sum(recent_charges) / len(recent_charges) if recent_charges else 0
+            )
+
+            # Determine cloud level (0-4)
+            if avg_charge >= 80:
+                cloud_level = 0
+                charging_status = "good"
+                reason = "Normal solar charging detected"
+            elif avg_charge >= 60:
+                cloud_level = 1
+                charging_status = "reduced"
+                reason = "Slightly reduced solar charging"
+            elif avg_charge >= 40:
+                cloud_level = 2
+                charging_status = "reduced"
+                reason = "Reduced solar charging - possible cloudy conditions"
+            elif avg_charge >= 20:
+                cloud_level = 3
+                charging_status = "poor"
+                reason = "Poor solar charging - likely overcast or obstructed"
+            else:
+                cloud_level = 4
+                charging_status = "critical"
+                reason = "Critical - minimal to no solar charging detected"
+
+            # Increase cloud level for prolonged issues
+            if hours_without_charge > 24 and cloud_level < 4:
+                cloud_level = min(4, cloud_level + 1)
+                if charging_status != "critical":
+                    charging_status = "poor"
+                    reason = f"No charging for {hours_without_charge}h - check panel"
+
+            if hours_without_charge > 48:
+                cloud_level = 4
+                charging_status = "critical"
+                reason = f"No charging for {hours_without_charge}h - critical"
+
+            return {
+                "charging_status": charging_status,
+                "cloud_level": cloud_level,
+                "hours_without_charge": hours_without_charge,
+                "daily_charge_percent": daily_charge_percent,
+                "avg_charge_percent": int(avg_charge),
+                "reason": reason,
+            }
+
+        except Exception as e:
+            logger.error(f"Error analyzing solar charging status: {e}", exc_info=True)
+            return {
+                "charging_status": "unknown",
+                "cloud_level": 0,
+                "hours_without_charge": 0,
+                "daily_charge_percent": [],
+                "reason": f"Error: {e}",
+            }
+
+    @staticmethod
+    def get_solar_nodes_with_charging_issues() -> list[dict[str, Any]]:
+        """Get all solar nodes that are experiencing charging issues.
+
+        Returns:
+            List of solar nodes with poor/critical charging status
+        """
+        try:
+            conn = get_db_connection()
+            cursor = conn.cursor()
+
+            # Get all solar-powered nodes
+            cursor.execute(
+                """
+                SELECT
+                    ni.node_id,
+                    COALESCE(ni.hex_id, printf('!%08x', ni.node_id)) as hex_id,
+                    ni.long_name,
+                    ni.short_name,
+                    ni.power_type_reason,
+                    ni.last_battery_voltage
+                FROM node_info ni
+                WHERE ni.power_type = 'solar'
+            """
+            )
+            solar_nodes = cursor.fetchall()
+            conn.close()
+
+            results = []
+            for node in solar_nodes:
+                node_id = node["node_id"]
+                node_name = node["long_name"] or node["short_name"] or node["hex_id"]
+
+                # Analyze charging status
+                status = BatteryAnalyticsRepository.analyze_solar_charging_status(
+                    node_id, hours=72
+                )
+
+                # Only include nodes with issues
+                if status["cloud_level"] >= 2:
+                    voltage = node["last_battery_voltage"]
+                    if voltage is not None and voltage < 1:
+                        voltage = voltage * 1000
+
+                    results.append(
+                        {
+                            "node_id": node_id,
+                            "hex_id": node["hex_id"],
+                            "name": node_name,
+                            "power_type_reason": node["power_type_reason"],
+                            "voltage": voltage,
+                            "charging_status": status["charging_status"],
+                            "cloud_level": status["cloud_level"],
+                            "hours_without_charge": status["hours_without_charge"],
+                            "avg_charge_percent": status.get("avg_charge_percent", 0),
+                            "reason": status["reason"],
+                        }
+                    )
+
+            # Sort by severity (highest cloud level first)
+            results.sort(key=lambda x: -x["cloud_level"])
+
+            logger.info(f"Found {len(results)} solar nodes with charging issues")
+            return results
+
+        except Exception as e:
+            logger.error(f"Error getting solar nodes with issues: {e}", exc_info=True)
             return []
