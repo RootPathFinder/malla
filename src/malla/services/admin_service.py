@@ -92,16 +92,22 @@ class AdminPublisher(Protocol):
 
 
 class ConfigType(Enum):
-    """Configuration types that can be requested."""
+    """Configuration types that can be requested.
 
-    DEVICE = 1
-    POSITION = 2
-    POWER = 3
-    NETWORK = 4
-    DISPLAY = 5
-    LORA = 6
-    BLUETOOTH = 7
-    SECURITY = 8
+    Values must match meshtastic.admin_pb2.AdminMessage.ConfigType enum:
+    DEVICE_CONFIG = 0, POSITION_CONFIG = 1, POWER_CONFIG = 2, NETWORK_CONFIG = 3,
+    DISPLAY_CONFIG = 4, LORA_CONFIG = 5, BLUETOOTH_CONFIG = 6, SECURITY_CONFIG = 7,
+    SESSIONKEY_CONFIG = 8, DEVICEUI_CONFIG = 9
+    """
+
+    DEVICE = 0
+    POSITION = 1
+    POWER = 2
+    NETWORK = 3
+    DISPLAY = 4
+    LORA = 5
+    BLUETOOTH = 6
+    SECURITY = 7
 
 
 @dataclass
