@@ -907,6 +907,7 @@ def api_create_template():
             "display",
             "bluetooth",
             "channel",
+            "channels",  # Full channel set (all 8 channels)
         ]
         if template_type not in valid_types:
             return jsonify(
@@ -964,8 +965,9 @@ TEMPLATE_EXCLUDED_FIELDS = {
         "ntp_server",
     ],  # Credentials are node-specific
     "display": [],  # All display settings are templateable
-    "bluetooth": ["fixed_pin"],  # PIN is node-specific
+    "bluetooth": [],  # All bluetooth settings are templateable (including PIN for fleet)
     "channel": [],  # Channel settings can be templated (name, psk, etc.)
+    "channels": [],  # Full channel set (all 8 channels)
 }
 
 
@@ -1004,6 +1006,32 @@ def api_extract_template_from_node():
             result = admin_service.get_channel(
                 target_node_id=node_id,
                 channel_index=channel_index,
+            )
+        elif config_type == "channels":
+            # Fetch all 8 channels
+            all_channels = []
+            total_attempts = 0
+            for idx in range(8):
+                result = admin_service.get_channel(
+                    target_node_id=node_id,
+                    channel_index=idx,
+                )
+                total_attempts += result.attempts or 0
+                if result.success and result.response:
+                    channel_data = result.response
+                    # Only include enabled channels (role != DISABLED)
+                    if channel_data.get("role", 0) != 0:
+                        all_channels.append(channel_data)
+
+            return jsonify(
+                {
+                    "success": True,
+                    "config_type": "channels",
+                    "config_data": {"channels": all_channels},
+                    "excluded_fields": [],
+                    "source_node_id": node_id,
+                    "attempts": total_attempts,
+                }
             )
         else:
             # Map config_type string to ConfigType enum
@@ -1204,6 +1232,51 @@ def api_deploy_template(template_id):
                         target_node_id=node_id_int,
                         channel_index=channel_index,
                         channel_data=config_data,
+                    )
+                elif template_type == "channels":
+                    # Deploy all channels in the set
+                    channels = config_data.get("channels", [])
+                    if not channels:
+                        raise ValueError("No channels in template")
+
+                    # Apply each channel
+                    all_success = True
+                    channel_results = []
+                    for channel in channels:
+                        channel_index = channel.get("index", 0)
+                        ch_result = admin_service.set_channel(
+                            target_node_id=node_id_int,
+                            channel_index=channel_index,
+                            channel_data=channel,
+                        )
+                        channel_results.append(
+                            {
+                                "index": channel_index,
+                                "success": ch_result.success,
+                                "error": ch_result.error,
+                            }
+                        )
+                        if not ch_result.success:
+                            all_success = False
+
+                    # Create synthetic result for the batch
+                    from dataclasses import dataclass
+
+                    @dataclass
+                    class BatchResult:
+                        success: bool
+                        error: str | None
+                        response: dict | None
+
+                    result = BatchResult(
+                        success=all_success,
+                        error=None
+                        if all_success
+                        else f"Some channels failed: {channel_results}",
+                        response={
+                            "message": f"Applied {len(channels)} channels",
+                            "details": channel_results,
+                        },
                     )
                 else:
                     # Map template type to ConfigType enum
