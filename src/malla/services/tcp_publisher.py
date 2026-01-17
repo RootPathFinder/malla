@@ -58,6 +58,10 @@ class TCPPublisher:
         self._response_lock = threading.Lock()
         self._response_events: dict[int, threading.Event] = {}
 
+        # General admin response tracking
+        self._last_admin_response: dict[str, Any] | None = None
+        self._admin_response_event = threading.Event()
+
     @property
     def is_connected(self) -> bool:
         """Check if connected to the node."""
@@ -135,6 +139,12 @@ class TCPPublisher:
                 if self._interface.localNode:
                     node_id = self._interface.localNode.nodeNum
                     logger.info(f"Local node ID: {node_id} (!{node_id:08x})")
+                    logger.info(
+                        "This node will be used to send admin commands to other nodes"
+                    )
+
+                    # Also subscribe to all received packets for debugging
+                    pub.subscribe(self._on_receive, "meshtastic.receive.admin")
 
                 return True
 
@@ -162,26 +172,42 @@ class TCPPublisher:
                     self._connected = False
                     logger.info("Disconnected from Meshtastic node")
 
-    def _on_receive(self, packet: dict[str, Any], interface: Any) -> None:
-        """Handle received packets."""
+    def _on_receive(self, packet: dict[str, Any], interface: Any = None) -> None:
+        """Handle received packets from pubsub."""
         try:
-            # Check if this is a response to a pending request
-            request_id = packet.get("requestId")
-            if request_id and request_id in self._pending_responses:
-                with self._response_lock:
-                    self._pending_responses[request_id] = {
-                        "packet": packet,
-                        "received_at": time.time(),
-                    }
-                    if request_id in self._response_events:
-                        self._response_events[request_id].set()
+            logger.debug(f"Received packet: {packet.get('decoded', {}).get('portnum')}")
 
-            # Also check decoded for admin messages
+            # Check for admin responses
             decoded = packet.get("decoded", {})
             portnum = decoded.get("portnum")
+
             if portnum == "ADMIN_APP":
                 from_node = packet.get("fromId") or packet.get("from")
-                logger.debug(f"Received admin response from {from_node}")
+                logger.info(f"Received admin response from {from_node}")
+
+                # Signal any waiting requests
+                # The meshtastic library uses 'requestId' for response correlation
+                request_id = packet.get("requestId")
+                if request_id:
+                    with self._response_lock:
+                        # Store the response for any matching pending request
+                        if request_id in self._pending_responses:
+                            self._pending_responses[request_id] = {
+                                "packet": packet,
+                                "received_at": time.time(),
+                                "from_node": from_node,
+                            }
+                            if request_id in self._response_events:
+                                self._response_events[request_id].set()
+
+                # Also check for destination-based matching (for our random packet IDs)
+                # Store last admin response for general use
+                self._last_admin_response = {
+                    "packet": packet,
+                    "from_node": from_node,
+                    "received_at": time.time(),
+                }
+                self._admin_response_event.set()
 
         except Exception as e:
             logger.error(f"Error processing received packet: {e}")
@@ -199,27 +225,45 @@ class TCPPublisher:
         Returns:
             Response data or None if timeout
         """
+        # Clear any previous response
+        self._admin_response_event.clear()
+        self._last_admin_response = None
+
         event = threading.Event()
 
         with self._response_lock:
             self._response_events[packet_id] = event
+            self._pending_responses[packet_id] = {}  # Mark as pending
 
-            # Check if already received
-            if packet_id in self._pending_responses:
-                response = self._pending_responses.pop(packet_id)
-                del self._response_events[packet_id]
+        logger.debug(f"Waiting for response to packet {packet_id}, timeout={timeout}s")
+
+        # Wait for either specific packet response or general admin response
+        start_time = time.time()
+        while time.time() - start_time < timeout:
+            # Check for specific packet ID match
+            if event.wait(timeout=0.5):
+                with self._response_lock:
+                    if packet_id in self._pending_responses:
+                        response = self._pending_responses.pop(packet_id)
+                        if response:  # Has actual response data (not just empty dict)
+                            self._response_events.pop(packet_id, None)
+                            logger.info(f"Got specific response for packet {packet_id}")
+                            return response
+
+            # Check for general admin response
+            if self._admin_response_event.is_set() and self._last_admin_response:
+                response = self._last_admin_response
+                self._last_admin_response = None
+                self._admin_response_event.clear()
+                logger.info(f"Got admin response from {response.get('from_node')}")
+                # Cleanup
+                with self._response_lock:
+                    self._pending_responses.pop(packet_id, None)
+                    self._response_events.pop(packet_id, None)
                 return response
 
-        # Wait for response
-        if event.wait(timeout=timeout):
-            with self._response_lock:
-                if packet_id in self._pending_responses:
-                    response = self._pending_responses.pop(packet_id)
-                    if packet_id in self._response_events:
-                        del self._response_events[packet_id]
-                    return response
-
         # Cleanup on timeout
+        logger.debug(f"Timeout waiting for response to packet {packet_id}")
         with self._response_lock:
             self._pending_responses.pop(packet_id, None)
             self._response_events.pop(packet_id, None)
