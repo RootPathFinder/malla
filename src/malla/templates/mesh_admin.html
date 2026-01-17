@@ -1970,6 +1970,76 @@
         }
     }
 
+    // Reboot log management
+    let rebootLogLines = [];
+    let spinnerInterval = null;
+    let spinnerFrame = 0;
+    const spinnerFrames = ['/', '-', '\\', '|'];
+
+    function initRebootLog() {
+        rebootLogLines = [];
+        const container = document.getElementById('commandResponse');
+        container.innerHTML = '<pre id="rebootLogPre" style="margin: 0; font-family: monospace; font-size: 0.85rem; white-space: pre-wrap; max-height: 300px; overflow-y: auto;"></pre>';
+    }
+
+    function addRebootLog(message, isSpinnerLine = false) {
+        const timestamp = new Date().toLocaleTimeString('en-US', { hour12: false });
+        const logLine = `[${timestamp}] ${message}`;
+
+        if (isSpinnerLine) {
+            // Replace last line if it was a spinner line
+            if (rebootLogLines.length > 0 && rebootLogLines[rebootLogLines.length - 1].isSpinner) {
+                rebootLogLines[rebootLogLines.length - 1] = { text: logLine, isSpinner: true };
+            } else {
+                rebootLogLines.push({ text: logLine, isSpinner: true });
+            }
+        } else {
+            rebootLogLines.push({ text: logLine, isSpinner: false });
+        }
+
+        updateRebootLogDisplay();
+    }
+
+    function updateRebootLogDisplay() {
+        const pre = document.getElementById('rebootLogPre');
+        if (!pre) return;
+
+        const text = rebootLogLines.map(line => line.text).join('\n');
+        pre.textContent = text;
+        pre.scrollTop = pre.scrollHeight;
+    }
+
+    function startSpinner(baseMessage) {
+        stopSpinner();
+        spinnerFrame = 0;
+
+        const updateSpinner = () => {
+            const spinner = spinnerFrames[spinnerFrame % spinnerFrames.length];
+            addRebootLog(`${spinner} ${baseMessage}`, true);
+            spinnerFrame++;
+        };
+
+        updateSpinner();
+        spinnerInterval = setInterval(updateSpinner, 250);
+    }
+
+    function stopSpinner() {
+        if (spinnerInterval) {
+            clearInterval(spinnerInterval);
+            spinnerInterval = null;
+        }
+    }
+
+    function finalizeRebootLog(message, success = true) {
+        stopSpinner();
+        // Remove the last spinner line if present
+        if (rebootLogLines.length > 0 && rebootLogLines[rebootLogLines.length - 1].isSpinner) {
+            rebootLogLines.pop();
+        }
+        const symbol = success ? '✓' : '✗';
+        addRebootLog(`${symbol} ${message}`);
+    }
+
     // Update reboot progress UI
     function updateRebootProgress(phase, progress, message, details) {
         const banner = document.getElementById('adminStatusBanner');
@@ -2028,12 +2098,20 @@
         let phase = 'waiting-shutdown';
         let startTime = Date.now();
         let offlineDetectedTime = null;
+        const nodeHex = `!${nodeId.toString(16).padStart(8, '0')}`;
+
+        // Initialize log
+        initRebootLog();
+        addRebootLog(`Reboot command sent to ${nodeHex}`);
+        addRebootLog('Node will restart in 5 seconds...');
 
         updateRebootProgress('waiting-shutdown', 10, 'Waiting for node to shut down...',
             'The node will restart in a few seconds');
-        showCommandResponse('Monitoring reboot... waiting for node to go offline');
 
         // Phase 1: Wait for node to go offline
+        addRebootLog('Phase 1: Waiting for node to go offline');
+        startSpinner('Polling node status...');
+
         while (Date.now() - startTime < SHUTDOWN_TIMEOUT) {
             await new Promise(resolve => setTimeout(resolve, POLL_INTERVAL));
 
@@ -2042,11 +2120,12 @@
 
             if (!responding) {
                 // Node is offline!
+                stopSpinner();
                 offlineDetectedTime = Date.now();
                 phase = 'offline';
+                finalizeRebootLog(`Node offline detected after ${elapsed}s`);
                 updateRebootProgress('offline', 30, 'Node is offline',
                     `Shutdown detected after ${elapsed}s. Waiting for restart...`);
-                showCommandResponse(`Node went offline after ${elapsed}s. Waiting for it to come back...`);
                 break;
             } else {
                 // Still online, update progress
@@ -2054,13 +2133,16 @@
                 updateRebootProgress('waiting-shutdown', Math.min(progress, 29),
                     'Waiting for node to shut down...',
                     `Still responding after ${elapsed}s...`);
+                startSpinner(`Polling node status... (${elapsed}s elapsed, still online)`);
             }
         }
 
         // If we didn't detect offline, assume it went offline and we missed it
         if (!offlineDetectedTime) {
+            stopSpinner();
             offlineDetectedTime = Date.now();
             phase = 'offline';
+            addRebootLog('! Node shutdown not detected, assuming offline');
             updateRebootProgress('offline', 30, 'Node appears offline',
                 'Shutdown assumed. Waiting for restart...');
         }
@@ -2070,6 +2152,9 @@
         let pollCount = 0;
         const maxPolls = Math.ceil(ONLINE_TIMEOUT / POLL_INTERVAL);
 
+        addRebootLog('Phase 2: Waiting for node to come back online');
+        startSpinner('Waiting for node to boot...');
+
         while (Date.now() - offlineDetectedTime < ONLINE_TIMEOUT) {
             pollCount++;
             const progress = 30 + (pollCount / maxPolls) * 50;
@@ -2078,6 +2163,7 @@
             updateRebootProgress('waiting-online', Math.min(progress, 79),
                 'Waiting for node to come back online...',
                 `Polling... (${waitTime}s since shutdown)`);
+            startSpinner(`Polling node... (${waitTime}s since shutdown, attempt ${pollCount})`);
 
             await new Promise(resolve => setTimeout(resolve, POLL_INTERVAL));
 
@@ -2085,13 +2171,19 @@
 
             if (responding) {
                 // Node is back online!
+                stopSpinner();
+                finalizeRebootLog(`Node responded after ${waitTime}s`);
+
                 phase = 'reconnecting';
                 updateRebootProgress('reconnecting', 85, 'Node is back online!',
                     'Re-establishing admin session...');
-                showCommandResponse('Node is back online! Re-establishing session...');
+                addRebootLog('Phase 3: Re-establishing admin session');
+                startSpinner('Negotiating session key...');
 
                 // Refresh admin info
                 await refreshNodeAdminInfo(nodeId);
+                stopSpinner();
+                finalizeRebootLog('Admin session established');
 
                 // Update admin status for selected node
                 const targetNodeInput = document.getElementById('targetNodeInput');
@@ -2101,9 +2193,12 @@
                 }
 
                 // Complete!
+                const totalTime = Math.round((Date.now() - startTime) / 1000);
                 updateRebootProgress('complete', 100, 'Reboot complete!',
-                    `Node rebooted successfully in ${Math.round((Date.now() - startTime) / 1000)}s`);
-                showCommandResponse('Reboot complete! Node is ready for commands.');
+                    `Node rebooted successfully in ${totalTime}s`);
+                addRebootLog('─'.repeat(40));
+                addRebootLog(`✓ REBOOT COMPLETE - Total time: ${totalTime}s`);
+                addRebootLog('─'.repeat(40));
                 showAlert('success', 'Node rebooted successfully');
 
                 // Clear progress after a few seconds
@@ -2119,9 +2214,15 @@
         }
 
         // Timeout - node didn't come back
+        stopSpinner();
+        const totalWait = Math.round((Date.now() - offlineDetectedTime) / 1000);
+        finalizeRebootLog(`Timeout after ${totalWait}s waiting for node`, false);
+        addRebootLog('─'.repeat(40));
+        addRebootLog('✗ REBOOT TIMEOUT - Node did not respond');
+        addRebootLog('─'.repeat(40));
+
         updateRebootProgress('error', 100, 'Timeout waiting for node',
             'Node did not respond within expected time. It may still be booting or have issues.');
-        showCommandResponse('Warning: Node did not respond within expected time.', true);
         showAlert('warning', 'Node reboot timeout - please check the device');
 
         return false;
@@ -2129,7 +2230,6 @@
 
     // Send reboot command
     async function sendReboot(nodeId) {
-        showCommandResponse('Sending reboot command...');
         updateRebootProgress('sending', 5, 'Sending reboot command...', '');
 
         try {
