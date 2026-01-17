@@ -681,10 +681,13 @@ function renderUptimeTable() {
             uptimeClass = 'text-warning';
         }
 
+        // Filter out future days when in local mode (API returns UTC dates)
+        const filteredSummary = node.daily_summary.filter(day => day.date <= todayStr);
+
         // Build compact 7-day visual grid (4 blocks per day = 6-hour periods)
         let dayGridHtml = '<div class="uptime-compact-inline">';
 
-        node.daily_summary.forEach(day => {
+        filteredSummary.forEach(day => {
             const dayDate = new Date(day.date + 'T12:00:00Z');
             const dayName = dayDate.toLocaleDateString(undefined, { weekday: 'short', timeZone: tzOption });
             const monthDay = dayDate.toLocaleDateString(undefined, { month: 'numeric', day: 'numeric', timeZone: tzOption });

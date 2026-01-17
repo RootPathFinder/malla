@@ -193,10 +193,16 @@
             currentHour = now.getHours();
         }
 
+        // Filter out future days when in local mode (API returns UTC dates)
+        // If in local mode and a day's date is after local "today", skip it
+        const filteredSummary = data.daily_summary.filter(day => {
+            return day.date <= todayStr;
+        });
+
         // Build compact visualization - 4 blocks per day (6-hour periods)
         let html = '<div class="uptime-row"><div class="uptime-days">';
 
-        data.daily_summary.forEach(day => {
+        filteredSummary.forEach(day => {
             const dayDate = new Date(day.date + 'T12:00:00Z');
             const dayName = dayDate.toLocaleDateString(undefined, { weekday: 'short', timeZone: tzOption });
             const monthDay = dayDate.toLocaleDateString(undefined, { month: 'numeric', day: 'numeric', timeZone: tzOption });
