@@ -35,7 +35,7 @@ document.addEventListener('DOMContentLoaded', function() {
         document.getElementById('archived-nodes-loading').style.display = 'block';
         document.getElementById('archived-nodes-content').style.display = 'none';
         try {
-            const response = await fetch('/api/archived-nodes');
+            const response = await fetch('/alerts/api/archived-nodes');
             const data = await response.json();
             const tbody = document.getElementById('archived-nodes-tbody');
             tbody.innerHTML = '';
@@ -65,7 +65,7 @@ document.addEventListener('DOMContentLoaded', function() {
             btn.disabled = true;
             btn.innerHTML = '<span class="spinner-border spinner-border-sm"></span> Unarchiving...';
             try {
-                const resp = await fetch(`/api/unarchive-node/${nodeId}`, { method: 'POST' });
+                const resp = await fetch(`/alerts/api/unarchive-node/${nodeId}`, { method: 'POST' });
                 const result = await resp.json();
                 if (result.success) {
                     btn.closest('tr').remove();
