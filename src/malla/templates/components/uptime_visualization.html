@@ -177,8 +177,21 @@
         const now = new Date();
         const tzPref = typeof getTimezonePreference === 'function' ? getTimezonePreference() : 'local';
         const tzOption = tzPref === 'utc' ? 'UTC' : undefined;
-        const todayStr = now.toISOString().split('T')[0];
-        const currentHour = tzPref === 'utc' ? now.getUTCHours() : now.getHours();
+
+        // Calculate today's date string based on timezone preference
+        let todayStr;
+        let currentHour;
+        if (tzPref === 'utc') {
+            todayStr = now.toISOString().split('T')[0];
+            currentHour = now.getUTCHours();
+        } else {
+            // Use local timezone
+            const year = now.getFullYear();
+            const month = String(now.getMonth() + 1).padStart(2, '0');
+            const day = String(now.getDate()).padStart(2, '0');
+            todayStr = `${year}-${month}-${day}`;
+            currentHour = now.getHours();
+        }
 
         // Build compact visualization - 4 blocks per day (6-hour periods)
         let html = '<div class="uptime-row"><div class="uptime-days">';
