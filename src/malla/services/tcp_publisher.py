@@ -292,6 +292,24 @@ class TCPPublisher:
             return self._interface.localNode.nodeNum
         return None
 
+    def _get_admin_channel_index(self) -> int:
+        """
+        Get the admin channel index from the local node.
+
+        Returns the channel index of a channel named "admin" (case-insensitive),
+        or 0 if no admin channel is found.
+
+        Returns:
+            The admin channel index
+        """
+        if self._interface and self._interface.localNode:
+            channels = self._interface.localNode.channels
+            if channels:
+                for channel in channels:
+                    if channel.settings and channel.settings.name.lower() == "admin":
+                        return channel.index
+        return 0
+
     def send_admin_message(
         self,
         target_node_id: int,
@@ -317,20 +335,23 @@ class TCPPublisher:
             return None
 
         try:
-            # Serialize the admin message
-            payload = admin_message.SerializeToString()
+            # Get admin channel index
+            admin_channel_index = self._get_admin_channel_index()
 
             # Generate a random packet ID for tracking
             packet_id = random.getrandbits(32)
 
             # Send the packet using sendData
             # Note: sendData returns a MeshPacket, we use our own packet_id for tracking
+            # pkiEncrypted=True is required for admin messages to work on remote nodes
             self._interface.sendData(
-                data=payload,
+                data=admin_message,
                 destinationId=target_node_id,
                 portNum=portnums_pb2.PortNum.ADMIN_APP,
                 wantAck=True,
                 wantResponse=want_response,
+                channelIndex=admin_channel_index,
+                pkiEncrypted=True,
             )
 
             logger.info(
