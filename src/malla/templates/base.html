@@ -274,6 +274,13 @@
                             </li>
                         </ul>
                     </li>
+
+                    <!-- Mesh Admin -->
+                    <li class="nav-item">
+                        <a class="nav-link {{ 'active' if request.endpoint == 'admin.admin_page' }}" href="{{ url_for('admin.admin_page') }}">
+                            <i class="bi bi-gear-wide-connected"></i> Admin
+                        </a>
+                    </li>
                 </ul>
 
                 <!-- Timezone Toggle, Temperature Toggle, and Dark Mode Toggle -->

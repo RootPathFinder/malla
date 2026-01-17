@@ -80,6 +80,9 @@
                 {% else %}
                     <span class="badge bg-secondary">Offline</span>
                 {% endif %}
+                <span id="adminBadge" class="badge bg-info d-none" title="This node is remotely administrable">
+                    <i class="bi bi-gear-wide-connected"></i> Administrable
+                </span>
             </h1>
             <p class="text-muted">
                 Node ID: {{ node.hex_id }} ({{ node.node_id }})
@@ -813,7 +816,27 @@ document.addEventListener('DOMContentLoaded', function() {
 
     // Load location history map
     loadLocationHistoryMap();
+
+    // Check if node is administrable
+    checkAdminStatus();
 });
+
+async function checkAdminStatus() {
+    const nodeId = document.querySelector('script[data-node-id]').getAttribute('data-node-id');
+    try {
+        const response = await fetch(`/api/admin/node/${nodeId}/check`);
+        const data = await response.json();
+        if (data.administrable) {
+            const badge = document.getElementById('adminBadge');
+            if (badge) {
+                badge.classList.remove('d-none');
+            }
+        }
+    } catch (error) {
+        // Silently fail - admin feature may not be available
+        console.debug('Admin check failed:', error);
+    }
+}
 
 function loadCurrentLocationMap() {
     const currentLocationContainer = document.getElementById('current-location-map');

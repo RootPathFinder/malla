@@ -2,6 +2,7 @@
 Routes package for Meshtastic Mesh Health Web UI
 """
 
+from .admin_routes import admin_bp
 from .alert_routes import alert_bp
 from .api_routes import api_bp
 from .battery_routes import battery_bp
@@ -26,3 +27,4 @@ def register_routes(app):
     app.register_blueprint(battery_bp)
     app.register_blueprint(mesh_bp)
     app.register_blueprint(alert_bp)
+    app.register_blueprint(admin_bp)

@@ -59,6 +59,15 @@ class AppConfig:
     # OpenTelemetry settings
     otlp_endpoint: str | None = None
 
+    # Remote admin settings
+    admin_enabled: bool = True
+    admin_gateway_node_id: int | None = None
+    admin_connection_type: str = "mqtt"  # "mqtt", "tcp", or "serial"
+
+    # TCP admin connection settings (when admin_connection_type = "tcp")
+    admin_tcp_host: str = "192.168.1.1"  # IP address of the node to connect to
+    admin_tcp_port: int = 4403  # Default Meshtastic TCP port
+
     # Internal attribute to remember the source file used
     _config_path: Path | None = field(default=None, repr=False, compare=False)
 

@@ -1,0 +1,17 @@
+Help on function __init__ in module meshtastic.tcp_interface:
+
+____iinniitt____(
+    self,
+    hostname: str,
+    debugOut=None,
+    noProto: bool = False,
+    connectNow: bool = True,
+    portNumber: int = 4403,
+    noNodes: bool = False,
+    timeout: int = 300
+)
+    Constructor, opens a connection to a specified IP address/hostname
+
+    Keyword Arguments:
+        hostname {string} -- Hostname/IP address of the device to connect to
+        timeout -- How long to wait for replies (default: 300 seconds)

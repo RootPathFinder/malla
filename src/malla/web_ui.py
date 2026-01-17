@@ -216,6 +216,19 @@ def create_app(cfg: AppConfig | None = None):  # noqa: D401
         except (ValueError, TypeError):
             return str(value)
 
+    @app.template_filter("timestamp_to_datetime")
+    def timestamp_to_datetime_filter(timestamp):
+        """Template filter to convert Unix timestamp to readable datetime string."""
+        if timestamp is None:
+            return "N/A"
+        try:
+            from datetime import datetime
+
+            dt = datetime.fromtimestamp(float(timestamp))
+            return dt.strftime("%Y-%m-%d %H:%M:%S")
+        except (ValueError, TypeError, OSError):
+            return str(timestamp)
+
     # ------------------------------------------------------------------
     # Markdown rendering filter & context processor for config variables
     # ------------------------------------------------------------------
@@ -251,6 +264,12 @@ def create_app(cfg: AppConfig | None = None):  # noqa: D401
     # Initialize database
     logger.info("Initializing database connection")
     init_database()
+
+    # Initialize admin tables
+    from .database.admin_repository import init_admin_tables
+
+    logger.info("Initializing admin tables")
+    init_admin_tables()
 
     # Start periodic cache cleanup for node names
     logger.info("Starting node name cache cleanup background thread")
