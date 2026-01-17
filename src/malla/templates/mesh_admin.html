@@ -1190,17 +1190,41 @@
         disconnectBtn.disabled = true;
         btn.innerHTML = '<span class="spinner-border spinner-border-sm"></span> Connecting...';
 
+        // Allow auto-reconnect since user is initiating connection
+        if (typeof NodeConnectionManager !== 'undefined') {
+            NodeConnectionManager.allowAutoReconnect();
+        }
+
         try {
-            const response = await fetch('/api/admin/tcp/connect', {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ host: host, port: port })
-            });
-            const data = await response.json();
+            // Use NodeConnectionManager if available
+            let success = false;
+            let data = {};
+
+            if (typeof NodeConnectionManager !== 'undefined') {
+                success = await NodeConnectionManager.connectTcp(host, port);
+                if (success) {
+                    const state = NodeConnectionManager.getState();
+                    data = {
+                        success: true,
+                        host: state.tcpHost,
+                        port: state.tcpPort,
+                        local_node_hex: state.localNodeHex
+                    };
+                }
+            } else {
+                // Fallback to direct API call
+                const response = await fetch('/api/admin/tcp/connect', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ host: host, port: port })
+                });
+                data = await response.json();
+                success = data.success;
+            }
 
             resultDiv.classList.remove('d-none', 'alert-success', 'alert-danger');
 
-            if (data.success) {
+            if (success) {
                 resultDiv.classList.add('alert-success');
                 resultDiv.innerHTML = `<i class="bi bi-check-circle"></i> Connected to ${data.host}:${data.port}` +
                     (data.local_node_hex ? ` (Local Node: ${data.local_node_hex})` : '');
@@ -1236,20 +1260,28 @@
         btn.innerHTML = '<span class="spinner-border spinner-border-sm"></span> Disconnecting...';
 
         try {
-            const response = await fetch('/api/admin/tcp/disconnect', {
-                method: 'POST'
-            });
-            const data = await response.json();
+            let success = false;
+
+            // Use NodeConnectionManager if available (this marks as user-disconnected)
+            if (typeof NodeConnectionManager !== 'undefined') {
+                success = await NodeConnectionManager.disconnect();
+            } else {
+                const response = await fetch('/api/admin/tcp/disconnect', {
+                    method: 'POST'
+                });
+                const data = await response.json();
+                success = data.success;
+            }
 
             resultDiv.classList.remove('d-none', 'alert-success', 'alert-danger');
 
-            if (data.success) {
+            if (success) {
                 resultDiv.classList.add('alert-success');
                 resultDiv.innerHTML = '<i class="bi bi-check-circle"></i> Disconnected';
                 await updateConnectionStatus();
             } else {
                 resultDiv.classList.add('alert-danger');
-                resultDiv.innerHTML = `<i class="bi bi-x-circle"></i> ${data.error || 'Failed to disconnect'}`;
+                resultDiv.innerHTML = `<i class="bi bi-x-circle"></i> Failed to disconnect`;
                 // Re-enable disconnect button on failure
                 btn.disabled = false;
             }
@@ -1466,17 +1498,40 @@
         disconnectBtn.disabled = true;
         btn.innerHTML = '<span class="spinner-border spinner-border-sm"></span> Connecting...';
 
+        // Allow auto-reconnect since user is initiating connection
+        if (typeof NodeConnectionManager !== 'undefined') {
+            NodeConnectionManager.allowAutoReconnect();
+        }
+
         try {
-            const response = await fetch('/api/admin/serial/connect', {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ port: port })
-            });
-            const data = await response.json();
+            // Use NodeConnectionManager if available
+            let success = false;
+            let data = {};
+
+            if (typeof NodeConnectionManager !== 'undefined') {
+                success = await NodeConnectionManager.connectSerial(port);
+                if (success) {
+                    const state = NodeConnectionManager.getState();
+                    data = {
+                        success: true,
+                        port: state.serialPort,
+                        local_node_hex: state.localNodeHex
+                    };
+                }
+            } else {
+                // Fallback to direct API call
+                const response = await fetch('/api/admin/serial/connect', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ port: port })
+                });
+                data = await response.json();
+                success = data.success;
+            }
 
             resultDiv.classList.remove('d-none', 'alert-success', 'alert-danger');
 
-            if (data.success) {
+            if (success) {
                 resultDiv.classList.add('alert-success');
                 resultDiv.innerHTML = `<i class="bi bi-check-circle"></i> Connected to ${data.port}` +
                     (data.local_node_hex ? ` (Local Node: ${data.local_node_hex})` : '');
@@ -1509,20 +1564,28 @@
         btn.innerHTML = '<span class="spinner-border spinner-border-sm"></span> Disconnecting...';
 
         try {
-            const response = await fetch('/api/admin/serial/disconnect', {
-                method: 'POST'
-            });
-            const data = await response.json();
+            let success = false;
+
+            // Use NodeConnectionManager if available (this marks as user-disconnected)
+            if (typeof NodeConnectionManager !== 'undefined') {
+                success = await NodeConnectionManager.disconnect();
+            } else {
+                const response = await fetch('/api/admin/serial/disconnect', {
+                    method: 'POST'
+                });
+                const data = await response.json();
+                success = data.success;
+            }
 
             resultDiv.classList.remove('d-none', 'alert-success', 'alert-danger');
 
-            if (data.success) {
+            if (success) {
                 resultDiv.classList.add('alert-success');
                 resultDiv.innerHTML = '<i class="bi bi-check-circle"></i> Disconnected';
                 await updateConnectionStatus();
             } else {
                 resultDiv.classList.add('alert-danger');
-                resultDiv.innerHTML = `<i class="bi bi-x-circle"></i> ${data.error || 'Failed to disconnect'}`;
+                resultDiv.innerHTML = `<i class="bi bi-x-circle"></i> Failed to disconnect`;
                 btn.disabled = false;
             }
         } catch (error) {
@@ -1548,7 +1611,11 @@
             const serialDisconnectBtn = document.getElementById('serialDisconnectBtn');
 
             if (data.connected) {
-                statusSpan.innerHTML = '<span class="status-indicator status-connected"></span>Connected';
+                let statusText = 'Connected';
+                if (data.local_node_hex) {
+                    statusText = `Connected (${data.local_node_hex})`;
+                }
+                statusSpan.innerHTML = `<span class="status-indicator status-connected"></span>${statusText}`;
                 // Disable connect buttons, enable disconnect buttons
                 if (tcpConnectBtn) {
                     tcpConnectBtn.disabled = true;
@@ -1598,6 +1665,11 @@
             // Update gateway display if available
             if (data.gateway_node_hex) {
                 document.getElementById('gatewayNodeDisplay').innerHTML = `<code>${data.gateway_node_hex}</code>`;
+            }
+
+            // Update the global header indicator
+            if (typeof NodeConnectionManager !== 'undefined') {
+                NodeConnectionManager.updateGlobalIndicator();
             }
 
             return data.connected;

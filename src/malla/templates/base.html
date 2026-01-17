@@ -284,7 +284,15 @@
                 </ul>
 
                 <!-- Timezone Toggle, Temperature Toggle, and Dark Mode Toggle -->
-                <div class="navbar-nav d-flex flex-row gap-2">
+                <div class="navbar-nav d-flex flex-row align-items-center gap-2">
+                    <!-- Node Connection Indicator -->
+                    <a id="node-connection-indicator" href="{{ url_for('admin.admin_page') }}"
+                       class="btn btn-outline-light btn-sm d-flex align-items-center gap-1 disconnected"
+                       title="Not connected to any node">
+                        <i class="bi bi-broadcast connection-icon"></i>
+                        <span class="connection-text d-none d-md-inline">No Node</span>
+                    </a>
+                    <div class="vr d-none d-md-block" style="height: 24px; opacity: 0.3;"></div>
                     <button id="timezone-toggle" class="btn btn-outline-light btn-sm" type="button"
                             title="Toggle timezone"
                             aria-label="Toggle timezone">
@@ -337,6 +345,8 @@
     <script src="{{ url_for('static', filename='js/timezone-toggle.js') }}"></script>
     <!-- Temperature Toggle -->
     <script src="{{ url_for('static', filename='js/temperature-toggle.js') }}"></script>
+    <!-- Node Connection Manager (global connection state) -->
+    <script src="{{ url_for('static', filename='js/node-connection-manager.js') }}"></script>
 
     <!-- Node tooltip functionality -->
     <script>
