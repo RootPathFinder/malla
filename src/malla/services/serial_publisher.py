@@ -357,7 +357,7 @@ class SerialPublisher:
             except PermissionError:
                 logger.error(
                     f"Permission denied accessing {self._serial_port}. "
-                    "Try: sudo chmod 666 {self._serial_port} or add user to dialout group"
+                    f"Try: sudo chmod 666 {self._serial_port} or add user to dialout group"
                 )
                 self._cleanup_connection()
                 return False
