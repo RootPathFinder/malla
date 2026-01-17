@@ -702,14 +702,25 @@
     }
 
     function getHeatmapColor(intensity) {
-        if (intensity === 0) return '#e9ecef';
+        if (intensity === 0) return '#e0e0e0';
 
-        // Red to blue gradient: red (high activity) to blue (low activity)
-        const r = Math.round(255 * intensity);
-        const g = Math.round(100 - (100 - 149) * intensity);
-        const b = Math.round(100 + (171 - 100) * intensity);
-
-        return `rgb(${r}, ${g}, ${b})`;
+        // Gray to light blue to dark blue gradient (matching the legend)
+        // Low: #e0e0e0 (gray) -> Mid: #4dabf7 (light blue) -> High: #1864ab (dark blue)
+        if (intensity <= 0.5) {
+            // Gray (#e0e0e0) to light blue (#4dabf7)
+            const t = intensity * 2;
+            const r = Math.round(224 + (77 - 224) * t);
+            const g = Math.round(224 + (171 - 224) * t);
+            const b = Math.round(224 + (247 - 224) * t);
+            return `rgb(${r}, ${g}, ${b})`;
+        } else {
+            // Light blue (#4dabf7) to dark blue (#1864ab)
+            const t = (intensity - 0.5) * 2;
+            const r = Math.round(77 + (24 - 77) * t);
+            const g = Math.round(171 + (100 - 171) * t);
+            const b = Math.round(247 + (171 - 247) * t);
+            return `rgb(${r}, ${g}, ${b})`;
+        }
     }
 
     async function loadThresholds() {
