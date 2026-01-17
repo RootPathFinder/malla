@@ -655,9 +655,39 @@
     // Connection Management
     // ============================================================================
 
+    // Local storage keys for persisting settings
+    const STORAGE_KEYS = {
+        connectionType: 'malla_admin_connection_type',
+        tcpHost: 'malla_admin_tcp_host',
+        tcpPort: 'malla_admin_tcp_port',
+        gatewayNode: 'malla_admin_gateway_node'
+    };
+
+    // Save setting to localStorage
+    function saveSetting(key, value) {
+        try {
+            localStorage.setItem(key, value);
+        } catch (e) {
+            console.warn('Failed to save setting to localStorage:', e);
+        }
+    }
+
+    // Load setting from localStorage
+    function loadSetting(key, defaultValue = '') {
+        try {
+            return localStorage.getItem(key) || defaultValue;
+        } catch (e) {
+            console.warn('Failed to load setting from localStorage:', e);
+            return defaultValue;
+        }
+    }
+
     // Change connection type
     async function changeConnectionType() {
         const connType = document.getElementById('connectionTypeSelect').value;
+
+        // Save to localStorage
+        saveSetting(STORAGE_KEYS.connectionType, connType);
 
         // Show/hide appropriate settings
         document.getElementById('mqttSettings').classList.toggle('d-none', connType !== 'mqtt');
@@ -686,6 +716,10 @@
     async function tcpConnect() {
         const host = document.getElementById('tcpHostInput').value.trim();
         const port = parseInt(document.getElementById('tcpPortInput').value) || 4403;
+
+        // Save TCP settings to localStorage (before connect attempt)
+        saveSetting(STORAGE_KEYS.tcpHost, host);
+        saveSetting(STORAGE_KEYS.tcpPort, port.toString());
 
         const btn = document.getElementById('tcpConnectBtn');
         const resultDiv = document.getElementById('tcpConnectResult');
@@ -793,6 +827,9 @@
             const data = await response.json();
 
             if (data.success) {
+                // Save gateway node to localStorage
+                saveSetting(STORAGE_KEYS.gatewayNode, data.gateway_node_hex || nodeId);
+
                 document.getElementById('gatewayNodeDisplay').innerHTML =
                     `<code>${data.gateway_node_hex}</code>`;
                 showAlert('success', 'Gateway node set successfully');
@@ -1432,8 +1469,47 @@
         }, 5000);
     }
 
+    // Restore saved settings from localStorage
+    function restoreSavedSettings() {
+        // Restore connection type
+        const savedConnType = loadSetting(STORAGE_KEYS.connectionType);
+        if (savedConnType) {
+            const connTypeSelect = document.getElementById('connectionTypeSelect');
+            if (connTypeSelect && (savedConnType === 'mqtt' || savedConnType === 'tcp')) {
+                connTypeSelect.value = savedConnType;
+                // Update visibility of settings panels
+                document.getElementById('mqttSettings').classList.toggle('d-none', savedConnType !== 'mqtt');
+                document.getElementById('tcpSettings').classList.toggle('d-none', savedConnType !== 'tcp');
+            }
+        }
+
+        // Restore TCP host
+        const savedHost = loadSetting(STORAGE_KEYS.tcpHost);
+        if (savedHost) {
+            const hostInput = document.getElementById('tcpHostInput');
+            if (hostInput) hostInput.value = savedHost;
+        }
+
+        // Restore TCP port
+        const savedPort = loadSetting(STORAGE_KEYS.tcpPort);
+        if (savedPort) {
+            const portInput = document.getElementById('tcpPortInput');
+            if (portInput) portInput.value = savedPort;
+        }
+
+        // Restore gateway node
+        const savedGateway = loadSetting(STORAGE_KEYS.gatewayNode);
+        if (savedGateway) {
+            const gatewayInput = document.getElementById('gatewayNodeInput');
+            if (gatewayInput && !gatewayInput.value) gatewayInput.value = savedGateway;
+        }
+    }
+
     // Initialize
     document.addEventListener('DOMContentLoaded', function() {
+        // Restore saved settings from localStorage
+        restoreSavedSettings();
+
         // Load audit log when tab is shown
         document.getElementById('log-tab').addEventListener('shown.bs.tab', function() {
             refreshLog();
