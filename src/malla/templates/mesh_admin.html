@@ -3670,7 +3670,7 @@
         document.querySelectorAll('.deploy-node-checkbox').forEach(cb => cb.checked = false);
     }
 
-    async function deployTemplate() {
+    async function deployTemplate(forceDeployment = false, acknowledgedWarnings = false) {
         if (!currentTemplateId) {
             showAlert('warning', 'Please save the template first');
             return;
@@ -3688,20 +3688,99 @@
 
         const deployBtn = document.getElementById('deployTemplateBtn');
         deployBtn.disabled = true;
-        deployBtn.innerHTML = '<span class="spinner-border spinner-border-sm"></span> Deploying...';
+        deployBtn.innerHTML = '<span class="spinner-border spinner-border-sm"></span> Validating...';
 
         const resultsDiv = document.getElementById('deploymentResults');
         resultsDiv.style.display = 'block';
-        resultsDiv.innerHTML = '<div class="text-muted"><i class="bi bi-hourglass-split"></i> Deploying to nodes...</div>';
+        resultsDiv.innerHTML = '<div class="text-muted"><i class="bi bi-shield-check"></i> Checking configuration safety...</div>';
 
         try {
             const response = await fetch(`/api/admin/templates/${currentTemplateId}/deploy`, {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ node_ids: selectedNodes }),
+                body: JSON.stringify({
+                    node_ids: selectedNodes,
+                    force: forceDeployment,
+                    acknowledged_warnings: acknowledgedWarnings,
+                }),
             });
 
             const result = await response.json();
+
+            // Check if we need to show warnings/blocking issues
+            if (result.requires_force || result.requires_acknowledgment) {
+                let html = '';
+
+                // Show blocking issues (critical)
+                if (result.blocking_issues && result.blocking_issues.length > 0) {
+                    html += `
+                        <div class="alert alert-danger py-2 mb-2">
+                            <strong><i class="bi bi-exclamation-octagon"></i> Critical Issues:</strong>
+                            <ul class="mb-0 mt-1">
+                    `;
+                    for (const issue of result.blocking_issues) {
+                        html += `<li>${escapeHtml(issue)}</li>`;
+                    }
+                    html += `
+                            </ul>
+                        </div>
+                    `;
+                }
+
+                // Show warnings
+                if (result.warnings && result.warnings.length > 0) {
+                    html += `
+                        <div class="alert alert-warning py-2 mb-2">
+                            <strong><i class="bi bi-exclamation-triangle"></i> Warnings:</strong>
+                            <ul class="mb-0 mt-1">
+                    `;
+                    for (const warning of result.warnings) {
+                        html += `<li>${escapeHtml(warning)}</li>`;
+                    }
+                    html += `
+                            </ul>
+                        </div>
+                    `;
+                }
+
+                // Show action buttons
+                if (result.requires_force) {
+                    html += `
+                        <div class="d-flex gap-2">
+                            <button class="btn btn-outline-secondary btn-sm" onclick="cancelDeploy()">
+                                Cancel
+                            </button>
+                            <button class="btn btn-danger btn-sm" onclick="deployTemplate(true, true)">
+                                <i class="bi bi-exclamation-triangle"></i> Deploy Anyway (Dangerous)
+                            </button>
+                        </div>
+                        <p class="text-muted small mt-2 mb-0">
+                            <i class="bi bi-info-circle"></i>
+                            Deploying this configuration may make nodes unreachable for future remote administration.
+                        </p>
+                    `;
+                } else if (result.requires_acknowledgment) {
+                    html += `
+                        <div class="d-flex gap-2">
+                            <button class="btn btn-outline-secondary btn-sm" onclick="cancelDeploy()">
+                                Cancel
+                            </button>
+                            <button class="btn btn-warning btn-sm" onclick="deployTemplate(false, true)">
+                                <i class="bi bi-check-lg"></i> I Understand, Proceed
+                            </button>
+                        </div>
+                    `;
+                }
+
+                resultsDiv.innerHTML = html;
+                deployBtn.disabled = false;
+                deployBtn.innerHTML = '<i class="bi bi-cloud-upload"></i> Deploy to Selected Nodes';
+                return;
+            }
+
+            // Normal deployment success/failure handling
+            deployBtn.innerHTML = '<span class="spinner-border spinner-border-sm"></span> Deploying...';
+            resultsDiv.innerHTML = '<div class="text-muted"><i class="bi bi-hourglass-split"></i> Deploying to nodes...</div>';
 
             // Display results
             let html = '';
@@ -3739,6 +3818,12 @@
             deployBtn.disabled = false;
             deployBtn.innerHTML = '<i class="bi bi-cloud-upload"></i> Deploy to Selected Nodes';
         }
+    }
+
+    function cancelDeploy() {
+        const resultsDiv = document.getElementById('deploymentResults');
+        resultsDiv.style.display = 'none';
+        resultsDiv.innerHTML = '';
     }
 
     async function loadDeploymentHistory() {

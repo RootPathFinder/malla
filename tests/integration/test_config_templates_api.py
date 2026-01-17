@@ -314,3 +314,87 @@ class TestExtractTemplateFromNode:
         data = response.get_json()
         assert "error" in data
         assert "invalid" in data["error"].lower()
+
+
+class TestConfigTemplateSafetyValidation:
+    """Test configuration safety validation."""
+
+    @pytest.mark.integration
+    @pytest.mark.api
+    def test_validate_safe_template(self, client):
+        """Test validating a safe template returns no issues."""
+        # Create a safe lora template
+        create_response = client.post(
+            "/api/admin/templates",
+            json={
+                "name": "Safe LoRa Config",
+                "template_type": "lora",
+                "config_data": {"hop_limit": 3, "tx_power": 20},
+            },
+        )
+        template_id = create_response.get_json()["template_id"]
+
+        # Validate it
+        response = client.post(f"/api/admin/templates/{template_id}/validate")
+        assert response.status_code == 200
+
+        data = response.get_json()
+        assert data["is_safe"] is True
+        assert len(data.get("blocking_issues", [])) == 0
+
+    @pytest.mark.integration
+    @pytest.mark.api
+    def test_validate_dangerous_tx_disabled(self, client):
+        """Test validating template with TX disabled shows blocking issue."""
+        # Create a dangerous template
+        create_response = client.post(
+            "/api/admin/templates",
+            json={
+                "name": "Dangerous LoRa Config",
+                "template_type": "lora",
+                "config_data": {"tx_enabled": False},
+            },
+        )
+        template_id = create_response.get_json()["template_id"]
+
+        # Validate it
+        response = client.post(f"/api/admin/templates/{template_id}/validate")
+        assert response.status_code == 200
+
+        data = response.get_json()
+        assert data["is_safe"] is False
+        assert len(data["blocking_issues"]) > 0
+        assert "CRITICAL" in data["blocking_issues"][0]
+
+    @pytest.mark.integration
+    @pytest.mark.api
+    def test_deploy_dangerous_template_blocked(self, client):
+        """Test deploying a dangerous template is blocked without force flag."""
+        # Create a dangerous template
+        create_response = client.post(
+            "/api/admin/templates",
+            json={
+                "name": "Block Deploy Test",
+                "template_type": "lora",
+                "config_data": {"tx_enabled": False},
+            },
+        )
+        template_id = create_response.get_json()["template_id"]
+
+        # Try to deploy without force
+        response = client.post(
+            f"/api/admin/templates/{template_id}/deploy",
+            json={"node_ids": [12345678]},
+        )
+        assert response.status_code == 400
+
+        data = response.get_json()
+        assert "blocking_issues" in data
+        assert data["requires_force"] is True
+
+    @pytest.mark.integration
+    @pytest.mark.api
+    def test_validate_template_not_found(self, client):
+        """Test validating non-existent template returns 404."""
+        response = client.post("/api/admin/templates/99999/validate")
+        assert response.status_code == 404

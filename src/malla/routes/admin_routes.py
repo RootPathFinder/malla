@@ -1185,6 +1185,157 @@ def api_delete_template(template_id):
         return jsonify({"error": str(e)}), 500
 
 
+# ============================================================================
+# Configuration Safety Validation
+# ============================================================================
+
+# Dangerous configuration settings that could break remote administration
+DANGEROUS_CONFIG_WARNINGS = {
+    "lora": {
+        "region": "Changing LoRa region may make the node unreachable if it differs from gateway",
+        "modem_preset": "Changing modem preset may break communication with gateway",
+        "tx_enabled": "Disabling TX will prevent the node from responding to admin commands",
+        "hop_limit": "Setting hop_limit to 0 may prevent multi-hop admin communication",
+    },
+    "network": {
+        "wifi_enabled": "Disabling WiFi will break TCP/IP based administration",
+        "wifi_ssid": "Changing WiFi network may make the node unreachable",
+        "wifi_psk": "Changing WiFi password may make the node unreachable",
+        "eth_enabled": "Disabling Ethernet may break network-based administration",
+    },
+    "bluetooth": {
+        "enabled": "Disabling Bluetooth will break BLE-based administration",
+        "mode": "Changing Bluetooth mode may affect BLE administration",
+    },
+    "power": {
+        "is_power_saving": "Aggressive power saving may make node unresponsive to admin commands",
+        "sds_secs": "Short sleep duration may affect responsiveness",
+    },
+    "device": {
+        "rebroadcast_mode": "Changing rebroadcast mode may affect mesh connectivity",
+    },
+    "channel": {
+        "settings.psk": "Changing channel PSK will break communication if gateway uses different key",
+        "role": "Disabling primary channel will break mesh communication",
+    },
+    "channels": {
+        "settings.psk": "Changing channel PSK will break communication if gateway uses different key",
+        "role": "Disabling primary channel will break mesh communication",
+    },
+}
+
+
+def validate_config_safety(
+    template_type: str, config_data: dict, force: bool = False
+) -> tuple[bool, list[str], list[str]]:
+    """
+    Validate configuration for potentially dangerous settings.
+
+    Args:
+        template_type: The type of configuration (lora, network, etc.)
+        config_data: The configuration data to validate
+        force: If True, return warnings but don't block
+
+    Returns:
+        Tuple of (is_safe, warnings, blocking_issues)
+    """
+    warnings = []
+    blocking_issues = []
+
+    dangerous_fields = DANGEROUS_CONFIG_WARNINGS.get(template_type, {})
+
+    def check_nested(data: dict, prefix: str = "") -> None:
+        for key, value in data.items():
+            full_key = f"{prefix}.{key}" if prefix else key
+
+            # Check if this field is dangerous
+            if key in dangerous_fields:
+                warning_msg = dangerous_fields[key]
+
+                # Some values are more dangerous than others
+                if key == "tx_enabled" and value is False:
+                    blocking_issues.append(
+                        f"CRITICAL: {warning_msg} - This will make the node completely unreachable!"
+                    )
+                elif key == "wifi_enabled" and value is False:
+                    warnings.append(f"WARNING: {warning_msg}")
+                elif (
+                    key == "enabled" and template_type == "bluetooth" and value is False
+                ):
+                    warnings.append(f"WARNING: {warning_msg}")
+                elif key == "role" and value == 0:  # DISABLED role
+                    if template_type == "channel":
+                        # Only block if it's the primary channel
+                        channel_index = config_data.get("index", 0)
+                        if channel_index == 0:
+                            blocking_issues.append(
+                                "CRITICAL: Disabling primary channel (index 0) will break all mesh communication!"
+                            )
+                        else:
+                            warnings.append(f"Note: Disabling channel {channel_index}")
+                else:
+                    warnings.append(f"Caution: {warning_msg}")
+
+            # Check nested dicts (like settings.psk)
+            if isinstance(value, dict):
+                check_nested(value, full_key)
+
+    # For channels template, check each channel
+    if template_type == "channels" and "channels" in config_data:
+        for i, channel in enumerate(config_data["channels"]):
+            # Check primary channel specifically
+            if channel.get("index", i) == 0:
+                if channel.get("role", 1) == 0:
+                    blocking_issues.append(
+                        "CRITICAL: Disabling primary channel will break all mesh communication!"
+                    )
+            check_nested(channel, f"channel[{i}]")
+    else:
+        check_nested(config_data)
+
+    is_safe = len(blocking_issues) == 0 or force
+    return is_safe, warnings, blocking_issues
+
+
+@admin_bp.route("/api/admin/templates/<int:template_id>/validate", methods=["POST"])
+def api_validate_template(template_id):
+    """
+    Validate a template's configuration for safety before deployment.
+
+    Returns warnings and blocking issues that could break remote administration.
+    """
+    try:
+        template = AdminRepository.get_template(template_id)
+        if not template:
+            return jsonify({"error": "Template not found"}), 404
+
+        import json
+
+        config_data = template["config_data"]
+        if isinstance(config_data, str):
+            config_data = json.loads(config_data)
+
+        template_type = template["template_type"]
+
+        is_safe, warnings, blocking_issues = validate_config_safety(
+            template_type, config_data
+        )
+
+        return jsonify(
+            {
+                "is_safe": is_safe,
+                "warnings": warnings,
+                "blocking_issues": blocking_issues,
+                "template_name": template["name"],
+                "template_type": template_type,
+            }
+        )
+
+    except Exception as e:
+        logger.error(f"Error validating template: {e}")
+        return jsonify({"error": str(e)}), 500
+
+
 @admin_bp.route("/api/admin/templates/<int:template_id>/deploy", methods=["POST"])
 def api_deploy_template(template_id):
     """Deploy a configuration template to one or more nodes."""
@@ -1196,6 +1347,10 @@ def api_deploy_template(template_id):
         node_ids = data.get("node_ids", [])
         if not node_ids:
             return jsonify({"error": "node_ids array is required"}), 400
+
+        # Check if user is forcing deployment despite warnings
+        force_deploy = data.get("force", False)
+        acknowledged_warnings = data.get("acknowledged_warnings", False)
 
         # Get template
         template = AdminRepository.get_template(template_id)
@@ -1209,6 +1364,36 @@ def api_deploy_template(template_id):
             config_data = json.loads(config_data)
 
         template_type = template["template_type"]
+
+        # Validate configuration safety
+        is_safe, warnings, blocking_issues = validate_config_safety(
+            template_type, config_data, force=force_deploy
+        )
+
+        # If there are blocking issues and force is not set, block deployment
+        if blocking_issues and not force_deploy:
+            return jsonify(
+                {
+                    "error": "Configuration contains dangerous settings",
+                    "blocking_issues": blocking_issues,
+                    "warnings": warnings,
+                    "requires_force": True,
+                    "message": "This configuration could break remote administration. "
+                    "Set 'force: true' and 'acknowledged_warnings: true' to deploy anyway.",
+                }
+            ), 400
+
+        # If there are warnings and user hasn't acknowledged, require acknowledgment
+        if warnings and not acknowledged_warnings and not force_deploy:
+            return jsonify(
+                {
+                    "error": "Configuration has warnings that require acknowledgment",
+                    "warnings": warnings,
+                    "blocking_issues": blocking_issues,
+                    "requires_acknowledgment": True,
+                    "message": "Please review warnings and set 'acknowledged_warnings: true' to proceed.",
+                }
+            ), 400
 
         admin_service = get_admin_service()
 
