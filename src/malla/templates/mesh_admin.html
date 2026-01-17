@@ -474,14 +474,14 @@
                                         <th>Node</th>
                                         <th>Hardware</th>
                                         <th>Firmware</th>
-                                        <th>First Confirmed</th>
+                                        <th>Status</th>
                                         <th>Last Confirmed</th>
                                         <th>Actions</th>
                                     </tr>
                                 </thead>
-                                <tbody>
+                                <tbody id="administrableNodesBody">
                                     {% for node in administrable_nodes %}
-                                    <tr>
+                                    <tr id="admin-node-row-{{ node.node_id }}">
                                         <td>
                                             <a href="/node/{{ node.node_id }}" class="text-decoration-none">
                                                 <strong>{{ node.long_name or node.short_name or 'Unknown' }}</strong>
@@ -489,20 +489,24 @@
                                             <br>
                                             <code class="text-muted small">{{ node.hex_id or ('!' + '%08x'|format(node.node_id)) }}</code>
                                         </td>
-                                        <td>{{ node.hw_model or 'Unknown' }}</td>
-                                        <td>{{ node.firmware_version or 'Unknown' }}</td>
-                                        <td>
-                                            <span class="text-muted small">
-                                                {{ node.first_confirmed | timestamp_to_datetime }}
-                                            </span>
+                                        <td id="admin-node-hw-{{ node.node_id }}">{{ node.hw_model or 'Unknown' }}</td>
+                                        <td id="admin-node-fw-{{ node.node_id }}">{{ node.firmware_version or 'Unknown' }}</td>
+                                        <td id="admin-node-status-{{ node.node_id }}">
+                                            <span class="badge bg-secondary">Not checked</span>
                                         </td>
-                                        <td>
+                                        <td id="admin-node-confirmed-{{ node.node_id }}">
                                             <span class="text-muted small">
                                                 {{ node.last_confirmed | timestamp_to_datetime }}
                                             </span>
                                         </td>
                                         <td>
                                             <div class="btn-group btn-group-sm">
+                                                <button class="btn btn-outline-success"
+                                                        onclick="refreshNodeAdminInfo({{ node.node_id }})"
+                                                        title="Refresh admin info"
+                                                        id="admin-node-refresh-btn-{{ node.node_id }}">
+                                                    <i class="bi bi-arrow-repeat"></i>
+                                                </button>
                                                 <button class="btn btn-outline-primary"
                                                         onclick="selectNode({{ node.node_id }})"
                                                         title="Select for commands">
@@ -512,11 +516,6 @@
                                                         onclick="getNodeConfig({{ node.node_id }}, 'device')"
                                                         title="Get device config">
                                                     <i class="bi bi-gear"></i>
-                                                </button>
-                                                <button class="btn btn-outline-warning"
-                                                        onclick="confirmReboot({{ node.node_id }})"
-                                                        title="Reboot node">
-                                                    <i class="bi bi-arrow-clockwise"></i>
                                                 </button>
                                             </div>
                                         </td>
@@ -1643,6 +1642,83 @@
         bootstrap.Tab.getOrCreateInstance(commandsTab).show();
 
         await getConfig(configType);
+    }
+
+    // Refresh node admin info - tests admin access and fetches metadata
+    async function refreshNodeAdminInfo(nodeId) {
+        const refreshBtn = document.getElementById(`admin-node-refresh-btn-${nodeId}`);
+        const statusCell = document.getElementById(`admin-node-status-${nodeId}`);
+        const fwCell = document.getElementById(`admin-node-fw-${nodeId}`);
+        const confirmedCell = document.getElementById(`admin-node-confirmed-${nodeId}`);
+
+        // Show loading state
+        if (refreshBtn) {
+            refreshBtn.disabled = true;
+            refreshBtn.innerHTML = '<span class="spinner-border spinner-border-sm"></span>';
+        }
+        if (statusCell) {
+            statusCell.innerHTML = '<span class="badge bg-warning text-dark"><i class="bi bi-hourglass-split"></i> Testing...</span>';
+        }
+
+        try {
+            // Test admin access - this sends a device metadata request
+            const response = await fetch(`/api/admin/node/${encodeURIComponent(nodeId)}/test`, {
+                method: 'POST'
+            });
+            const data = await response.json();
+
+            if (data.success && data.administrable) {
+                // Success - update the row with new info
+                if (statusCell) {
+                    statusCell.innerHTML = '<span class="badge bg-success"><i class="bi bi-check-circle"></i> Online</span>';
+                }
+
+                // Update firmware version if returned
+                if (data.response && data.response.firmware_version && fwCell) {
+                    fwCell.textContent = data.response.firmware_version;
+                }
+
+                // Update last confirmed time
+                if (confirmedCell) {
+                    const now = new Date();
+                    confirmedCell.innerHTML = `<span class="text-muted small">${now.toLocaleString()}</span>`;
+                }
+
+                showAlert('success', `Node ${data.hex_id} is online and administrable`);
+            } else {
+                // Failed to get response
+                if (statusCell) {
+                    statusCell.innerHTML = '<span class="badge bg-danger"><i class="bi bi-x-circle"></i> No Response</span>';
+                }
+                showAlert('warning', data.error || 'Node did not respond to admin request');
+            }
+        } catch (error) {
+            // Error occurred
+            if (statusCell) {
+                statusCell.innerHTML = '<span class="badge bg-danger"><i class="bi bi-exclamation-triangle"></i> Error</span>';
+            }
+            showAlert('danger', `Error: ${error.message}`);
+        } finally {
+            // Restore button
+            if (refreshBtn) {
+                refreshBtn.disabled = false;
+                refreshBtn.innerHTML = '<i class="bi bi-arrow-repeat"></i>';
+            }
+        }
+    }
+
+    // Refresh all administrable nodes
+    async function refreshAllNodes() {
+        const tbody = document.getElementById('administrableNodesBody');
+        if (!tbody) return;
+
+        const rows = tbody.querySelectorAll('tr[id^="admin-node-row-"]');
+        for (const row of rows) {
+            const nodeId = row.id.replace('admin-node-row-', '');
+            await refreshNodeAdminInfo(parseInt(nodeId));
+            // Small delay between requests to avoid overwhelming the mesh
+            await new Promise(resolve => setTimeout(resolve, 1000));
+        }
     }
 
     // Confirm reboot from nodes table
