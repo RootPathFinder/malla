@@ -878,6 +878,35 @@
         suggestionsEl.innerHTML = '';
     }
 
+    // Update admin status banner with a simple message (for reboot/shutdown status)
+    function updateAdminStatusBanner(level, message, details) {
+        const banner = document.getElementById('adminStatusBanner');
+        const iconEl = document.getElementById('adminStatusIcon');
+        const messageEl = document.getElementById('adminStatusMessage');
+        const detailsEl = document.getElementById('adminStatusDetails');
+        const suggestionsEl = document.getElementById('adminStatusSuggestions');
+
+        if (!banner) return;
+
+        // Reset classes
+        banner.classList.remove('d-none', 'status-success', 'status-warning', 'status-danger');
+        banner.classList.add(`status-${level}`);
+
+        // Set icon based on level
+        if (level === 'success') {
+            iconEl.className = 'status-icon bi bi-check-circle-fill text-success';
+        } else if (level === 'warning') {
+            iconEl.className = 'status-icon bi bi-hourglass-split text-warning';
+        } else {
+            iconEl.className = 'status-icon bi bi-x-circle-fill text-danger';
+        }
+
+        messageEl.textContent = message || '';
+        detailsEl.innerHTML = details ? `<span class="text-muted">${escapeHtml(details)}</span>` : '';
+        suggestionsEl.innerHTML = '';
+        suggestionsEl.classList.add('d-none');
+    }
+
     // Hide admin status banner
     function hideAdminStatusBanner() {
         const banner = document.getElementById('adminStatusBanner');
@@ -1843,6 +1872,35 @@
             if (data.success) {
                 showCommandResponse(data.message);
                 showAlert('success', data.message);
+
+                // Update status to show rebooting
+                updateAdminStatusBanner('warning', 'Node is rebooting...',
+                    'The node will restart in a few seconds. Session will be refreshed automatically.');
+
+                // After node reboots (delay + boot time), refresh admin status to re-establish session
+                // This fixes the issue where old session key is cached after reboot
+                const rebootDelay = 5;  // seconds until reboot
+                const bootTime = 30;    // estimated boot time in seconds
+                const totalWait = (rebootDelay + bootTime) * 1000;
+
+                showCommandResponse(`Node will reboot in ${rebootDelay}s. Waiting ${bootTime}s for it to come back online...`);
+
+                setTimeout(async () => {
+                    showCommandResponse('Refreshing admin session with rebooted node...');
+                    updateAdminStatusBanner('warning', 'Reconnecting...',
+                        'Attempting to re-establish admin session with rebooted node.');
+
+                    // Refresh admin info which re-negotiates session key
+                    await refreshNodeAdminInfo(nodeId);
+
+                    // Also refresh the admin status check for the selected node
+                    if (document.getElementById('targetNodeId') &&
+                        document.getElementById('targetNodeId').value == nodeId) {
+                        await checkAdminStatus(nodeId);
+                    }
+
+                    showCommandResponse('Admin session refreshed. Node is ready for commands.');
+                }, totalWait);
             } else {
                 showCommandResponse(`Error: ${data.error}`, true);
             }
@@ -1866,6 +1924,10 @@
             if (data.success) {
                 showCommandResponse(data.message);
                 showAlert('warning', data.message);
+
+                // Update status to show shutting down
+                updateAdminStatusBanner('warning', 'Node is shutting down...',
+                    'The node will power off in a few seconds. It will not respond to commands until manually powered on.');
             } else {
                 showCommandResponse(`Error: ${data.error}`, true);
             }
