@@ -8,6 +8,7 @@ import logging
 
 from flask import Blueprint, jsonify, render_template, request
 
+from ..config import get_config
 from ..database.admin_repository import AdminRepository
 from ..services.admin_service import ConfigType, get_admin_service
 from ..services.serial_publisher import discover_serial_ports, get_serial_publisher
@@ -17,6 +18,31 @@ from ..utils.node_utils import convert_node_id
 logger = logging.getLogger(__name__)
 
 admin_bp = Blueprint("admin", __name__)
+
+
+@admin_bp.before_request
+def check_admin_enabled():
+    """Check if admin features are enabled before processing any admin request."""
+    config = get_config()
+    if not config.admin_enabled:
+        # Allow a special status endpoint to check if admin is enabled
+        if request.endpoint == "admin.api_admin_enabled":
+            return None
+        # For the main page, render a disabled message
+        if request.endpoint == "admin.admin_page":
+            return render_template(
+                "admin_disabled.html",
+            ), 403
+        # For API endpoints, return 403 Forbidden
+        return jsonify(
+            {
+                "error": "Admin features are disabled",
+                "admin_enabled": False,
+                "message": "Remote administration is disabled in this installation. "
+                "Set MALLA_ADMIN_ENABLED=true to enable.",
+            }
+        ), 403
+    return None
 
 
 # ============================================================================
@@ -46,6 +72,17 @@ def admin_page():
 # ============================================================================
 # API Routes - Status
 # ============================================================================
+
+
+@admin_bp.route("/api/admin/enabled")
+def api_admin_enabled():
+    """Check if admin features are enabled."""
+    config = get_config()
+    return jsonify(
+        {
+            "admin_enabled": config.admin_enabled,
+        }
+    )
 
 
 @admin_bp.route("/api/admin/status")

@@ -67,6 +67,24 @@ debug: false
 # battery_check_interval_minutes: 15
 
 # ---------------------------------------------------------------------------
+# Remote Administration settings
+# ---------------------------------------------------------------------------
+
+# Enable/disable remote node administration features
+# Set to false for public read-only deployments
+# admin_enabled: true
+
+# Gateway node ID for admin operations (integer node ID)
+# admin_gateway_node_id: null
+
+# Connection type for admin operations: "mqtt", "tcp", or "serial"
+# admin_connection_type: "mqtt"
+
+# TCP connection settings (when admin_connection_type = "tcp")
+# admin_tcp_host: "192.168.1.1"
+# admin_tcp_port: 4403
+
+# ---------------------------------------------------------------------------
 # OpenTelemetry settings
 # Endpoint for sending traces (e.g. "http://localhost:4317")
 # otlp_endpoint: ""

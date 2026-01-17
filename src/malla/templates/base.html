@@ -275,16 +275,19 @@
                         </ul>
                     </li>
 
+                    {% if APP_CONFIG.admin_enabled %}
                     <!-- Mesh Admin -->
                     <li class="nav-item">
                         <a class="nav-link {{ 'active' if request.endpoint == 'admin.admin_page' }}" href="{{ url_for('admin.admin_page') }}">
                             <i class="bi bi-gear-wide-connected"></i> Admin
                         </a>
                     </li>
+                    {% endif %}
                 </ul>
 
                 <!-- Timezone Toggle, Temperature Toggle, and Dark Mode Toggle -->
                 <div class="navbar-nav d-flex flex-row align-items-center gap-2">
+                    {% if APP_CONFIG.admin_enabled %}
                     <!-- Node Connection Indicator -->
                     <a id="node-connection-indicator" href="{{ url_for('admin.admin_page') }}"
                        class="btn btn-outline-light btn-sm d-flex align-items-center gap-1 disconnected"
@@ -293,6 +296,7 @@
                         <span class="connection-text d-none d-md-inline">No Node</span>
                     </a>
                     <div class="vr d-none d-md-block" style="height: 24px; opacity: 0.3;"></div>
+                    {% endif %}
                     <button id="timezone-toggle" class="btn btn-outline-light btn-sm" type="button"
                             title="Toggle timezone"
                             aria-label="Toggle timezone">
