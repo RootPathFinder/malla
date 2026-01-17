@@ -362,7 +362,15 @@ class SerialPublisher:
                 self._cleanup_connection()
                 return False
             except Exception as e:
-                logger.error(f"Failed to connect via serial: {e}")
+                error_msg = str(e)
+                if "Timed out" in error_msg:
+                    logger.error(
+                        f"Connection to {self._serial_port} timed out. "
+                        "The device may be busy, unresponsive, or not a Meshtastic device. "
+                        "Try unplugging and replugging the device."
+                    )
+                else:
+                    logger.error(f"Failed to connect via serial: {e}")
                 self._cleanup_connection()
                 return False
 
@@ -381,9 +389,14 @@ class SerialPublisher:
 
         if self._interface:
             try:
+                # Close the interface - this releases the serial port
                 self._interface.close()
+                logger.debug("Serial interface closed")
             except Exception as e:
                 logger.warning(f"Error closing serial interface: {e}")
+            finally:
+                # Ensure we clear the reference even if close() fails
+                self._interface = None
 
         self._interface = None
         self._connected = False
@@ -494,6 +507,7 @@ class SerialPublisher:
         self,
         target_node_id: int,
         admin_message: admin_pb2.AdminMessage,
+        want_response: bool = True,
     ) -> int | None:
         """
         Send an admin message to a target node.
@@ -501,6 +515,7 @@ class SerialPublisher:
         Args:
             target_node_id: The target node ID
             admin_message: The admin message to send
+            want_response: Whether to request a response
 
         Returns:
             Packet ID if sent successfully
@@ -525,7 +540,7 @@ class SerialPublisher:
                 data=admin_message.SerializeToString(),
                 destinationId=target_node_id,
                 portNum=portnums_pb2.ADMIN_APP,
-                wantResponse=True,
+                wantResponse=want_response,
                 channelIndex=0,
             )
 
@@ -537,6 +552,76 @@ class SerialPublisher:
         except Exception as e:
             logger.error(f"Failed to send admin message: {e}")
             return None
+
+    def send_get_device_metadata(
+        self,
+        target_node_id: int,
+    ) -> int | None:
+        """
+        Request device metadata from a target node.
+
+        Args:
+            target_node_id: The target node ID
+
+        Returns:
+            Packet ID if sent successfully
+        """
+        admin_msg = admin_pb2.AdminMessage()
+        admin_msg.get_device_metadata_request = True
+
+        return self.send_admin_message(
+            target_node_id=target_node_id,
+            admin_message=admin_msg,
+            want_response=True,
+        )
+
+    def send_get_config(
+        self,
+        target_node_id: int,
+        config_type: int,
+    ) -> int | None:
+        """
+        Request configuration from a target node.
+
+        Args:
+            target_node_id: The target node ID
+            config_type: The config type (from ConfigType enum value)
+
+        Returns:
+            Packet ID if sent successfully
+        """
+        admin_msg = admin_pb2.AdminMessage()
+        admin_msg.get_config_request = config_type  # type: ignore[assignment]
+
+        return self.send_admin_message(
+            target_node_id=target_node_id,
+            admin_message=admin_msg,
+            want_response=True,
+        )
+
+    def send_get_channel(
+        self,
+        target_node_id: int,
+        channel_index: int,
+    ) -> int | None:
+        """
+        Request channel configuration from a target node.
+
+        Args:
+            target_node_id: The target node ID
+            channel_index: The channel index (0-7)
+
+        Returns:
+            Packet ID if sent successfully
+        """
+        admin_msg = admin_pb2.AdminMessage()
+        admin_msg.get_channel_request = channel_index + 1
+
+        return self.send_admin_message(
+            target_node_id=target_node_id,
+            admin_message=admin_msg,
+            want_response=True,
+        )
 
     def send_reboot(
         self,
