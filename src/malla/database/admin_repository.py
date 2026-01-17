@@ -75,6 +75,40 @@ def init_admin_tables() -> None:
         "CREATE INDEX IF NOT EXISTS idx_admin_log_status ON admin_log(status, timestamp DESC)"
     )
 
+    # Table for configuration templates
+    cursor.execute("""
+        CREATE TABLE IF NOT EXISTS config_templates (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            name TEXT NOT NULL UNIQUE,
+            description TEXT,
+            template_type TEXT NOT NULL,
+            config_data TEXT NOT NULL,
+            created_at REAL NOT NULL,
+            updated_at REAL NOT NULL
+        )
+    """)
+
+    # Table for template deployment history
+    cursor.execute("""
+        CREATE TABLE IF NOT EXISTS template_deployments (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            template_id INTEGER NOT NULL,
+            node_id INTEGER NOT NULL,
+            deployed_at REAL NOT NULL,
+            status TEXT NOT NULL DEFAULT 'pending',
+            result_message TEXT,
+            FOREIGN KEY (template_id) REFERENCES config_templates(id)
+        )
+    """)
+
+    # Index for deployment queries
+    cursor.execute(
+        "CREATE INDEX IF NOT EXISTS idx_deployments_template ON template_deployments(template_id, deployed_at DESC)"
+    )
+    cursor.execute(
+        "CREATE INDEX IF NOT EXISTS idx_deployments_node ON template_deployments(node_id, deployed_at DESC)"
+    )
+
     conn.commit()
     conn.close()
     logger.info("Admin tables initialized")
@@ -426,3 +460,320 @@ class AdminRepository:
             logger.info(f"Removed node {node_id} from administrable list")
 
         return deleted
+
+    # =========================================================================
+    # Configuration Template Methods
+    # =========================================================================
+
+    @staticmethod
+    def create_template(
+        name: str,
+        template_type: str,
+        config_data: str,
+        description: str | None = None,
+    ) -> int:
+        """
+        Create a new configuration template.
+
+        Args:
+            name: Unique template name
+            template_type: Type of config (device, lora, channel, position, etc.)
+            config_data: JSON string of configuration data
+            description: Optional description
+
+        Returns:
+            The ID of the created template
+        """
+        conn = get_db_connection()
+        cursor = conn.cursor()
+
+        now = time.time()
+
+        cursor.execute(
+            """
+            INSERT INTO config_templates (name, description, template_type, config_data, created_at, updated_at)
+            VALUES (?, ?, ?, ?, ?, ?)
+            """,
+            (name, description, template_type, config_data, now, now),
+        )
+
+        template_id = cursor.lastrowid
+        conn.commit()
+        conn.close()
+
+        logger.info(f"Created config template '{name}' (id={template_id})")
+        return template_id  # type: ignore[return-value]
+
+    @staticmethod
+    def update_template(
+        template_id: int,
+        name: str | None = None,
+        description: str | None = None,
+        config_data: str | None = None,
+    ) -> bool:
+        """
+        Update an existing configuration template.
+
+        Args:
+            template_id: The template ID to update
+            name: New name (optional)
+            description: New description (optional)
+            config_data: New config data JSON (optional)
+
+        Returns:
+            True if template was updated
+        """
+        conn = get_db_connection()
+        cursor = conn.cursor()
+
+        now = time.time()
+
+        # Build dynamic update query
+        updates = ["updated_at = ?"]
+        params: list[Any] = [now]
+
+        if name is not None:
+            updates.append("name = ?")
+            params.append(name)
+        if description is not None:
+            updates.append("description = ?")
+            params.append(description)
+        if config_data is not None:
+            updates.append("config_data = ?")
+            params.append(config_data)
+
+        params.append(template_id)
+
+        cursor.execute(
+            f"UPDATE config_templates SET {', '.join(updates)} WHERE id = ?",
+            params,
+        )
+
+        updated = cursor.rowcount > 0
+        conn.commit()
+        conn.close()
+
+        if updated:
+            logger.info(f"Updated config template id={template_id}")
+
+        return updated
+
+    @staticmethod
+    def delete_template(template_id: int) -> bool:
+        """
+        Delete a configuration template.
+
+        Args:
+            template_id: The template ID to delete
+
+        Returns:
+            True if template was deleted
+        """
+        conn = get_db_connection()
+        cursor = conn.cursor()
+
+        cursor.execute("DELETE FROM config_templates WHERE id = ?", (template_id,))
+
+        deleted = cursor.rowcount > 0
+        conn.commit()
+        conn.close()
+
+        if deleted:
+            logger.info(f"Deleted config template id={template_id}")
+
+        return deleted
+
+    @staticmethod
+    def get_template(template_id: int) -> dict[str, Any] | None:
+        """
+        Get a configuration template by ID.
+
+        Args:
+            template_id: The template ID
+
+        Returns:
+            Template dict or None if not found
+        """
+        conn = get_db_connection()
+        cursor = conn.cursor()
+
+        cursor.execute("SELECT * FROM config_templates WHERE id = ?", (template_id,))
+
+        row = cursor.fetchone()
+        conn.close()
+
+        return dict(row) if row else None
+
+    @staticmethod
+    def get_template_by_name(name: str) -> dict[str, Any] | None:
+        """
+        Get a configuration template by name.
+
+        Args:
+            name: The template name
+
+        Returns:
+            Template dict or None if not found
+        """
+        conn = get_db_connection()
+        cursor = conn.cursor()
+
+        cursor.execute("SELECT * FROM config_templates WHERE name = ?", (name,))
+
+        row = cursor.fetchone()
+        conn.close()
+
+        return dict(row) if row else None
+
+    @staticmethod
+    def get_all_templates(template_type: str | None = None) -> list[dict[str, Any]]:
+        """
+        Get all configuration templates, optionally filtered by type.
+
+        Args:
+            template_type: Filter by type (optional)
+
+        Returns:
+            List of template dicts
+        """
+        conn = get_db_connection()
+        cursor = conn.cursor()
+
+        if template_type:
+            cursor.execute(
+                "SELECT * FROM config_templates WHERE template_type = ? ORDER BY name",
+                (template_type,),
+            )
+        else:
+            cursor.execute("SELECT * FROM config_templates ORDER BY name")
+
+        rows = cursor.fetchall()
+        conn.close()
+
+        return [dict(row) for row in rows]
+
+    # =========================================================================
+    # Template Deployment Methods
+    # =========================================================================
+
+    @staticmethod
+    def log_deployment(
+        template_id: int,
+        node_id: int,
+        status: str = "pending",
+        result_message: str | None = None,
+    ) -> int:
+        """
+        Log a template deployment attempt.
+
+        Args:
+            template_id: The template being deployed
+            node_id: Target node ID
+            status: Deployment status
+            result_message: Optional result message
+
+        Returns:
+            The deployment log ID
+        """
+        conn = get_db_connection()
+        cursor = conn.cursor()
+
+        now = time.time()
+
+        cursor.execute(
+            """
+            INSERT INTO template_deployments (template_id, node_id, deployed_at, status, result_message)
+            VALUES (?, ?, ?, ?, ?)
+            """,
+            (template_id, node_id, now, status, result_message),
+        )
+
+        deployment_id = cursor.lastrowid
+        conn.commit()
+        conn.close()
+
+        return deployment_id  # type: ignore[return-value]
+
+    @staticmethod
+    def update_deployment_status(
+        deployment_id: int,
+        status: str,
+        result_message: str | None = None,
+    ) -> None:
+        """
+        Update a deployment status.
+
+        Args:
+            deployment_id: The deployment ID
+            status: New status
+            result_message: Optional result message
+        """
+        conn = get_db_connection()
+        cursor = conn.cursor()
+
+        cursor.execute(
+            """
+            UPDATE template_deployments
+            SET status = ?, result_message = ?
+            WHERE id = ?
+            """,
+            (status, result_message, deployment_id),
+        )
+
+        conn.commit()
+        conn.close()
+
+    @staticmethod
+    def get_deployment_history(
+        template_id: int | None = None,
+        node_id: int | None = None,
+        limit: int = 50,
+    ) -> list[dict[str, Any]]:
+        """
+        Get deployment history, optionally filtered.
+
+        Args:
+            template_id: Filter by template (optional)
+            node_id: Filter by node (optional)
+            limit: Maximum records to return
+
+        Returns:
+            List of deployment records with template and node info
+        """
+        conn = get_db_connection()
+        cursor = conn.cursor()
+
+        query = """
+            SELECT
+                td.*,
+                ct.name as template_name,
+                ct.template_type,
+                ni.long_name as node_name,
+                ni.hex_id as node_hex
+            FROM template_deployments td
+            JOIN config_templates ct ON td.template_id = ct.id
+            LEFT JOIN node_info ni ON td.node_id = ni.node_id
+        """
+
+        conditions = []
+        params: list[Any] = []
+
+        if template_id:
+            conditions.append("td.template_id = ?")
+            params.append(template_id)
+        if node_id:
+            conditions.append("td.node_id = ?")
+            params.append(node_id)
+
+        if conditions:
+            query += " WHERE " + " AND ".join(conditions)
+
+        query += " ORDER BY td.deployed_at DESC LIMIT ?"
+        params.append(limit)
+
+        cursor.execute(query, params)
+
+        rows = cursor.fetchall()
+        conn.close()
+
+        return [dict(row) for row in rows]

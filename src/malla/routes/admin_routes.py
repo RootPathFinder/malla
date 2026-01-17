@@ -851,3 +851,355 @@ def api_admin_log():
     except Exception as e:
         logger.error(f"Error getting admin log: {e}")
         return jsonify({"error": str(e)}), 500
+
+
+# ============================================================================
+# Configuration Template Routes
+# ============================================================================
+
+
+@admin_bp.route("/api/admin/templates")
+def api_get_templates():
+    """Get all configuration templates."""
+    try:
+        template_type = request.args.get("type")
+        templates = AdminRepository.get_all_templates(template_type=template_type)
+
+        return jsonify(
+            {
+                "templates": templates,
+                "count": len(templates),
+            }
+        )
+
+    except Exception as e:
+        logger.error(f"Error getting templates: {e}")
+        return jsonify({"error": str(e)}), 500
+
+
+@admin_bp.route("/api/admin/templates", methods=["POST"])
+def api_create_template():
+    """Create a new configuration template."""
+    try:
+        data = request.get_json()
+        if not data:
+            return jsonify({"error": "Request body required"}), 400
+
+        name = data.get("name")
+        template_type = data.get("template_type")
+        config_data = data.get("config_data")
+        description = data.get("description")
+
+        if not name:
+            return jsonify({"error": "name is required"}), 400
+        if not template_type:
+            return jsonify({"error": "template_type is required"}), 400
+        if not config_data:
+            return jsonify({"error": "config_data is required"}), 400
+
+        # Validate template_type
+        valid_types = [
+            "device",
+            "lora",
+            "position",
+            "power",
+            "network",
+            "display",
+            "bluetooth",
+            "channel",
+        ]
+        if template_type not in valid_types:
+            return jsonify(
+                {"error": f"template_type must be one of: {valid_types}"}
+            ), 400
+
+        # Check for duplicate name
+        existing = AdminRepository.get_template_by_name(name)
+        if existing:
+            return jsonify(
+                {"error": f"Template with name '{name}' already exists"}
+            ), 409
+
+        import json
+
+        config_json = (
+            json.dumps(config_data) if isinstance(config_data, dict) else config_data
+        )
+
+        template_id = AdminRepository.create_template(
+            name=name,
+            template_type=template_type,
+            config_data=config_json,
+            description=description,
+        )
+
+        return jsonify(
+            {
+                "success": True,
+                "template_id": template_id,
+                "message": f"Template '{name}' created successfully",
+            }
+        )
+
+    except Exception as e:
+        logger.error(f"Error creating template: {e}")
+        return jsonify({"error": str(e)}), 500
+
+
+@admin_bp.route("/api/admin/templates/<int:template_id>")
+def api_get_template(template_id):
+    """Get a specific configuration template."""
+    try:
+        template = AdminRepository.get_template(template_id)
+        if not template:
+            return jsonify({"error": "Template not found"}), 404
+
+        import json
+
+        # Parse config_data JSON
+        try:
+            template["config_data"] = json.loads(template["config_data"])
+        except (json.JSONDecodeError, TypeError):
+            pass  # Keep as string if not valid JSON
+
+        return jsonify(template)
+
+    except Exception as e:
+        logger.error(f"Error getting template: {e}")
+        return jsonify({"error": str(e)}), 500
+
+
+@admin_bp.route("/api/admin/templates/<int:template_id>", methods=["PUT"])
+def api_update_template(template_id):
+    """Update a configuration template."""
+    try:
+        data = request.get_json()
+        if not data:
+            return jsonify({"error": "Request body required"}), 400
+
+        # Check template exists
+        template = AdminRepository.get_template(template_id)
+        if not template:
+            return jsonify({"error": "Template not found"}), 404
+
+        import json
+
+        config_data = data.get("config_data")
+        if config_data and isinstance(config_data, dict):
+            config_data = json.dumps(config_data)
+
+        success = AdminRepository.update_template(
+            template_id=template_id,
+            name=data.get("name"),
+            description=data.get("description"),
+            config_data=config_data,
+        )
+
+        if success:
+            return jsonify(
+                {
+                    "success": True,
+                    "message": "Template updated successfully",
+                }
+            )
+        else:
+            return jsonify({"error": "Failed to update template"}), 500
+
+    except Exception as e:
+        logger.error(f"Error updating template: {e}")
+        return jsonify({"error": str(e)}), 500
+
+
+@admin_bp.route("/api/admin/templates/<int:template_id>", methods=["DELETE"])
+def api_delete_template(template_id):
+    """Delete a configuration template."""
+    try:
+        template = AdminRepository.get_template(template_id)
+        if not template:
+            return jsonify({"error": "Template not found"}), 404
+
+        success = AdminRepository.delete_template(template_id)
+
+        if success:
+            return jsonify(
+                {
+                    "success": True,
+                    "message": "Template deleted successfully",
+                }
+            )
+        else:
+            return jsonify({"error": "Failed to delete template"}), 500
+
+    except Exception as e:
+        logger.error(f"Error deleting template: {e}")
+        return jsonify({"error": str(e)}), 500
+
+
+@admin_bp.route("/api/admin/templates/<int:template_id>/deploy", methods=["POST"])
+def api_deploy_template(template_id):
+    """Deploy a configuration template to one or more nodes."""
+    try:
+        data = request.get_json()
+        if not data:
+            return jsonify({"error": "Request body required"}), 400
+
+        node_ids = data.get("node_ids", [])
+        if not node_ids:
+            return jsonify({"error": "node_ids array is required"}), 400
+
+        # Get template
+        template = AdminRepository.get_template(template_id)
+        if not template:
+            return jsonify({"error": "Template not found"}), 404
+
+        import json
+
+        config_data = template["config_data"]
+        if isinstance(config_data, str):
+            config_data = json.loads(config_data)
+
+        template_type = template["template_type"]
+
+        admin_service = get_admin_service()
+
+        # Deploy to each node
+        results = []
+        for node_id in node_ids:
+            node_id_int = convert_node_id(node_id)
+
+            # Log deployment attempt
+            deployment_id = AdminRepository.log_deployment(
+                template_id=template_id,
+                node_id=node_id_int,
+                status="pending",
+            )
+
+            try:
+                # Deploy based on template type
+                if template_type == "channel":
+                    channel_index = config_data.get("index", 0)
+                    result = admin_service.set_channel(
+                        target_node_id=node_id_int,
+                        channel_index=channel_index,
+                        channel_data=config_data,
+                    )
+                else:
+                    # Map template type to ConfigType enum
+                    config_type_map = {
+                        "device": ConfigType.DEVICE,
+                        "lora": ConfigType.LORA,
+                        "position": ConfigType.POSITION,
+                        "power": ConfigType.POWER,
+                        "network": ConfigType.NETWORK,
+                        "display": ConfigType.DISPLAY,
+                        "bluetooth": ConfigType.BLUETOOTH,
+                    }
+                    config_type = config_type_map.get(template_type)
+                    if not config_type:
+                        raise ValueError(f"Unsupported template type: {template_type}")
+
+                    result = admin_service.set_config(
+                        target_node_id=node_id_int,
+                        config_type=config_type,
+                        config_data=config_data,
+                    )
+
+                if result.success:
+                    AdminRepository.update_deployment_status(
+                        deployment_id=deployment_id,
+                        status="success",
+                        result_message=result.response.get("message")
+                        if result.response
+                        else None,
+                    )
+                    results.append(
+                        {
+                            "node_id": node_id_int,
+                            "hex_id": f"!{node_id_int:08x}",
+                            "success": True,
+                            "message": "Deployed successfully",
+                        }
+                    )
+                else:
+                    AdminRepository.update_deployment_status(
+                        deployment_id=deployment_id,
+                        status="failed",
+                        result_message=result.error,
+                    )
+                    results.append(
+                        {
+                            "node_id": node_id_int,
+                            "hex_id": f"!{node_id_int:08x}",
+                            "success": False,
+                            "error": result.error,
+                        }
+                    )
+
+            except Exception as deploy_error:
+                AdminRepository.update_deployment_status(
+                    deployment_id=deployment_id,
+                    status="failed",
+                    result_message=str(deploy_error),
+                )
+                results.append(
+                    {
+                        "node_id": node_id_int,
+                        "hex_id": f"!{node_id_int:08x}",
+                        "success": False,
+                        "error": str(deploy_error),
+                    }
+                )
+
+        successful = sum(1 for r in results if r["success"])
+        failed = len(results) - successful
+
+        return jsonify(
+            {
+                "success": failed == 0,
+                "results": results,
+                "summary": {
+                    "total": len(results),
+                    "successful": successful,
+                    "failed": failed,
+                },
+            }
+        )
+
+    except Exception as e:
+        logger.error(f"Error deploying template: {e}")
+        return jsonify({"error": str(e)}), 500
+
+
+@admin_bp.route("/api/admin/deployments")
+def api_get_deployments():
+    """Get template deployment history."""
+    try:
+        template_id = request.args.get("template_id", type=int)
+        node_id = request.args.get("node_id")
+        limit = request.args.get("limit", 50, type=int)
+
+        node_id_int = None
+        if node_id:
+            node_id_int = convert_node_id(node_id)
+
+        deployments = AdminRepository.get_deployment_history(
+            template_id=template_id,
+            node_id=node_id_int,
+            limit=limit,
+        )
+
+        # Add hex IDs
+        for dep in deployments:
+            if dep.get("node_id"):
+                dep["node_hex"] = f"!{dep['node_id']:08x}"
+
+        return jsonify(
+            {
+                "deployments": deployments,
+                "count": len(deployments),
+            }
+        )
+
+    except Exception as e:
+        logger.error(f"Error getting deployments: {e}")
+        return jsonify({"error": str(e)}), 500
