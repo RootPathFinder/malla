@@ -43,7 +43,10 @@ class DashboardRepository:
                 gateway_params = [gateway_id]
 
             # Get basic node count (this is fast and separate)
-            cursor.execute("SELECT COUNT(*) as total_nodes FROM node_info")
+            # Exclude archived nodes from the count
+            cursor.execute(
+                "SELECT COUNT(*) as total_nodes FROM node_info WHERE COALESCE(archived, 0) = 0"
+            )
             total_nodes = cursor.fetchone()["total_nodes"]
 
             # Single optimized query for all packet statistics
@@ -960,6 +963,10 @@ class NodeRepository:
                 where_conditions.append(
                     "ni.long_name IS NOT NULL AND ni.long_name != ''"
                 )
+
+            # Always exclude archived nodes unless explicitly requested
+            if not filters.get("include_archived"):
+                where_conditions.append("COALESCE(ni.archived, 0) = 0")
 
             where_clause = ""
             if where_conditions:

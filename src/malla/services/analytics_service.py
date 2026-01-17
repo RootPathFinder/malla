@@ -164,8 +164,10 @@ class AnalyticsService:
         conn = get_db_connection()
         cursor = conn.cursor()
 
-        # Get total node count
-        cursor.execute("SELECT COUNT(*) as total_nodes FROM node_info")
+        # Get total node count (exclude archived nodes)
+        cursor.execute(
+            "SELECT COUNT(*) as total_nodes FROM node_info WHERE COALESCE(archived, 0) = 0"
+        )
         total_nodes = cursor.fetchone()["total_nodes"]
 
         # Build WHERE clause for packet filtering

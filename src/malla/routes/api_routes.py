@@ -1033,7 +1033,8 @@ def api_traceroute_hops_nodes():
                 ni.hw_model,
                 printf('!%08x', ni.node_id) as hex_id
             FROM node_info ni
-            WHERE ni.node_id IN (
+            WHERE COALESCE(ni.archived, 0) = 0
+              AND ni.node_id IN (
                 SELECT DISTINCT from_node_id FROM packet_history
                 WHERE portnum_name = 'TRACEROUTE_APP' AND from_node_id IS NOT NULL
                 UNION
@@ -2599,6 +2600,7 @@ def api_new_nodes_24h():
             SELECT COUNT(DISTINCT node_id) as new_nodes
             FROM node_info
             WHERE last_updated > ?
+              AND COALESCE(archived, 0) = 0
             """,
             (twenty_four_hours_ago,),
         )

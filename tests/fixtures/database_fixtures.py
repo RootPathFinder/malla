@@ -106,7 +106,8 @@ class DatabaseFixtures:
                 battery_health_score INTEGER,
                 last_battery_voltage REAL,
                 power_type_reason TEXT,
-                power_analysis_timestamp REAL
+                power_analysis_timestamp REAL,
+                archived INTEGER DEFAULT 0
             )
         """)
 

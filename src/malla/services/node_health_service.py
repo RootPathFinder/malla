@@ -537,13 +537,15 @@ class NodeHealthService:
         candidate_hours = max(hours, 48)
         cutoff_time = int(time.time()) - (candidate_hours * 3600)
 
-        # Get all nodes that have been active
+        # Get all nodes that have been active (exclude archived nodes)
         cursor.execute(
             """
-            SELECT DISTINCT from_node_id
-            FROM packet_history
-            WHERE timestamp >= ?
-            AND from_node_id IS NOT NULL
+            SELECT DISTINCT p.from_node_id
+            FROM packet_history p
+            LEFT JOIN node_info ni ON p.from_node_id = ni.node_id
+            WHERE p.timestamp >= ?
+            AND p.from_node_id IS NOT NULL
+            AND COALESCE(ni.archived, 0) = 0
         """,
             (cutoff_time,),
         )
@@ -579,13 +581,15 @@ class NodeHealthService:
         # Calculate time threshold
         cutoff_time = int(time.time()) - (hours * 3600)
 
-        # Get active nodes count
+        # Get active nodes count (exclude archived nodes)
         cursor.execute(
             """
-            SELECT COUNT(DISTINCT from_node_id) as active_nodes
-            FROM packet_history
-            WHERE timestamp >= ?
-            AND from_node_id IS NOT NULL
+            SELECT COUNT(DISTINCT p.from_node_id) as active_nodes
+            FROM packet_history p
+            LEFT JOIN node_info ni ON p.from_node_id = ni.node_id
+            WHERE p.timestamp >= ?
+            AND p.from_node_id IS NOT NULL
+            AND COALESCE(ni.archived, 0) = 0
         """,
             (cutoff_time,),
         )
@@ -606,26 +610,30 @@ class NodeHealthService:
         )
         network_stats = dict(cursor.fetchone())
 
-        # Get nodes with poor signal
+        # Get nodes with poor signal (exclude archived nodes)
         cursor.execute(
             """
-            SELECT COUNT(DISTINCT from_node_id) as poor_signal_nodes
-            FROM packet_history
-            WHERE timestamp >= ?
-            AND from_node_id IS NOT NULL
-            AND (rssi < -115 OR snr < -7)
+            SELECT COUNT(DISTINCT p.from_node_id) as poor_signal_nodes
+            FROM packet_history p
+            LEFT JOIN node_info ni ON p.from_node_id = ni.node_id
+            WHERE p.timestamp >= ?
+            AND p.from_node_id IS NOT NULL
+            AND (p.rssi < -115 OR p.snr < -7)
+            AND COALESCE(ni.archived, 0) = 0
         """,
             (cutoff_time,),
         )
         poor_signal_count = cursor.fetchone()["poor_signal_nodes"]
 
-        # Get nodes not heard by any gateway
+        # Get nodes not heard by any gateway (exclude archived nodes)
         cursor.execute(
             """
-            SELECT COUNT(DISTINCT from_node_id) as isolated_nodes
+            SELECT COUNT(DISTINCT p1.from_node_id) as isolated_nodes
             FROM packet_history p1
-            WHERE timestamp >= ?
-            AND from_node_id IS NOT NULL
+            LEFT JOIN node_info ni ON p1.from_node_id = ni.node_id
+            WHERE p1.timestamp >= ?
+            AND p1.from_node_id IS NOT NULL
+            AND COALESCE(ni.archived, 0) = 0
             AND NOT EXISTS (
                 SELECT 1 FROM packet_history p2
                 WHERE p2.from_node_id = p1.from_node_id
@@ -637,13 +645,15 @@ class NodeHealthService:
         )
         isolated_count = cursor.fetchone()["isolated_nodes"]
 
-        # Get all active nodes for health distribution (before closing conn)
+        # Get all active nodes for health distribution (exclude archived nodes)
         cursor.execute(
             """
-            SELECT DISTINCT from_node_id
-            FROM packet_history
-            WHERE timestamp >= ?
-            AND from_node_id IS NOT NULL
+            SELECT DISTINCT p.from_node_id
+            FROM packet_history p
+            LEFT JOIN node_info ni ON p.from_node_id = ni.node_id
+            WHERE p.timestamp >= ?
+            AND p.from_node_id IS NOT NULL
+            AND COALESCE(ni.archived, 0) = 0
         """,
             (cutoff_time,),
         )

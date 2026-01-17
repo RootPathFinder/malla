@@ -89,7 +89,9 @@ def battery_debug():
         )
         battery_level_count = cursor.fetchone()["total"]
 
-        cursor.execute("SELECT COUNT(*) as total FROM node_info")
+        cursor.execute(
+            "SELECT COUNT(*) as total FROM node_info WHERE COALESCE(archived, 0) = 0"
+        )
         total_nodes = cursor.fetchone()["total"]
 
         # Get sample telemetry data

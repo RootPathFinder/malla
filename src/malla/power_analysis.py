@@ -431,6 +431,7 @@ def check_battery_alerts(
           AND td.timestamp > ?
           AND td.voltage < ?
           AND ni.power_type IN ('solar', 'battery')
+          AND COALESCE(ni.archived, 0) = 0
         ORDER BY td.voltage ASC
     """,
         (one_hour_ago, warning_voltage),
