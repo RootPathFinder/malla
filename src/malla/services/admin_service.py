@@ -313,6 +313,12 @@ class AdminService:
         response = publisher.get_response(packet_id, timeout=30.0)
 
         if response:
+            # Mark the node as administrable since it responded
+            AdminRepository.mark_node_administrable(
+                node_id=target_node_id,
+                admin_channel_index=0,  # Default channel
+            )
+
             AdminRepository.update_admin_log_status(
                 log_id=log_id,
                 status="success",

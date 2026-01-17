@@ -51,6 +51,45 @@
     .log-status-timeout {
         color: #fd7e14;
     }
+    /* Node autocomplete styles */
+    .node-autocomplete-container {
+        position: relative;
+    }
+    .node-autocomplete-results {
+        position: absolute;
+        top: 100%;
+        left: 0;
+        right: 0;
+        z-index: 1000;
+        max-height: 300px;
+        overflow-y: auto;
+        background: var(--bs-body-bg);
+        border: 1px solid var(--bs-border-color);
+        border-top: none;
+        border-radius: 0 0 0.375rem 0.375rem;
+        box-shadow: 0 4px 6px rgba(0,0,0,0.1);
+    }
+    .node-autocomplete-item {
+        padding: 0.5rem 0.75rem;
+        cursor: pointer;
+        border-bottom: 1px solid var(--bs-border-color);
+    }
+    .node-autocomplete-item:last-child {
+        border-bottom: none;
+    }
+    .node-autocomplete-item:hover,
+    .node-autocomplete-item.active {
+        background: var(--bs-primary);
+        color: white;
+    }
+    .node-autocomplete-item .node-name {
+        font-weight: 500;
+    }
+    .node-autocomplete-item .node-id {
+        font-size: 0.8rem;
+        font-family: monospace;
+        opacity: 0.8;
+    }
     .config-display {
         font-family: 'SF Mono', 'Monaco', 'Inconsolata', 'Fira Mono', monospace;
         font-size: 0.8rem;
@@ -235,12 +274,19 @@
                     <p class="text-muted mb-3">
                         Test if a node has this server's public key configured and can be remotely administered.
                     </p>
-                    <div class="input-group mb-3">
-                        <input type="text" class="form-control" id="testNodeInput"
-                               placeholder="Enter node ID (e.g., !abcd1234)">
-                        <button class="btn btn-outline-primary" type="button" onclick="testNodeAdmin()" id="testNodeBtn">
-                            <i class="bi bi-lightning"></i> Test
-                        </button>
+                    <div class="node-autocomplete-container mb-3">
+                        <div class="input-group">
+                            <input type="text" class="form-control" id="testNodeInput"
+                                   placeholder="Start typing node name or ID..."
+                                   autocomplete="off"
+                                   oninput="searchNodes(this.value, 'testNodeResults')"
+                                   onfocus="if(this.value.length >= 1) searchNodes(this.value, 'testNodeResults')"
+                                   onblur="setTimeout(() => hideAutocomplete('testNodeResults'), 200)">
+                            <button class="btn btn-outline-primary" type="button" onclick="testNodeAdmin()" id="testNodeBtn">
+                                <i class="bi bi-lightning"></i> Test
+                            </button>
+                        </div>
+                        <div id="testNodeResults" class="node-autocomplete-results" style="display:none;"></div>
                     </div>
                     <div id="testNodeResult" class="alert d-none" role="alert"></div>
                 </div>
@@ -351,10 +397,15 @@
                 <div class="tab-pane fade" id="commands-pane" role="tabpanel">
                     <div class="row">
                         <div class="col-lg-6">
-                            <div class="mb-3">
-                                <label for="targetNodeInput" class="form-label">Target Node ID</label>
+                            <div class="mb-3 node-autocomplete-container">
+                                <label for="targetNodeInput" class="form-label">Target Node</label>
                                 <input type="text" class="form-control" id="targetNodeInput"
-                                       placeholder="e.g., !abcd1234 or 2882400052">
+                                       placeholder="Start typing node name or ID..."
+                                       autocomplete="off"
+                                       oninput="searchNodes(this.value, 'targetNodeResults')"
+                                       onfocus="if(this.value.length >= 1) searchNodes(this.value, 'targetNodeResults')"
+                                       onblur="setTimeout(() => hideAutocomplete('targetNodeResults'), 200)">
+                                <div id="targetNodeResults" class="node-autocomplete-results" style="display:none;"></div>
                             </div>
 
                             <div class="mb-3">
@@ -498,6 +549,106 @@
     let currentConfigType = null;
     let currentConfigData = null;
     let currentConfigSchema = null;
+    let searchTimeout = null;
+    let cachedNodes = null;
+
+    // ============================================================================
+    // Node Autocomplete
+    // ============================================================================
+
+    async function searchNodes(query, resultsContainerId) {
+        const resultsDiv = document.getElementById(resultsContainerId);
+
+        if (!query || query.length < 1) {
+            hideAutocomplete(resultsContainerId);
+            return;
+        }
+
+        // Use cached nodes if available, otherwise fetch
+        if (!cachedNodes) {
+            try {
+                const response = await fetch('/api/nodes?limit=500');
+                const data = await response.json();
+                cachedNodes = data.nodes || [];
+            } catch (error) {
+                console.error('Failed to fetch nodes:', error);
+                cachedNodes = [];
+            }
+        }
+
+        // Filter nodes based on query
+        const lowerQuery = query.toLowerCase();
+        const matches = cachedNodes.filter(node => {
+            const longName = (node.long_name || '').toLowerCase();
+            const shortName = (node.short_name || '').toLowerCase();
+            const hexId = node.hex_id ? node.hex_id.toLowerCase() : '';
+            const nodeId = node.node_id ? node.node_id.toString() : '';
+
+            return longName.includes(lowerQuery) ||
+                   shortName.includes(lowerQuery) ||
+                   hexId.includes(lowerQuery) ||
+                   nodeId.includes(lowerQuery);
+        }).slice(0, 10); // Limit to 10 results
+
+        if (matches.length === 0) {
+            hideAutocomplete(resultsContainerId);
+            return;
+        }
+
+        // Build results HTML
+        let html = '';
+        for (const node of matches) {
+            const displayName = node.long_name || node.short_name || 'Unknown';
+            const hexId = node.hex_id || `!${(node.node_id >>> 0).toString(16).padStart(8, '0')}`;
+            html += `
+                <div class="node-autocomplete-item"
+                     onclick="selectAutocompleteNode('${hexId}', '${resultsContainerId}')">
+                    <div class="node-name">${escapeHtml(displayName)}</div>
+                    <div class="node-id">${hexId}</div>
+                </div>
+            `;
+        }
+
+        resultsDiv.innerHTML = html;
+        resultsDiv.style.display = 'block';
+    }
+
+    function selectAutocompleteNode(nodeId, resultsContainerId) {
+        // Find the input associated with this results container
+        const resultsDiv = document.getElementById(resultsContainerId);
+        const inputId = resultsContainerId === 'testNodeResults' ? 'testNodeInput' : 'targetNodeInput';
+        const input = document.getElementById(inputId);
+
+        input.value = nodeId;
+        hideAutocomplete(resultsContainerId);
+
+        // If it's the target node input, also store the selected node
+        if (inputId === 'targetNodeInput') {
+            selectedNodeId = nodeId;
+        }
+    }
+
+    function hideAutocomplete(resultsContainerId) {
+        const resultsDiv = document.getElementById(resultsContainerId);
+        if (resultsDiv) {
+            resultsDiv.style.display = 'none';
+        }
+    }
+
+    function escapeHtml(text) {
+        const div = document.createElement('div');
+        div.textContent = text;
+        return div.innerHTML;
+    }
+
+    // Refresh cached nodes
+    function refreshNodeCache() {
+        cachedNodes = null;
+    }
+
+    // ============================================================================
+    // Connection Management
+    // ============================================================================
 
     // Change connection type
     async function changeConnectionType() {
@@ -674,7 +825,10 @@
             if (data.success && data.administrable) {
                 resultDiv.classList.add('alert-success');
                 resultDiv.innerHTML = `<i class="bi bi-check-circle"></i> <strong>Success!</strong>
-                    Node ${data.hex_id} is administrable and responded to the test request.`;
+                    Node ${data.hex_id} is administrable and responded to the test request.
+                    <button class="btn btn-sm btn-outline-success ms-2" onclick="location.reload()">
+                        <i class="bi bi-arrow-clockwise"></i> Refresh Page
+                    </button>`;
             } else {
                 resultDiv.classList.add('alert-warning');
                 resultDiv.innerHTML = `<i class="bi bi-exclamation-triangle"></i> <strong>Not Administrable</strong><br>
