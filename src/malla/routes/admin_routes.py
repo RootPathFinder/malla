@@ -236,6 +236,27 @@ def api_check_node_administrable(node_id):
         return jsonify({"error": str(e)}), 500
 
 
+@admin_bp.route("/api/admin/node/<node_id>/status")
+def api_node_admin_status(node_id):
+    """
+    Get admin session status for a specific node.
+
+    Returns detailed information about whether the admin channel is ready
+    to send commands to this node, including connection status, gateway
+    configuration, and node administrability.
+    """
+    try:
+        node_id_int = convert_node_id(node_id)
+
+        admin_service = get_admin_service()
+        status = admin_service.get_node_admin_status(node_id_int)
+
+        return jsonify(status)
+    except Exception as e:
+        logger.error(f"Error getting node admin status: {e}")
+        return jsonify({"error": str(e)}), 500
+
+
 @admin_bp.route("/api/admin/node/<node_id>/test", methods=["POST"])
 def api_test_node_admin(node_id):
     """Test if a node is administrable by sending a device metadata request."""

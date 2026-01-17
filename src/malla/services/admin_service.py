@@ -258,6 +258,181 @@ class AdminService:
 
         return status
 
+    def get_node_admin_status(self, target_node_id: int) -> dict[str, Any]:
+        """
+        Get the admin session status for a specific node.
+
+        This checks whether the admin channel is ready to send commands to the node,
+        including connection status, gateway configuration, and node administrability.
+
+        Args:
+            target_node_id: The target node ID to check
+
+        Returns:
+            Dictionary with admin readiness status and helpful messages
+        """
+        conn_type = self.connection_type
+        publisher = self._get_publisher()
+        gateway_id = self.gateway_node_id
+
+        # Build status response
+        status: dict[str, Any] = {
+            "node_id": target_node_id,
+            "hex_id": f"!{target_node_id:08x}",
+            "ready": False,
+            "connection_type": conn_type.value,
+            "checks": [],
+            "issues": [],
+            "suggestions": [],
+        }
+
+        # Check 1: Is the node marked as administrable?
+        node_details = AdminRepository.get_administrable_node_details(target_node_id)
+        is_administrable = node_details is not None
+
+        if is_administrable:
+            status["checks"].append(
+                {
+                    "name": "node_administrable",
+                    "passed": True,
+                    "message": "Node has previously responded to admin requests",
+                    "details": {
+                        "last_confirmed": node_details.get("last_confirmed"),
+                        "firmware_version": node_details.get("firmware_version"),
+                    },
+                }
+            )
+        else:
+            status["checks"].append(
+                {
+                    "name": "node_administrable",
+                    "passed": False,
+                    "message": "Node has not been confirmed as administrable",
+                }
+            )
+            status["issues"].append("Node has not responded to admin requests yet")
+            status["suggestions"].append(
+                "Use 'Test Node Admin Access' to verify the node can receive admin commands"
+            )
+
+        # Check 2: Is there a valid connection?
+        is_connected = publisher.is_connected
+
+        if is_connected:
+            status["checks"].append(
+                {
+                    "name": "connection",
+                    "passed": True,
+                    "message": f"Connected via {conn_type.value.upper()}",
+                }
+            )
+        else:
+            status["checks"].append(
+                {
+                    "name": "connection",
+                    "passed": False,
+                    "message": f"Not connected via {conn_type.value.upper()}",
+                }
+            )
+            status["issues"].append(
+                f"{conn_type.value.upper()} connection is not established"
+            )
+            if conn_type == AdminConnectionType.TCP:
+                status["suggestions"].append(
+                    "Connect to a Meshtastic node via TCP in the Connection Status section"
+                )
+            else:
+                status["suggestions"].append(
+                    "Ensure the MQTT broker is connected and configured"
+                )
+
+        # Check 3: Is a gateway node configured?
+        if gateway_id:
+            status["checks"].append(
+                {
+                    "name": "gateway",
+                    "passed": True,
+                    "message": f"Gateway node configured: !{gateway_id:08x}",
+                    "gateway_node_hex": f"!{gateway_id:08x}",
+                }
+            )
+
+            # Check if target is the gateway itself
+            if gateway_id == target_node_id:
+                status["checks"].append(
+                    {
+                        "name": "target_is_gateway",
+                        "passed": True,
+                        "message": "Target node is the gateway node (local administration)",
+                    }
+                )
+        else:
+            status["checks"].append(
+                {
+                    "name": "gateway",
+                    "passed": False,
+                    "message": "No gateway node configured",
+                }
+            )
+            if conn_type == AdminConnectionType.MQTT:
+                status["issues"].append("No gateway node is configured for MQTT mode")
+                status["suggestions"].append(
+                    "Set a gateway node ID in the Connection Status section"
+                )
+
+        # Check 4: For TCP, check if admin channel exists on local node
+        if conn_type == AdminConnectionType.TCP and is_connected:
+            try:
+                tcp_publisher = get_tcp_publisher()
+                admin_channel_index = tcp_publisher._get_admin_channel_index()
+
+                if admin_channel_index > 0:
+                    status["checks"].append(
+                        {
+                            "name": "admin_channel",
+                            "passed": True,
+                            "message": f"Admin channel found at index {admin_channel_index}",
+                            "channel_index": admin_channel_index,
+                        }
+                    )
+                else:
+                    # Channel 0 is used (primary channel), which is fine for PKI
+                    status["checks"].append(
+                        {
+                            "name": "admin_channel",
+                            "passed": True,
+                            "message": "Using primary channel with PKI encryption",
+                            "channel_index": 0,
+                        }
+                    )
+            except Exception as e:
+                logger.warning(f"Failed to check admin channel: {e}")
+
+        # Determine overall readiness
+        all_critical_passed = all(
+            check["passed"]
+            for check in status["checks"]
+            if check["name"] in ("connection", "gateway")
+        )
+        status["ready"] = all_critical_passed and is_connected
+
+        # Add overall status message
+        if status["ready"]:
+            if is_administrable:
+                status["status_message"] = "Ready to send admin commands"
+                status["status_level"] = "success"
+            else:
+                status["status_message"] = (
+                    "Connection ready, but node has not been tested. "
+                    "Commands may work if the node has your public key configured."
+                )
+                status["status_level"] = "warning"
+        else:
+            status["status_message"] = "Admin session is not ready"
+            status["status_level"] = "danger"
+
+        return status
+
     def test_node_admin(self, target_node_id: int) -> AdminCommandResult:
         """
         Test if a node is administrable by requesting device metadata.

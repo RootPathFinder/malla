@@ -216,6 +216,65 @@
         max-height: 300px;
         overflow-y: auto;
     }
+    /* Admin status banner styles */
+    .admin-status-banner {
+        border-radius: 0.5rem;
+        padding: 0.75rem 1rem;
+        margin-bottom: 1rem;
+        border: 1px solid;
+    }
+    .admin-status-banner.status-success {
+        background-color: rgba(25, 135, 84, 0.1);
+        border-color: rgba(25, 135, 84, 0.3);
+    }
+    .admin-status-banner.status-warning {
+        background-color: rgba(255, 193, 7, 0.1);
+        border-color: rgba(255, 193, 7, 0.3);
+    }
+    .admin-status-banner.status-danger {
+        background-color: rgba(220, 53, 69, 0.1);
+        border-color: rgba(220, 53, 69, 0.3);
+    }
+    .admin-status-banner .status-icon {
+        font-size: 1.25rem;
+        margin-right: 0.5rem;
+    }
+    .admin-status-banner .status-message {
+        font-weight: 500;
+    }
+    .admin-status-banner .status-details {
+        font-size: 0.85rem;
+        margin-top: 0.5rem;
+    }
+    .admin-status-banner .check-item {
+        display: flex;
+        align-items: center;
+        gap: 0.5rem;
+        padding: 0.25rem 0;
+    }
+    .admin-status-banner .check-item i {
+        font-size: 0.9rem;
+    }
+    .admin-status-banner .check-passed {
+        color: #198754;
+    }
+    .admin-status-banner .check-failed {
+        color: #dc3545;
+    }
+    .admin-status-banner .suggestions {
+        margin-top: 0.5rem;
+        padding-top: 0.5rem;
+        border-top: 1px solid var(--bs-border-color);
+    }
+    .admin-status-banner .suggestion-item {
+        font-size: 0.85rem;
+        color: var(--bs-secondary-color);
+        margin-top: 0.25rem;
+    }
+    .admin-status-banner .suggestion-item i {
+        color: var(--bs-info);
+        margin-right: 0.25rem;
+    }
 </style>
 {% endblock %}
 
@@ -487,10 +546,26 @@
                                 <input type="text" class="form-control" id="targetNodeInput"
                                        placeholder="Start typing node name or ID..."
                                        autocomplete="off"
-                                       oninput="searchNodes(this.value, 'targetNodeResults')"
+                                       oninput="searchNodes(this.value, 'targetNodeResults'); checkAdminStatusDebounced()"
                                        onfocus="if(this.value.length >= 1) searchNodes(this.value, 'targetNodeResults')"
                                        onblur="setTimeout(() => hideAutocomplete('targetNodeResults'), 200)">
                                 <div id="targetNodeResults" class="node-autocomplete-results" style="display:none;"></div>
+                            </div>
+
+                            <!-- Admin Status Banner -->
+                            <div id="adminStatusBanner" class="admin-status-banner d-none">
+                                <div class="d-flex align-items-start">
+                                    <i class="status-icon bi" id="adminStatusIcon"></i>
+                                    <div class="flex-grow-1">
+                                        <div class="status-message" id="adminStatusMessage"></div>
+                                        <div class="status-details" id="adminStatusDetails"></div>
+                                        <div class="suggestions" id="adminStatusSuggestions"></div>
+                                    </div>
+                                    <button type="button" class="btn btn-sm btn-outline-primary ms-2"
+                                            onclick="refreshAdminStatus()" title="Refresh status">
+                                        <i class="bi bi-arrow-clockwise"></i>
+                                    </button>
+                                </div>
                             </div>
 
                             <div class="mb-3">
@@ -636,6 +711,227 @@
     let currentConfigSchema = null;
     let searchTimeout = null;
     let cachedNodes = null;
+    let adminStatusTimeout = null;
+    let lastCheckedNodeId = null;
+
+    // ============================================================================
+    // Admin Status Checking
+    // ============================================================================
+
+    // Debounced function to check admin status when typing
+    function checkAdminStatusDebounced() {
+        if (adminStatusTimeout) {
+            clearTimeout(adminStatusTimeout);
+        }
+        adminStatusTimeout = setTimeout(() => {
+            const nodeId = document.getElementById('targetNodeInput').value.trim();
+            if (nodeId && nodeId.length >= 3) {
+                checkAdminStatus(nodeId);
+            } else {
+                hideAdminStatusBanner();
+            }
+        }, 500);
+    }
+
+    // Check admin status for a node
+    async function checkAdminStatus(nodeId) {
+        // Don't re-check the same node
+        if (nodeId === lastCheckedNodeId) {
+            return;
+        }
+        lastCheckedNodeId = nodeId;
+
+        const banner = document.getElementById('adminStatusBanner');
+        const iconEl = document.getElementById('adminStatusIcon');
+        const messageEl = document.getElementById('adminStatusMessage');
+        const detailsEl = document.getElementById('adminStatusDetails');
+        const suggestionsEl = document.getElementById('adminStatusSuggestions');
+
+        // Show loading state
+        banner.classList.remove('d-none', 'status-success', 'status-warning', 'status-danger');
+        banner.classList.add('status-warning');
+        iconEl.className = 'status-icon bi bi-hourglass-split text-warning';
+        messageEl.textContent = 'Checking admin channel status...';
+        detailsEl.innerHTML = '';
+        suggestionsEl.innerHTML = '';
+
+        try {
+            const response = await fetch(`/api/admin/node/${encodeURIComponent(nodeId)}/status`);
+            const data = await response.json();
+
+            if (data.error) {
+                showAdminStatusError(data.error);
+                return;
+            }
+
+            displayAdminStatus(data);
+        } catch (error) {
+            showAdminStatusError(error.message);
+        }
+    }
+
+    // Refresh admin status for current node
+    function refreshAdminStatus() {
+        lastCheckedNodeId = null; // Force refresh
+        const nodeId = document.getElementById('targetNodeInput').value.trim();
+        if (nodeId) {
+            checkAdminStatus(nodeId);
+        }
+    }
+
+    // Display admin status in the banner
+    function displayAdminStatus(status) {
+        const banner = document.getElementById('adminStatusBanner');
+        const iconEl = document.getElementById('adminStatusIcon');
+        const messageEl = document.getElementById('adminStatusMessage');
+        const detailsEl = document.getElementById('adminStatusDetails');
+        const suggestionsEl = document.getElementById('adminStatusSuggestions');
+
+        // Reset classes
+        banner.classList.remove('d-none', 'status-success', 'status-warning', 'status-danger');
+
+        // Set status level styling
+        const level = status.status_level || 'warning';
+        banner.classList.add(`status-${level}`);
+
+        // Set icon
+        if (level === 'success') {
+            iconEl.className = 'status-icon bi bi-check-circle-fill text-success';
+        } else if (level === 'warning') {
+            iconEl.className = 'status-icon bi bi-exclamation-triangle-fill text-warning';
+        } else {
+            iconEl.className = 'status-icon bi bi-x-circle-fill text-danger';
+        }
+
+        // Set message
+        messageEl.textContent = status.status_message || 'Unknown status';
+
+        // Build checks display
+        let checksHtml = '';
+        if (status.checks && status.checks.length > 0) {
+            for (const check of status.checks) {
+                const checkClass = check.passed ? 'check-passed' : 'check-failed';
+                const checkIcon = check.passed ? 'bi-check-circle-fill' : 'bi-x-circle-fill';
+                checksHtml += `
+                    <div class="check-item ${checkClass}">
+                        <i class="bi ${checkIcon}"></i>
+                        <span>${escapeHtml(check.message)}</span>
+                    </div>
+                `;
+            }
+        }
+        detailsEl.innerHTML = checksHtml;
+
+        // Build suggestions display
+        let suggestionsHtml = '';
+        if (status.suggestions && status.suggestions.length > 0) {
+            for (const suggestion of status.suggestions) {
+                suggestionsHtml += `
+                    <div class="suggestion-item">
+                        <i class="bi bi-lightbulb"></i>
+                        ${escapeHtml(suggestion)}
+                    </div>
+                `;
+            }
+        }
+
+        // Add test button if node is not administrable
+        const nodeAdminCheck = status.checks?.find(c => c.name === 'node_administrable');
+        if (nodeAdminCheck && !nodeAdminCheck.passed) {
+            suggestionsHtml += `
+                <div class="mt-2">
+                    <button class="btn btn-sm btn-outline-primary" onclick="testCurrentNode()">
+                        <i class="bi bi-lightning"></i> Test Admin Access Now
+                    </button>
+                </div>
+            `;
+        }
+
+        suggestionsEl.innerHTML = suggestionsHtml;
+        if (!suggestionsHtml) {
+            suggestionsEl.classList.add('d-none');
+        } else {
+            suggestionsEl.classList.remove('d-none');
+        }
+    }
+
+    // Show error in admin status banner
+    function showAdminStatusError(errorMessage) {
+        const banner = document.getElementById('adminStatusBanner');
+        const iconEl = document.getElementById('adminStatusIcon');
+        const messageEl = document.getElementById('adminStatusMessage');
+        const detailsEl = document.getElementById('adminStatusDetails');
+        const suggestionsEl = document.getElementById('adminStatusSuggestions');
+
+        banner.classList.remove('d-none', 'status-success', 'status-warning');
+        banner.classList.add('status-danger');
+        iconEl.className = 'status-icon bi bi-exclamation-octagon-fill text-danger';
+        messageEl.textContent = 'Error checking admin status';
+        detailsEl.innerHTML = `<span class="text-danger">${escapeHtml(errorMessage)}</span>`;
+        suggestionsEl.innerHTML = '';
+    }
+
+    // Hide admin status banner
+    function hideAdminStatusBanner() {
+        const banner = document.getElementById('adminStatusBanner');
+        banner.classList.add('d-none');
+        lastCheckedNodeId = null;
+    }
+
+    // Test admin access for the current target node
+    async function testCurrentNode() {
+        const nodeId = document.getElementById('targetNodeInput').value.trim();
+        if (!nodeId) {
+            alert('Please enter a target node ID');
+            return;
+        }
+
+        const banner = document.getElementById('adminStatusBanner');
+        const messageEl = document.getElementById('adminStatusMessage');
+        const detailsEl = document.getElementById('adminStatusDetails');
+        const suggestionsEl = document.getElementById('adminStatusSuggestions');
+
+        // Show testing state
+        banner.classList.remove('status-success', 'status-danger');
+        banner.classList.add('status-warning');
+        document.getElementById('adminStatusIcon').className = 'status-icon bi bi-hourglass-split text-warning';
+        messageEl.textContent = 'Testing admin access...';
+        detailsEl.innerHTML = '<div class="spinner-border spinner-border-sm text-primary" role="status"></div> Sending device metadata request...';
+        suggestionsEl.innerHTML = '';
+
+        try {
+            const response = await fetch(`/api/admin/node/${encodeURIComponent(nodeId)}/test`, {
+                method: 'POST'
+            });
+            const data = await response.json();
+
+            if (data.success && data.administrable) {
+                // Refresh status to show updated state
+                lastCheckedNodeId = null;
+                await checkAdminStatus(nodeId);
+                showAlert('success', `Node ${data.hex_id} is administrable!`);
+            } else {
+                // Show failure in banner
+                banner.classList.remove('status-warning');
+                banner.classList.add('status-danger');
+                document.getElementById('adminStatusIcon').className = 'status-icon bi bi-x-circle-fill text-danger';
+                messageEl.textContent = 'Admin test failed';
+                detailsEl.innerHTML = `<span class="text-danger">${escapeHtml(data.error || 'No response from node')}</span>`;
+                suggestionsEl.innerHTML = `
+                    <div class="suggestion-item">
+                        <i class="bi bi-lightbulb"></i>
+                        Ensure the node has this server's public key configured
+                    </div>
+                    <div class="suggestion-item">
+                        <i class="bi bi-lightbulb"></i>
+                        Check that the node is within radio range of the gateway
+                    </div>
+                `;
+            }
+        } catch (error) {
+            showAdminStatusError(error.message);
+        }
+    }
 
     // ============================================================================
     // Node Autocomplete
@@ -707,9 +1003,10 @@
         input.value = nodeId;
         hideAutocomplete(resultsContainerId);
 
-        // If it's the target node input, also store the selected node
+        // If it's the target node input, also store the selected node and check admin status
         if (inputId === 'targetNodeInput') {
             selectedNodeId = nodeId;
+            checkAdminStatus(nodeId);
         }
     }
 
@@ -974,6 +1271,9 @@
         // Switch to commands tab
         const commandsTab = document.getElementById('commands-tab');
         bootstrap.Tab.getOrCreateInstance(commandsTab).show();
+
+        // Check admin status for the selected node
+        checkAdminStatus(nodeId);
 
         showAlert('info', `Selected node ${nodeId} for commands`);
     }
