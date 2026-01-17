@@ -1135,9 +1135,11 @@
         saveSetting(STORAGE_KEYS.tcpPort, port.toString());
 
         const btn = document.getElementById('tcpConnectBtn');
+        const disconnectBtn = document.getElementById('tcpDisconnectBtn');
         const resultDiv = document.getElementById('tcpConnectResult');
 
         btn.disabled = true;
+        disconnectBtn.disabled = true;
         btn.innerHTML = '<span class="spinner-border spinner-border-sm"></span> Connecting...';
 
         try {
@@ -1154,27 +1156,36 @@
                 resultDiv.classList.add('alert-success');
                 resultDiv.innerHTML = `<i class="bi bi-check-circle"></i> Connected to ${data.host}:${data.port}` +
                     (data.local_node_hex ? ` (Local Node: ${data.local_node_hex})` : '');
-                updateConnectionStatus();
+                await updateConnectionStatus();
             } else {
                 resultDiv.classList.add('alert-danger');
                 resultDiv.innerHTML = `<i class="bi bi-x-circle"></i> ${data.error || 'Failed to connect'}`;
+                // Re-enable connect button on failure
+                btn.disabled = false;
+                btn.innerHTML = '<i class="bi bi-plug"></i> Connect';
             }
         } catch (error) {
             resultDiv.classList.remove('d-none', 'alert-success');
             resultDiv.classList.add('alert-danger');
             resultDiv.innerHTML = `<i class="bi bi-x-circle"></i> Error: ${error.message}`;
-        } finally {
+            // Re-enable connect button on error
             btn.disabled = false;
             btn.innerHTML = '<i class="bi bi-plug"></i> Connect';
         }
+
+        // Restore button text (state will be set by updateConnectionStatus)
+        btn.innerHTML = '<i class="bi bi-plug"></i> Connect';
     }
 
     // TCP Disconnect
     async function tcpDisconnect() {
         const btn = document.getElementById('tcpDisconnectBtn');
+        const connectBtn = document.getElementById('tcpConnectBtn');
         const resultDiv = document.getElementById('tcpConnectResult');
 
         btn.disabled = true;
+        connectBtn.disabled = true;
+        btn.innerHTML = '<span class="spinner-border spinner-border-sm"></span> Disconnecting...';
 
         try {
             const response = await fetch('/api/admin/tcp/disconnect', {
@@ -1187,18 +1198,23 @@
             if (data.success) {
                 resultDiv.classList.add('alert-success');
                 resultDiv.innerHTML = '<i class="bi bi-check-circle"></i> Disconnected';
-                updateConnectionStatus();
+                await updateConnectionStatus();
             } else {
                 resultDiv.classList.add('alert-danger');
                 resultDiv.innerHTML = `<i class="bi bi-x-circle"></i> ${data.error || 'Failed to disconnect'}`;
+                // Re-enable disconnect button on failure
+                btn.disabled = false;
             }
         } catch (error) {
             resultDiv.classList.remove('d-none', 'alert-success');
             resultDiv.classList.add('alert-danger');
             resultDiv.innerHTML = `<i class="bi bi-x-circle"></i> Error: ${error.message}`;
-        } finally {
+            // Re-enable disconnect button on error
             btn.disabled = false;
         }
+
+        // Restore button text (state will be set by updateConnectionStatus)
+        btn.innerHTML = '<i class="bi bi-x-circle"></i> Disconnect';
     }
 
     // Update connection status display
@@ -1208,20 +1224,78 @@
             const data = await response.json();
 
             const statusSpan = document.getElementById('connectionStatus');
+            const connectBtn = document.getElementById('tcpConnectBtn');
+            const disconnectBtn = document.getElementById('tcpDisconnectBtn');
+
             if (data.connected) {
                 statusSpan.innerHTML = '<span class="status-indicator status-connected"></span>Connected';
+                // Disable connect button, enable disconnect button
+                if (connectBtn) {
+                    connectBtn.disabled = true;
+                    connectBtn.classList.remove('btn-success');
+                    connectBtn.classList.add('btn-outline-secondary');
+                }
+                if (disconnectBtn) {
+                    disconnectBtn.disabled = false;
+                    disconnectBtn.classList.remove('btn-outline-secondary');
+                    disconnectBtn.classList.add('btn-outline-danger');
+                }
             } else {
                 statusSpan.innerHTML = '<span class="status-indicator status-disconnected"></span>Disconnected';
+                // Enable connect button, disable disconnect button
+                if (connectBtn) {
+                    connectBtn.disabled = false;
+                    connectBtn.classList.remove('btn-outline-secondary');
+                    connectBtn.classList.add('btn-success');
+                }
+                if (disconnectBtn) {
+                    disconnectBtn.disabled = true;
+                    disconnectBtn.classList.remove('btn-outline-danger');
+                    disconnectBtn.classList.add('btn-outline-secondary');
+                }
             }
 
             // Update gateway display if available
             if (data.gateway_node_hex) {
                 document.getElementById('gatewayNodeDisplay').innerHTML = `<code>${data.gateway_node_hex}</code>`;
             }
+
+            return data.connected;
         } catch (error) {
             console.error('Failed to update connection status:', error);
+            return false;
         }
     }
+
+    // Periodic connection status check
+    let connectionCheckInterval = null;
+
+    function startConnectionCheck() {
+        // Clear any existing interval
+        if (connectionCheckInterval) {
+            clearInterval(connectionCheckInterval);
+        }
+
+        // Check connection status every 10 seconds
+        connectionCheckInterval = setInterval(async () => {
+            await updateConnectionStatus();
+        }, 10000);
+    }
+
+    function stopConnectionCheck() {
+        if (connectionCheckInterval) {
+            clearInterval(connectionCheckInterval);
+            connectionCheckInterval = null;
+        }
+    }
+
+    // Start connection check on page load
+    document.addEventListener('DOMContentLoaded', function() {
+        // Initial status update
+        updateConnectionStatus();
+        // Start periodic check
+        startConnectionCheck();
+    });
 
     // Set gateway node
     async function setGatewayNode() {
