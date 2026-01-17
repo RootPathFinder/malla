@@ -4264,7 +4264,48 @@ class BatteryAnalyticsRepository:
                         f"Battery cycling {bat_min}-{bat_max}% indicates solar charging",
                     )
 
-                # Battery: Never reaches full charge (max < 98%)
+                # Check for daytime charging pattern (solar detection for smaller panels)
+                # Even if battery never reaches 98%, if it charges during daytime and
+                # discharges at night, it's likely solar
+                if bat_max < 98 and len(timestamps) >= 10:
+                    from datetime import datetime
+
+                    # Group battery levels by hour of day
+                    hourly_levels: dict[int, list[int]] = {}
+                    for ts, level in zip(timestamps, battery_levels, strict=False):
+                        if level is not None:
+                            hour = datetime.fromtimestamp(ts).hour
+                            if hour not in hourly_levels:
+                                hourly_levels[hour] = []
+                            hourly_levels[hour].append(level)
+
+                    # Calculate hourly averages
+                    hourly_avgs = {}
+                    for hour, levels in hourly_levels.items():
+                        hourly_avgs[hour] = sum(levels) / len(levels)
+
+                    # Solar pattern: afternoon (14-18) higher than morning (6-10)
+                    # This detects the characteristic solar charging curve
+                    morning_levels = [
+                        hourly_avgs[h] for h in range(6, 11) if h in hourly_avgs
+                    ]
+                    afternoon_levels = [
+                        hourly_avgs[h] for h in range(14, 19) if h in hourly_avgs
+                    ]
+
+                    if len(morning_levels) >= 2 and len(afternoon_levels) >= 2:
+                        morning_avg = sum(morning_levels) / len(morning_levels)
+                        afternoon_avg = sum(afternoon_levels) / len(afternoon_levels)
+
+                        # If afternoon is at least 1% higher than morning,
+                        # it indicates daytime charging (solar)
+                        if afternoon_avg > morning_avg + 1.0:
+                            return (
+                                "solar",
+                                f"Daytime charging pattern ({morning_avg:.0f}% AM → {afternoon_avg:.0f}% PM)",
+                            )
+
+                # Battery: Never reaches full charge and no daytime charging pattern
                 if bat_max < 98:
                     return "battery", f"Battery discharging (Max {bat_max}%)"
 
