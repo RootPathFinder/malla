@@ -310,6 +310,7 @@
                             <select class="form-select" id="connectionTypeSelect" onchange="changeConnectionType()">
                                 <option value="mqtt" {{ 'selected' if connection_status.connection_type == 'mqtt' else '' }}>MQTT (via broker)</option>
                                 <option value="tcp" {{ 'selected' if connection_status.connection_type == 'tcp' else '' }}>TCP (direct connection)</option>
+                                <option value="serial" {{ 'selected' if connection_status.connection_type == 'serial' else '' }}>USB/Serial (local device)</option>
                             </select>
                         </div>
                         <div class="col-md-6">
@@ -402,6 +403,47 @@
                         <div id="tcpConnectResult" class="alert d-none mt-2" role="alert"></div>
                         <div class="form-text">
                             Connect directly to a Meshtastic node via TCP. The node must have WiFi enabled and be accessible on the network.
+                        </div>
+                    </div>
+
+                    <!-- Serial/USB Settings -->
+                    <div id="serialSettings" class="{{ 'd-none' if connection_status.connection_type != 'serial' else '' }}">
+                        <div class="row mb-3">
+                            <div class="col-md-6">
+                                <label for="serialPortSelect" class="form-label">Serial Port</label>
+                                <select class="form-select" id="serialPortSelect">
+                                    <option value="">-- Select USB/Serial to scan --</option>
+                                </select>
+                            </div>
+                            <div class="col-md-3">
+                                <label class="form-label">&nbsp;</label>
+                                <button class="btn btn-outline-secondary d-block w-100" type="button" onclick="discoverSerialPorts()">
+                                    <i class="bi bi-search"></i> Discover
+                                </button>
+                            </div>
+                            <div class="col-md-3">
+                                <label class="form-label">&nbsp;</label>
+                                <button class="btn btn-outline-info d-block w-100" type="button" onclick="probeSerialDevices()" id="probeDevicesBtn">
+                                    <i class="bi bi-cpu"></i> Identify
+                                </button>
+                            </div>
+                        </div>
+                        <div id="serialPortInfo" class="alert alert-info d-none mb-3" role="alert">
+                            <small></small>
+                        </div>
+                        <div class="row mb-2">
+                            <div class="col">
+                                <button class="btn btn-success me-2" type="button" onclick="serialConnect()" id="serialConnectBtn">
+                                    <i class="bi bi-usb-plug"></i> Connect
+                                </button>
+                                <button class="btn btn-outline-danger" type="button" onclick="serialDisconnect()" id="serialDisconnectBtn">
+                                    <i class="bi bi-x-circle"></i> Disconnect
+                                </button>
+                            </div>
+                        </div>
+                        <div id="serialConnectResult" class="alert d-none mt-2" role="alert"></div>
+                        <div class="form-text">
+                            <strong>Discover</strong> scans for USB ports. <strong>Identify</strong> connects briefly to detect actual Meshtastic hardware (takes a few seconds per device).
                         </div>
                     </div>
                 </div>
@@ -1105,6 +1147,12 @@
         // Show/hide appropriate settings
         document.getElementById('mqttSettings').classList.toggle('d-none', connType !== 'mqtt');
         document.getElementById('tcpSettings').classList.toggle('d-none', connType !== 'tcp');
+        document.getElementById('serialSettings').classList.toggle('d-none', connType !== 'serial');
+
+        // Auto-discover serial ports when switching to serial
+        if (connType === 'serial') {
+            discoverSerialPorts();
+        }
 
         try {
             const response = await fetch('/api/admin/connection-type', {
@@ -1217,6 +1265,256 @@
         btn.innerHTML = '<i class="bi bi-x-circle"></i> Disconnect';
     }
 
+    // Serial Port Discovery
+    async function discoverSerialPorts(probe = false) {
+        const selectEl = document.getElementById('serialPortSelect');
+        const infoDiv = document.getElementById('serialPortInfo');
+        const discoverBtn = document.querySelector('#serialSettings button[onclick="discoverSerialPorts()"]');
+
+        selectEl.disabled = true;
+        if (discoverBtn) {
+            discoverBtn.disabled = true;
+            discoverBtn.innerHTML = probe
+                ? '<span class="spinner-border spinner-border-sm"></span> Probing...'
+                : '<span class="spinner-border spinner-border-sm"></span> Scanning...';
+        }
+        selectEl.innerHTML = probe
+            ? '<option value="">Probing devices (this may take a moment)...</option>'
+            : '<option value="">Scanning ports...</option>';
+        infoDiv.classList.add('d-none');
+
+        try {
+            const url = probe ? '/api/admin/serial/ports?probe=true' : '/api/admin/serial/ports';
+            const response = await fetch(url);
+            const data = await response.json();
+
+            // Store ports data for later reference
+            window._serialPortsData = data.ports || [];
+
+            selectEl.innerHTML = '';
+
+            if (data.success && data.ports && data.ports.length > 0) {
+                // Add placeholder
+                const placeholderOpt = document.createElement('option');
+                placeholderOpt.value = '';
+                placeholderOpt.textContent = '-- Select a port --';
+                selectEl.appendChild(placeholderOpt);
+
+                // Add ports - confirmed/likely Meshtastic devices first
+                const sortedPorts = [...data.ports].sort((a, b) => {
+                    // Confirmed devices first
+                    if (a.is_meshtastic_confirmed && !b.is_meshtastic_confirmed) return -1;
+                    if (!a.is_meshtastic_confirmed && b.is_meshtastic_confirmed) return 1;
+                    // Then likely devices
+                    if (a.is_meshtastic_likely && !b.is_meshtastic_likely) return -1;
+                    if (!a.is_meshtastic_likely && b.is_meshtastic_likely) return 1;
+                    return 0;
+                });
+
+                for (const port of sortedPorts) {
+                    const opt = document.createElement('option');
+                    opt.value = port.device;
+
+                    // Build label
+                    let label = port.device;
+
+                    // If we have device info from probing, show hardware model and name
+                    if (port.device_info) {
+                        const di = port.device_info;
+                        if (di.hardware_model_name) {
+                            label += ` - ${di.hardware_model_name}`;
+                        }
+                        if (di.short_name) {
+                            label += ` (${di.short_name})`;
+                        }
+                        label += ' ✓';
+                    } else if (port.chip_type) {
+                        // Show chip type from VID:PID lookup
+                        label += ` - ${port.chip_type}`;
+                        if (port.is_meshtastic_likely) {
+                            label += ' ⭐';
+                        }
+                    } else if (port.description && port.description !== 'n/a') {
+                        label += ` - ${port.description}`;
+                        if (port.is_meshtastic_likely) {
+                            label += ' ⭐';
+                        }
+                    }
+
+                    opt.textContent = label;
+                    selectEl.appendChild(opt);
+                }
+
+                // Auto-select first confirmed/likely Meshtastic port
+                const bestPort = data.ports.find(p => p.is_meshtastic_confirmed) ||
+                                 data.ports.find(p => p.is_meshtastic_likely);
+                if (bestPort) {
+                    selectEl.value = bestPort.device;
+                    showSerialPortInfo(bestPort);
+                }
+
+                // Add change handler to show port info
+                selectEl.onchange = () => {
+                    const selectedPort = window._serialPortsData.find(p => p.device === selectEl.value);
+                    if (selectedPort) {
+                        showSerialPortInfo(selectedPort);
+                    } else {
+                        infoDiv.classList.add('d-none');
+                    }
+                };
+            } else {
+                selectEl.innerHTML = '<option value="">No serial ports found</option>';
+            }
+        } catch (error) {
+            selectEl.innerHTML = '<option value="">Error discovering ports</option>';
+            console.error('Serial port discovery error:', error);
+        }
+
+        selectEl.disabled = false;
+        if (discoverBtn) {
+            discoverBtn.disabled = false;
+            discoverBtn.innerHTML = '<i class="bi bi-search"></i> Discover Ports';
+        }
+    }
+
+    // Probe devices to identify Meshtastic hardware
+    async function probeSerialDevices() {
+        await discoverSerialPorts(true);
+    }
+
+    function showSerialPortInfo(port) {
+        const infoDiv = document.getElementById('serialPortInfo');
+        let html = `<strong>${port.device}</strong>`;
+
+        // Show confirmed device info if available
+        if (port.device_info) {
+            const di = port.device_info;
+            if (di.hardware_model_name) {
+                html += `<br><span class="text-success"><i class="bi bi-check-circle-fill"></i> <strong>${di.hardware_model_name}</strong></span>`;
+            }
+            if (di.long_name) {
+                html += `<br>Name: ${di.long_name}`;
+            }
+            if (di.short_name) {
+                html += ` (${di.short_name})`;
+            }
+            if (di.node_hex) {
+                html += `<br>Node ID: <code>${di.node_hex}</code>`;
+            }
+            if (di.firmware_version) {
+                html += `<br>Firmware: ${di.firmware_version}`;
+            }
+        } else {
+            // Fallback to basic info
+            if (port.chip_type) {
+                html += `<br>Chip: ${port.chip_type}`;
+            } else if (port.description && port.description !== 'n/a') {
+                html += `<br>Description: ${port.description}`;
+            }
+            if (port.manufacturer && port.manufacturer !== 'n/a') {
+                html += `<br>Manufacturer: ${port.manufacturer}`;
+            }
+            if (port.vid && port.pid) {
+                html += `<br>VID:PID: ${port.vid.toString(16).toUpperCase().padStart(4, '0')}:${port.pid.toString(16).toUpperCase().padStart(4, '0')}`;
+            }
+            if (port.is_meshtastic_likely) {
+                html += `<br><span class="text-warning"><i class="bi bi-question-circle"></i> Likely Meshtastic - click "Identify Device" to confirm</span>`;
+            }
+        }
+
+        infoDiv.querySelector('small').innerHTML = html;
+        infoDiv.classList.remove('d-none');
+    }
+
+    // Serial Connect
+    async function serialConnect() {
+        const port = document.getElementById('serialPortSelect').value;
+
+        if (!port) {
+            showAlert('warning', 'Please select a serial port first');
+            return;
+        }
+
+        // Save serial port to localStorage
+        saveSetting('serialPort', port);
+
+        const btn = document.getElementById('serialConnectBtn');
+        const disconnectBtn = document.getElementById('serialDisconnectBtn');
+        const resultDiv = document.getElementById('serialConnectResult');
+
+        btn.disabled = true;
+        disconnectBtn.disabled = true;
+        btn.innerHTML = '<span class="spinner-border spinner-border-sm"></span> Connecting...';
+
+        try {
+            const response = await fetch('/api/admin/serial/connect', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ port: port })
+            });
+            const data = await response.json();
+
+            resultDiv.classList.remove('d-none', 'alert-success', 'alert-danger');
+
+            if (data.success) {
+                resultDiv.classList.add('alert-success');
+                resultDiv.innerHTML = `<i class="bi bi-check-circle"></i> Connected to ${data.port}` +
+                    (data.local_node_hex ? ` (Local Node: ${data.local_node_hex})` : '');
+                await updateConnectionStatus();
+            } else {
+                resultDiv.classList.add('alert-danger');
+                resultDiv.innerHTML = `<i class="bi bi-x-circle"></i> ${data.error || 'Failed to connect'}`;
+                btn.disabled = false;
+                btn.innerHTML = '<i class="bi bi-usb-plug"></i> Connect';
+            }
+        } catch (error) {
+            resultDiv.classList.remove('d-none', 'alert-success');
+            resultDiv.classList.add('alert-danger');
+            resultDiv.innerHTML = `<i class="bi bi-x-circle"></i> Error: ${error.message}`;
+            btn.disabled = false;
+            btn.innerHTML = '<i class="bi bi-usb-plug"></i> Connect';
+        }
+
+        btn.innerHTML = '<i class="bi bi-usb-plug"></i> Connect';
+    }
+
+    // Serial Disconnect
+    async function serialDisconnect() {
+        const btn = document.getElementById('serialDisconnectBtn');
+        const connectBtn = document.getElementById('serialConnectBtn');
+        const resultDiv = document.getElementById('serialConnectResult');
+
+        btn.disabled = true;
+        connectBtn.disabled = true;
+        btn.innerHTML = '<span class="spinner-border spinner-border-sm"></span> Disconnecting...';
+
+        try {
+            const response = await fetch('/api/admin/serial/disconnect', {
+                method: 'POST'
+            });
+            const data = await response.json();
+
+            resultDiv.classList.remove('d-none', 'alert-success', 'alert-danger');
+
+            if (data.success) {
+                resultDiv.classList.add('alert-success');
+                resultDiv.innerHTML = '<i class="bi bi-check-circle"></i> Disconnected';
+                await updateConnectionStatus();
+            } else {
+                resultDiv.classList.add('alert-danger');
+                resultDiv.innerHTML = `<i class="bi bi-x-circle"></i> ${data.error || 'Failed to disconnect'}`;
+                btn.disabled = false;
+            }
+        } catch (error) {
+            resultDiv.classList.remove('d-none', 'alert-success');
+            resultDiv.classList.add('alert-danger');
+            resultDiv.innerHTML = `<i class="bi bi-x-circle"></i> Error: ${error.message}`;
+            btn.disabled = false;
+        }
+
+        btn.innerHTML = '<i class="bi bi-x-circle"></i> Disconnect';
+    }
+
     // Update connection status display
     async function updateConnectionStatus() {
         try {
@@ -1224,34 +1522,56 @@
             const data = await response.json();
 
             const statusSpan = document.getElementById('connectionStatus');
-            const connectBtn = document.getElementById('tcpConnectBtn');
-            const disconnectBtn = document.getElementById('tcpDisconnectBtn');
+            const tcpConnectBtn = document.getElementById('tcpConnectBtn');
+            const tcpDisconnectBtn = document.getElementById('tcpDisconnectBtn');
+            const serialConnectBtn = document.getElementById('serialConnectBtn');
+            const serialDisconnectBtn = document.getElementById('serialDisconnectBtn');
 
             if (data.connected) {
                 statusSpan.innerHTML = '<span class="status-indicator status-connected"></span>Connected';
-                // Disable connect button, enable disconnect button
-                if (connectBtn) {
-                    connectBtn.disabled = true;
-                    connectBtn.classList.remove('btn-success');
-                    connectBtn.classList.add('btn-outline-secondary');
+                // Disable connect buttons, enable disconnect buttons
+                if (tcpConnectBtn) {
+                    tcpConnectBtn.disabled = true;
+                    tcpConnectBtn.classList.remove('btn-success');
+                    tcpConnectBtn.classList.add('btn-outline-secondary');
                 }
-                if (disconnectBtn) {
-                    disconnectBtn.disabled = false;
-                    disconnectBtn.classList.remove('btn-outline-secondary');
-                    disconnectBtn.classList.add('btn-outline-danger');
+                if (tcpDisconnectBtn) {
+                    tcpDisconnectBtn.disabled = false;
+                    tcpDisconnectBtn.classList.remove('btn-outline-secondary');
+                    tcpDisconnectBtn.classList.add('btn-outline-danger');
+                }
+                if (serialConnectBtn) {
+                    serialConnectBtn.disabled = true;
+                    serialConnectBtn.classList.remove('btn-success');
+                    serialConnectBtn.classList.add('btn-outline-secondary');
+                }
+                if (serialDisconnectBtn) {
+                    serialDisconnectBtn.disabled = false;
+                    serialDisconnectBtn.classList.remove('btn-outline-secondary');
+                    serialDisconnectBtn.classList.add('btn-outline-danger');
                 }
             } else {
                 statusSpan.innerHTML = '<span class="status-indicator status-disconnected"></span>Disconnected';
-                // Enable connect button, disable disconnect button
-                if (connectBtn) {
-                    connectBtn.disabled = false;
-                    connectBtn.classList.remove('btn-outline-secondary');
-                    connectBtn.classList.add('btn-success');
+                // Enable connect buttons, disable disconnect buttons
+                if (tcpConnectBtn) {
+                    tcpConnectBtn.disabled = false;
+                    tcpConnectBtn.classList.remove('btn-outline-secondary');
+                    tcpConnectBtn.classList.add('btn-success');
                 }
-                if (disconnectBtn) {
-                    disconnectBtn.disabled = true;
-                    disconnectBtn.classList.remove('btn-outline-danger');
-                    disconnectBtn.classList.add('btn-outline-secondary');
+                if (tcpDisconnectBtn) {
+                    tcpDisconnectBtn.disabled = true;
+                    tcpDisconnectBtn.classList.remove('btn-outline-danger');
+                    tcpDisconnectBtn.classList.add('btn-outline-secondary');
+                }
+                if (serialConnectBtn) {
+                    serialConnectBtn.disabled = false;
+                    serialConnectBtn.classList.remove('btn-outline-secondary');
+                    serialConnectBtn.classList.add('btn-success');
+                }
+                if (serialDisconnectBtn) {
+                    serialDisconnectBtn.disabled = true;
+                    serialDisconnectBtn.classList.remove('btn-outline-danger');
+                    serialDisconnectBtn.classList.add('btn-outline-secondary');
                 }
             }
 

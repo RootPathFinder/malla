@@ -10,6 +10,7 @@ from flask import Blueprint, jsonify, render_template, request
 
 from ..database.admin_repository import AdminRepository
 from ..services.admin_service import ConfigType, get_admin_service
+from ..services.serial_publisher import discover_serial_ports, get_serial_publisher
 from ..services.tcp_publisher import get_tcp_publisher
 from ..utils.node_utils import convert_node_id
 
@@ -190,6 +191,106 @@ def api_tcp_disconnect():
 
     except Exception as e:
         logger.error(f"Error disconnecting TCP: {e}")
+        return jsonify({"error": str(e)}), 500
+
+
+# ============================================================================
+# API Routes - Serial/USB Connection
+# ============================================================================
+
+
+@admin_bp.route("/api/admin/serial/ports")
+def api_serial_ports():
+    """Discover available serial ports.
+
+    Query Parameters:
+        probe: If "true", attempt to connect and identify Meshtastic devices (slower)
+    """
+    try:
+        probe = request.args.get("probe", "false").lower() == "true"
+        ports = discover_serial_ports(probe_devices=probe)
+        return jsonify(
+            {
+                "success": True,
+                "ports": ports,
+                "count": len(ports),
+                "probed": probe,
+            }
+        )
+    except Exception as e:
+        logger.error(f"Error discovering serial ports: {e}")
+        return jsonify({"error": str(e)}), 500
+
+
+@admin_bp.route("/api/admin/serial/connect", methods=["POST"])
+def api_serial_connect():
+    """Connect to a Meshtastic node via USB/Serial."""
+    try:
+        data = request.get_json() or {}
+        port = data.get("port")
+
+        if not port:
+            return jsonify({"error": "Serial port is required"}), 400
+
+        serial_publisher = get_serial_publisher()
+
+        # Disconnect TCP if connected
+        tcp_publisher = get_tcp_publisher()
+        if tcp_publisher.is_connected:
+            tcp_publisher.disconnect()
+
+        if serial_publisher.connect(port=port):
+            local_node_id = serial_publisher.get_local_node_id()
+
+            # Set connection type to Serial
+            admin_service = get_admin_service()
+            admin_service.set_connection_type("serial")
+
+            return jsonify(
+                {
+                    "success": True,
+                    "connected": True,
+                    "port": port,
+                    "local_node_id": local_node_id,
+                    "local_node_hex": f"!{local_node_id:08x}"
+                    if local_node_id
+                    else None,
+                }
+            )
+        else:
+            return jsonify(
+                {
+                    "success": False,
+                    "connected": False,
+                    "error": f"Failed to connect to {port}",
+                }
+            ), 500
+
+    except Exception as e:
+        logger.error(f"Error connecting via Serial: {e}")
+        return jsonify({"error": str(e)}), 500
+
+
+@admin_bp.route("/api/admin/serial/disconnect", methods=["POST"])
+def api_serial_disconnect():
+    """Disconnect from the Serial-connected Meshtastic node."""
+    try:
+        serial_publisher = get_serial_publisher()
+        serial_publisher.disconnect()
+
+        # Set connection type back to MQTT
+        admin_service = get_admin_service()
+        admin_service.set_connection_type("mqtt")
+
+        return jsonify(
+            {
+                "success": True,
+                "connected": False,
+            }
+        )
+
+    except Exception as e:
+        logger.error(f"Error disconnecting Serial: {e}")
         return jsonify({"error": str(e)}), 500
 
 

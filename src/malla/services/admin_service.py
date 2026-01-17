@@ -17,6 +17,7 @@ from ..config import get_config
 from ..database.admin_repository import AdminRepository
 from .config_metadata import get_all_config_schemas, get_config_schema
 from .mqtt_publisher import get_mqtt_publisher
+from .serial_publisher import get_serial_publisher
 from .tcp_publisher import get_tcp_publisher
 
 logger = logging.getLogger(__name__)
@@ -271,9 +272,7 @@ class AdminService:
         if conn_type == AdminConnectionType.TCP:
             return get_tcp_publisher()
         elif conn_type == AdminConnectionType.SERIAL:
-            # Serial not yet implemented, fall back to MQTT
-            logger.warning("Serial connection not yet implemented, using MQTT")
-            return get_mqtt_publisher()
+            return get_serial_publisher()
         else:
             return get_mqtt_publisher()
 
@@ -283,6 +282,14 @@ class AdminService:
         # For TCP connections, we can get the local node ID from the interface
         if self.connection_type == AdminConnectionType.TCP:
             publisher = get_tcp_publisher()
+            if publisher.is_connected:
+                local_id = publisher.get_local_node_id()
+                if local_id:
+                    return local_id
+
+        # For Serial connections, get the local node ID from the interface
+        if self.connection_type == AdminConnectionType.SERIAL:
+            publisher = get_serial_publisher()
             if publisher.is_connected:
                 local_id = publisher.get_local_node_id()
                 if local_id:
@@ -338,6 +345,9 @@ class AdminService:
             tcp_publisher = get_tcp_publisher()
             status["tcp_host"] = tcp_publisher.tcp_host
             status["tcp_port"] = tcp_publisher.tcp_port
+        elif conn_type == AdminConnectionType.SERIAL:
+            serial_publisher = get_serial_publisher()
+            status["serial_port"] = serial_publisher.serial_port
         elif conn_type == AdminConnectionType.MQTT:
             mqtt_publisher = get_mqtt_publisher()
             status["mqtt_connected"] = mqtt_publisher.is_connected
