@@ -1951,9 +1951,186 @@
         );
     }
 
+    // Quick check if node is responding (lighter than full test)
+    async function isNodeResponding(nodeId, timeoutMs = 5000) {
+        const controller = new AbortController();
+        const timeoutId = setTimeout(() => controller.abort(), timeoutMs);
+
+        try {
+            const response = await fetch(`/api/admin/node/${encodeURIComponent(nodeId)}/test`, {
+                method: 'POST',
+                signal: controller.signal
+            });
+            clearTimeout(timeoutId);
+            const data = await response.json();
+            return data.success && data.administrable;
+        } catch (error) {
+            clearTimeout(timeoutId);
+            return false;
+        }
+    }
+
+    // Update reboot progress UI
+    function updateRebootProgress(phase, progress, message, details) {
+        const banner = document.getElementById('adminStatusBanner');
+        if (!banner) return;
+
+        // Create or get progress container
+        let progressContainer = document.getElementById('rebootProgressContainer');
+        if (!progressContainer) {
+            progressContainer = document.createElement('div');
+            progressContainer.id = 'rebootProgressContainer';
+            progressContainer.className = 'mt-3';
+            banner.querySelector('.status-details')?.appendChild(progressContainer);
+        }
+
+        // Phase icons and colors
+        const phases = {
+            'sending': { icon: 'bi-send', color: 'warning' },
+            'waiting-shutdown': { icon: 'bi-hourglass-split', color: 'warning' },
+            'offline': { icon: 'bi-power', color: 'secondary' },
+            'waiting-online': { icon: 'bi-arrow-repeat', color: 'info' },
+            'reconnecting': { icon: 'bi-plug', color: 'primary' },
+            'complete': { icon: 'bi-check-circle', color: 'success' },
+            'error': { icon: 'bi-x-circle', color: 'danger' }
+        };
+
+        const phaseInfo = phases[phase] || phases['sending'];
+
+        progressContainer.innerHTML = `
+            <div class="d-flex align-items-center mb-2">
+                <i class="bi ${phaseInfo.icon} text-${phaseInfo.color} me-2" style="font-size: 1.2rem;"></i>
+                <strong>${message}</strong>
+            </div>
+            <div class="progress" style="height: 8px;">
+                <div class="progress-bar bg-${phaseInfo.color} ${phase === 'offline' || phase === 'waiting-online' ? 'progress-bar-striped progress-bar-animated' : ''}"
+                     role="progressbar"
+                     style="width: ${progress}%;"
+                     aria-valuenow="${progress}"
+                     aria-valuemin="0"
+                     aria-valuemax="100">
+                </div>
+            </div>
+            <small class="text-muted mt-1 d-block">${details || ''}</small>
+        `;
+
+        // Update banner styling
+        updateAdminStatusBanner(phaseInfo.color === 'success' ? 'success' : 'warning',
+            phase === 'complete' ? 'Reboot Complete' : 'Rebooting Node...', '');
+    }
+
+    // Monitor reboot process with real-time updates
+    async function monitorReboot(nodeId) {
+        const POLL_INTERVAL = 3000;  // Check every 3 seconds
+        const SHUTDOWN_TIMEOUT = 15000;  // Max time to wait for shutdown (15s)
+        const ONLINE_TIMEOUT = 120000;  // Max time to wait for online (2 min)
+
+        let phase = 'waiting-shutdown';
+        let startTime = Date.now();
+        let offlineDetectedTime = null;
+
+        updateRebootProgress('waiting-shutdown', 10, 'Waiting for node to shut down...',
+            'The node will restart in a few seconds');
+        showCommandResponse('Monitoring reboot... waiting for node to go offline');
+
+        // Phase 1: Wait for node to go offline
+        while (Date.now() - startTime < SHUTDOWN_TIMEOUT) {
+            await new Promise(resolve => setTimeout(resolve, POLL_INTERVAL));
+
+            const responding = await isNodeResponding(nodeId, 4000);
+            const elapsed = Math.round((Date.now() - startTime) / 1000);
+
+            if (!responding) {
+                // Node is offline!
+                offlineDetectedTime = Date.now();
+                phase = 'offline';
+                updateRebootProgress('offline', 30, 'Node is offline',
+                    `Shutdown detected after ${elapsed}s. Waiting for restart...`);
+                showCommandResponse(`Node went offline after ${elapsed}s. Waiting for it to come back...`);
+                break;
+            } else {
+                // Still online, update progress
+                const progress = 10 + (elapsed / (SHUTDOWN_TIMEOUT / 1000)) * 20;
+                updateRebootProgress('waiting-shutdown', Math.min(progress, 29),
+                    'Waiting for node to shut down...',
+                    `Still responding after ${elapsed}s...`);
+            }
+        }
+
+        // If we didn't detect offline, assume it went offline and we missed it
+        if (!offlineDetectedTime) {
+            offlineDetectedTime = Date.now();
+            phase = 'offline';
+            updateRebootProgress('offline', 30, 'Node appears offline',
+                'Shutdown assumed. Waiting for restart...');
+        }
+
+        // Phase 2: Wait for node to come back online
+        phase = 'waiting-online';
+        let pollCount = 0;
+        const maxPolls = Math.ceil(ONLINE_TIMEOUT / POLL_INTERVAL);
+
+        while (Date.now() - offlineDetectedTime < ONLINE_TIMEOUT) {
+            pollCount++;
+            const progress = 30 + (pollCount / maxPolls) * 50;
+            const waitTime = Math.round((Date.now() - offlineDetectedTime) / 1000);
+
+            updateRebootProgress('waiting-online', Math.min(progress, 79),
+                'Waiting for node to come back online...',
+                `Polling... (${waitTime}s since shutdown)`);
+
+            await new Promise(resolve => setTimeout(resolve, POLL_INTERVAL));
+
+            const responding = await isNodeResponding(nodeId, 4000);
+
+            if (responding) {
+                // Node is back online!
+                phase = 'reconnecting';
+                updateRebootProgress('reconnecting', 85, 'Node is back online!',
+                    'Re-establishing admin session...');
+                showCommandResponse('Node is back online! Re-establishing session...');
+
+                // Refresh admin info
+                await refreshNodeAdminInfo(nodeId);
+
+                // Update admin status for selected node
+                const targetNodeInput = document.getElementById('targetNodeInput');
+                if (targetNodeInput && targetNodeInput.value.trim() == nodeId) {
+                    lastCheckedNodeId = null;
+                    await checkAdminStatus(nodeId);
+                }
+
+                // Complete!
+                updateRebootProgress('complete', 100, 'Reboot complete!',
+                    `Node rebooted successfully in ${Math.round((Date.now() - startTime) / 1000)}s`);
+                showCommandResponse('Reboot complete! Node is ready for commands.');
+                showAlert('success', 'Node rebooted successfully');
+
+                // Clear progress after a few seconds
+                setTimeout(() => {
+                    const progressContainer = document.getElementById('rebootProgressContainer');
+                    if (progressContainer) {
+                        progressContainer.remove();
+                    }
+                }, 5000);
+
+                return true;
+            }
+        }
+
+        // Timeout - node didn't come back
+        updateRebootProgress('error', 100, 'Timeout waiting for node',
+            'Node did not respond within expected time. It may still be booting or have issues.');
+        showCommandResponse('Warning: Node did not respond within expected time.', true);
+        showAlert('warning', 'Node reboot timeout - please check the device');
+
+        return false;
+    }
+
     // Send reboot command
     async function sendReboot(nodeId) {
         showCommandResponse('Sending reboot command...');
+        updateRebootProgress('sending', 5, 'Sending reboot command...', '');
 
         try {
             const response = await fetch(`/api/admin/node/${encodeURIComponent(nodeId)}/reboot`, {
@@ -1967,45 +2144,15 @@
                 showCommandResponse(data.message);
                 showAlert('success', data.message);
 
-                // Update status to show rebooting
-                updateAdminStatusBanner('warning', 'Node is rebooting...',
-                    'The node will restart in a few seconds. Session will be refreshed automatically.');
-
-                // After node reboots (delay + boot time), refresh admin status to re-establish session
-                // This fixes the issue where old session key is cached after reboot
-                const rebootDelay = 5;  // seconds until reboot
-                const bootTime = 30;    // estimated boot time in seconds
-                const totalWait = (rebootDelay + bootTime) * 1000;
-
-                showCommandResponse(`Node will reboot in ${rebootDelay}s. Waiting ${bootTime}s for it to come back online...`);
-
-                setTimeout(async () => {
-                    showCommandResponse('Refreshing admin session with rebooted node...');
-                    updateAdminStatusBanner('warning', 'Reconnecting...',
-                        'Attempting to re-establish admin session with rebooted node.');
-
-                    // Refresh admin info which re-negotiates session key
-                    await refreshNodeAdminInfo(nodeId);
-
-                    // Also refresh the admin status check for the selected node
-                    // Reset lastCheckedNodeId to force a refresh
-                    const targetNodeInput = document.getElementById('targetNodeInput');
-                    if (targetNodeInput && targetNodeInput.value.trim() == nodeId) {
-                        lastCheckedNodeId = null; // Force re-check
-                        await checkAdminStatus(nodeId);
-                    } else {
-                        // If not the selected node, just update banner to success
-                        updateAdminStatusBanner('success', 'Session refreshed',
-                            'Admin session has been re-established with the rebooted node.');
-                    }
-
-                    showCommandResponse('Admin session refreshed. Node is ready for commands.');
-                }, totalWait);
+                // Start real-time reboot monitoring
+                await monitorReboot(nodeId);
             } else {
                 showCommandResponse(`Error: ${data.error}`, true);
+                updateRebootProgress('error', 0, 'Failed to send reboot', data.error);
             }
         } catch (error) {
             showCommandResponse(`Error: ${error.message}`, true);
+            updateRebootProgress('error', 0, 'Error sending reboot', error.message);
         }
     }
 
