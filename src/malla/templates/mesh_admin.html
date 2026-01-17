@@ -1270,17 +1270,30 @@
         const selectEl = document.getElementById('serialPortSelect');
         const infoDiv = document.getElementById('serialPortInfo');
         const discoverBtn = document.querySelector('#serialSettings button[onclick="discoverSerialPorts()"]');
+        const probeBtn = document.getElementById('probeDevicesBtn');
 
         selectEl.disabled = true;
+
+        // Disable both buttons during operation
         if (discoverBtn) {
             discoverBtn.disabled = true;
-            discoverBtn.innerHTML = probe
-                ? '<span class="spinner-border spinner-border-sm"></span> Probing...'
-                : '<span class="spinner-border spinner-border-sm"></span> Scanning...';
         }
-        selectEl.innerHTML = probe
-            ? '<option value="">Probing devices (this may take a moment)...</option>'
-            : '<option value="">Scanning ports...</option>';
+        if (probeBtn) {
+            probeBtn.disabled = true;
+        }
+
+        // Show appropriate loading state
+        if (probe) {
+            if (probeBtn) {
+                probeBtn.innerHTML = '<span class="spinner-border spinner-border-sm"></span> Probing...';
+            }
+            selectEl.innerHTML = '<option value="">Probing devices (this may take a moment)...</option>';
+        } else {
+            if (discoverBtn) {
+                discoverBtn.innerHTML = '<span class="spinner-border spinner-border-sm"></span> Scanning...';
+            }
+            selectEl.innerHTML = '<option value="">Scanning ports...</option>';
+        }
         infoDiv.classList.add('d-none');
 
         try {
@@ -1370,10 +1383,17 @@
             console.error('Serial port discovery error:', error);
         }
 
+        // Re-enable all controls
         selectEl.disabled = false;
-        if (discoverBtn) {
-            discoverBtn.disabled = false;
-            discoverBtn.innerHTML = '<i class="bi bi-search"></i> Discover Ports';
+        const discoverBtnFinal = document.querySelector('#serialSettings button[onclick="discoverSerialPorts()"]');
+        const probeBtnFinal = document.getElementById('probeDevicesBtn');
+        if (discoverBtnFinal) {
+            discoverBtnFinal.disabled = false;
+            discoverBtnFinal.innerHTML = '<i class="bi bi-search"></i> Discover';
+        }
+        if (probeBtnFinal) {
+            probeBtnFinal.disabled = false;
+            probeBtnFinal.innerHTML = '<i class="bi bi-cpu"></i> Identify';
         }
     }
 

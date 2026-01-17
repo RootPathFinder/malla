@@ -258,13 +258,26 @@ def api_serial_connect():
                 }
             )
         else:
+            # Check if port exists
+            import os
+
+            if not os.path.exists(port):
+                error_msg = (
+                    f"Serial port {port} does not exist. "
+                    "Make sure the device is connected and the port is accessible."
+                )
+            else:
+                error_msg = (
+                    f"Failed to connect to {port}. "
+                    "Check if another application is using the port or if you have permission."
+                )
             return jsonify(
                 {
                     "success": False,
                     "connected": False,
-                    "error": f"Failed to connect to {port}",
+                    "error": error_msg,
                 }
-            ), 500
+            ), 400
 
     except Exception as e:
         logger.error(f"Error connecting via Serial: {e}")

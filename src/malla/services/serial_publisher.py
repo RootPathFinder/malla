@@ -135,7 +135,7 @@ def discover_serial_ports(probe_devices: bool = False) -> list[dict[str, Any]]:
     return ports
 
 
-def probe_meshtastic_device(port: str, timeout: float = 5.0) -> dict[str, Any] | None:
+def probe_meshtastic_device(port: str, timeout: float = 8.0) -> dict[str, Any] | None:
     """
     Attempt to briefly connect to a serial port and identify the Meshtastic device.
 
@@ -150,22 +150,35 @@ def probe_meshtastic_device(port: str, timeout: float = 5.0) -> dict[str, Any] |
     try:
         logger.info(f"Probing device on {port}...")
 
-        # Try to connect with a short timeout
-        interface = SerialInterface(port, noProto=False, debugOut=None)
+        # Check if port exists first
+        import os
 
-        # Wait a bit for the interface to initialize
+        if not os.path.exists(port):
+            logger.debug(f"Port {port} does not exist")
+            return None
+
+        # Try to connect
+        try:
+            interface = SerialInterface(port, noProto=False, debugOut=None)
+        except Exception as e:
+            logger.debug(f"Failed to open serial interface on {port}: {e}")
+            return None
+
+        # Wait for the interface to initialize
         start_time = time.time()
         while time.time() - start_time < timeout:
             if interface.myInfo and interface.myInfo.my_node_num:
                 break
-            time.sleep(0.2)
+            time.sleep(0.3)
 
         if not interface.myInfo or not interface.myInfo.my_node_num:
-            logger.debug(f"No node info received from {port}")
+            logger.debug(f"No node info received from {port} within {timeout}s")
             return None
 
         # Extract device information
         my_node_num = interface.myInfo.my_node_num
+        logger.info(f"Got node info from {port}: !{my_node_num:08x}")
+
         nodes = interface.nodes or {}
         node_info = nodes.get(f"!{my_node_num:08x}", {}) or {}
 
@@ -205,7 +218,7 @@ def probe_meshtastic_device(port: str, timeout: float = 5.0) -> dict[str, Any] |
         return device_info
 
     except Exception as e:
-        logger.debug(f"Failed to probe device on {port}: {e}")
+        logger.warning(f"Failed to probe device on {port}: {e}")
         return None
 
     finally:
@@ -306,13 +319,26 @@ class SerialPublisher:
             try:
                 logger.info(f"Connecting to Meshtastic node via {self._serial_port}...")
 
+                # Check if port exists first
+                import os
+
+                if not os.path.exists(self._serial_port):
+                    logger.error(f"Serial port {self._serial_port} does not exist")
+                    return False
+
                 # Subscribe to receive messages before connecting
                 pub.subscribe(self._on_receive, "meshtastic.receive")
 
+                # Use a timeout for connection
                 self._interface = SerialInterface(devPath=self._serial_port)
 
-                # Wait a bit for connection to stabilize
-                time.sleep(1)
+                # Wait a bit for connection to stabilize (with timeout)
+                start_time = time.time()
+                timeout = 10.0
+                while time.time() - start_time < timeout:
+                    if self._interface and self._interface.localNode:
+                        break
+                    time.sleep(0.2)
 
                 if self._interface and self._interface.localNode:
                     self._connected = True
@@ -322,10 +348,19 @@ class SerialPublisher:
                     )
                     return True
                 else:
-                    logger.error("Failed to establish connection - no local node")
+                    logger.error(
+                        "Failed to establish connection - no local node (timeout)"
+                    )
                     self._cleanup_connection()
                     return False
 
+            except PermissionError:
+                logger.error(
+                    f"Permission denied accessing {self._serial_port}. "
+                    "Try: sudo chmod 666 {self._serial_port} or add user to dialout group"
+                )
+                self._cleanup_connection()
+                return False
             except Exception as e:
                 logger.error(f"Failed to connect via serial: {e}")
                 self._cleanup_connection()
@@ -353,17 +388,17 @@ class SerialPublisher:
         self._interface = None
         self._connected = False
 
-    def _on_receive(self, packet: dict[str, Any], interface: Any) -> None:
+    def _on_receive(self, packet: dict[str, Any], interface: Any = None) -> None:
         """
         Handle received packets from the Meshtastic node.
 
         Args:
             packet: The received packet
-            interface: The interface that received the packet
+            interface: The interface that received the packet (optional)
         """
         try:
             # Only process packets from our interface
-            if interface != self._interface:
+            if interface is not None and interface != self._interface:
                 return
 
             port_num = packet.get("decoded", {}).get("portnum")
