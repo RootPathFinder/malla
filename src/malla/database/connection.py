@@ -225,16 +225,23 @@ def _ensure_schema_migrations(cursor: sqlite3.Cursor) -> None:
     # Old constraint included 'resolved' column which caused errors when resolving alerts
     if "alerts_constraint_fix" not in _SCHEMA_MIGRATIONS_DONE:
         try:
+            # Drop any orphaned alerts_new table from failed migrations
+            cursor.execute("DROP TABLE IF EXISTS alerts_new")
+
             # Check if the old bad constraint exists by checking table schema
             cursor.execute(
                 "SELECT sql FROM sqlite_master WHERE type='table' AND name='alerts'"
             )
             table_schema = cursor.fetchone()
 
-            if (
+            # Check for the bad constraint in the table definition
+            has_bad_constraint = (
                 table_schema
+                and table_schema[0]
                 and "UNIQUE(alert_type, node_id, resolved)" in table_schema[0]
-            ):
+            )
+
+            if has_bad_constraint:
                 logging.info("Migrating alerts table to fix UNIQUE constraint...")
 
                 # Recreate the table without the bad constraint
