@@ -27,6 +27,8 @@ Check out some instances with running data from community MQTT servers:
 
 • **Battery & Power monitoring** – Track solar panels, batteries and mains-powered nodes with automated detection, health scores and low-battery alerts.
 
+• **Remote node administration** – Configure, reboot, and manage nodes directly from the web UI via MQTT, TCP, or serial connections.
+
 • **Toolbox** – Hop-analysis tables, gateway-compare matrix and "longest links" explorer for deep dives.
 
 • **Analytics charts** – 7-day trends, RSSI distribution, top talkers, hop distribution and more (Plotly powered).
@@ -34,6 +36,60 @@ Check out some instances with running data from community MQTT servers:
 • **Single-source config** – One `config.yaml` (or `MALLA_*` env-vars) drives both the capture tool and the web UI.
 
 • **One-command launch** – `malla-capture` and `malla-web` wrapper scripts get you up and running in seconds.
+
+### 📋 Full Feature List
+
+#### Dashboard & Monitoring
+- **Real-time dashboard** with network statistics, packet rates, and health indicators
+- **Live monitor** with streaming packet display
+- **Alerts & trends** view for tracking network issues over time
+- **Node health** page with per-node diagnostics and status
+
+#### Node Management
+- **Node explorer** with searchable list, hardware info, battery status, and role badges
+- **Node detail pages** with location history, packet statistics, and telemetry charts
+- **Archived nodes** view for nodes no longer active on the network
+- **Direct receptions** analysis showing which nodes hear each other
+
+#### Packet Analysis
+- **Packet browser** with advanced filtering (time, node, port, RSSI, SNR, hop count)
+- **Packet detail** view with full payload inspection and decoding
+- **Exclude filters** to hide specific nodes or packet types from views
+- **CSV export** for offline analysis
+
+#### Traceroute & Network Topology
+- **Traceroute history** with path visualization and hop analysis
+- **Traceroute graph** (force-directed) showing network topology and link quality
+- **Mesh topology** view of the entire network structure
+- **Hop analysis** tables for understanding message routing
+- **Gateway comparison** matrix to evaluate gateway performance
+
+#### Maps & Location
+- **Interactive map** with node locations, role-based markers, and RF link overlays
+- **Line of sight** analysis between nodes with terrain consideration
+- **Longest links** explorer showing record-breaking RF distances
+- **Location history** tracking for mobile nodes
+
+#### Battery & Power Analytics
+- **Power source detection** – Automatically classifies nodes as solar, battery, or mains-powered
+- **Battery health scoring** – 0-100 health score based on voltage stability
+- **Solar charging analysis** – Detects charging issues with cloud/weather indicators
+- **Low battery alerts** – Automatic alerts when nodes drop below thresholds
+- **Voltage trend charts** – Historical telemetry visualization
+
+#### Remote Administration
+- **Node configuration** – Read and modify node settings (device, LoRa, position, etc.)
+- **Channel management** – View and edit channel configurations
+- **Node reboot/shutdown** – Remote power management
+- **Connection options** – Connect via MQTT, TCP (direct), or serial
+- **Admin toggle** – Disable admin features for public read-only deployments
+
+#### Infrastructure
+- **Multiple decryption keys** – Support for comma-separated channel keys
+- **Data retention** – Automatic cleanup of old records
+- **OpenTelemetry** – Optional tracing for debugging and monitoring
+- **Docker support** – Pre-built images with compose files
+- **Gunicorn support** – Production-ready WSGI server
 
 <!-- screenshots:start -->
 ![dashboard](.screenshots/dashboard.jpg)
@@ -306,6 +362,11 @@ The following keys are recognised:
 | `battery_critical_voltage` | float | `3.2`                            | Critical voltage threshold (V) - nodes may shut down. | `MALLA_BATTERY_CRITICAL_VOLTAGE` |
 | `battery_warning_voltage` | float | `3.4`                             | Warning voltage threshold (V) - battery is getting low. | `MALLA_BATTERY_WARNING_VOLTAGE` |
 | `battery_check_interval_minutes` | int | `15`                         | How often to check battery levels (minutes).        | `MALLA_BATTERY_CHECK_INTERVAL_MINUTES` |
+| `admin_enabled` | bool | `true`                                    | Enable/disable remote node administration features. Set to `false` for public read-only deployments. | `MALLA_ADMIN_ENABLED` |
+| `admin_connection_type` | str | `"mqtt"`                             | Connection type for admin operations: `mqtt`, `tcp`, or `serial`. | `MALLA_ADMIN_CONNECTION_TYPE` |
+| `admin_tcp_host` | str | `"192.168.1.1"`                          | TCP host for direct node connection (when using TCP). | `MALLA_ADMIN_TCP_HOST` |
+| `admin_tcp_port` | int | `4403`                                    | TCP port for direct node connection.           | `MALLA_ADMIN_TCP_PORT` |
+| `otlp_endpoint` | str | `null`                                     | OpenTelemetry endpoint for tracing (e.g., `http://localhost:4317`). | `MALLA_OTLP_ENDPOINT` |
 
 Environment variables **always override** values coming from YAML file.
 
@@ -341,6 +402,51 @@ Access the battery analytics dashboard at `/battery-analytics` to view:
 - Battery health overview with color-coded status indicators
 - Critical battery alerts for nodes requiring attention
 - Historical voltage trends (when sufficient data is available)
+
+### Remote Node Administration
+
+Malla includes a powerful remote administration feature that allows you to configure, monitor, and manage Meshtastic nodes directly from the web interface.
+
+**Features:**
+- **Read node configuration**: View device settings, LoRa parameters, position config, and more
+- **Modify settings**: Update node configurations remotely (requires admin key)
+- **Channel management**: View and edit channel configurations
+- **Reboot/shutdown**: Remote power management for nodes
+- **Multiple connection types**: Connect via MQTT, TCP (direct), or serial
+- **Retry support**: Resilient command delivery with automatic retries for unreliable nodes
+- **Command logging**: Real-time status display showing command progress and results
+
+**Connection Types:**
+
+1. **MQTT** (default): Uses your existing MQTT broker to relay admin commands
+2. **TCP**: Direct connection to a node's IP address (requires network access)
+3. **Serial**: Connect to a locally-attached node via USB/serial port
+
+**Disabling Admin for Public Deployments:**
+
+For public, read-only deployments, you can disable all admin features:
+
+```yaml
+# In config.yaml
+admin_enabled: false
+```
+
+Or via environment variable (recommended for Docker):
+```bash
+MALLA_ADMIN_ENABLED=false
+```
+
+When disabled:
+- The "Admin" navigation link is hidden
+- The node connection indicator is hidden
+- Accessing `/admin` shows a friendly "disabled" message
+- All admin API endpoints return HTTP 403 Forbidden
+
+Access the admin dashboard at `/admin` to:
+- Select a gateway node for relaying commands
+- Choose connection type (MQTT/TCP/Serial)
+- Browse administrable nodes with their admin key status
+- Send configuration requests, reboot commands, and more
 
 ### Data Cleanup
 
