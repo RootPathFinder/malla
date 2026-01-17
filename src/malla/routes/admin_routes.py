@@ -438,10 +438,18 @@ def api_get_node_config(node_id, config_type):
                 }
             ), 400
 
+        # Get retry parameters from query string
+        max_retries = request.args.get("max_retries", 3, type=int)
+        retry_delay = request.args.get("retry_delay", 2.0, type=float)
+        timeout = request.args.get("timeout", 30.0, type=float)
+
         admin_service = get_admin_service()
         result = admin_service.get_config(
             target_node_id=node_id_int,
             config_type=config_type_map[config_type.lower()],
+            max_retries=max_retries,
+            retry_delay=retry_delay,
+            timeout=timeout,
         )
 
         if result.success:
@@ -455,6 +463,8 @@ def api_get_node_config(node_id, config_type):
                     "config": result.response,
                     "schema": schema,
                     "log_id": result.log_id,
+                    "attempts": result.attempts,
+                    "retry_info": result.retry_info,
                 }
             )
         else:
@@ -463,6 +473,8 @@ def api_get_node_config(node_id, config_type):
                     "success": False,
                     "error": result.error,
                     "log_id": result.log_id,
+                    "attempts": result.attempts,
+                    "retry_info": result.retry_info,
                 }
             ), 200
 
@@ -541,10 +553,18 @@ def api_get_node_channel(node_id, channel_index):
         if channel_index < 0 or channel_index > 7:
             return jsonify({"error": "Channel index must be 0-7"}), 400
 
+        # Get retry parameters from query string
+        max_retries = request.args.get("max_retries", 3, type=int)
+        retry_delay = request.args.get("retry_delay", 2.0, type=float)
+        timeout = request.args.get("timeout", 30.0, type=float)
+
         admin_service = get_admin_service()
         result = admin_service.get_channel(
             target_node_id=node_id_int,
             channel_index=channel_index,
+            max_retries=max_retries,
+            retry_delay=retry_delay,
+            timeout=timeout,
         )
 
         if result.success:
@@ -555,6 +575,8 @@ def api_get_node_channel(node_id, channel_index):
                     "channel_index": channel_index,
                     "channel": result.response,
                     "log_id": result.log_id,
+                    "attempts": result.attempts,
+                    "retry_info": result.retry_info,
                 }
             )
         else:
@@ -563,6 +585,8 @@ def api_get_node_channel(node_id, channel_index):
                     "success": False,
                     "error": result.error,
                     "log_id": result.log_id,
+                    "attempts": result.attempts,
+                    "retry_info": result.retry_info,
                 }
             ), 200
 

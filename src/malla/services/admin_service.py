@@ -7,6 +7,7 @@ remotely via MQTT, TCP, or serial connection.
 
 import json
 import logging
+import time
 from dataclasses import dataclass
 from enum import Enum
 from typing import Any, Protocol
@@ -206,6 +207,8 @@ class AdminCommandResult:
     log_id: int | None = None
     response: dict[str, Any] | None = None
     error: str | None = None
+    attempts: int = 1
+    retry_info: list[dict[str, Any]] | None = None
 
 
 class AdminService:
@@ -215,6 +218,11 @@ class AdminService:
     Provides high-level methods for common admin operations like
     getting configuration, rebooting nodes, etc.
     """
+
+    # Default retry configuration
+    DEFAULT_MAX_RETRIES = 3
+    DEFAULT_RETRY_DELAY = 2.0  # seconds between retries
+    DEFAULT_TIMEOUT = 30.0  # seconds to wait for response
 
     def __init__(self) -> None:
         """Initialize the admin service."""
@@ -275,6 +283,90 @@ class AdminService:
             return get_serial_publisher()
         else:
             return get_mqtt_publisher()
+
+    def _send_with_retry(
+        self,
+        send_func: Any,
+        response_parser: Any,
+        max_retries: int = 3,
+        retry_delay: float = 2.0,
+        timeout: float = 30.0,
+        command_name: str = "command",
+    ) -> tuple[bool, Any, list[dict[str, Any]]]:
+        """
+        Send a command with retry logic for unreliable nodes.
+
+        Args:
+            send_func: Function to call to send the command, returns packet_id
+            response_parser: Function to call to parse the response
+            max_retries: Maximum number of retry attempts
+            retry_delay: Seconds to wait between retries
+            timeout: Seconds to wait for each response
+            command_name: Name of the command for logging
+
+        Returns:
+            Tuple of (success, response_data, retry_info)
+        """
+        publisher = self._get_publisher()
+        retry_info: list[dict[str, Any]] = []
+
+        for attempt in range(1, max_retries + 1):
+            attempt_info = {
+                "attempt": attempt,
+                "max_attempts": max_retries,
+                "timestamp": time.time(),
+                "status": "pending",
+            }
+
+            # Send the command
+            packet_id = send_func()
+
+            if packet_id is None:
+                attempt_info["status"] = "send_failed"
+                attempt_info["error"] = "Failed to send message"
+                retry_info.append(attempt_info)
+
+                if attempt < max_retries:
+                    logger.warning(
+                        f"{command_name} attempt {attempt}/{max_retries} failed to send, "
+                        f"retrying in {retry_delay}s..."
+                    )
+                    time.sleep(retry_delay)
+                continue
+
+            attempt_info["packet_id"] = packet_id
+
+            # Wait for response
+            response = publisher.get_response(packet_id, timeout=timeout)
+
+            if response:
+                # Parse the response
+                parsed = response_parser(response)
+                if parsed is not None:
+                    attempt_info["status"] = "success"
+                    retry_info.append(attempt_info)
+                    logger.info(
+                        f"{command_name} succeeded on attempt {attempt}/{max_retries}"
+                    )
+                    return True, parsed, retry_info
+
+                attempt_info["status"] = "parse_failed"
+                attempt_info["error"] = "Failed to parse response"
+            else:
+                attempt_info["status"] = "timeout"
+                attempt_info["error"] = f"No response within {timeout}s"
+
+            retry_info.append(attempt_info)
+
+            if attempt < max_retries:
+                logger.warning(
+                    f"{command_name} attempt {attempt}/{max_retries} timed out, "
+                    f"retrying in {retry_delay}s..."
+                )
+                time.sleep(retry_delay)
+
+        logger.error(f"{command_name} failed after {max_retries} attempts")
+        return False, None, retry_info
 
     @property
     def gateway_node_id(self) -> int | None:
@@ -679,16 +771,22 @@ class AdminService:
         self,
         target_node_id: int,
         config_type: ConfigType,
+        max_retries: int = 3,
+        retry_delay: float = 2.0,
+        timeout: float = 30.0,
     ) -> AdminCommandResult:
         """
-        Request configuration from a remote node.
+        Request configuration from a remote node with retry support.
 
         Args:
             target_node_id: The target node ID
             config_type: The type of configuration to request
+            max_retries: Maximum number of retry attempts (default 3)
+            retry_delay: Seconds to wait between retries (default 2.0)
+            timeout: Seconds to wait for each response (default 30.0)
 
         Returns:
-            AdminCommandResult with config data
+            AdminCommandResult with config data and retry info
         """
         gateway_id = self.gateway_node_id
         if not gateway_id:
@@ -698,6 +796,7 @@ class AdminService:
             )
 
         conn_type = self.connection_type
+        publisher = self._get_publisher()
 
         # Log the command
         log_id = AdminRepository.log_admin_command(
@@ -707,88 +806,103 @@ class AdminService:
                 {
                     "config_type": config_type.name,
                     "connection_type": conn_type.value,
+                    "max_retries": max_retries,
                 }
             ),
         )
 
-        # Send the request using appropriate publisher
-        publisher = self._get_publisher()
+        # Define send function for retry helper
+        def send_func() -> int | None:
+            if conn_type == AdminConnectionType.TCP:
+                return publisher.send_get_config(
+                    target_node_id=target_node_id,
+                    config_type=config_type.value,
+                )
+            else:
+                return publisher.send_get_config(
+                    target_node_id=target_node_id,
+                    from_node_id=gateway_id,
+                    config_type=config_type.value,
+                )
 
-        if conn_type == AdminConnectionType.TCP:
-            packet_id = publisher.send_get_config(
-                target_node_id=target_node_id,
-                config_type=config_type.value,
-            )
-        else:
-            packet_id = publisher.send_get_config(
-                target_node_id=target_node_id,
-                from_node_id=gateway_id,
-                config_type=config_type.value,
-            )
-
-        if packet_id is None:
-            AdminRepository.update_admin_log_status(
-                log_id=log_id,
-                status="failed",
-                error_message=f"Failed to send message via {conn_type.value}",
-            )
-            return AdminCommandResult(
-                success=False,
-                log_id=log_id,
-                error=f"Failed to send admin message via {conn_type.value}",
-            )
-
-        # Wait for response
-        response = publisher.get_response(packet_id, timeout=30.0)
-
-        if response:
-            # Parse the config response
+        # Define response parser
+        def parse_response(response: dict[str, Any]) -> dict[str, Any] | None:
             admin_msg = response.get("admin_message")
-            config_data = {}
-
             if admin_msg and admin_msg.HasField("get_config_response"):
                 config = admin_msg.get_config_response
-                config_data = self._config_to_dict(config)
+                return self._config_to_dict(config)
+            return None
 
+        # Send with retry
+        success, config_data, retry_info = self._send_with_retry(
+            send_func=send_func,
+            response_parser=parse_response,
+            max_retries=max_retries,
+            retry_delay=retry_delay,
+            timeout=timeout,
+            command_name=f"get_config({config_type.name})",
+        )
+
+        attempts = len(retry_info)
+
+        if success and config_data:
             AdminRepository.update_admin_log_status(
                 log_id=log_id,
                 status="success",
-                response_data=json.dumps(config_data),
+                response_data=json.dumps(
+                    {
+                        "config": config_data,
+                        "attempts": attempts,
+                    }
+                ),
             )
 
             return AdminCommandResult(
                 success=True,
-                packet_id=packet_id,
                 log_id=log_id,
                 response=config_data,
+                attempts=attempts,
+                retry_info=retry_info,
             )
         else:
+            last_error = "No response received"
+            if retry_info:
+                last_attempt = retry_info[-1]
+                last_error = last_attempt.get("error", "Unknown error")
+
             AdminRepository.update_admin_log_status(
                 log_id=log_id,
                 status="timeout",
-                error_message="No response received",
+                error_message=f"Failed after {attempts} attempts: {last_error}",
             )
             return AdminCommandResult(
                 success=False,
-                packet_id=packet_id,
                 log_id=log_id,
-                error="No response received (timeout)",
+                error=f"No response after {attempts} attempts (timeout)",
+                attempts=attempts,
+                retry_info=retry_info,
             )
 
     def get_channel(
         self,
         target_node_id: int,
         channel_index: int,
+        max_retries: int = 3,
+        retry_delay: float = 2.0,
+        timeout: float = 30.0,
     ) -> AdminCommandResult:
         """
-        Request channel configuration from a remote node.
+        Request channel configuration from a remote node with retry support.
 
         Args:
             target_node_id: The target node ID
             channel_index: The channel index (0-7)
+            max_retries: Maximum number of retry attempts (default 3)
+            retry_delay: Seconds to wait between retries (default 2.0)
+            timeout: Seconds to wait for each response (default 30.0)
 
         Returns:
-            AdminCommandResult with channel data
+            AdminCommandResult with channel data and retry info
         """
         gateway_id = self.gateway_node_id
         if not gateway_id:
@@ -798,6 +912,7 @@ class AdminService:
             )
 
         conn_type = self.connection_type
+        publisher = self._get_publisher()
 
         # Log the command
         log_id = AdminRepository.log_admin_command(
@@ -807,47 +922,31 @@ class AdminService:
                 {
                     "channel_index": channel_index,
                     "connection_type": conn_type.value,
+                    "max_retries": max_retries,
                 }
             ),
         )
 
-        # Send the request using appropriate publisher
-        publisher = self._get_publisher()
+        # Define send function for retry helper
+        def send_func() -> int | None:
+            if conn_type == AdminConnectionType.TCP:
+                return publisher.send_get_channel(
+                    target_node_id=target_node_id,
+                    channel_index=channel_index,
+                )
+            else:
+                return publisher.send_get_channel(
+                    target_node_id=target_node_id,
+                    from_node_id=gateway_id,
+                    channel_index=channel_index,
+                )
 
-        if conn_type == AdminConnectionType.TCP:
-            packet_id = publisher.send_get_channel(
-                target_node_id=target_node_id,
-                channel_index=channel_index,
-            )
-        else:
-            packet_id = publisher.send_get_channel(
-                target_node_id=target_node_id,
-                from_node_id=gateway_id,
-                channel_index=channel_index,
-            )
-
-        if packet_id is None:
-            AdminRepository.update_admin_log_status(
-                log_id=log_id,
-                status="failed",
-                error_message=f"Failed to send message via {conn_type.value}",
-            )
-            return AdminCommandResult(
-                success=False,
-                log_id=log_id,
-                error=f"Failed to send admin message via {conn_type.value}",
-            )
-
-        # Wait for response
-        response = publisher.get_response(packet_id, timeout=30.0)
-
-        if response:
+        # Define response parser
+        def parse_response(response: dict[str, Any]) -> dict[str, Any] | None:
             admin_msg = response.get("admin_message")
-            channel_data = {}
-
             if admin_msg and admin_msg.HasField("get_channel_response"):
                 channel = admin_msg.get_channel_response
-                channel_data = {
+                return {
                     "index": channel.index,
                     "role": channel.role,
                     "settings": {
@@ -860,30 +959,56 @@ class AdminService:
                         },
                     },
                 }
+            return None
 
+        # Send with retry
+        success, channel_data, retry_info = self._send_with_retry(
+            send_func=send_func,
+            response_parser=parse_response,
+            max_retries=max_retries,
+            retry_delay=retry_delay,
+            timeout=timeout,
+            command_name=f"get_channel({channel_index})",
+        )
+
+        attempts = len(retry_info)
+
+        if success and channel_data:
             AdminRepository.update_admin_log_status(
                 log_id=log_id,
                 status="success",
-                response_data=json.dumps(channel_data),
+                response_data=json.dumps(
+                    {
+                        "channel": channel_data,
+                        "attempts": attempts,
+                    }
+                ),
             )
 
             return AdminCommandResult(
                 success=True,
-                packet_id=packet_id,
                 log_id=log_id,
                 response=channel_data,
+                attempts=attempts,
+                retry_info=retry_info,
             )
         else:
+            last_error = "No response received"
+            if retry_info:
+                last_attempt = retry_info[-1]
+                last_error = last_attempt.get("error", "Unknown error")
+
             AdminRepository.update_admin_log_status(
                 log_id=log_id,
                 status="timeout",
-                error_message="No response received",
+                error_message=f"Failed after {attempts} attempts: {last_error}",
             )
             return AdminCommandResult(
                 success=False,
-                packet_id=packet_id,
                 log_id=log_id,
-                error="No response received (timeout)",
+                error=f"No response after {attempts} attempts (timeout)",
+                attempts=attempts,
+                retry_info=retry_info,
             )
 
     def reboot_node(

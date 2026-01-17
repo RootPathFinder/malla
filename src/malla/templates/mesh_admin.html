@@ -1800,7 +1800,75 @@
         showAlert('info', `Selected node ${nodeId} for commands`);
     }
 
-    // Get configuration
+    // Command log management (similar to reboot log)
+    let commandLogLines = [];
+    let commandSpinnerInterval = null;
+    let commandSpinnerFrame = 0;
+    const commandSpinnerFrames = ['/', '-', '\\', '|'];
+
+    function initCommandLog() {
+        commandLogLines = [];
+        const container = document.getElementById('commandResponse');
+        container.innerHTML = '<pre id="commandLogPre" style="margin: 0; font-family: monospace; font-size: 0.85rem; white-space: pre-wrap; max-height: 300px; overflow-y: auto;"></pre>';
+    }
+
+    function addCommandLog(message, isSpinnerLine = false) {
+        const timestamp = new Date().toLocaleTimeString('en-US', { hour12: false });
+        const logLine = `[${timestamp}] ${message}`;
+
+        if (isSpinnerLine) {
+            if (commandLogLines.length > 0 && commandLogLines[commandLogLines.length - 1].isSpinner) {
+                commandLogLines[commandLogLines.length - 1] = { text: logLine, isSpinner: true };
+            } else {
+                commandLogLines.push({ text: logLine, isSpinner: true });
+            }
+        } else {
+            commandLogLines.push({ text: logLine, isSpinner: false });
+        }
+
+        updateCommandLogDisplay();
+    }
+
+    function updateCommandLogDisplay() {
+        const pre = document.getElementById('commandLogPre');
+        if (!pre) return;
+
+        const text = commandLogLines.map(line => line.text).join('\n');
+        pre.textContent = text;
+        pre.scrollTop = pre.scrollHeight;
+    }
+
+    function startCommandSpinner(baseMessage) {
+        stopCommandSpinner();
+        commandSpinnerFrame = 0;
+
+        const updateSpinner = () => {
+            const spinner = commandSpinnerFrames[commandSpinnerFrame % commandSpinnerFrames.length];
+            addCommandLog(`${spinner} ${baseMessage}`, true);
+            commandSpinnerFrame++;
+        };
+
+        updateSpinner();
+        commandSpinnerInterval = setInterval(updateSpinner, 250);
+    }
+
+    function stopCommandSpinner() {
+        if (commandSpinnerInterval) {
+            clearInterval(commandSpinnerInterval);
+            commandSpinnerInterval = null;
+        }
+    }
+
+    function finalizeCommandLog(message, success = true) {
+        stopCommandSpinner();
+        if (commandLogLines.length > 0 && commandLogLines[commandLogLines.length - 1].isSpinner) {
+            commandLogLines.pop();
+        }
+        const symbol = success ? '✓' : '✗';
+        addCommandLog(`${symbol} ${message}`);
+    }
+
+    // Get configuration with retry support
     async function getConfig(configType) {
         const nodeId = document.getElementById('targetNodeInput').value.trim();
         if (!nodeId) {
@@ -1808,17 +1876,43 @@
             return;
         }
 
-        showCommandResponse('Loading...');
+        // Get retry settings from UI if available
+        const maxRetries = 3;
+        const retryDelay = 2.0;
+        const timeout = 30.0;
+
+        // Initialize command log
+        initCommandLog();
+        addCommandLog(`Requesting ${configType} config from ${nodeId}`);
+        addCommandLog(`Settings: max_retries=${maxRetries}, retry_delay=${retryDelay}s, timeout=${timeout}s`);
         hideConfigForm();
 
+        startCommandSpinner(`Sending request (attempt 1/${maxRetries})...`);
+
         try {
-            const response = await fetch(`/api/admin/node/${encodeURIComponent(nodeId)}/config/${configType}`);
+            const url = `/api/admin/node/${encodeURIComponent(nodeId)}/config/${configType}?max_retries=${maxRetries}&retry_delay=${retryDelay}&timeout=${timeout}`;
+            const response = await fetch(url);
             const data = await response.json();
+
+            stopCommandSpinner();
+
+            // Log retry information if available
+            if (data.retry_info && data.retry_info.length > 0) {
+                addCommandLog(`─── Attempt Summary ───`);
+                for (const attempt of data.retry_info) {
+                    const statusSymbol = attempt.status === 'success' ? '✓' : (attempt.status === 'timeout' ? '⏱' : '✗');
+                    addCommandLog(`  ${statusSymbol} Attempt ${attempt.attempt}/${attempt.max_attempts}: ${attempt.status}${attempt.error ? ' - ' + attempt.error : ''}`);
+                }
+                addCommandLog(`─────────────────────`);
+            }
 
             if (data.success) {
                 currentConfigType = configType;
                 currentConfigData = data.config;
                 currentConfigSchema = data.schema;
+
+                const attemptsMsg = data.attempts > 1 ? ` (took ${data.attempts} attempts)` : '';
+                finalizeCommandLog(`Config received successfully${attemptsMsg}`);
 
                 // Render the form if we have schema
                 if (data.schema && data.config) {
@@ -1826,13 +1920,22 @@
                     showConfigForm();
                 }
 
-                // Also show raw JSON
-                showCommandResponse(JSON.stringify(data.config, null, 2));
+                // Also append raw JSON to log
+                addCommandLog('');
+                addCommandLog('─── Response Data ───');
+                const jsonLines = JSON.stringify(data.config, null, 2).split('\n');
+                for (const line of jsonLines) {
+                    addCommandLog(line);
+                }
             } else {
-                showCommandResponse(`Error: ${data.error}`, true);
+                const attemptsMsg = data.attempts ? ` after ${data.attempts} attempts` : '';
+                finalizeCommandLog(`Failed${attemptsMsg}: ${data.error}`, false);
+                showAlert('danger', `Failed to get config: ${data.error}`);
             }
         } catch (error) {
-            showCommandResponse(`Error: ${error.message}`, true);
+            stopCommandSpinner();
+            finalizeCommandLog(`Error: ${error.message}`, false);
+            showAlert('danger', `Error: ${error.message}`);
         }
     }
 
@@ -1986,7 +2089,7 @@
         }
     }
 
-    // Get channel
+    // Get channel with retry support
     async function getChannel(channelIndex) {
         const nodeId = document.getElementById('targetNodeInput').value.trim();
         if (!nodeId) {
@@ -1994,27 +2097,62 @@
             return;
         }
 
-        showCommandResponse('Loading...');
+        const maxRetries = 3;
+        const retryDelay = 2.0;
+        const timeout = 30.0;
+
+        // Initialize command log
+        initCommandLog();
+        addCommandLog(`Requesting channel ${channelIndex} config from ${nodeId}`);
+        addCommandLog(`Settings: max_retries=${maxRetries}, retry_delay=${retryDelay}s, timeout=${timeout}s`);
         hideConfigForm();
 
+        startCommandSpinner(`Sending request (attempt 1/${maxRetries})...`);
+
         try {
-            const response = await fetch(`/api/admin/node/${encodeURIComponent(nodeId)}/channel/${channelIndex}`);
+            const url = `/api/admin/node/${encodeURIComponent(nodeId)}/channel/${channelIndex}?max_retries=${maxRetries}&retry_delay=${retryDelay}&timeout=${timeout}`;
+            const response = await fetch(url);
             const data = await response.json();
+
+            stopCommandSpinner();
+
+            // Log retry information if available
+            if (data.retry_info && data.retry_info.length > 0) {
+                addCommandLog(`─── Attempt Summary ───`);
+                for (const attempt of data.retry_info) {
+                    const statusSymbol = attempt.status === 'success' ? '✓' : (attempt.status === 'timeout' ? '⏱' : '✗');
+                    addCommandLog(`  ${statusSymbol} Attempt ${attempt.attempt}/${attempt.max_attempts}: ${attempt.status}${attempt.error ? ' - ' + attempt.error : ''}`);
+                }
+                addCommandLog(`─────────────────────`);
+            }
 
             if (data.success) {
                 currentConfigType = 'channel';
                 currentConfigData = data.channel;
 
+                const attemptsMsg = data.attempts > 1 ? ` (took ${data.attempts} attempts)` : '';
+                finalizeCommandLog(`Channel received successfully${attemptsMsg}`);
+
                 // Render channel form
                 renderChannelForm(channelIndex, data.channel);
                 showConfigForm();
 
-                showCommandResponse(JSON.stringify(data.channel, null, 2));
+                // Append raw JSON to log
+                addCommandLog('');
+                addCommandLog('─── Response Data ───');
+                const jsonLines = JSON.stringify(data.channel, null, 2).split('\n');
+                for (const line of jsonLines) {
+                    addCommandLog(line);
+                }
             } else {
-                showCommandResponse(`Error: ${data.error}`, true);
+                const attemptsMsg = data.attempts ? ` after ${data.attempts} attempts` : '';
+                finalizeCommandLog(`Failed${attemptsMsg}: ${data.error}`, false);
+                showAlert('danger', `Failed to get channel: ${data.error}`);
             }
         } catch (error) {
-            showCommandResponse(`Error: ${error.message}`, true);
+            stopCommandSpinner();
+            finalizeCommandLog(`Error: ${error.message}`, false);
+            showAlert('danger', `Error: ${error.message}`);
         }
     }
 
