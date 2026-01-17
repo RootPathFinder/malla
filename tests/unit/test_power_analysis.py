@@ -51,7 +51,8 @@ def db_with_telemetry():
             short_name TEXT,
             power_type TEXT DEFAULT 'unknown',
             battery_health_score INTEGER,
-            last_battery_voltage REAL
+            last_battery_voltage REAL,
+            archived INTEGER DEFAULT 0
         )
     """)
 
