@@ -1568,6 +1568,24 @@ class AdminService:
                 "fixed_pin": config.bluetooth.fixed_pin,
             }
 
+        if config.HasField("security"):
+            result["security"] = {
+                "public_key": config.security.public_key.hex()
+                if config.security.public_key
+                else None,
+                "private_key": config.security.private_key.hex()
+                if config.security.private_key
+                else None,
+                # admin_key is a repeated field (list of admin public keys)
+                "admin_key": [k.hex() for k in config.security.admin_key]
+                if config.security.admin_key
+                else [],
+                "is_managed": config.security.is_managed,
+                "serial_enabled": config.security.serial_enabled,
+                "debug_log_api_enabled": config.security.debug_log_api_enabled,
+                "admin_channel_enabled": config.security.admin_channel_enabled,
+            }
+
         return result
 
 

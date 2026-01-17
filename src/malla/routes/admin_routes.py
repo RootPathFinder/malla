@@ -906,6 +906,7 @@ def api_create_template():
             "network",
             "display",
             "bluetooth",
+            "security",
             "channel",
             "channels",  # Full channel set (all 8 channels)
         ]
@@ -966,6 +967,7 @@ TEMPLATE_EXCLUDED_FIELDS = {
     ],  # Credentials are node-specific
     "display": [],  # All display settings are templateable
     "bluetooth": [],  # All bluetooth settings are templateable (including PIN for fleet)
+    "security": [],  # All security settings are templateable (admin keys for fleet)
     "channel": [],  # Channel settings can be templated (name, psk, etc.)
     "channels": [],  # Full channel set (all 8 channels)
 }
@@ -1043,6 +1045,7 @@ def api_extract_template_from_node():
                 "display": ConfigType.DISPLAY,
                 "lora": ConfigType.LORA,
                 "bluetooth": ConfigType.BLUETOOTH,
+                "security": ConfigType.SECURITY,
             }
 
             if config_type not in config_type_map:
@@ -1213,6 +1216,12 @@ DANGEROUS_CONFIG_WARNINGS = {
     },
     "device": {
         "rebroadcast_mode": "Changing rebroadcast mode may affect mesh connectivity",
+    },
+    "security": {
+        "public_key": "Changing public key affects node identity and admin authentication",
+        "private_key": "Changing private key affects node identity and admin authentication",
+        "admin_key": "Changing admin key will affect who can administer the node",
+        "admin_channel_enabled": "Disabling admin channel will break remote administration via mesh",
     },
     "channel": {
         "settings.psk": "Changing channel PSK will break communication if gateway uses different key",
@@ -1473,6 +1482,7 @@ def api_deploy_template(template_id):
                         "network": ConfigType.NETWORK,
                         "display": ConfigType.DISPLAY,
                         "bluetooth": ConfigType.BLUETOOTH,
+                        "security": ConfigType.SECURITY,
                     }
                     config_type = config_type_map.get(template_type)
                     if not config_type:
