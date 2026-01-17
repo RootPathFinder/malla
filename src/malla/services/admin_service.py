@@ -679,6 +679,8 @@ class AdminService:
                 status="failed",
                 error_message=f"Failed to send message via {conn_type.value}",
             )
+            # Update status to reflect the failed check
+            AdminRepository.update_node_status(target_node_id, "error")
             return AdminCommandResult(
                 success=False,
                 log_id=log_id,
@@ -760,6 +762,8 @@ class AdminService:
                 status="timeout",
                 error_message="No response received within timeout",
             )
+            # Update status to reflect the timeout
+            AdminRepository.update_node_status(target_node_id, "timeout")
             return AdminCommandResult(
                 success=False,
                 packet_id=packet_id,

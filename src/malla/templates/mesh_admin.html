@@ -542,7 +542,29 @@
                                             <span class="text-muted small">—</span>
                                         </td>
                                         <td id="admin-node-status-{{ node.node_id }}">
-                                            <span class="badge bg-secondary">Not checked</span>
+                                            {% if node.last_status_result == 'online' %}
+                                                <span class="badge bg-success"><i class="bi bi-check-circle"></i> Online</span>
+                                                {% if node.last_status_check %}
+                                                <br><span class="text-muted small">{{ node.last_status_check | timestamp_to_datetime }}</span>
+                                                {% endif %}
+                                            {% elif node.last_status_result == 'timeout' %}
+                                                <span class="badge bg-warning text-dark"><i class="bi bi-clock"></i> Timeout</span>
+                                                {% if node.last_status_check %}
+                                                <br><span class="text-muted small">{{ node.last_status_check | timestamp_to_datetime }}</span>
+                                                {% endif %}
+                                            {% elif node.last_status_result == 'error' %}
+                                                <span class="badge bg-danger"><i class="bi bi-x-circle"></i> Error</span>
+                                                {% if node.last_status_check %}
+                                                <br><span class="text-muted small">{{ node.last_status_check | timestamp_to_datetime }}</span>
+                                                {% endif %}
+                                            {% elif node.last_status_result == 'offline' %}
+                                                <span class="badge bg-danger"><i class="bi bi-x-circle"></i> Offline</span>
+                                                {% if node.last_status_check %}
+                                                <br><span class="text-muted small">{{ node.last_status_check | timestamp_to_datetime }}</span>
+                                                {% endif %}
+                                            {% else %}
+                                                <span class="badge bg-secondary">Not checked</span>
+                                            {% endif %}
                                         </td>
                                         <td id="admin-node-confirmed-{{ node.node_id }}">
                                             <span class="text-muted small">

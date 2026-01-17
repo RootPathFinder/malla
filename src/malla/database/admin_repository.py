@@ -46,9 +46,26 @@ def init_admin_tables() -> None:
             last_confirmed REAL NOT NULL,
             firmware_version TEXT,
             device_metadata TEXT,
-            admin_channel_index INTEGER DEFAULT 0
+            admin_channel_index INTEGER DEFAULT 0,
+            last_status_check REAL,
+            last_status_result TEXT DEFAULT 'unknown'
         )
     """)
+
+    # Migration: Add new columns if they don't exist (for existing databases)
+    try:
+        cursor.execute(
+            "ALTER TABLE administrable_nodes ADD COLUMN last_status_check REAL"
+        )
+    except Exception:
+        pass  # Column already exists
+
+    try:
+        cursor.execute(
+            "ALTER TABLE administrable_nodes ADD COLUMN last_status_result TEXT DEFAULT 'unknown'"
+        )
+    except Exception:
+        pass  # Column already exists
 
     # Index for efficient queries
     cursor.execute(
@@ -237,21 +254,60 @@ class AdminRepository:
         cursor.execute(
             """
             INSERT INTO administrable_nodes (node_id, first_confirmed, last_confirmed,
-                                             firmware_version, device_metadata, admin_channel_index)
-            VALUES (?, ?, ?, ?, ?, ?)
+                                             firmware_version, device_metadata, admin_channel_index,
+                                             last_status_check, last_status_result)
+            VALUES (?, ?, ?, ?, ?, ?, ?, 'online')
             ON CONFLICT(node_id) DO UPDATE SET
                 last_confirmed = excluded.last_confirmed,
                 firmware_version = COALESCE(excluded.firmware_version, firmware_version),
                 device_metadata = COALESCE(excluded.device_metadata, device_metadata),
-                admin_channel_index = excluded.admin_channel_index
+                admin_channel_index = excluded.admin_channel_index,
+                last_status_check = excluded.last_status_check,
+                last_status_result = 'online'
             """,
-            (node_id, now, now, firmware_version, device_metadata, admin_channel_index),
+            (
+                node_id,
+                now,
+                now,
+                firmware_version,
+                device_metadata,
+                admin_channel_index,
+                now,
+            ),
         )
 
         conn.commit()
         conn.close()
 
         logger.info(f"Marked node {node_id} as administrable")
+
+    @staticmethod
+    def update_node_status(node_id: int, status: str) -> None:
+        """
+        Update the last status check for an administrable node.
+
+        Args:
+            node_id: The node ID
+            status: Status result ('online', 'offline', 'timeout', 'error')
+        """
+        conn = get_db_connection()
+        cursor = conn.cursor()
+
+        now = time.time()
+
+        cursor.execute(
+            """
+            UPDATE administrable_nodes
+            SET last_status_check = ?, last_status_result = ?
+            WHERE node_id = ?
+            """,
+            (now, status, node_id),
+        )
+
+        conn.commit()
+        conn.close()
+
+        logger.debug(f"Updated status for node {node_id}: {status}")
 
     @staticmethod
     def is_node_administrable(node_id: int) -> bool:
