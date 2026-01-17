@@ -319,16 +319,41 @@ class AdminService:
         response = publisher.get_response(packet_id, timeout=30.0)
 
         if response:
+            # Extract firmware version and metadata from device metadata response
+            firmware_version = None
+            device_metadata = None
+            admin_msg = response.get("admin_message")
+
+            if admin_msg and hasattr(admin_msg, "HasField"):
+                try:
+                    if admin_msg.HasField("get_device_metadata_response"):
+                        meta = admin_msg.get_device_metadata_response
+                        firmware_version = meta.firmware_version
+                        device_metadata = str(meta)
+                        logger.info(
+                            f"Got device metadata from node {target_node_id}: "
+                            f"firmware={firmware_version}"
+                        )
+                except Exception as e:
+                    logger.warning(f"Failed to extract device metadata: {e}")
+
             # Mark the node as administrable since it responded
             AdminRepository.mark_node_administrable(
                 node_id=target_node_id,
+                firmware_version=firmware_version,
+                device_metadata=device_metadata,
                 admin_channel_index=0,  # Default channel
             )
 
             AdminRepository.update_admin_log_status(
                 log_id=log_id,
                 status="success",
-                response_data=json.dumps({"from_node": response.get("from_node")}),
+                response_data=json.dumps(
+                    {
+                        "from_node": response.get("from_node"),
+                        "firmware_version": firmware_version,
+                    }
+                ),
             )
             return AdminCommandResult(
                 success=True,
@@ -337,6 +362,7 @@ class AdminService:
                 response={
                     "from_node": response.get("from_node"),
                     "administrable": True,
+                    "firmware_version": firmware_version,
                 },
             )
         else:

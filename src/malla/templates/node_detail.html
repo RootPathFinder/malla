@@ -236,11 +236,11 @@
                                 <tr>
                                     <th>Firmware Version:</th>
                                     <td>
-                                        <span class="text-muted">Not available</span>
-                                        <i class="bi bi-info-circle text-muted ms-1"
+                                        <span id="firmwareVersion" class="text-muted">Not available</span>
+                                        <i id="firmwareInfoTooltip" class="bi bi-info-circle text-muted ms-1"
                                            data-bs-toggle="tooltip"
                                            data-bs-placement="top"
-                                           title="Firmware version information is not transmitted in standard nodeinfo packets. It would require admin access to query device metadata."></i>
+                                           title="Firmware version information requires admin access. If this node is administrable, it will be displayed automatically."></i>
                                     </td>
                                 </tr>
                                 <tr>
@@ -830,6 +830,21 @@ async function checkAdminStatus() {
             const badge = document.getElementById('adminBadge');
             if (badge) {
                 badge.classList.remove('d-none');
+            }
+
+            // Display firmware version if available
+            if (data.details && data.details.firmware_version) {
+                const firmwareEl = document.getElementById('firmwareVersion');
+                const tooltipEl = document.getElementById('firmwareInfoTooltip');
+                if (firmwareEl) {
+                    firmwareEl.textContent = data.details.firmware_version;
+                    firmwareEl.classList.remove('text-muted');
+                    firmwareEl.classList.add('text-success');
+                }
+                // Hide the info tooltip since we have the data
+                if (tooltipEl) {
+                    tooltipEl.classList.add('d-none');
+                }
             }
         }
     } catch (error) {
