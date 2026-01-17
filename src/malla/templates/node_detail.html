@@ -1080,14 +1080,31 @@ async function loadHealthWarnings() {
             const importantIssues = data.issues.filter(i => i.severity !== 'info');
 
             if (importantIssues.length > 0) {
-                html += '<div class="list-group list-group-flush mb-2">';
+                html += '<div class="d-flex flex-wrap gap-1 mb-2">';
                 for (const issue of importantIssues) {
                     const severityClass = issue.severity === 'critical' ? 'danger' : 'warning';
                     const severityIcon = issue.severity === 'critical' ? 'exclamation-circle-fill' : 'exclamation-triangle-fill';
 
-                    html += `<div class="list-group-item list-group-item-${severityClass} p-2">`;
-                    html += `<small><i class="bi bi-${severityIcon}"></i> ${issue.message}</small>`;
-                    html += '</div>';
+                    // Shorten the message - extract just the key part
+                    let shortMsg = issue.message;
+                    // Remove category prefix like "behavior: ", "signal: ", "connectivity: "
+                    shortMsg = shortMsg.replace(/^(behavior|signal|connectivity|battery|gateway):\s*/i, '');
+                    // Truncate long messages and remove parenthetical info
+                    shortMsg = shortMsg.replace(/\s*\([^)]+\)\s*/g, ' ').trim();
+                    // Further shorten common phrases
+                    shortMsg = shortMsg.replace('Abnormally low activity', 'Low activity');
+                    shortMsg = shortMsg.replace('Average RSSI', 'RSSI');
+                    shortMsg = shortMsg.replace('Average SNR', 'SNR');
+                    shortMsg = shortMsg.replace('Only heard by one gateway', '1 gateway');
+                    shortMsg = shortMsg.replace('expected', 'exp');
+                    shortMsg = shortMsg.replace('baseline', 'base');
+                    // Cap length
+                    if (shortMsg.length > 35) shortMsg = shortMsg.substring(0, 32) + '...';
+
+                    html += `<span class="badge bg-${severityClass}" style="font-size: 0.6rem; font-weight: 500; cursor: help;"
+                                   data-bs-toggle="tooltip" title="${issue.message.replace(/"/g, '&quot;')}">`;
+                    html += `<i class="bi bi-${severityIcon}"></i> ${shortMsg}`;
+                    html += '</span>';
                 }
                 html += '</div>';
             }
@@ -1102,11 +1119,11 @@ async function loadHealthWarnings() {
             const confidenceClass = data.confidence_score >= 80 ? 'success' :
                                    data.confidence_score >= 60 ? 'warning' : 'danger';
 
-            html += `<div class="text-center">`;
-            html += `<span class="badge bg-${scoreClass}">Health: ${data.health_score}/100</span>`;
-            html += ` <span class="badge bg-${confidenceClass}" data-bs-toggle="tooltip"
-                            title="Confidence in health assessment. Based on: ${data.confidence_factors ? data.confidence_factors.join('; ') : 'Available data'}">
-                        Confidence: ${data.confidence_score}%</span>`;
+            html += `<div class="d-flex justify-content-center gap-1 flex-wrap">`;
+            html += `<span class="badge bg-${scoreClass}" style="font-size: 0.7rem;">${data.health_score}/100</span>`;
+            html += `<span class="badge bg-${confidenceClass}" style="font-size: 0.7rem;" data-bs-toggle="tooltip"
+                            title="Confidence: ${data.confidence_score}%. ${data.confidence_factors ? data.confidence_factors.join('; ') : ''}">
+                        <i class="bi bi-check-circle"></i> ${data.confidence_score}%</span>`;
             html += '</div>';
         }
 
@@ -1343,6 +1360,29 @@ async function loadTelemetryData() {
 
         html += '<table class="table table-sm table-borderless mb-0" style="font-size: 0.9rem;">';
 
+        // Power Type (from analysis)
+        if (telemetry.power_type && telemetry.power_type !== 'unknown') {
+            const powerIcons = {
+                'mains': '<i class="bi bi-plug-fill text-primary"></i>',
+                'solar': '<i class="bi bi-sun-fill text-warning"></i>',
+                'battery': '<i class="bi bi-battery-full text-success"></i>',
+                'usb': '<i class="bi bi-usb-symbol text-info"></i>'
+            };
+            const powerLabels = {
+                'mains': 'Mains Power',
+                'solar': 'Solar Powered',
+                'battery': 'Battery Only',
+                'usb': 'USB Power'
+            };
+            const icon = powerIcons[telemetry.power_type] || '<i class="bi bi-lightning-charge"></i>';
+            const label = powerLabels[telemetry.power_type] || telemetry.power_type;
+            const tooltip = telemetry.power_type_reason ? ' title="' + telemetry.power_type_reason + '"' : '';
+            html += '<tr>';
+            html += '<td class="text-muted" style="width: 50%;">Power Source</td>';
+            html += '<td class="text-end fw-bold"' + tooltip + ' data-bs-toggle="tooltip">' + icon + ' ' + label + '</td>';
+            html += '</tr>';
+        }
+
         if (telemetry.device_metrics) {
             const dm = telemetry.device_metrics;
 
@@ -1449,37 +1489,13 @@ async function loadTelemetryData() {
             html += '</div>';
         }
 
-        // Power Metrics Section
-        if (telemetry.power_metrics || telemetry.power_type) {
+        // Power Metrics Section (only show if there are actual power metrics, not just power_type)
+        if (telemetry.power_metrics) {
             const pm = telemetry.power_metrics || {};
             html += '<div class="col-lg-6">';
             html += '<h6 class="text-secondary mb-2"><i class="bi bi-lightning-charge"></i> Power Metrics</h6>';
             html += '<div class="table-responsive">';
             html += '<table class="table table-sm table-borderless mb-0" style="font-size: 0.9rem;">';
-
-            if (telemetry.power_type) {
-                let badgeClass = 'bg-secondary';
-                if (telemetry.power_type === 'solar') badgeClass = 'bg-warning text-dark';
-                else if (telemetry.power_type === 'mains') badgeClass = 'bg-danger';
-                else if (telemetry.power_type === 'battery') badgeClass = 'bg-success';
-
-                let tooltipAttr = '';
-                if (telemetry.power_type_reason) {
-                    let tooltipText = telemetry.power_type_reason;
-                    tooltipText = tooltipText.replace(/"/g, '&quot;');
-
-                    if (telemetry.power_analysis_timestamp) {
-                         const nextEval = new Date((telemetry.power_analysis_timestamp + 3600) * 1000);
-                         tooltipText += '. Re-evaluation scheduled around ' + (typeof formatTimestamp === 'function' ? formatTimestamp(Math.floor(nextEval.getTime() / 1000), 'time') : nextEval.toLocaleTimeString());
-                    }
-                    tooltipAttr = `data-bs-toggle="tooltip" data-bs-placement="top" title="${tooltipText}"`;
-                }
-
-                html += '<tr>';
-                html += '<td class="text-muted" style="width: 50%;">Power Source</td>';
-                html += `<td class="text-end"><span class="badge ${badgeClass}" ${tooltipAttr} style="cursor:help;">${telemetry.power_type.toUpperCase()}</span></td>`;
-                html += '</tr>';
-            }
 
             if (pm.ch1_voltage !== undefined) {
                 html += '<tr>';
