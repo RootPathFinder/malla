@@ -613,16 +613,40 @@ class AdminService:
 
         conn_type = self.connection_type
 
-        # Log the command
+        # Gather diagnostic info
+        diag_info = {
+            "delay_seconds": delay_seconds,
+            "connection_type": conn_type.value,
+            "gateway_node_id": f"!{gateway_id:08x}",
+            "target_node_id": f"!{target_node_id:08x}",
+        }
+
+        # Add TCP-specific diagnostics
+        if conn_type == AdminConnectionType.TCP:
+            from .tcp_publisher import get_tcp_publisher
+
+            publisher = get_tcp_publisher()
+            diag_info["tcp_host"] = publisher.tcp_host
+            diag_info["tcp_port"] = publisher.tcp_port
+            diag_info["tcp_connected"] = publisher.is_connected
+            diag_info["method"] = "meshtastic_library_node_reboot"
+            if publisher._interface and publisher._interface.localNode:
+                local_node = publisher._interface.localNode
+                diag_info["local_node_id"] = f"!{local_node.nodeNum:08x}"
+                # Check if target is local node
+                if local_node.nodeNum == target_node_id:
+                    diag_info["is_local_node"] = True
+                else:
+                    diag_info["is_local_node"] = False
+                    diag_info["session_key_note"] = (
+                        "Session key will be negotiated automatically by library"
+                    )
+
+        # Log the command with diagnostic info
         log_id = AdminRepository.log_admin_command(
             target_node_id=target_node_id,
             command_type="reboot",
-            command_data=json.dumps(
-                {
-                    "delay_seconds": delay_seconds,
-                    "connection_type": conn_type.value,
-                }
-            ),
+            command_data=json.dumps(diag_info),
         )
 
         # Send the command using appropriate publisher
@@ -641,26 +665,37 @@ class AdminService:
             )
 
         if packet_id is None:
+            error_msg = f"Failed to send message via {conn_type.value}. "
+            if conn_type == AdminConnectionType.TCP:
+                error_msg += "Check TCP connection to the gateway node."
+            else:
+                error_msg += "Check MQTT connection and gateway configuration."
+
             AdminRepository.update_admin_log_status(
                 log_id=log_id,
                 status="failed",
-                error_message=f"Failed to send message via {conn_type.value}",
+                error_message=error_msg,
             )
             return AdminCommandResult(
                 success=False,
                 log_id=log_id,
-                error=f"Failed to send reboot command via {conn_type.value}",
+                error=error_msg,
             )
 
-        # Reboot doesn't send a response, mark as success
+        # Reboot doesn't send a response - we can only confirm the command was sent
+        # The actual reboot success can only be verified by observing the node going offline/online
+        response_info = {
+            "message": f"Reboot command sent to !{target_node_id:08x}",
+            "packet_id": packet_id,
+            "delay_seconds": delay_seconds,
+            "note": "Reboot commands do not receive acknowledgment. "
+            "Verify by checking if the node goes offline and comes back online.",
+        }
+
         AdminRepository.update_admin_log_status(
             log_id=log_id,
             status="success",
-            response_data=json.dumps(
-                {
-                    "message": f"Reboot command sent, node will reboot in {delay_seconds}s"
-                }
-            ),
+            response_data=json.dumps(response_info),
         )
 
         return AdminCommandResult(

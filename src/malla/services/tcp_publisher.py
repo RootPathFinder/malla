@@ -582,6 +582,9 @@ class TCPPublisher:
         """
         Send a reboot command to a target node.
 
+        Uses the Meshtastic library's built-in reboot method which properly
+        handles session key negotiation for remote admin commands.
+
         Args:
             target_node_id: The target node ID
             seconds: Seconds until reboot
@@ -589,14 +592,48 @@ class TCPPublisher:
         Returns:
             Packet ID if sent successfully
         """
-        admin_msg = admin_pb2.AdminMessage()
-        admin_msg.reboot_seconds = seconds
+        if not self.connect():
+            logger.error("Cannot send reboot: not connected to node")
+            return None
 
-        return self.send_admin_message(
-            target_node_id=target_node_id,
-            admin_message=admin_msg,
-            want_response=False,
-        )
+        if self._interface is None:
+            return None
+
+        try:
+            # Get or create a Node object for the target
+            # The Meshtastic library's Node.reboot() handles session key negotiation
+            node_id_str = f"!{target_node_id:08x}"
+            node = self._interface.getNode(node_id_str, requestChannels=False)
+
+            if node is None:
+                logger.error(f"Could not get node object for !{target_node_id:08x}")
+                return None
+
+            # Use the library's reboot method which handles session keys properly
+            logger.info(
+                f"Sending reboot command to !{target_node_id:08x} via library method"
+            )
+            result = node.reboot(secs=seconds)
+
+            # Generate a tracking packet ID
+            packet_id = random.getrandbits(32)
+
+            if result:
+                logger.info(
+                    f"Reboot command sent to !{target_node_id:08x}, "
+                    f"delay={seconds}s, packet_id={packet_id}"
+                )
+                return packet_id
+            else:
+                logger.warning(
+                    f"Reboot command may have been sent to !{target_node_id:08x}, "
+                    f"but no confirmation received"
+                )
+                return packet_id
+
+        except Exception as e:
+            logger.error(f"Failed to send reboot command: {e}")
+            return None
 
     def send_shutdown(
         self,
@@ -606,6 +643,9 @@ class TCPPublisher:
         """
         Send a shutdown command to a target node.
 
+        Uses the Meshtastic library's built-in shutdown method which properly
+        handles session key negotiation for remote admin commands.
+
         Args:
             target_node_id: The target node ID
             seconds: Seconds until shutdown
@@ -613,14 +653,47 @@ class TCPPublisher:
         Returns:
             Packet ID if sent successfully
         """
-        admin_msg = admin_pb2.AdminMessage()
-        admin_msg.shutdown_seconds = seconds
+        if not self.connect():
+            logger.error("Cannot send shutdown: not connected to node")
+            return None
 
-        return self.send_admin_message(
-            target_node_id=target_node_id,
-            admin_message=admin_msg,
-            want_response=False,
-        )
+        if self._interface is None:
+            return None
+
+        try:
+            # Get or create a Node object for the target
+            node_id_str = f"!{target_node_id:08x}"
+            node = self._interface.getNode(node_id_str, requestChannels=False)
+
+            if node is None:
+                logger.error(f"Could not get node object for !{target_node_id:08x}")
+                return None
+
+            # Use the library's shutdown method which handles session keys properly
+            logger.info(
+                f"Sending shutdown command to !{target_node_id:08x} via library method"
+            )
+            result = node.shutdown(secs=seconds)
+
+            # Generate a tracking packet ID
+            packet_id = random.getrandbits(32)
+
+            if result:
+                logger.info(
+                    f"Shutdown command sent to !{target_node_id:08x}, "
+                    f"delay={seconds}s, packet_id={packet_id}"
+                )
+                return packet_id
+            else:
+                logger.warning(
+                    f"Shutdown command may have been sent to !{target_node_id:08x}, "
+                    f"but no confirmation received"
+                )
+                return packet_id
+
+        except Exception as e:
+            logger.error(f"Failed to send shutdown command: {e}")
+            return None
 
 
 # Module-level singleton accessor

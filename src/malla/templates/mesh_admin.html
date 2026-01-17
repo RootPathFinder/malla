@@ -51,6 +51,53 @@
     .log-status-timeout {
         color: #fd7e14;
     }
+    .log-entry {
+        cursor: pointer;
+    }
+    .log-entry:hover {
+        background-color: var(--bs-tertiary-bg);
+    }
+    .log-details-popover {
+        max-width: 450px;
+        font-size: 0.8rem;
+    }
+    .log-details-popover .popover-body {
+        padding: 0.75rem;
+    }
+    .log-details-section {
+        margin-bottom: 0.5rem;
+    }
+    .log-details-section:last-child {
+        margin-bottom: 0;
+    }
+    .log-details-label {
+        font-weight: 600;
+        color: var(--bs-secondary-color);
+        font-size: 0.7rem;
+        text-transform: uppercase;
+        margin-bottom: 0.25rem;
+    }
+    .log-details-content {
+        font-family: 'SF Mono', 'Monaco', 'Inconsolata', 'Fira Mono', monospace;
+        font-size: 0.75rem;
+        background: var(--bs-tertiary-bg);
+        padding: 0.5rem;
+        border-radius: 0.25rem;
+        white-space: pre-wrap;
+        word-break: break-all;
+        max-height: 150px;
+        overflow-y: auto;
+    }
+    [data-bs-theme="dark"] .log-details-content {
+        background: #161b22;
+    }
+    .log-error-content {
+        color: #dc3545;
+        background: rgba(220, 53, 69, 0.1);
+    }
+    .log-success-content {
+        color: #198754;
+    }
     /* Node autocomplete styles */
     .node-autocomplete-container {
         position: relative;
@@ -93,8 +140,8 @@
     .config-display {
         font-family: 'SF Mono', 'Monaco', 'Inconsolata', 'Fira Mono', monospace;
         font-size: 0.8rem;
-        background: #1e1e1e;
-        color: #d4d4d4;
+        background: var(--bs-tertiary-bg);
+        color: var(--bs-body-color);
         padding: 1rem;
         border-radius: 0.5rem;
         max-height: 400px;
@@ -102,31 +149,64 @@
         border: 1px solid var(--bs-border-color);
     }
     [data-bs-theme="dark"] .config-display {
-        background: #0d1117;
+        background: #161b22;
         border-color: #30363d;
     }
     .config-form {
         max-height: 500px;
         overflow-y: auto;
         padding: 1rem;
-        background: var(--bs-light);
+        background: var(--bs-tertiary-bg);
         border-radius: 0.5rem;
+        border: 1px solid var(--bs-border-color);
     }
     [data-bs-theme="dark"] .config-form {
-        background: var(--bs-dark);
+        background: #161b22;
+        border-color: #30363d;
+    }
+    .config-form .form-control,
+    .config-form .form-select {
+        background-color: var(--bs-body-bg);
+        color: var(--bs-body-color);
+        border-color: var(--bs-border-color);
+    }
+    .config-form .form-control:focus,
+    .config-form .form-select:focus {
+        background-color: var(--bs-body-bg);
+        color: var(--bs-body-color);
+        border-color: var(--bs-primary);
+    }
+    [data-bs-theme="dark"] .config-form .form-control,
+    [data-bs-theme="dark"] .config-form .form-select {
+        background-color: #0d1117;
+        color: #c9d1d9;
+        border-color: #30363d;
+    }
+    [data-bs-theme="dark"] .config-form .form-control:focus,
+    [data-bs-theme="dark"] .config-form .form-select:focus {
+        background-color: #0d1117;
+        border-color: var(--bs-primary);
+    }
+    [data-bs-theme="dark"] .config-form .form-control::placeholder {
+        color: #6e7681;
     }
     .config-field {
         margin-bottom: 1rem;
     }
     .config-field label {
         font-weight: 500;
+        color: var(--bs-body-color);
     }
     .config-field .form-text {
         font-size: 0.75rem;
+        color: var(--bs-secondary-color);
     }
     .config-field-unit {
         font-size: 0.8rem;
-        color: #6c757d;
+        color: var(--bs-secondary-color);
+    }
+    [data-bs-theme="dark"] .config-field-unit {
+        color: #8b949e;
     }
     .spinner-border-sm {
         width: 1rem;
@@ -1385,6 +1465,7 @@
                                     <th>Target</th>
                                     <th>Command</th>
                                     <th>Status</th>
+                                    <th></th>
                                 </tr>
                             </thead>
                             <tbody>
@@ -1393,9 +1474,21 @@
                 for (const entry of data.log) {
                     const timestamp = new Date(entry.timestamp * 1000).toLocaleString();
                     const statusClass = `log-status-${entry.status}`;
+                    const entryId = `log-entry-${entry.id}`;
+
+                    // Build popover content
+                    const popoverContent = buildLogPopoverContent(entry);
 
                     html += `
-                        <tr class="log-entry">
+                        <tr class="log-entry"
+                            id="${entryId}"
+                            data-bs-toggle="popover"
+                            data-bs-trigger="hover focus"
+                            data-bs-placement="left"
+                            data-bs-html="true"
+                            data-bs-custom-class="log-details-popover"
+                            data-bs-content="${escapeHtml(popoverContent)}"
+                            title="Command Details">
                             <td class="log-timestamp">${timestamp}</td>
                             <td><code>${entry.target_node_hex || entry.target_node_id}</code></td>
                             <td>${entry.command_type}</td>
@@ -1403,12 +1496,24 @@
                                 <i class="bi bi-${getStatusIcon(entry.status)}"></i>
                                 ${entry.status}
                             </td>
+                            <td>
+                                <i class="bi bi-info-circle text-muted" title="Hover for details"></i>
+                            </td>
                         </tr>
                     `;
                 }
 
                 html += '</tbody></table></div>';
                 container.innerHTML = html;
+
+                // Initialize popovers for the log entries
+                const popoverTriggerList = container.querySelectorAll('[data-bs-toggle="popover"]');
+                popoverTriggerList.forEach(el => {
+                    new bootstrap.Popover(el, {
+                        container: 'body',
+                        sanitize: false
+                    });
+                });
             } else {
                 container.innerHTML = `
                     <div class="text-center py-5 text-muted">
@@ -1423,6 +1528,75 @@
                 </div>
             `;
         }
+    }
+
+    // Build popover content for a log entry
+    function buildLogPopoverContent(entry) {
+        let content = '';
+
+        // Command data section
+        if (entry.command_data) {
+            try {
+                const cmdData = JSON.parse(entry.command_data);
+                content += `<div class="log-details-section">`;
+                content += `<div class="log-details-label">Command Sent</div>`;
+                content += `<div class="log-details-content">${JSON.stringify(cmdData, null, 2)}</div>`;
+                content += `</div>`;
+            } catch (e) {
+                content += `<div class="log-details-section">`;
+                content += `<div class="log-details-label">Command Sent</div>`;
+                content += `<div class="log-details-content">${entry.command_data}</div>`;
+                content += `</div>`;
+            }
+        }
+
+        // Response data section
+        if (entry.response_data) {
+            try {
+                const respData = JSON.parse(entry.response_data);
+                content += `<div class="log-details-section">`;
+                content += `<div class="log-details-label">Response</div>`;
+                content += `<div class="log-details-content log-success-content">${JSON.stringify(respData, null, 2)}</div>`;
+                content += `</div>`;
+            } catch (e) {
+                content += `<div class="log-details-section">`;
+                content += `<div class="log-details-label">Response</div>`;
+                content += `<div class="log-details-content log-success-content">${entry.response_data}</div>`;
+                content += `</div>`;
+            }
+        }
+
+        // Error message section
+        if (entry.error_message) {
+            content += `<div class="log-details-section">`;
+            content += `<div class="log-details-label">Error</div>`;
+            content += `<div class="log-details-content log-error-content">${entry.error_message}</div>`;
+            content += `</div>`;
+        }
+
+        // If no details available
+        if (!content) {
+            content = `<div class="text-muted">No additional details available</div>`;
+        }
+
+        // Add timing info if available
+        if (entry.response_timestamp && entry.timestamp) {
+            const durationMs = ((entry.response_timestamp - entry.timestamp) * 1000).toFixed(0);
+            content += `<div class="log-details-section mt-2">`;
+            content += `<small class="text-muted">Duration: ${durationMs}ms</small>`;
+            content += `</div>`;
+        }
+
+        return content;
+    }
+
+    // Escape HTML for safe insertion into data attributes
+    function escapeHtml(text) {
+        const div = document.createElement('div');
+        div.textContent = text;
+        return div.innerHTML
+            .replace(/"/g, '&quot;')
+            .replace(/'/g, '&#39;');
     }
 
     function getStatusIcon(status) {
