@@ -15,6 +15,7 @@ from meshtastic import config_pb2
 
 from ..config import get_config
 from ..database.admin_repository import AdminRepository
+from .config_metadata import get_all_config_schemas, get_config_schema
 from .mqtt_publisher import get_mqtt_publisher
 from .tcp_publisher import get_tcp_publisher
 
@@ -73,6 +74,20 @@ class AdminPublisher(Protocol):
         target_node_id: int,
         from_node_id: int | None = None,
         seconds: int = 5,
+    ) -> int | None: ...
+
+    def send_set_config(
+        self,
+        target_node_id: int,
+        config_type: str,
+        config_data: dict,
+    ) -> int | None: ...
+
+    def send_set_channel(
+        self,
+        target_node_id: int,
+        channel_index: int,
+        channel_data: dict,
     ) -> int | None: ...
 
 
@@ -701,6 +716,239 @@ class AdminService:
                 "message": f"Shutdown command sent. Node will shutdown in {delay_seconds} seconds."
             },
         )
+
+    def set_config(
+        self,
+        target_node_id: int,
+        config_type: ConfigType,
+        config_data: dict[str, Any],
+    ) -> AdminCommandResult:
+        """
+        Set configuration on a remote node.
+
+        Args:
+            target_node_id: The target node ID
+            config_type: The type of configuration to set
+            config_data: Dictionary of config values to set
+
+        Returns:
+            AdminCommandResult with success/failure info
+        """
+        gateway_id = self.gateway_node_id
+        if not gateway_id:
+            return AdminCommandResult(
+                success=False,
+                error="No gateway node configured",
+            )
+
+        conn_type = self.connection_type
+
+        # Log the command
+        log_id = AdminRepository.log_admin_command(
+            target_node_id=target_node_id,
+            command_type="set_config",
+            command_data=json.dumps(
+                {
+                    "config_type": config_type.name,
+                    "config_data": config_data,
+                    "connection_type": conn_type.value,
+                }
+            ),
+        )
+
+        # Send the request using appropriate publisher
+        publisher = self._get_publisher()
+
+        config_type_str = config_type.name.lower()
+
+        if conn_type == AdminConnectionType.TCP:
+            packet_id = publisher.send_set_config(
+                target_node_id=target_node_id,
+                config_type=config_type_str,
+                config_data=config_data,
+            )
+        else:
+            # MQTT set_config not yet implemented
+            AdminRepository.update_admin_log_status(
+                log_id=log_id,
+                status="failed",
+                error_message="set_config not supported via MQTT",
+            )
+            return AdminCommandResult(
+                success=False,
+                log_id=log_id,
+                error="set_config is only supported via TCP connection",
+            )
+
+        if packet_id is None:
+            AdminRepository.update_admin_log_status(
+                log_id=log_id,
+                status="failed",
+                error_message=f"Failed to send message via {conn_type.value}",
+            )
+            return AdminCommandResult(
+                success=False,
+                log_id=log_id,
+                error=f"Failed to send admin message via {conn_type.value}",
+            )
+
+        # Wait for response/acknowledgment
+        response = publisher.get_response(packet_id, timeout=30.0)
+
+        if response:
+            AdminRepository.update_admin_log_status(
+                log_id=log_id,
+                status="success",
+                response_data=json.dumps({"message": "Config updated successfully"}),
+            )
+
+            return AdminCommandResult(
+                success=True,
+                packet_id=packet_id,
+                log_id=log_id,
+                response={"message": "Config updated successfully"},
+            )
+        else:
+            # Even without response, the config may have been applied
+            AdminRepository.update_admin_log_status(
+                log_id=log_id,
+                status="success",
+                response_data=json.dumps(
+                    {"message": "Config sent (no confirmation received)"}
+                ),
+            )
+            return AdminCommandResult(
+                success=True,
+                packet_id=packet_id,
+                log_id=log_id,
+                response={"message": "Config sent (no confirmation received)"},
+            )
+
+    def set_channel(
+        self,
+        target_node_id: int,
+        channel_index: int,
+        channel_data: dict[str, Any],
+    ) -> AdminCommandResult:
+        """
+        Set channel configuration on a remote node.
+
+        Args:
+            target_node_id: The target node ID
+            channel_index: The channel index (0-7)
+            channel_data: Dictionary of channel settings
+
+        Returns:
+            AdminCommandResult with success/failure info
+        """
+        gateway_id = self.gateway_node_id
+        if not gateway_id:
+            return AdminCommandResult(
+                success=False,
+                error="No gateway node configured",
+            )
+
+        conn_type = self.connection_type
+
+        # Log the command
+        log_id = AdminRepository.log_admin_command(
+            target_node_id=target_node_id,
+            command_type="set_channel",
+            command_data=json.dumps(
+                {
+                    "channel_index": channel_index,
+                    "channel_data": channel_data,
+                    "connection_type": conn_type.value,
+                }
+            ),
+        )
+
+        # Send the request using appropriate publisher
+        publisher = self._get_publisher()
+
+        if conn_type == AdminConnectionType.TCP:
+            packet_id = publisher.send_set_channel(
+                target_node_id=target_node_id,
+                channel_index=channel_index,
+                channel_data=channel_data,
+            )
+        else:
+            # MQTT set_channel not yet implemented
+            AdminRepository.update_admin_log_status(
+                log_id=log_id,
+                status="failed",
+                error_message="set_channel not supported via MQTT",
+            )
+            return AdminCommandResult(
+                success=False,
+                log_id=log_id,
+                error="set_channel is only supported via TCP connection",
+            )
+
+        if packet_id is None:
+            AdminRepository.update_admin_log_status(
+                log_id=log_id,
+                status="failed",
+                error_message=f"Failed to send message via {conn_type.value}",
+            )
+            return AdminCommandResult(
+                success=False,
+                log_id=log_id,
+                error=f"Failed to send admin message via {conn_type.value}",
+            )
+
+        # Wait for response/acknowledgment
+        response = publisher.get_response(packet_id, timeout=30.0)
+
+        if response:
+            AdminRepository.update_admin_log_status(
+                log_id=log_id,
+                status="success",
+                response_data=json.dumps({"message": "Channel updated successfully"}),
+            )
+
+            return AdminCommandResult(
+                success=True,
+                packet_id=packet_id,
+                log_id=log_id,
+                response={"message": "Channel updated successfully"},
+            )
+        else:
+            # Even without response, the channel may have been applied
+            AdminRepository.update_admin_log_status(
+                log_id=log_id,
+                status="success",
+                response_data=json.dumps(
+                    {"message": "Channel sent (no confirmation received)"}
+                ),
+            )
+            return AdminCommandResult(
+                success=True,
+                packet_id=packet_id,
+                log_id=log_id,
+                response={"message": "Channel sent (no confirmation received)"},
+            )
+
+    def get_config_schema(self, config_type: str) -> list[dict[str, Any]]:
+        """
+        Get the field schema for a config type.
+
+        Args:
+            config_type: The config type (device, position, etc.)
+
+        Returns:
+            List of field definitions
+        """
+        return get_config_schema(config_type)
+
+    def get_all_config_schemas(self) -> dict[str, list[dict[str, Any]]]:
+        """
+        Get all config field schemas.
+
+        Returns:
+            Dict of config type to field definitions
+        """
+        return get_all_config_schemas()
 
     def get_administrable_nodes(self) -> list[dict[str, Any]]:
         """

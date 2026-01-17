@@ -310,12 +310,15 @@ def api_get_node_config(node_id, config_type):
         )
 
         if result.success:
+            # Include field schema for the UI
+            schema = admin_service.get_config_schema(config_type.lower())
             return jsonify(
                 {
                     "success": True,
                     "node_id": node_id_int,
                     "config_type": config_type,
                     "config": result.response,
+                    "schema": schema,
                     "log_id": result.log_id,
                 }
             )
@@ -330,6 +333,67 @@ def api_get_node_config(node_id, config_type):
 
     except Exception as e:
         logger.error(f"Error getting node config: {e}")
+        return jsonify({"error": str(e)}), 500
+
+
+@admin_bp.route("/api/admin/node/<node_id>/config/<config_type>", methods=["POST"])
+def api_set_node_config(node_id, config_type):
+    """Set configuration on a remote node."""
+    try:
+        node_id_int = convert_node_id(node_id)
+
+        # Map config type string to enum
+        config_type_map = {
+            "device": ConfigType.DEVICE,
+            "position": ConfigType.POSITION,
+            "power": ConfigType.POWER,
+            "network": ConfigType.NETWORK,
+            "display": ConfigType.DISPLAY,
+            "lora": ConfigType.LORA,
+            "bluetooth": ConfigType.BLUETOOTH,
+        }
+
+        if config_type.lower() not in config_type_map:
+            return jsonify(
+                {
+                    "error": f"Invalid config type. Valid types: {list(config_type_map.keys())}",
+                }
+            ), 400
+
+        data = request.get_json()
+        if not data:
+            return jsonify({"error": "No configuration data provided"}), 400
+
+        admin_service = get_admin_service()
+        result = admin_service.set_config(
+            target_node_id=node_id_int,
+            config_type=config_type_map[config_type.lower()],
+            config_data=data,
+        )
+
+        if result.success:
+            return jsonify(
+                {
+                    "success": True,
+                    "node_id": node_id_int,
+                    "config_type": config_type,
+                    "message": result.response.get("message")
+                    if result.response
+                    else None,
+                    "log_id": result.log_id,
+                }
+            )
+        else:
+            return jsonify(
+                {
+                    "success": False,
+                    "error": result.error,
+                    "log_id": result.log_id,
+                }
+            ), 200
+
+    except Exception as e:
+        logger.error(f"Error setting node config: {e}")
         return jsonify({"error": str(e)}), 500
 
 
@@ -369,6 +433,85 @@ def api_get_node_channel(node_id, channel_index):
 
     except Exception as e:
         logger.error(f"Error getting node channel: {e}")
+        return jsonify({"error": str(e)}), 500
+
+
+@admin_bp.route(
+    "/api/admin/node/<node_id>/channel/<int:channel_index>", methods=["POST"]
+)
+def api_set_node_channel(node_id, channel_index):
+    """Set channel configuration on a remote node."""
+    try:
+        node_id_int = convert_node_id(node_id)
+
+        if channel_index < 0 or channel_index > 7:
+            return jsonify({"error": "Channel index must be 0-7"}), 400
+
+        data = request.get_json()
+        if not data:
+            return jsonify({"error": "No channel data provided"}), 400
+
+        admin_service = get_admin_service()
+        result = admin_service.set_channel(
+            target_node_id=node_id_int,
+            channel_index=channel_index,
+            channel_data=data,
+        )
+
+        if result.success:
+            return jsonify(
+                {
+                    "success": True,
+                    "node_id": node_id_int,
+                    "channel_index": channel_index,
+                    "message": result.response.get("message")
+                    if result.response
+                    else None,
+                    "log_id": result.log_id,
+                }
+            )
+        else:
+            return jsonify(
+                {
+                    "success": False,
+                    "error": result.error,
+                    "log_id": result.log_id,
+                }
+            ), 200
+
+    except Exception as e:
+        logger.error(f"Error setting node channel: {e}")
+        return jsonify({"error": str(e)}), 500
+
+
+@admin_bp.route("/api/admin/config/schema")
+def api_config_schemas():
+    """Get all config field schemas."""
+    try:
+        admin_service = get_admin_service()
+        schemas = admin_service.get_all_config_schemas()
+        return jsonify(schemas)
+    except Exception as e:
+        logger.error(f"Error getting config schemas: {e}")
+        return jsonify({"error": str(e)}), 500
+
+
+@admin_bp.route("/api/admin/config/schema/<config_type>")
+def api_config_schema(config_type):
+    """Get config field schema for a specific type."""
+    try:
+        admin_service = get_admin_service()
+        schema = admin_service.get_config_schema(config_type)
+        if not schema:
+            return jsonify({"error": f"Unknown config type: {config_type}"}), 404
+        return jsonify(
+            {
+                "config_type": config_type,
+                "schema": schema,
+            }
+        )
+    except Exception as e:
+        logger.error(f"Error getting config schema: {e}")
         return jsonify({"error": str(e)}), 500
 
 

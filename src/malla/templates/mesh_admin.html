@@ -61,6 +61,29 @@
         max-height: 400px;
         overflow-y: auto;
     }
+    .config-form {
+        max-height: 500px;
+        overflow-y: auto;
+        padding: 1rem;
+        background: var(--bs-light);
+        border-radius: 0.5rem;
+    }
+    [data-bs-theme="dark"] .config-form {
+        background: var(--bs-dark);
+    }
+    .config-field {
+        margin-bottom: 1rem;
+    }
+    .config-field label {
+        font-weight: 500;
+    }
+    .config-field .form-text {
+        font-size: 0.75rem;
+    }
+    .config-field-unit {
+        font-size: 0.8rem;
+        color: #6c757d;
+    }
     .spinner-border-sm {
         width: 1rem;
         height: 1rem;
@@ -396,7 +419,32 @@
                         </div>
 
                         <div class="col-lg-6">
-                            <label class="form-label">Response</label>
+                            <div class="d-flex justify-content-between align-items-center mb-2">
+                                <label class="form-label mb-0">Response</label>
+                                <div class="btn-group btn-group-sm" id="responseViewToggle" style="display:none;">
+                                    <button type="button" class="btn btn-outline-secondary active" onclick="showFormView()">
+                                        <i class="bi bi-ui-checks"></i> Form
+                                    </button>
+                                    <button type="button" class="btn btn-outline-secondary" onclick="showJsonView()">
+                                        <i class="bi bi-code-square"></i> JSON
+                                    </button>
+                                </div>
+                            </div>
+                            <div id="commandResponseForm" class="config-form" style="display:none;">
+                                <form id="configEditForm">
+                                    <div id="configFields">
+                                        <!-- Dynamic config fields will be rendered here -->
+                                    </div>
+                                    <div class="d-flex gap-2 mt-3" id="configFormActions" style="display:none;">
+                                        <button type="button" class="btn btn-primary" onclick="saveConfig()">
+                                            <i class="bi bi-check-lg"></i> Save Changes
+                                        </button>
+                                        <button type="button" class="btn btn-outline-secondary" onclick="refreshConfig()">
+                                            <i class="bi bi-arrow-clockwise"></i> Refresh
+                                        </button>
+                                    </div>
+                                </form>
+                            </div>
                             <div id="commandResponse" class="config-display">
                                 <span class="text-muted">Response will appear here...</span>
                             </div>
@@ -447,6 +495,9 @@
 {% block extra_js %}
 <script>
     let selectedNodeId = null;
+    let currentConfigType = null;
+    let currentConfigData = null;
+    let currentConfigSchema = null;
 
     // Change connection type
     async function changeConnectionType() {
@@ -660,18 +711,180 @@
         }
 
         showCommandResponse('Loading...');
+        hideConfigForm();
 
         try {
             const response = await fetch(`/api/admin/node/${encodeURIComponent(nodeId)}/config/${configType}`);
             const data = await response.json();
 
             if (data.success) {
+                currentConfigType = configType;
+                currentConfigData = data.config;
+                currentConfigSchema = data.schema;
+
+                // Render the form if we have schema
+                if (data.schema && data.config) {
+                    renderConfigForm(configType, data.config, data.schema);
+                    showConfigForm();
+                }
+
+                // Also show raw JSON
                 showCommandResponse(JSON.stringify(data.config, null, 2));
             } else {
                 showCommandResponse(`Error: ${data.error}`, true);
             }
         } catch (error) {
             showCommandResponse(`Error: ${error.message}`, true);
+        }
+    }
+
+    // Render editable config form
+    function renderConfigForm(configType, config, schema) {
+        const container = document.getElementById('configFields');
+        const configValues = config[configType] || config;
+
+        let html = `<h6 class="mb-3"><i class="bi bi-gear"></i> ${configType.charAt(0).toUpperCase() + configType.slice(1)} Configuration</h6>`;
+
+        for (const field of schema) {
+            const value = configValues[field.name];
+            const fieldId = `config_${field.name}`;
+
+            html += `<div class="config-field">`;
+            html += `<label for="${fieldId}" class="form-label">${field.label}</label>`;
+
+            if (field.type === 'boolean') {
+                html += `
+                    <div class="form-check form-switch">
+                        <input class="form-check-input" type="checkbox" id="${fieldId}"
+                               name="${field.name}" ${value ? 'checked' : ''}>
+                    </div>
+                `;
+            } else if (field.type === 'enum' && field.enum) {
+                html += `<select class="form-select form-select-sm" id="${fieldId}" name="${field.name}">`;
+                for (const [enumVal, enumLabel] of Object.entries(field.enum)) {
+                    const selected = parseInt(enumVal) === value ? 'selected' : '';
+                    html += `<option value="${enumVal}" ${selected}>${enumLabel} (${enumVal})</option>`;
+                }
+                html += `</select>`;
+            } else if (field.type === 'number') {
+                const min = field.min !== null ? `min="${field.min}"` : '';
+                const max = field.max !== null ? `max="${field.max}"` : '';
+                html += `
+                    <div class="input-group input-group-sm">
+                        <input type="number" class="form-control" id="${fieldId}"
+                               name="${field.name}" value="${value !== undefined ? value : ''}"
+                               ${min} ${max}>
+                        ${field.unit ? `<span class="input-group-text config-field-unit">${field.unit}</span>` : ''}
+                    </div>
+                `;
+            } else if (field.type === 'password') {
+                html += `
+                    <input type="text" class="form-control form-control-sm font-monospace" id="${fieldId}"
+                           name="${field.name}" value="${value || ''}" placeholder="Hex key">
+                `;
+            } else if (field.readonly) {
+                html += `
+                    <input type="text" class="form-control form-control-sm" id="${fieldId}"
+                           name="${field.name}" value="${value !== undefined ? value : ''}" readonly disabled>
+                `;
+            } else {
+                html += `
+                    <input type="text" class="form-control form-control-sm" id="${fieldId}"
+                           name="${field.name}" value="${value !== undefined ? value : ''}">
+                `;
+            }
+
+            if (field.description) {
+                html += `<div class="form-text">${field.description}</div>`;
+            }
+
+            html += `</div>`;
+        }
+
+        container.innerHTML = html;
+        document.getElementById('configFormActions').style.display = 'flex';
+    }
+
+    // Show/hide form vs JSON view
+    function showConfigForm() {
+        document.getElementById('responseViewToggle').style.display = 'block';
+        document.getElementById('commandResponseForm').style.display = 'block';
+        document.getElementById('commandResponse').style.display = 'none';
+        updateViewToggle(true);
+    }
+
+    function hideConfigForm() {
+        document.getElementById('responseViewToggle').style.display = 'none';
+        document.getElementById('commandResponseForm').style.display = 'none';
+        document.getElementById('commandResponse').style.display = 'block';
+    }
+
+    function showFormView() {
+        document.getElementById('commandResponseForm').style.display = 'block';
+        document.getElementById('commandResponse').style.display = 'none';
+        updateViewToggle(true);
+    }
+
+    function showJsonView() {
+        document.getElementById('commandResponseForm').style.display = 'none';
+        document.getElementById('commandResponse').style.display = 'block';
+        updateViewToggle(false);
+    }
+
+    function updateViewToggle(formActive) {
+        const buttons = document.querySelectorAll('#responseViewToggle .btn');
+        buttons[0].classList.toggle('active', formActive);
+        buttons[1].classList.toggle('active', !formActive);
+    }
+
+    // Save config changes
+    async function saveConfig() {
+        const nodeId = document.getElementById('targetNodeInput').value.trim();
+        if (!nodeId || !currentConfigType || !currentConfigSchema) {
+            alert('No configuration loaded to save');
+            return;
+        }
+
+        // Collect form values
+        const formData = {};
+        for (const field of currentConfigSchema) {
+            const element = document.getElementById(`config_${field.name}`);
+            if (!element || field.readonly) continue;
+
+            if (field.type === 'boolean') {
+                formData[field.name] = element.checked;
+            } else if (field.type === 'enum' || field.type === 'number') {
+                formData[field.name] = parseInt(element.value);
+            } else {
+                formData[field.name] = element.value;
+            }
+        }
+
+        showAlert('info', 'Saving configuration...');
+
+        try {
+            const response = await fetch(`/api/admin/node/${encodeURIComponent(nodeId)}/config/${currentConfigType}`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify(formData)
+            });
+            const data = await response.json();
+
+            if (data.success) {
+                showAlert('success', `${currentConfigType} configuration saved successfully!`);
+                showCommandResponse(JSON.stringify({saved: formData, message: data.message}, null, 2));
+            } else {
+                showAlert('danger', `Failed to save: ${data.error}`);
+            }
+        } catch (error) {
+            showAlert('danger', `Error: ${error.message}`);
+        }
+    }
+
+    // Refresh current config
+    async function refreshConfig() {
+        if (currentConfigType) {
+            await getConfig(currentConfigType);
         }
     }
 
@@ -684,18 +897,164 @@
         }
 
         showCommandResponse('Loading...');
+        hideConfigForm();
 
         try {
             const response = await fetch(`/api/admin/node/${encodeURIComponent(nodeId)}/channel/${channelIndex}`);
             const data = await response.json();
 
             if (data.success) {
+                currentConfigType = 'channel';
+                currentConfigData = data.channel;
+
+                // Render channel form
+                renderChannelForm(channelIndex, data.channel);
+                showConfigForm();
+
                 showCommandResponse(JSON.stringify(data.channel, null, 2));
             } else {
                 showCommandResponse(`Error: ${data.error}`, true);
             }
         } catch (error) {
             showCommandResponse(`Error: ${error.message}`, true);
+        }
+    }
+
+    // Render channel edit form
+    function renderChannelForm(channelIndex, channel) {
+        const container = document.getElementById('configFields');
+
+        const roleOptions = {
+            0: 'DISABLED',
+            1: 'PRIMARY',
+            2: 'SECONDARY'
+        };
+
+        const settings = channel.settings || {};
+        const moduleSettings = settings.module_settings || {};
+
+        let html = `
+            <h6 class="mb-3"><i class="bi bi-broadcast"></i> Channel ${channelIndex} Configuration</h6>
+            <input type="hidden" id="channel_index" value="${channelIndex}">
+
+            <div class="config-field">
+                <label class="form-label">Channel Role</label>
+                <select class="form-select form-select-sm" id="channel_role" name="role">
+                    ${Object.entries(roleOptions).map(([val, label]) =>
+                        `<option value="${val}" ${parseInt(val) === channel.role ? 'selected' : ''}>${label}</option>`
+                    ).join('')}
+                </select>
+            </div>
+
+            <div class="config-field">
+                <label class="form-label">Channel Name</label>
+                <input type="text" class="form-control form-control-sm" id="channel_name"
+                       name="name" value="${settings.name || ''}">
+                <div class="form-text">Display name for this channel</div>
+            </div>
+
+            <div class="config-field">
+                <label class="form-label">Pre-Shared Key (PSK)</label>
+                <input type="text" class="form-control form-control-sm font-monospace" id="channel_psk"
+                       name="psk" value="${settings.psk || ''}" placeholder="Hex encoded key">
+                <div class="form-text">Encryption key in hexadecimal format</div>
+            </div>
+
+            <div class="config-field">
+                <label class="form-label">Position Precision</label>
+                <input type="number" class="form-control form-control-sm" id="channel_position_precision"
+                       name="position_precision" value="${moduleSettings.position_precision || 0}"
+                       min="0" max="32">
+                <div class="form-text">Bits of precision (0=full, 32=no location)</div>
+            </div>
+        `;
+
+        container.innerHTML = html;
+
+        // Override save button for channels
+        document.getElementById('configFormActions').style.display = 'flex';
+        currentConfigSchema = [{name: 'role'}, {name: 'name'}, {name: 'psk'}, {name: 'position_precision'}];
+    }
+
+    // Override saveConfig for channels
+    const originalSaveConfig = saveConfig;
+    saveConfig = async function() {
+        const nodeId = document.getElementById('targetNodeInput').value.trim();
+        if (!nodeId || !currentConfigType) {
+            alert('No configuration loaded to save');
+            return;
+        }
+
+        if (currentConfigType === 'channel') {
+            await saveChannel();
+        } else {
+            // Collect form values
+            const formData = {};
+            for (const field of currentConfigSchema) {
+                const element = document.getElementById(`config_${field.name}`);
+                if (!element || field.readonly) continue;
+
+                if (field.type === 'boolean') {
+                    formData[field.name] = element.checked;
+                } else if (field.type === 'enum' || field.type === 'number') {
+                    formData[field.name] = parseInt(element.value);
+                } else {
+                    formData[field.name] = element.value;
+                }
+            }
+
+            showAlert('info', 'Saving configuration...');
+
+            try {
+                const response = await fetch(`/api/admin/node/${encodeURIComponent(nodeId)}/config/${currentConfigType}`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify(formData)
+                });
+                const data = await response.json();
+
+                if (data.success) {
+                    showAlert('success', `${currentConfigType} configuration saved successfully!`);
+                    showCommandResponse(JSON.stringify({saved: formData, message: data.message}, null, 2));
+                } else {
+                    showAlert('danger', `Failed to save: ${data.error}`);
+                }
+            } catch (error) {
+                showAlert('danger', `Error: ${error.message}`);
+            }
+        }
+    };
+
+    // Save channel
+    async function saveChannel() {
+        const nodeId = document.getElementById('targetNodeInput').value.trim();
+        const channelIndex = parseInt(document.getElementById('channel_index').value);
+
+        const channelData = {
+            role: parseInt(document.getElementById('channel_role').value),
+            name: document.getElementById('channel_name').value,
+            psk: document.getElementById('channel_psk').value,
+            position_precision: parseInt(document.getElementById('channel_position_precision').value) || 0
+        };
+
+        showAlert('info', 'Saving channel configuration...');
+
+        try {
+            const response = await fetch(`/api/admin/node/${encodeURIComponent(nodeId)}/channel/${channelIndex}`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify(channelData)
+            });
+            const data = await response.json();
+
+            if (data.success) {
+                showAlert('success', `Channel ${channelIndex} saved successfully!`);
+                showCommandResponse(JSON.stringify({saved: channelData, message: data.message}, null, 2));
+            } else {
+                showAlert('danger', `Failed to save channel: ${data.error}`);
+            }
+        } catch (error) {
+            showAlert('danger', `Error: ${error.message}`);
         }
     }
 

@@ -418,6 +418,141 @@ class TCPPublisher:
             want_response=True,
         )
 
+    def send_set_config(
+        self,
+        target_node_id: int,
+        config_type: str,
+        config_data: dict,
+    ) -> int | None:
+        """
+        Set configuration on a target node.
+
+        Args:
+            target_node_id: The target node ID
+            config_type: The config type (device, position, etc.)
+            config_data: Dictionary of config values to set
+
+        Returns:
+            Packet ID if sent successfully
+        """
+        from meshtastic import config_pb2
+
+        admin_msg = admin_pb2.AdminMessage()
+
+        # Build the config protobuf based on type
+        config = config_pb2.Config()
+
+        if config_type == "device":
+            for key, value in config_data.items():
+                if hasattr(config.device, key):
+                    setattr(config.device, key, value)
+            admin_msg.set_config.CopyFrom(config)
+
+        elif config_type == "position":
+            for key, value in config_data.items():
+                # Map gps_enabled to gps_mode
+                if key == "gps_enabled":
+                    config.position.gps_mode = value
+                elif hasattr(config.position, key):
+                    setattr(config.position, key, value)
+            admin_msg.set_config.CopyFrom(config)
+
+        elif config_type == "power":
+            for key, value in config_data.items():
+                if hasattr(config.power, key):
+                    setattr(config.power, key, value)
+            admin_msg.set_config.CopyFrom(config)
+
+        elif config_type == "network":
+            for key, value in config_data.items():
+                if hasattr(config.network, key):
+                    setattr(config.network, key, value)
+            admin_msg.set_config.CopyFrom(config)
+
+        elif config_type == "display":
+            for key, value in config_data.items():
+                if hasattr(config.display, key):
+                    setattr(config.display, key, value)
+            admin_msg.set_config.CopyFrom(config)
+
+        elif config_type == "lora":
+            for key, value in config_data.items():
+                if hasattr(config.lora, key):
+                    setattr(config.lora, key, value)
+            admin_msg.set_config.CopyFrom(config)
+
+        elif config_type == "bluetooth":
+            for key, value in config_data.items():
+                if hasattr(config.bluetooth, key):
+                    setattr(config.bluetooth, key, value)
+            admin_msg.set_config.CopyFrom(config)
+
+        else:
+            logger.error(f"Unknown config type: {config_type}")
+            return None
+
+        logger.info(f"Sending set_config for {config_type} to !{target_node_id:08x}")
+
+        return self.send_admin_message(
+            target_node_id=target_node_id,
+            admin_message=admin_msg,
+            want_response=True,
+        )
+
+    def send_set_channel(
+        self,
+        target_node_id: int,
+        channel_index: int,
+        channel_data: dict,
+    ) -> int | None:
+        """
+        Set channel configuration on a target node.
+
+        Args:
+            target_node_id: The target node ID
+            channel_index: The channel index (0-7)
+            channel_data: Dictionary of channel settings
+
+        Returns:
+            Packet ID if sent successfully
+        """
+        from meshtastic import channel_pb2
+
+        admin_msg = admin_pb2.AdminMessage()
+
+        channel = channel_pb2.Channel()
+        channel.index = channel_index
+
+        # Set channel role
+        if "role" in channel_data:
+            channel.role = channel_data["role"]
+
+        # Set channel settings
+        if "name" in channel_data:
+            channel.settings.name = channel_data["name"]
+
+        if "psk" in channel_data:
+            psk = channel_data["psk"]
+            if isinstance(psk, str):
+                channel.settings.psk = bytes.fromhex(psk)
+            elif isinstance(psk, bytes):
+                channel.settings.psk = psk
+
+        if "position_precision" in channel_data:
+            channel.settings.module_settings.position_precision = channel_data[
+                "position_precision"
+            ]
+
+        admin_msg.set_channel.CopyFrom(channel)
+
+        logger.info(f"Sending set_channel {channel_index} to !{target_node_id:08x}")
+
+        return self.send_admin_message(
+            target_node_id=target_node_id,
+            admin_message=admin_msg,
+            want_response=True,
+        )
+
     def send_reboot(
         self,
         target_node_id: int,
