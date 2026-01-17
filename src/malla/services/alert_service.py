@@ -396,13 +396,16 @@ class AlertService:
                     # No active alert to resolve
                     return False
 
+                alert_id = active_alert["id"]
+
+                # Update by ID to avoid any constraint issues
                 cursor.execute(
                     """
                     UPDATE alerts
                     SET resolved = 1, resolved_at = ?
-                    WHERE alert_type = ? AND COALESCE(node_id, -1) = COALESCE(?, -1) AND resolved = 0
+                    WHERE id = ?
                 """,
-                    (time.time(), alert_type.value, node_id),
+                    (time.time(), alert_id),
                 )
 
                 success = cursor.rowcount > 0
@@ -410,7 +413,7 @@ class AlertService:
 
                 if success:
                     logger.info(
-                        f"Alert resolved: {alert_type.value} for node {node_id}"
+                        f"Alert resolved: {alert_type.value} for node {node_id} (id={alert_id})"
                     )
                 return success
             finally:
