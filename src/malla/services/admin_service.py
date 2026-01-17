@@ -11,7 +11,7 @@ from dataclasses import dataclass
 from enum import Enum
 from typing import Any, Protocol
 
-from meshtastic import config_pb2
+from meshtastic import config_pb2, mesh_pb2
 
 from ..config import get_config
 from ..database.admin_repository import AdminRepository
@@ -20,6 +20,92 @@ from .mqtt_publisher import get_mqtt_publisher
 from .tcp_publisher import get_tcp_publisher
 
 logger = logging.getLogger(__name__)
+
+
+def get_hardware_model_name(hw_model_value: int | None) -> str | None:
+    """Convert hardware model enum value to human-readable name."""
+    if hw_model_value is None:
+        return None
+
+    try:
+        # Get the enum name from the value - cast to the enum type
+        hw_enum = mesh_pb2.HardwareModel.ValueType(hw_model_value)
+        enum_name = mesh_pb2.HardwareModel.Name(hw_enum)
+
+        # Map to friendly display names
+        display_name_map: dict[str, str | None] = {
+            "UNSET": None,
+            "TLORA_V2": "T-LoRa V2",
+            "TLORA_V1": "T-LoRa V1",
+            "TLORA_V2_1_1P6": "T-LoRa V2.1.1.6",
+            "TLORA_V2_1_1P8": "T-LoRa V2.1.1.8",
+            "TLORA_T3_S3": "T-LoRa T3 S3",
+            "TBEAM": "T-Beam",
+            "TBEAM_V0P7": "T-Beam V0.7",
+            "T_ECHO": "T-Echo",
+            "T_DECK": "T-Deck",
+            "T_WATCH_S3": "T-Watch S3",
+            "HELTEC_V1": "Heltec V1",
+            "HELTEC_V2_0": "Heltec V2.0",
+            "HELTEC_V2_1": "Heltec V2.1",
+            "HELTEC_V3": "Heltec V3",
+            "HELTEC_WSL_V3": "Heltec WSL V3",
+            "HELTEC_WIRELESS_PAPER": "Heltec Wireless Paper",
+            "HELTEC_WIRELESS_TRACKER": "Heltec Wireless Tracker",
+            "HELTEC_MESH_NODE_T114": "Heltec Mesh Node T114",
+            "HELTEC_CAPSULE_SENSOR_V3": "Heltec Capsule Sensor V3",
+            "HELTEC_VISION_MASTER_T190": "Heltec Vision Master T190",
+            "HELTEC_VISION_MASTER_E213": "Heltec Vision Master E213",
+            "HELTEC_VISION_MASTER_E290": "Heltec Vision Master E290",
+            "HELTEC_MESH_POCKET": "Heltec Mesh Pocket",
+            "RAK4631": "RAK4631",
+            "RAK11200": "RAK11200",
+            "RAK11310": "RAK11310",
+            "RAK2560": "RAK2560",
+            "LILYGO_TBEAM_S3_CORE": "LilyGO T-Beam S3 Core",
+            "STATION_G1": "Station G1",
+            "STATION_G2": "Station G2",
+            "LORA_TYPE": "LoRa Type",
+            "WIPHONE": "WiPhone",
+            "WIO_WM1110": "Wio WM1110",
+            "NANO_G1": "Nano G1",
+            "NANO_G1_EXPLORER": "Nano G1 Explorer",
+            "NANO_G2_ULTRA": "Nano G2 Ultra",
+            "NRF52_PROMICRO_DIY": "nRF52 Pro Micro DIY",
+            "NRF52840_PCA10059": "nRF52840 PCA10059",
+            "NRF52840DK": "nRF52840 DK",
+            "RPI_PICO": "Raspberry Pi Pico",
+            "RPI_PICO2": "Raspberry Pi Pico 2",
+            "SEEED_XIAO_S3": "Seeed XIAO S3",
+            "M5STACK": "M5Stack",
+            "M5STACK_COREINK": "M5Stack CoreInk",
+            "M5STACK_CORES3": "M5Stack CoreS3",
+            "PORTDUINO": "Portduino",
+            "SENSECAP_INDICATOR": "SenseCAP Indicator",
+            "TRACKER_T1000_E": "Tracker T1000-E",
+            "CANARYONE": "CanaryOne",
+            "RP2040_LORA": "RP2040 LoRa",
+            "PPR": "PPR",
+            "RADIOMASTER_900_BANDIT": "RadioMaster 900 Bandit",
+            "RADIOMASTER_900_BANDIT_NANO": "RadioMaster 900 Bandit Nano",
+            "PRIVATE_HW": "Private Hardware",
+            "DIY_V1": "DIY V1",
+            "XIAO_NRF52_KIT": "XIAO nRF52 Kit",
+            "WISMESH_TAP": "WisMesh TAP",
+            "THINKNODE_M1": "ThinkNode M1",
+            "THINKNODE_M2": "ThinkNode M2",
+            "CHATTER_2": "Chatter 2",
+            "PICOMPUTER_S3": "PiComputer S3",
+        }
+
+        if enum_name in display_name_map:
+            return display_name_map[enum_name]
+
+        # Fallback: convert enum name to title case
+        return enum_name.replace("_", " ").title()
+    except ValueError:
+        # Unknown enum value, return as-is
+        return str(hw_model_value)
 
 
 class AdminConnectionType(Enum):
@@ -498,6 +584,7 @@ class AdminService:
             firmware_version = None
             device_metadata = None
             hw_model = None
+            hw_model_name = None
             role = None
             has_wifi = None
             has_bluetooth = None
@@ -510,6 +597,7 @@ class AdminService:
                         meta = admin_msg.get_device_metadata_response
                         firmware_version = meta.firmware_version
                         hw_model = meta.hw_model
+                        hw_model_name = get_hardware_model_name(hw_model)
                         role = meta.role
                         has_wifi = meta.hasWifi
                         has_bluetooth = meta.hasBluetooth
@@ -517,7 +605,7 @@ class AdminService:
                         device_metadata = str(meta)
                         logger.info(
                             f"Got device metadata from node {target_node_id}: "
-                            f"firmware={firmware_version}, hw_model={hw_model}"
+                            f"firmware={firmware_version}, hw_model={hw_model_name}"
                         )
                 except Exception as e:
                     logger.warning(f"Failed to extract device metadata: {e}")
@@ -537,7 +625,7 @@ class AdminService:
                     {
                         "from_node": response.get("from_node"),
                         "firmware_version": firmware_version,
-                        "hw_model": hw_model,
+                        "hw_model": hw_model_name,
                         "role": role,
                     }
                 ),
@@ -550,7 +638,7 @@ class AdminService:
                     "from_node": response.get("from_node"),
                     "administrable": True,
                     "firmware_version": firmware_version,
-                    "hw_model": hw_model,
+                    "hw_model": hw_model_name,
                     "role": role,
                     "has_wifi": has_wifi,
                     "has_bluetooth": has_bluetooth,
