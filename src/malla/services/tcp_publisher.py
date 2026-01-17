@@ -185,6 +185,31 @@ class TCPPublisher:
                 from_node = packet.get("fromId") or packet.get("from")
                 logger.info(f"Received admin response from {from_node}")
 
+                # Parse the admin message from the payload
+                admin_message = None
+                payload = decoded.get("payload")
+                if payload:
+                    try:
+                        admin_message = admin_pb2.AdminMessage()
+                        if isinstance(payload, bytes):
+                            admin_message.ParseFromString(payload)
+                        else:
+                            # payload might already be decoded by meshtastic lib
+                            admin_message = decoded.get("admin")
+                        logger.debug(f"Parsed admin message: {admin_message}")
+                    except Exception as e:
+                        logger.warning(f"Failed to parse admin message: {e}")
+                        # Try to get pre-parsed admin message
+                        admin_message = decoded.get("admin")
+
+                response_data = {
+                    "packet": packet,
+                    "received_at": time.time(),
+                    "from_node": from_node,
+                    "admin_message": admin_message,
+                    "decoded": decoded,
+                }
+
                 # Signal any waiting requests
                 # The meshtastic library uses 'requestId' for response correlation
                 request_id = packet.get("requestId")
@@ -192,21 +217,12 @@ class TCPPublisher:
                     with self._response_lock:
                         # Store the response for any matching pending request
                         if request_id in self._pending_responses:
-                            self._pending_responses[request_id] = {
-                                "packet": packet,
-                                "received_at": time.time(),
-                                "from_node": from_node,
-                            }
+                            self._pending_responses[request_id] = response_data
                             if request_id in self._response_events:
                                 self._response_events[request_id].set()
 
-                # Also check for destination-based matching (for our random packet IDs)
                 # Store last admin response for general use
-                self._last_admin_response = {
-                    "packet": packet,
-                    "from_node": from_node,
-                    "received_at": time.time(),
-                }
+                self._last_admin_response = response_data
                 self._admin_response_event.set()
 
         except Exception as e:
