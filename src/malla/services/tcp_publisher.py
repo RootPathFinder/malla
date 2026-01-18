@@ -67,17 +67,46 @@ class TCPPublisher:
         self._last_health_check_time: float = 0
         self._health_check_timeout: float = 30.0  # seconds
 
+        # Keepalive thread
+        self._keepalive_thread: threading.Thread | None = None
+        self._keepalive_stop_event = threading.Event()
+        self._keepalive_interval: float = 30.0  # Send heartbeat every 30 seconds
+        self._missed_heartbeats: int = 0
+        self._max_missed_heartbeats: int = 3  # Disconnect after 3 missed heartbeats
+
     @property
     def is_connected(self) -> bool:
         """Check if connected to the node."""
-        return self._connected and self._interface is not None
+        if not self._connected or self._interface is None:
+            return False
 
-    def check_connection_health(self) -> dict[str, Any]:
+        # Also check the interface's internal connection state
+        try:
+            # The meshtastic library tracks connection state internally
+            if hasattr(self._interface, "_connected"):
+                interface_connected = getattr(self._interface, "_connected", None)
+                if interface_connected is not None and hasattr(
+                    interface_connected, "is_set"
+                ):
+                    # It's a threading.Event
+                    return interface_connected.is_set()  # type: ignore[union-attr]
+                return bool(interface_connected)
+        except Exception:
+            pass
+
+        return self._connected
+
+    def check_connection_health(self, send_heartbeat: bool = False) -> dict[str, Any]:
         """
         Perform a health check on the TCP connection.
 
-        This verifies the connection is actually alive by checking if
-        we can still communicate with the interface.
+        This verifies the connection is actually alive by checking the interface
+        state and optionally sending a heartbeat to verify communication.
+
+        Args:
+            send_heartbeat: If True, send a heartbeat packet to verify the
+                           connection is truly alive. This is more thorough but
+                           takes slightly longer.
 
         Returns:
             Dictionary with health status info
@@ -90,12 +119,29 @@ class TCPPublisher:
             }
 
         try:
-            # Try to access the node info - this will fail if connection is dead
+            # Check 1: Interface's internal connection state
+            interface_connected = True
+            if hasattr(self._interface, "_connected"):
+                conn_state = getattr(self._interface, "_connected", None)
+                if conn_state is not None and hasattr(conn_state, "is_set"):
+                    interface_connected = conn_state.is_set()  # type: ignore[union-attr]
+                else:
+                    interface_connected = bool(conn_state)
+
+            if not interface_connected:
+                self._connected = False
+                return {
+                    "healthy": False,
+                    "connected": False,
+                    "reason": "TCP socket disconnected",
+                    "suggestion": "The connection was lost. Click 'Reconnect' to restore it.",
+                }
+
+            # Check 2: Verify we have node info (indicates successful initial handshake)
             my_info = self._interface.myInfo
             local_node = self._interface.localNode
 
             if my_info is None and local_node is None:
-                # Connection is stale - we have an interface but it's not working
                 return {
                     "healthy": False,
                     "connected": True,
@@ -103,8 +149,29 @@ class TCPPublisher:
                     "suggestion": "Try disconnecting and reconnecting",
                 }
 
+            # Check 3: Optionally send a heartbeat to verify the connection is truly alive
+            if send_heartbeat:
+                try:
+                    self._interface.sendHeartbeat()
+                    logger.debug("Heartbeat sent successfully")
+                except Exception as e:
+                    logger.warning(f"Heartbeat failed: {e}")
+                    return {
+                        "healthy": False,
+                        "connected": True,
+                        "reason": f"Heartbeat failed: {str(e)}",
+                        "suggestion": "Connection may be stale - try reconnecting",
+                    }
+
             # Update last activity time
             self._last_health_check_time = time.time()
+
+            # Calculate time since last activity
+            time_since_activity = (
+                time.time() - self._last_activity_time
+                if self._last_activity_time > 0
+                else None
+            )
 
             return {
                 "healthy": True,
@@ -112,6 +179,13 @@ class TCPPublisher:
                 "node_id": getattr(my_info, "my_node_num", None) if my_info else None,
                 "last_activity": self._last_activity_time,
                 "last_health_check": self._last_health_check_time,
+                "keepalive_active": (
+                    self._keepalive_thread is not None
+                    and self._keepalive_thread.is_alive()
+                ),
+                "keepalive_interval": self._keepalive_interval,
+                "missed_heartbeats": self._missed_heartbeats,
+                "seconds_since_activity": time_since_activity,
             }
 
         except Exception as e:
@@ -122,6 +196,104 @@ class TCPPublisher:
                 "reason": f"Health check failed: {str(e)}",
                 "suggestion": "Connection may be stale - try reconnecting",
             }
+
+    def ensure_healthy_connection(self) -> bool:
+        """
+        Ensure the TCP connection is healthy before performing operations.
+
+        This performs a thorough health check and attempts to reconnect if needed.
+
+        Returns:
+            True if connection is healthy, False otherwise
+        """
+        # First, quick check
+        if not self.is_connected:
+            logger.warning("TCP connection not established, attempting to connect...")
+            if not self.connect():
+                return False
+
+        # Thorough health check with heartbeat
+        health = self.check_connection_health(send_heartbeat=True)
+
+        if not health.get("healthy", False):
+            logger.warning(f"TCP connection unhealthy: {health.get('reason')}")
+
+            # Attempt automatic reconnection
+            logger.info("Attempting automatic reconnection...")
+            if self.reconnect():
+                # Verify the new connection
+                health = self.check_connection_health(send_heartbeat=True)
+                if health.get("healthy", False):
+                    logger.info("Reconnection successful")
+                    return True
+
+            logger.error("Failed to restore TCP connection")
+            return False
+
+        return True
+
+    def _start_keepalive(self) -> None:
+        """Start the keepalive background thread."""
+        if self._keepalive_thread is not None and self._keepalive_thread.is_alive():
+            return  # Already running
+
+        self._keepalive_stop_event.clear()
+        self._missed_heartbeats = 0
+        self._keepalive_thread = threading.Thread(
+            target=self._keepalive_loop,
+            name="TCPKeepalive",
+            daemon=True,
+        )
+        self._keepalive_thread.start()
+        logger.info(f"TCP keepalive started (interval: {self._keepalive_interval}s)")
+
+    def _stop_keepalive(self) -> None:
+        """Stop the keepalive background thread."""
+        if self._keepalive_thread is None:
+            return
+
+        self._keepalive_stop_event.set()
+        self._keepalive_thread.join(timeout=2.0)
+        self._keepalive_thread = None
+        logger.debug("TCP keepalive stopped")
+
+    def _keepalive_loop(self) -> None:
+        """Background loop that sends periodic heartbeats to keep connection alive."""
+        logger.debug("Keepalive loop started")
+
+        while not self._keepalive_stop_event.is_set():
+            # Wait for the interval
+            if self._keepalive_stop_event.wait(timeout=self._keepalive_interval):
+                break  # Stop event was set
+
+            # Skip if not connected
+            if not self._connected or self._interface is None:
+                continue
+
+            try:
+                # Send heartbeat to verify connection is alive
+                self._interface.sendHeartbeat()
+                self._missed_heartbeats = 0
+                self._last_activity_time = time.time()
+                logger.debug("TCP keepalive heartbeat sent successfully")
+
+            except Exception as e:
+                self._missed_heartbeats += 1
+                logger.warning(
+                    f"TCP keepalive heartbeat failed ({self._missed_heartbeats}/"
+                    f"{self._max_missed_heartbeats}): {e}"
+                )
+
+                if self._missed_heartbeats >= self._max_missed_heartbeats:
+                    logger.error(
+                        f"TCP connection appears dead after {self._missed_heartbeats} "
+                        "missed heartbeats, marking as disconnected"
+                    )
+                    self._connected = False
+                    # Don't try to close the interface here, it may hang
+                    # Just mark as disconnected so next operation triggers reconnect
+
+        logger.debug("Keepalive loop exited")
 
     def reconnect(self) -> bool:
         """
@@ -201,6 +373,7 @@ class TCPPublisher:
                 pub.subscribe(self._on_receive, "meshtastic.receive")
 
                 self._connected = True
+                self._last_activity_time = time.time()
                 logger.info(
                     f"Connected to Meshtastic node at {self.tcp_host}:{self.tcp_port}"
                 )
@@ -216,6 +389,9 @@ class TCPPublisher:
                     # Also subscribe to all received packets for debugging
                     pub.subscribe(self._on_receive, "meshtastic.receive.admin")
 
+                # Start keepalive thread to detect stale connections
+                self._start_keepalive()
+
                 return True
 
             except Exception as e:
@@ -226,6 +402,9 @@ class TCPPublisher:
 
     def disconnect(self) -> None:
         """Disconnect from the Meshtastic node."""
+        # Stop keepalive thread first (outside of lock to avoid deadlock)
+        self._stop_keepalive()
+
         with self._connect_lock:
             if self._interface is not None:
                 try:
@@ -430,6 +609,7 @@ class TCPPublisher:
         target_node_id: int,
         admin_message: admin_pb2.AdminMessage,
         want_response: bool = True,
+        verify_connection: bool = True,
     ) -> int | None:
         """
         Send an admin message to a target node.
@@ -438,11 +618,19 @@ class TCPPublisher:
             target_node_id: The destination node ID
             admin_message: The admin message protobuf
             want_response: Whether to wait for a response
+            verify_connection: Whether to verify connection health before sending
 
         Returns:
             Packet ID if sent successfully, None otherwise
         """
-        if not self.connect():
+        # Verify connection is healthy before attempting to send
+        if verify_connection:
+            if not self.ensure_healthy_connection():
+                logger.error(
+                    "Cannot send admin message: connection unhealthy and reconnection failed"
+                )
+                return None
+        elif not self.connect():
             logger.error("Cannot send admin message: not connected to node")
             return None
 
@@ -473,6 +661,9 @@ class TCPPublisher:
                 f"Sent admin message to !{target_node_id:08x}, packet_id={packet_id}"
             )
 
+            # Update activity time on successful send
+            self._last_activity_time = time.time()
+
             # Initialize pending response tracking
             if want_response:
                 with self._response_lock:
@@ -482,6 +673,10 @@ class TCPPublisher:
 
         except Exception as e:
             logger.error(f"Failed to send admin message: {e}")
+            # Check if this was a connection error
+            if "connection" in str(e).lower() or "socket" in str(e).lower():
+                logger.warning("Connection error detected, marking as disconnected")
+                self._connected = False
             return None
 
     def send_get_device_metadata(

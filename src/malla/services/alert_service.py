@@ -699,25 +699,23 @@ class AlertService:
             conn = get_db_connection()
             cursor = conn.cursor()
 
-            # Get latest battery telemetry for each node
+            # Get latest valid battery telemetry for each node
+            # We fetch battery and voltage separately to handle cases where they are sent in different packets
+            # or where one value is 0/invalid
             cursor.execute(
                 """
                 SELECT
-                    t.node_id,
-                    t.battery_level,
-                    t.voltage,
-                    t.timestamp
-                FROM telemetry_data t
-                INNER JOIN (
-                    SELECT node_id, MAX(timestamp) as max_ts
-                    FROM telemetry_data
-                    WHERE battery_level IS NOT NULL OR voltage IS NOT NULL
-                    GROUP BY node_id
-                ) latest ON t.node_id = latest.node_id AND t.timestamp = latest.max_ts
-                WHERE t.timestamp > ?
-            """,
-                (time.time() - 86400,),
-            )  # Last 24 hours
+                    n.node_id,
+                    (SELECT t.battery_level FROM telemetry_data t
+                     WHERE t.node_id = n.node_id AND t.battery_level > 0
+                     ORDER BY t.timestamp DESC LIMIT 1) as battery_level,
+                    (SELECT t.voltage FROM telemetry_data t
+                     WHERE t.node_id = n.node_id AND t.voltage > 0
+                     ORDER BY t.timestamp DESC LIMIT 1) as voltage
+                FROM node_info n
+                WHERE COALESCE(n.archived, 0) = 0
+            """
+            )
 
             rows = cursor.fetchall()
 
@@ -737,7 +735,7 @@ class AlertService:
                 voltage = row["voltage"]
 
                 # Check battery percentage
-                if battery_level is not None:
+                if battery_level is not None and battery_level > 0:
                     if battery_level <= cls._thresholds.battery_critical_percent:
                         cls.add_alert(
                             Alert(
@@ -770,7 +768,7 @@ class AlertService:
                         alerts_generated += 1
 
                 # Check voltage
-                if voltage is not None and battery_level is None:
+                if voltage is not None and voltage > 0 and battery_level is None:
                     if voltage <= cls._thresholds.battery_critical_voltage:
                         cls.add_alert(
                             Alert(
@@ -1751,25 +1749,44 @@ class AlertService:
                 )
 
             # 2. Check for low battery nodes
+            # Use correlated subqueries to get latest VALID battery/voltage
             cursor.execute(
                 """
-                SELECT n.node_id,
-                       COALESCE(n.long_name, n.short_name, printf('!%08x', n.node_id)) as name,
-                       t.battery_level,
-                       t.voltage
+                SELECT
+                    n.node_id,
+                    COALESCE(n.long_name, n.short_name, printf('!%08x', n.node_id)) as name,
+                    (SELECT t.battery_level FROM telemetry_data t
+                     WHERE t.node_id = n.node_id AND t.battery_level > 0
+                     ORDER BY t.timestamp DESC LIMIT 1) as battery_level,
+                    (SELECT t.voltage FROM telemetry_data t
+                     WHERE t.node_id = n.node_id AND t.voltage > 0
+                     ORDER BY t.timestamp DESC LIMIT 1) as voltage
                 FROM node_info n
-                INNER JOIN telemetry_data t ON t.node_id = n.node_id
                 WHERE COALESCE(n.archived, 0) = 0
-                  AND t.timestamp = (SELECT MAX(t2.timestamp) FROM telemetry_data t2 WHERE t2.node_id = n.node_id)
-                  AND (t.battery_level < 30 OR t.voltage < 3.4)
                 """
             )
 
-            low_battery_nodes = cursor.fetchall()
+            all_nodes_battery = cursor.fetchall()
+            low_battery_nodes = []
+
+            for n in all_nodes_battery:
+                batt = n["battery_level"]
+                volt = n["voltage"]
+                is_low = False
+
+                if batt is not None and batt < 30:
+                    is_low = True
+                elif volt is not None and volt < 3.4:
+                    is_low = True
+
+                if is_low:
+                    low_battery_nodes.append(n)
+
             critical_battery = [
                 n
                 for n in low_battery_nodes
-                if (n["battery_level"] or 100) < 15 or (n["voltage"] or 5) < 3.2
+                if (n["battery_level"] is not None and n["battery_level"] < 15)
+                or (n["voltage"] is not None and n["voltage"] < 3.2)
             ]
             warning_battery = [
                 n for n in low_battery_nodes if n not in critical_battery
@@ -2052,6 +2069,7 @@ class AlertService:
             }
 
             # Get all active nodes with their latest telemetry
+            # Filter for valid (>0) values to avoid 0.00V issues
             cursor.execute(
                 """
                 SELECT
@@ -2060,9 +2078,11 @@ class AlertService:
                     n.hex_id,
                     n.role,
                     (SELECT t.battery_level FROM telemetry_data t
-                     WHERE t.node_id = n.node_id ORDER BY t.timestamp DESC LIMIT 1) as battery_level,
+                     WHERE t.node_id = n.node_id AND t.battery_level > 0
+                     ORDER BY t.timestamp DESC LIMIT 1) as battery_level,
                     (SELECT t.voltage FROM telemetry_data t
-                     WHERE t.node_id = n.node_id ORDER BY t.timestamp DESC LIMIT 1) as voltage
+                     WHERE t.node_id = n.node_id AND t.voltage > 0
+                     ORDER BY t.timestamp DESC LIMIT 1) as voltage
                 FROM node_info n
                 WHERE COALESCE(n.archived, 0) = 0
                 """
@@ -2250,16 +2270,25 @@ class AlertService:
                     solar_nodes += count
 
             # Battery stats
+            # Use subquery to get latest valid battery level for each node
             cursor.execute(
                 """
                 SELECT
-                    AVG(t.battery_level) as avg_battery,
-                    COUNT(CASE WHEN t.battery_level < 30 THEN 1 END) as low_battery
+                    AVG(latest_batt.battery_level) as avg_battery,
+                    COUNT(CASE WHEN latest_batt.battery_level < 30 THEN 1 END) as low_battery
                 FROM node_info n
-                INNER JOIN telemetry_data t ON t.node_id = n.node_id
+                LEFT JOIN (
+                    SELECT node_id, battery_level
+                    FROM telemetry_data t1
+                    WHERE battery_level > 0
+                    AND timestamp = (
+                        SELECT MAX(timestamp)
+                        FROM telemetry_data t2
+                        WHERE t2.node_id = t1.node_id AND t2.battery_level > 0
+                    )
+                ) latest_batt ON n.node_id = latest_batt.node_id
                 WHERE COALESCE(n.archived, 0) = 0
-                  AND t.timestamp = (SELECT MAX(t2.timestamp) FROM telemetry_data t2 WHERE t2.node_id = n.node_id)
-                  AND t.battery_level IS NOT NULL
+                  AND latest_batt.battery_level IS NOT NULL
                 """
             )
             battery_stats = cursor.fetchone()

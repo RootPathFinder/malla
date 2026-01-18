@@ -244,10 +244,16 @@ def api_tcp_disconnect():
 
 @admin_bp.route("/api/admin/tcp/health")
 def api_tcp_health():
-    """Check the health of the TCP connection."""
+    """Check the health of the TCP connection.
+
+    Query parameters:
+        thorough: If 'true', sends a heartbeat to verify connection is truly alive
+    """
     try:
         tcp_publisher = get_tcp_publisher()
-        health = tcp_publisher.check_connection_health()
+        # Use thorough check (with heartbeat) if requested
+        send_heartbeat = request.args.get("thorough", "false").lower() == "true"
+        health = tcp_publisher.check_connection_health(send_heartbeat=send_heartbeat)
         return jsonify(health)
     except Exception as e:
         logger.error(f"Error checking TCP health: {e}")
