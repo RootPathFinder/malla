@@ -4,9 +4,10 @@ Admin routes for remote node administration.
 Provides REST API endpoints and page routes for the Mesh Admin functionality.
 """
 
+import json
 import logging
 
-from flask import Blueprint, jsonify, render_template, request
+from flask import Blueprint, Response, jsonify, render_template, request
 
 from ..config import get_config
 from ..database.admin_repository import AdminRepository
@@ -1097,6 +1098,255 @@ def api_extract_template_from_node():
     except Exception as e:
         logger.error(f"Error extracting template from node: {e}")
         return jsonify({"error": str(e)}), 500
+
+
+@admin_bp.route("/api/admin/templates/extract-from-node/stream")
+def api_extract_template_from_node_stream():
+    """
+    SSE endpoint to extract configuration from a node with real-time progress updates.
+
+    Returns a Server-Sent Events stream with progress messages during config extraction.
+    Particularly useful for "channels" extraction which fetches multiple channels.
+    """
+    node_id_str = request.args.get("node_id")
+    config_type = request.args.get("config_type")
+    channel_index = request.args.get("channel_index", "0")
+
+    def generate():
+        def send_event(data: dict) -> str:
+            return f"data: {json.dumps(data)}\n\n"
+
+        # Validate inputs
+        if not node_id_str:
+            yield send_event(
+                {"complete": True, "success": False, "error": "node_id is required"}
+            )
+            return
+        if not config_type:
+            yield send_event(
+                {"complete": True, "success": False, "error": "config_type is required"}
+            )
+            return
+
+        # Convert node ID
+        try:
+            node_id = convert_node_id(node_id_str)
+        except (ValueError, TypeError):
+            yield send_event(
+                {
+                    "complete": True,
+                    "success": False,
+                    "error": f"Invalid node_id: {node_id_str}",
+                }
+            )
+            return
+
+        admin_service = get_admin_service()
+
+        try:
+            # Handle channel config separately
+            if config_type == "channel":
+                yield send_event(
+                    {
+                        "status": "Fetching channel configuration...",
+                        "progress": 10,
+                        "details": f"Channel index: {channel_index}",
+                    }
+                )
+
+                result = admin_service.get_channel(
+                    target_node_id=node_id,
+                    channel_index=int(channel_index),
+                )
+
+                yield send_event(
+                    {
+                        "status": "Processing response...",
+                        "progress": 80,
+                    }
+                )
+
+                if result.success:
+                    excluded_fields = TEMPLATE_EXCLUDED_FIELDS.get("channel", [])
+                    config_data = result.response
+                    if isinstance(config_data, dict):
+                        sanitized_config = {
+                            k: v
+                            for k, v in config_data.items()
+                            if k not in excluded_fields
+                        }
+                    else:
+                        sanitized_config = config_data
+
+                    yield send_event(
+                        {
+                            "complete": True,
+                            "success": True,
+                            "config_type": config_type,
+                            "config_data": sanitized_config,
+                            "excluded_fields": excluded_fields,
+                            "source_node_id": node_id,
+                            "attempts": result.attempts,
+                        }
+                    )
+                else:
+                    yield send_event(
+                        {
+                            "complete": True,
+                            "success": False,
+                            "error": result.error or "Failed to get channel config",
+                            "attempts": result.attempts,
+                        }
+                    )
+
+            elif config_type == "channels":
+                # Fetch all 8 channels with progress updates
+                all_channels = []
+                total_attempts = 0
+
+                for idx in range(8):
+                    progress = 10 + (idx * 10)  # 10-90% progress
+                    yield send_event(
+                        {
+                            "status": f"Fetching channel {idx}...",
+                            "progress": progress,
+                            "details": f"Channel {idx + 1} of 8",
+                        }
+                    )
+
+                    result = admin_service.get_channel(
+                        target_node_id=node_id,
+                        channel_index=idx,
+                    )
+                    total_attempts += result.attempts or 0
+
+                    if result.success and result.response:
+                        channel_data = result.response
+                        # Only include enabled channels (role != DISABLED)
+                        role = channel_data.get("role", 0)
+                        if role != 0:
+                            all_channels.append(channel_data)
+                            yield send_event(
+                                {
+                                    "status": f"Fetched channel {idx}",
+                                    "progress": progress + 5,
+                                    "details": f"Found active channel (role={role})",
+                                }
+                            )
+                        else:
+                            yield send_event(
+                                {
+                                    "status": f"Channel {idx} disabled, skipping",
+                                    "progress": progress + 5,
+                                    "details": "Channel is disabled",
+                                }
+                            )
+
+                yield send_event(
+                    {
+                        "complete": True,
+                        "success": True,
+                        "config_type": "channels",
+                        "config_data": {"channels": all_channels},
+                        "excluded_fields": [],
+                        "source_node_id": node_id,
+                        "attempts": total_attempts,
+                    }
+                )
+
+            else:
+                # Regular config type
+                config_type_map = {
+                    "device": ConfigType.DEVICE,
+                    "position": ConfigType.POSITION,
+                    "power": ConfigType.POWER,
+                    "network": ConfigType.NETWORK,
+                    "display": ConfigType.DISPLAY,
+                    "lora": ConfigType.LORA,
+                    "bluetooth": ConfigType.BLUETOOTH,
+                    "security": ConfigType.SECURITY,
+                }
+
+                if config_type not in config_type_map:
+                    yield send_event(
+                        {
+                            "complete": True,
+                            "success": False,
+                            "error": f"Invalid config_type: {config_type}",
+                        }
+                    )
+                    return
+
+                yield send_event(
+                    {
+                        "status": f"Fetching {config_type} configuration...",
+                        "progress": 20,
+                        "details": f"Sending request to node {node_id_str}",
+                    }
+                )
+
+                result = admin_service.get_config(
+                    target_node_id=node_id,
+                    config_type=config_type_map[config_type],
+                )
+
+                yield send_event(
+                    {
+                        "status": "Processing response...",
+                        "progress": 80,
+                    }
+                )
+
+                if result.success:
+                    raw_config = result.response
+                    if isinstance(raw_config, dict):
+                        config_data = raw_config.get(config_type, raw_config)
+                    else:
+                        config_data = raw_config
+
+                    excluded_fields = TEMPLATE_EXCLUDED_FIELDS.get(config_type, [])
+                    if isinstance(config_data, dict):
+                        sanitized_config = {
+                            k: v
+                            for k, v in config_data.items()
+                            if k not in excluded_fields
+                        }
+                    else:
+                        sanitized_config = config_data
+
+                    yield send_event(
+                        {
+                            "complete": True,
+                            "success": True,
+                            "config_type": config_type,
+                            "config_data": sanitized_config,
+                            "excluded_fields": excluded_fields,
+                            "source_node_id": node_id,
+                            "attempts": result.attempts,
+                        }
+                    )
+                else:
+                    yield send_event(
+                        {
+                            "complete": True,
+                            "success": False,
+                            "error": result.error or "Failed to get config from node",
+                            "attempts": result.attempts,
+                        }
+                    )
+
+        except Exception as e:
+            logger.error(f"Error in extract stream: {e}")
+            yield send_event({"complete": True, "success": False, "error": str(e)})
+
+    return Response(
+        generate(),
+        mimetype="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache",
+            "X-Accel-Buffering": "no",  # Disable nginx buffering
+        },
+    )
 
 
 @admin_bp.route("/api/admin/templates/<int:template_id>")

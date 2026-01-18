@@ -989,6 +989,25 @@
                     <button class="btn btn-primary" onclick="extractConfigFromNode()" id="extractConfigBtn">
                         <i class="bi bi-cloud-download"></i> Extract Configuration
                     </button>
+
+                    <!-- Real-time extraction progress -->
+                    <div id="extractionProgress" class="mt-3" style="display: none;">
+                        <div class="card bg-light">
+                            <div class="card-body py-2">
+                                <div class="d-flex align-items-center mb-2">
+                                    <span class="spinner-border spinner-border-sm text-primary me-2"></span>
+                                    <strong id="extractionStatus">Connecting to node...</strong>
+                                </div>
+                                <div class="progress" style="height: 8px;">
+                                    <div class="progress-bar progress-bar-striped progress-bar-animated"
+                                         role="progressbar"
+                                         id="extractionProgressBar"
+                                         style="width: 0%"></div>
+                                </div>
+                                <small class="text-muted mt-1 d-block" id="extractionDetails"></small>
+                            </div>
+                        </div>
+                    </div>
                 </div>
 
                 <!-- Step 2: Review and Name -->
@@ -3946,63 +3965,116 @@
         }
 
         const btn = document.getElementById('extractConfigBtn');
+        const progressDiv = document.getElementById('extractionProgress');
+        const statusEl = document.getElementById('extractionStatus');
+        const progressBar = document.getElementById('extractionProgressBar');
+        const detailsEl = document.getElementById('extractionDetails');
+
         btn.disabled = true;
-        btn.innerHTML = '<span class="spinner-border spinner-border-sm"></span> Extracting config (this may take up to 30s)...';
+        btn.innerHTML = '<span class="spinner-border spinner-border-sm"></span> Extracting...';
+        progressDiv.style.display = 'block';
+        statusEl.textContent = 'Connecting to node...';
+        progressBar.style.width = '0%';
+        detailsEl.textContent = '';
+
+        // Build the SSE URL with query parameters
+        const params = new URLSearchParams({
+            node_id: nodeId,
+            config_type: configType,
+            channel_index: channelIndex
+        });
+        const sseUrl = `/api/admin/templates/extract-from-node/stream?${params.toString()}`;
+
+        let eventSource = null;
+        let lastData = null;
 
         try {
-            const response = await fetch('/api/admin/templates/extract-from-node', {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({
-                    node_id: nodeId,
-                    config_type: configType,
-                    channel_index: parseInt(channelIndex),
-                }),
-            });
+            eventSource = new EventSource(sseUrl);
 
-            const data = await response.json();
+            eventSource.onmessage = function(event) {
+                try {
+                    const data = JSON.parse(event.data);
+                    lastData = data;
 
-            if (response.ok && data.success) {
-                // Store extracted data
-                extractedConfigType = configType;
-                extractedConfig = data.config_data;
+                    // Update progress display
+                    if (data.status) {
+                        statusEl.textContent = data.status;
+                    }
+                    if (data.progress !== undefined) {
+                        progressBar.style.width = data.progress + '%';
+                    }
+                    if (data.details) {
+                        detailsEl.textContent = data.details;
+                    }
 
-                // Show extracted node info
-                const nodeName = document.getElementById('extractSourceNode').selectedOptions[0].text;
-                document.getElementById('extractedFromNode').textContent = nodeName;
+                    // Handle completion
+                    if (data.complete) {
+                        eventSource.close();
+                        progressDiv.style.display = 'none';
 
-                // Show excluded fields warning if any
-                if (data.excluded_fields && data.excluded_fields.length > 0) {
-                    document.getElementById('excludedFieldsList').textContent = data.excluded_fields.join(', ');
-                    document.getElementById('excludedFieldsWarning').style.display = 'block';
-                } else {
-                    document.getElementById('excludedFieldsWarning').style.display = 'none';
+                        if (data.success) {
+                            // Store extracted data
+                            extractedConfigType = configType;
+                            extractedConfig = data.config_data;
+
+                            // Show extracted node info
+                            const nodeName = document.getElementById('extractSourceNode').selectedOptions[0].text;
+                            document.getElementById('extractedFromNode').textContent = nodeName;
+
+                            // Show excluded fields warning if any
+                            if (data.excluded_fields && data.excluded_fields.length > 0) {
+                                document.getElementById('excludedFieldsList').textContent = data.excluded_fields.join(', ');
+                                document.getElementById('excludedFieldsWarning').style.display = 'block';
+                            } else {
+                                document.getElementById('excludedFieldsWarning').style.display = 'none';
+                            }
+
+                            // Populate config preview
+                            document.getElementById('extractedConfigData').value = JSON.stringify(data.config_data, null, 2);
+
+                            // Suggest a template name
+                            const typeLabel = configType.charAt(0).toUpperCase() + configType.slice(1);
+                            document.getElementById('extractTemplateName').value = `${typeLabel} Config from ${nodeName.split(' (')[0]}`;
+
+                            // Switch to step 2
+                            document.getElementById('extractStep1').style.display = 'none';
+                            document.getElementById('extractStep2').style.display = 'block';
+                            document.getElementById('extractBackBtn').style.display = 'inline-block';
+                            document.getElementById('saveExtractedTemplateBtn').style.display = 'inline-block';
+                        } else {
+                            let errorMsg = data.error || 'Failed to extract configuration';
+                            if (data.attempts) {
+                                errorMsg += ` (after ${data.attempts} attempt(s))`;
+                            }
+                            showAlert('danger', errorMsg);
+                        }
+
+                        btn.disabled = false;
+                        btn.innerHTML = '<i class="bi bi-cloud-download"></i> Extract Configuration';
+                    }
+                } catch (e) {
+                    console.error('Error parsing SSE message:', e, event.data);
+                }
+            };
+
+            eventSource.onerror = function(err) {
+                console.error('SSE error:', err);
+                eventSource.close();
+                progressDiv.style.display = 'none';
+
+                // If we got a final response before the error, it may have succeeded
+                if (lastData && lastData.complete && lastData.success) {
+                    return; // Already handled
                 }
 
-                // Populate config preview
-                document.getElementById('extractedConfigData').value = JSON.stringify(data.config_data, null, 2);
-
-                // Suggest a template name
-                const typeLabel = configType.charAt(0).toUpperCase() + configType.slice(1);
-                document.getElementById('extractTemplateName').value = `${typeLabel} Config from ${nodeName.split(' (')[0]}`;
-
-                // Switch to step 2
-                document.getElementById('extractStep1').style.display = 'none';
-                document.getElementById('extractStep2').style.display = 'block';
-                document.getElementById('extractBackBtn').style.display = 'inline-block';
-                document.getElementById('saveExtractedTemplateBtn').style.display = 'inline-block';
-
-            } else {
-                let errorMsg = data.error || 'Failed to extract configuration';
-                if (data.attempts) {
-                    errorMsg += ` (after ${data.attempts} attempt(s))`;
-                }
-                showAlert('danger', errorMsg);
-            }
+                showAlert('danger', 'Connection error while extracting configuration. Please try again.');
+                btn.disabled = false;
+                btn.innerHTML = '<i class="bi bi-cloud-download"></i> Extract Configuration';
+            };
 
         } catch (error) {
+            progressDiv.style.display = 'none';
             showAlert('danger', `Error: ${error.message}`);
-        } finally {
             btn.disabled = false;
             btn.innerHTML = '<i class="bi bi-cloud-download"></i> Extract Configuration';
         }

@@ -398,3 +398,108 @@ class TestConfigTemplateSafetyValidation:
         """Test validating non-existent template returns 404."""
         response = client.post("/api/admin/templates/99999/validate")
         assert response.status_code == 404
+
+
+class TestExtractTemplateSSE:
+    """Test SSE streaming endpoint for config extraction."""
+
+    @pytest.mark.integration
+    @pytest.mark.api
+    def test_extract_stream_missing_node_id(self, client):
+        """Test SSE stream returns error when node_id is missing."""
+        response = client.get(
+            "/api/admin/templates/extract-from-node/stream",
+            query_string={"config_type": "lora"},
+        )
+        assert response.status_code == 200
+        assert response.content_type.startswith("text/event-stream")
+
+        # Read the SSE data
+        import json
+
+        data_lines = [
+            line
+            for line in response.get_data(as_text=True).split("\n")
+            if line.startswith("data:")
+        ]
+        assert len(data_lines) > 0
+
+        event_data = json.loads(data_lines[0].replace("data: ", ""))
+        assert event_data["complete"] is True
+        assert event_data["success"] is False
+        assert "node_id" in event_data["error"]
+
+    @pytest.mark.integration
+    @pytest.mark.api
+    def test_extract_stream_missing_config_type(self, client):
+        """Test SSE stream returns error when config_type is missing."""
+        response = client.get(
+            "/api/admin/templates/extract-from-node/stream",
+            query_string={"node_id": "!12345678"},
+        )
+        assert response.status_code == 200
+        assert response.content_type.startswith("text/event-stream")
+
+        import json
+
+        data_lines = [
+            line
+            for line in response.get_data(as_text=True).split("\n")
+            if line.startswith("data:")
+        ]
+        assert len(data_lines) > 0
+
+        event_data = json.loads(data_lines[0].replace("data: ", ""))
+        assert event_data["complete"] is True
+        assert event_data["success"] is False
+        assert "config_type" in event_data["error"]
+
+    @pytest.mark.integration
+    @pytest.mark.api
+    def test_extract_stream_invalid_node_id(self, client):
+        """Test SSE stream returns error for invalid node ID format."""
+        response = client.get(
+            "/api/admin/templates/extract-from-node/stream",
+            query_string={"node_id": "not-a-valid-id", "config_type": "lora"},
+        )
+        assert response.status_code == 200
+        assert response.content_type.startswith("text/event-stream")
+
+        import json
+
+        data_lines = [
+            line
+            for line in response.get_data(as_text=True).split("\n")
+            if line.startswith("data:")
+        ]
+        assert len(data_lines) > 0
+
+        event_data = json.loads(data_lines[0].replace("data: ", ""))
+        assert event_data["complete"] is True
+        assert event_data["success"] is False
+        assert "invalid" in event_data["error"].lower()
+
+    @pytest.mark.integration
+    @pytest.mark.api
+    def test_extract_stream_invalid_config_type(self, client):
+        """Test SSE stream returns error for invalid config type."""
+        response = client.get(
+            "/api/admin/templates/extract-from-node/stream",
+            query_string={"node_id": "!12345678", "config_type": "invalid_type"},
+        )
+        assert response.status_code == 200
+        assert response.content_type.startswith("text/event-stream")
+
+        import json
+
+        data_lines = [
+            line
+            for line in response.get_data(as_text=True).split("\n")
+            if line.startswith("data:")
+        ]
+        assert len(data_lines) > 0
+
+        event_data = json.loads(data_lines[0].replace("data: ", ""))
+        assert event_data["complete"] is True
+        assert event_data["success"] is False
+        assert "invalid" in event_data["error"].lower()
