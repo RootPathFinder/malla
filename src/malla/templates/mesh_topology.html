@@ -129,7 +129,8 @@
     <div class="row mb-4">
         <div class="col">
             <h1><i class="bi bi-diagram-3"></i> Mesh Topology</h1>
-            <p class="text-muted">Visualize mesh network connections and analyze neighbor stability</p>
+            <p class="text-muted mb-1">Visualize mesh network connections and analyze neighbor stability</p>
+            <small class="text-info"><i class="bi bi-info-circle"></i> All RF links are bidirectional. "Full data" means both nodes have reported SNR measurements; "Partial" means we're waiting for one node's report.</small>
         </div>
     </div>
 
@@ -180,20 +181,28 @@
             <div class="card stats-card excellent h-100">
                 <div class="card-body text-center">
                     <div class="h3 mb-0" id="statEdges">-</div>
-                    <small class="text-muted">Total Links</small>
+                    <small class="text-muted">RF Links</small>
                 </div>
             </div>
         </div>
         <div class="col-md-2">
             <div class="card stats-card good h-100">
                 <div class="card-body text-center">
-                    <div class="h3 mb-0" id="statBidirectional">-</div>
-                    <small class="text-muted">Bidirectional Links</small>
+                    <div class="h3 mb-0" id="statConfirmedBothWays">-</div>
+                    <small class="text-muted">Full Data (Both Sides)</small>
                 </div>
             </div>
         </div>
         <div class="col-md-2">
             <div class="card stats-card warning h-100">
+                <div class="card-body text-center">
+                    <div class="h3 mb-0" id="statPartialData">-</div>
+                    <small class="text-muted">Partial Data (One Side)</small>
+                </div>
+            </div>
+        </div>
+        <div class="col-md-2">
+            <div class="card stats-card h-100">
                 <div class="card-body text-center">
                     <div class="h3 mb-0" id="statAvgNeighbors">-</div>
                     <small class="text-muted">Avg Neighbors/Node</small>
@@ -205,14 +214,6 @@
                 <div class="card-body text-center">
                     <div class="h3 mb-0" id="statDensity">-</div>
                     <small class="text-muted">Mesh Density</small>
-                </div>
-            </div>
-        </div>
-        <div class="col-md-2">
-            <div class="card stats-card poor h-100">
-                <div class="card-body text-center">
-                    <div class="h3 mb-0" id="statUnidirectional">-</div>
-                    <small class="text-muted">One-way Links</small>
                 </div>
             </div>
         </div>
@@ -252,7 +253,7 @@
                                     <th data-sort="snr_b_to_a">SNR B→A <i class="bi bi-arrow-down-up sort-icon"></i></th>
                                     <th data-sort="avg_snr">Avg SNR <i class="bi bi-arrow-down-up sort-icon"></i></th>
                                     <th data-sort="quality">Quality <i class="bi bi-arrow-down-up sort-icon"></i></th>
-                                    <th data-sort="bidirectional">Direction <i class="bi bi-arrow-down-up sort-icon"></i></th>
+                                    <th data-sort="confirmed_both_ways">Data Status <i class="bi bi-arrow-down-up sort-icon"></i></th>
                                 </tr>
                             </thead>
                             <tbody id="linksTableBody">
@@ -431,8 +432,8 @@
     function updateStats(stats) {
         document.getElementById('statNodes').textContent = stats.total_nodes;
         document.getElementById('statEdges').textContent = stats.total_edges;
-        document.getElementById('statBidirectional').textContent = stats.bidirectional_edges;
-        document.getElementById('statUnidirectional').textContent = stats.unidirectional_edges;
+        document.getElementById('statConfirmedBothWays').textContent = stats.confirmed_both_ways;
+        document.getElementById('statPartialData').textContent = stats.partial_data;
         document.getElementById('statAvgNeighbors').textContent = stats.avg_neighbors_per_node;
         document.getElementById('statDensity').textContent = stats.mesh_density + '%';
     }
@@ -496,8 +497,8 @@
                 <td>
                     <a href="/node/${edge.node_b}" class="node-link">${edge.node_b_name}</a>
                 </td>
-                <td>${edge.snr_a_to_b !== null ? edge.snr_a_to_b.toFixed(1) + ' dB' : '-'}</td>
-                <td>${edge.snr_b_to_a !== null ? edge.snr_b_to_a.toFixed(1) + ' dB' : '-'}</td>
+                <td>${edge.snr_a_to_b !== null ? edge.snr_a_to_b.toFixed(1) + ' dB' : '<span class="text-muted">pending</span>'}</td>
+                <td>${edge.snr_b_to_a !== null ? edge.snr_b_to_a.toFixed(1) + ' dB' : '<span class="text-muted">pending</span>'}</td>
                 <td>
                     <span class="snr-badge snr-${edge.quality}">
                         ${edge.avg_snr !== null ? edge.avg_snr.toFixed(1) + ' dB' : '-'}
@@ -509,9 +510,10 @@
                     </span>
                 </td>
                 <td>
-                    ${edge.bidirectional
-                        ? '<span class="text-success"><i class="bi bi-arrow-left-right"></i> Bidirectional</span>'
-                        : '<span class="text-warning"><i class="bi bi-arrow-right"></i> One-way</span>'}
+                    ${edge.confirmed_both_ways
+                        ? '<span class="text-success"><i class="bi bi-check-circle-fill"></i> Full data</span>'
+                        : '<span class="text-warning"><i class="bi bi-exclamation-circle"></i> Partial</span>'}
+                    <br><small class="text-muted"><i class="bi bi-arrow-left-right"></i> Bidirectional</small>
                 </td>
             </tr>
         `).join('');

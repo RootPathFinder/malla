@@ -153,27 +153,33 @@ class NeighborService:
                                 "snr_a_to_b": None,
                                 "snr_b_to_a": None,
                                 "last_seen": packet["timestamp"],
-                                "bidirectional": False,
+                                "confirmed_both_ways": False,
+                                # All RF links are bidirectional - this tracks data completeness
+                                "data_sources": 0,  # Count of nodes that reported this link
                             }
 
                         # Update SNR based on direction
                         if actual_node_id == edge_key[0]:
                             # This node is node_a, reporting hearing node_b
+                            if edges[edge_key]["snr_a_to_b"] is None:
+                                edges[edge_key]["data_sources"] += 1
                             edges[edge_key]["snr_a_to_b"] = snr
                         else:
                             # This node is node_b, reporting hearing node_a
+                            if edges[edge_key]["snr_b_to_a"] is None:
+                                edges[edge_key]["data_sources"] += 1
                             edges[edge_key]["snr_b_to_a"] = snr
 
                         edges[edge_key]["last_seen"] = max(
                             edges[edge_key]["last_seen"], packet["timestamp"]
                         )
 
-                        # Check if bidirectional
+                        # Check if we have SNR data from both directions
                         if (
                             edges[edge_key]["snr_a_to_b"] is not None
                             and edges[edge_key]["snr_b_to_a"] is not None
                         ):
-                            edges[edge_key]["bidirectional"] = True
+                            edges[edge_key]["confirmed_both_ways"] = True
 
                         latest_neighbor_info[actual_node_id]["neighbors"].append(
                             {"node_id": neighbor_node_id, "snr": snr}
@@ -228,7 +234,8 @@ class NeighborService:
             # Calculate topology statistics
             total_nodes = len(nodes)
             total_edges = len(edge_list)
-            bidirectional_edges = sum(1 for e in edge_list if e["bidirectional"])
+            confirmed_both_ways = sum(1 for e in edge_list if e["confirmed_both_ways"])
+            partial_data = total_edges - confirmed_both_ways
             nodes_with_neighbors = sum(
                 1 for n in nodes.values() if n["neighbor_count"] > 0
             )
@@ -246,8 +253,8 @@ class NeighborService:
                 "statistics": {
                     "total_nodes": total_nodes,
                     "total_edges": total_edges,
-                    "bidirectional_edges": bidirectional_edges,
-                    "unidirectional_edges": total_edges - bidirectional_edges,
+                    "confirmed_both_ways": confirmed_both_ways,
+                    "partial_data": partial_data,
                     "nodes_with_neighbors": nodes_with_neighbors,
                     "nodes_without_reports": total_nodes - nodes_with_neighbors,
                     "avg_neighbors_per_node": round(avg_neighbors, 1),
@@ -265,8 +272,8 @@ class NeighborService:
             NeighborService._topology_cache[cache_key] = (now, result)
 
             logger.info(
-                f"Topology built: {total_nodes} nodes, {total_edges} edges, "
-                f"{bidirectional_edges} bidirectional"
+                f"Topology built: {total_nodes} nodes, {total_edges} links, "
+                f"{confirmed_both_ways} confirmed both ways, {partial_data} partial data"
             )
 
             return result
