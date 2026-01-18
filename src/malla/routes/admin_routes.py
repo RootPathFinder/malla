@@ -2868,6 +2868,375 @@ def api_deploy_template(template_id):
         return jsonify({"error": str(e)}), 500
 
 
+@admin_bp.route("/api/admin/templates/<int:template_id>/deploy/stream")
+def api_deploy_template_stream(template_id):
+    """
+    SSE endpoint to deploy a configuration template to nodes with real-time progress.
+
+    Query parameters:
+        node_ids: Comma-separated list of node IDs to deploy to
+        force: "true" to force deployment despite blocking issues
+        acknowledged_warnings: "true" to acknowledge warnings
+
+    Returns a Server-Sent Events stream with progress messages during deployment.
+    """
+    from ..services.admin_service import ConfigType
+
+    node_ids_str = request.args.get("node_ids", "")
+    force_deploy = request.args.get("force", "false") == "true"
+    acknowledged_warnings = request.args.get("acknowledged_warnings", "false") == "true"
+
+    def generate():
+        def send_event(data: dict) -> str:
+            return f"data: {json.dumps(data)}\n\n"
+
+        # Parse node IDs
+        if not node_ids_str:
+            yield send_event(
+                {"complete": True, "success": False, "error": "node_ids is required"}
+            )
+            return
+
+        try:
+            node_ids = [
+                int(nid.strip()) for nid in node_ids_str.split(",") if nid.strip()
+            ]
+        except ValueError as e:
+            yield send_event(
+                {"complete": True, "success": False, "error": f"Invalid node_ids: {e}"}
+            )
+            return
+
+        if not node_ids:
+            yield send_event(
+                {
+                    "complete": True,
+                    "success": False,
+                    "error": "No valid node IDs provided",
+                }
+            )
+            return
+
+        # Get template
+        yield send_event(
+            {"status": "Loading template...", "progress": 0, "phase": "init"}
+        )
+
+        template = AdminRepository.get_template(template_id)
+        if not template:
+            yield send_event(
+                {
+                    "complete": True,
+                    "success": False,
+                    "error": f"Template not found: {template_id}",
+                }
+            )
+            return
+
+        # Parse template config
+        config_data = template["config_data"]
+        if isinstance(config_data, str):
+            config_data = json.loads(config_data)
+
+        template_type = template["template_type"]
+        template_name = template.get("name", f"Template {template_id}")
+
+        yield send_event(
+            {
+                "status": f"Template '{template_name}' loaded ({template_type})",
+                "progress": 5,
+                "phase": "init",
+            }
+        )
+
+        # Validate configuration safety
+        yield send_event(
+            {
+                "status": "Validating configuration safety...",
+                "progress": 10,
+                "phase": "validate",
+            }
+        )
+
+        is_safe, warnings, blocking_issues = validate_config_safety(
+            template_type, config_data, force=force_deploy
+        )
+
+        # Report validation results
+        if blocking_issues:
+            for issue in blocking_issues:
+                yield send_event(
+                    {
+                        "status": f"⚠️ Critical: {issue}",
+                        "progress": 10,
+                        "phase": "validate",
+                        "warning": True,
+                    }
+                )
+
+        if warnings:
+            for warning in warnings:
+                yield send_event(
+                    {
+                        "status": f"⚠️ Warning: {warning}",
+                        "progress": 10,
+                        "phase": "validate",
+                        "warning": True,
+                    }
+                )
+
+        # Check if we should proceed
+        if blocking_issues and not force_deploy:
+            yield send_event(
+                {
+                    "complete": True,
+                    "success": False,
+                    "error": "Configuration contains dangerous settings",
+                    "blocking_issues": blocking_issues,
+                    "warnings": warnings,
+                    "requires_force": True,
+                }
+            )
+            return
+
+        if warnings and not acknowledged_warnings and not force_deploy:
+            yield send_event(
+                {
+                    "complete": True,
+                    "success": False,
+                    "error": "Configuration has warnings that require acknowledgment",
+                    "warnings": warnings,
+                    "blocking_issues": blocking_issues,
+                    "requires_acknowledgment": True,
+                }
+            )
+            return
+
+        admin_service = get_admin_service()
+
+        # Calculate progress per node
+        total_nodes = len(node_ids)
+        progress_per_node = 80 / total_nodes  # Reserve 10% at start, 10% at end
+        base_progress = 15
+
+        results = []
+
+        for idx, node_id in enumerate(node_ids):
+            node_hex = f"!{node_id:08x}"
+            current_progress = base_progress + (idx * progress_per_node)
+
+            yield send_event(
+                {
+                    "status": f"Deploying to {node_hex} ({idx + 1}/{total_nodes})...",
+                    "progress": int(current_progress),
+                    "phase": "deploy",
+                    "current_node": node_hex,
+                    "node_index": idx + 1,
+                    "total_nodes": total_nodes,
+                }
+            )
+
+            # Log deployment attempt
+            deployment_id = AdminRepository.log_deployment(
+                template_id=template_id,
+                node_id=node_id,
+                status="pending",
+            )
+
+            try:
+                # Deploy based on template type
+                if template_type == "channel":
+                    channel_index = config_data.get("index", 0)
+                    result = admin_service.set_channel(
+                        target_node_id=node_id,
+                        channel_index=channel_index,
+                        channel_data=config_data,
+                    )
+                elif template_type == "channels":
+                    # Deploy all channels in the set
+                    channels = config_data.get("channels", [])
+                    if not channels:
+                        raise ValueError("No channels in template")
+
+                    all_success = True
+                    channel_results = []
+                    for ch_idx, channel in enumerate(channels):
+                        channel_index = channel.get("index", 0)
+                        yield send_event(
+                            {
+                                "status": f"Setting channel {channel_index} on {node_hex}...",
+                                "progress": int(
+                                    current_progress
+                                    + (ch_idx / len(channels)) * progress_per_node * 0.8
+                                ),
+                                "phase": "deploy",
+                                "current_node": node_hex,
+                            }
+                        )
+                        ch_result = admin_service.set_channel(
+                            target_node_id=node_id,
+                            channel_index=channel_index,
+                            channel_data=channel,
+                        )
+                        channel_results.append(
+                            {
+                                "index": channel_index,
+                                "success": ch_result.success,
+                                "error": ch_result.error,
+                            }
+                        )
+                        if not ch_result.success:
+                            all_success = False
+
+                    # Create synthetic result for the batch
+                    from dataclasses import dataclass
+
+                    @dataclass
+                    class BatchResult:
+                        success: bool
+                        error: str | None
+                        response: dict | None
+
+                    result = BatchResult(
+                        success=all_success,
+                        error=None
+                        if all_success
+                        else f"Some channels failed: {channel_results}",
+                        response={
+                            "message": f"Applied {len(channels)} channels",
+                            "details": channel_results,
+                        },
+                    )
+                else:
+                    # Map template type to ConfigType enum
+                    config_type_map = {
+                        "device": ConfigType.DEVICE,
+                        "lora": ConfigType.LORA,
+                        "position": ConfigType.POSITION,
+                        "power": ConfigType.POWER,
+                        "network": ConfigType.NETWORK,
+                        "display": ConfigType.DISPLAY,
+                        "bluetooth": ConfigType.BLUETOOTH,
+                        "security": ConfigType.SECURITY,
+                    }
+                    config_type = config_type_map.get(template_type)
+                    if not config_type:
+                        raise ValueError(f"Unsupported template type: {template_type}")
+
+                    result = admin_service.set_config(
+                        target_node_id=node_id,
+                        config_type=config_type,
+                        config_data=config_data,
+                    )
+
+                if result.success:
+                    AdminRepository.update_deployment_status(
+                        deployment_id=deployment_id,
+                        status="success",
+                        result_message=result.response.get("message")
+                        if result.response
+                        else None,
+                    )
+                    results.append(
+                        {
+                            "node_id": node_id,
+                            "hex_id": node_hex,
+                            "success": True,
+                            "message": "Deployed successfully",
+                        }
+                    )
+                    yield send_event(
+                        {
+                            "status": f"✓ {node_hex}: Deployed successfully",
+                            "progress": int(current_progress + progress_per_node),
+                            "phase": "deploy",
+                            "node_result": {"node": node_hex, "success": True},
+                        }
+                    )
+                else:
+                    AdminRepository.update_deployment_status(
+                        deployment_id=deployment_id,
+                        status="failed",
+                        result_message=result.error,
+                    )
+                    results.append(
+                        {
+                            "node_id": node_id,
+                            "hex_id": node_hex,
+                            "success": False,
+                            "error": result.error,
+                        }
+                    )
+                    yield send_event(
+                        {
+                            "status": f"✗ {node_hex}: {result.error}",
+                            "progress": int(current_progress + progress_per_node),
+                            "phase": "deploy",
+                            "node_result": {
+                                "node": node_hex,
+                                "success": False,
+                                "error": result.error,
+                            },
+                        }
+                    )
+
+            except Exception as deploy_error:
+                AdminRepository.update_deployment_status(
+                    deployment_id=deployment_id,
+                    status="failed",
+                    result_message=str(deploy_error),
+                )
+                results.append(
+                    {
+                        "node_id": node_id,
+                        "hex_id": node_hex,
+                        "success": False,
+                        "error": str(deploy_error),
+                    }
+                )
+                yield send_event(
+                    {
+                        "status": f"✗ {node_hex}: {deploy_error}",
+                        "progress": int(current_progress + progress_per_node),
+                        "phase": "deploy",
+                        "node_result": {
+                            "node": node_hex,
+                            "success": False,
+                            "error": str(deploy_error),
+                        },
+                    }
+                )
+
+        # Final summary
+        successful = sum(1 for r in results if r["success"])
+        failed = len(results) - successful
+
+        yield send_event(
+            {
+                "complete": True,
+                "success": failed == 0,
+                "results": results,
+                "summary": {
+                    "total": len(results),
+                    "successful": successful,
+                    "failed": failed,
+                },
+                "template_name": template_name,
+                "template_type": template_type,
+            }
+        )
+
+    return Response(
+        stream_with_context(generate()),
+        mimetype="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache",
+            "Connection": "keep-alive",
+            "X-Accel-Buffering": "no",
+        },
+    )
+
+
 @admin_bp.route("/api/admin/deployments")
 def api_get_deployments():
     """Get template deployment history."""

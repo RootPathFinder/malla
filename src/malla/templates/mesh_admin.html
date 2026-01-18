@@ -4262,6 +4262,58 @@
         document.querySelectorAll('.deploy-node-checkbox').forEach(cb => cb.checked = false);
     }
 
+    // Deployment log lines for SSE streaming
+    let deployLogLines = [];
+
+    function initDeployLog() {
+        deployLogLines = [];
+    }
+
+    function addDeployLog(message) {
+        const timestamp = new Date().toLocaleTimeString('en-US', { hour12: false });
+        deployLogLines.push(`[${timestamp}] ${message}`);
+    }
+
+    function renderDeployProgress(status, progress, logLines, nodeResults = []) {
+        let html = `
+            <div class="mb-2">
+                <div class="d-flex justify-content-between align-items-center mb-1">
+                    <span class="small fw-bold">${escapeHtml(status)}</span>
+                    <span class="badge bg-primary">${progress}%</span>
+                </div>
+                <div class="progress" style="height: 8px;">
+                    <div class="progress-bar progress-bar-striped progress-bar-animated" role="progressbar"
+                         style="width: ${progress}%;" aria-valuenow="${progress}" aria-valuemin="0" aria-valuemax="100"></div>
+                </div>
+            </div>
+        `;
+
+        // Show node results if any
+        if (nodeResults.length > 0) {
+            html += '<ul class="list-unstyled mb-2 small">';
+            for (const r of nodeResults) {
+                const icon = r.success ? 'check-circle text-success' : 'x-circle text-danger';
+                const message = r.success ? 'Deployed successfully' : r.error;
+                html += `
+                    <li>
+                        <i class="bi bi-${icon}"></i>
+                        <code>${escapeHtml(r.node)}</code>: ${escapeHtml(message || 'Unknown')}
+                    </li>
+                `;
+            }
+            html += '</ul>';
+        }
+
+        // Show log console
+        html += `
+            <div class="bg-dark text-light rounded p-2" style="max-height: 150px; overflow-y: auto; font-family: monospace; font-size: 0.75rem;">
+                <pre id="deployLogPre" style="margin: 0; white-space: pre-wrap;">${escapeHtml(logLines.join('\n'))}</pre>
+            </div>
+        `;
+
+        return html;
+    }
+
     async function deployTemplate(forceDeployment = false, acknowledgedWarnings = false) {
         if (!currentTemplateId) {
             showAlert('warning', 'Please save the template first');
@@ -4280,133 +4332,205 @@
 
         const deployBtn = document.getElementById('deployTemplateBtn');
         deployBtn.disabled = true;
-        deployBtn.innerHTML = '<span class="spinner-border spinner-border-sm"></span> Validating...';
+        deployBtn.innerHTML = '<span class="spinner-border spinner-border-sm"></span> Deploying...';
 
         const resultsDiv = document.getElementById('deploymentResults');
         resultsDiv.style.display = 'block';
-        resultsDiv.innerHTML = '<div class="text-muted"><i class="bi bi-shield-check"></i> Checking configuration safety...</div>';
+
+        // Initialize deployment log
+        initDeployLog();
+        addDeployLog(`Starting deployment to ${selectedNodes.length} node(s)`);
+        addDeployLog(`Template ID: ${currentTemplateId}`);
+        addDeployLog(`Force: ${forceDeployment}, Acknowledged: ${acknowledgedWarnings}`);
+
+        resultsDiv.innerHTML = renderDeployProgress('Connecting to server...', 0, deployLogLines);
+
+        // Track node results for display
+        const nodeResults = [];
 
         try {
-            const response = await fetch(`/api/admin/templates/${currentTemplateId}/deploy`, {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({
-                    node_ids: selectedNodes,
-                    force: forceDeployment,
-                    acknowledged_warnings: acknowledgedWarnings,
-                }),
+            // Build SSE URL with query parameters
+            const params = new URLSearchParams({
+                node_ids: selectedNodes.join(','),
+                force: forceDeployment.toString(),
+                acknowledged_warnings: acknowledgedWarnings.toString(),
             });
+            const url = `/api/admin/templates/${currentTemplateId}/deploy/stream?${params}`;
 
-            const result = await response.json();
+            addDeployLog(`Connecting to: ${url}`);
+            resultsDiv.innerHTML = renderDeployProgress('Connecting...', 0, deployLogLines);
 
-            // Check if we need to show warnings/blocking issues
-            if (result.requires_force || result.requires_acknowledgment) {
-                let html = '';
+            const eventSource = new EventSource(url);
 
-                // Show blocking issues (critical)
-                if (result.blocking_issues && result.blocking_issues.length > 0) {
-                    html += `
-                        <div class="alert alert-danger py-2 mb-2">
-                            <strong><i class="bi bi-exclamation-octagon"></i> Critical Issues:</strong>
-                            <ul class="mb-0 mt-1">
-                    `;
-                    for (const issue of result.blocking_issues) {
-                        html += `<li>${escapeHtml(issue)}</li>`;
+            eventSource.onmessage = function(event) {
+                const data = JSON.parse(event.data);
+
+                // Check for completion
+                if (data.complete) {
+                    eventSource.close();
+
+                    if (data.requires_force || data.requires_acknowledgment) {
+                        // Handle warnings/blocking issues - show confirmation UI
+                        let html = '';
+
+                        // Show log first
+                        addDeployLog('Validation issues detected');
+                        html += `
+                            <div class="bg-dark text-light rounded p-2 mb-2" style="max-height: 100px; overflow-y: auto; font-family: monospace; font-size: 0.75rem;">
+                                <pre style="margin: 0; white-space: pre-wrap;">${escapeHtml(deployLogLines.join('\n'))}</pre>
+                            </div>
+                        `;
+
+                        // Show blocking issues (critical)
+                        if (data.blocking_issues && data.blocking_issues.length > 0) {
+                            html += `
+                                <div class="alert alert-danger py-2 mb-2">
+                                    <strong><i class="bi bi-exclamation-octagon"></i> Critical Issues:</strong>
+                                    <ul class="mb-0 mt-1">
+                            `;
+                            for (const issue of data.blocking_issues) {
+                                html += `<li>${escapeHtml(issue)}</li>`;
+                            }
+                            html += `</ul></div>`;
+                        }
+
+                        // Show warnings
+                        if (data.warnings && data.warnings.length > 0) {
+                            html += `
+                                <div class="alert alert-warning py-2 mb-2">
+                                    <strong><i class="bi bi-exclamation-triangle"></i> Warnings:</strong>
+                                    <ul class="mb-0 mt-1">
+                            `;
+                            for (const warning of data.warnings) {
+                                html += `<li>${escapeHtml(warning)}</li>`;
+                            }
+                            html += `</ul></div>`;
+                        }
+
+                        // Show action buttons
+                        if (data.requires_force) {
+                            html += `
+                                <div class="d-flex gap-2">
+                                    <button class="btn btn-outline-secondary btn-sm" onclick="cancelDeploy()">Cancel</button>
+                                    <button class="btn btn-danger btn-sm" onclick="deployTemplate(true, true)">
+                                        <i class="bi bi-exclamation-triangle"></i> Deploy Anyway (Dangerous)
+                                    </button>
+                                </div>
+                                <p class="text-muted small mt-2 mb-0">
+                                    <i class="bi bi-info-circle"></i>
+                                    Deploying this configuration may make nodes unreachable for future remote administration.
+                                </p>
+                            `;
+                        } else if (data.requires_acknowledgment) {
+                            html += `
+                                <div class="d-flex gap-2">
+                                    <button class="btn btn-outline-secondary btn-sm" onclick="cancelDeploy()">Cancel</button>
+                                    <button class="btn btn-warning btn-sm" onclick="deployTemplate(false, true)">
+                                        <i class="bi bi-check-lg"></i> I Understand, Proceed
+                                    </button>
+                                </div>
+                            `;
+                        }
+
+                        resultsDiv.innerHTML = html;
+                        deployBtn.disabled = false;
+                        deployBtn.innerHTML = '<i class="bi bi-cloud-upload"></i> Deploy to Selected Nodes';
+                        return;
                     }
-                    html += `
-                            </ul>
-                        </div>
-                    `;
-                }
 
-                // Show warnings
-                if (result.warnings && result.warnings.length > 0) {
-                    html += `
-                        <div class="alert alert-warning py-2 mb-2">
-                            <strong><i class="bi bi-exclamation-triangle"></i> Warnings:</strong>
-                            <ul class="mb-0 mt-1">
-                    `;
-                    for (const warning of result.warnings) {
-                        html += `<li>${escapeHtml(warning)}</li>`;
+                    // Normal completion
+                    addDeployLog('─────────────────────');
+                    if (data.success) {
+                        addDeployLog(`✓ Deployment complete: ${data.summary.successful}/${data.summary.total} successful`);
+                    } else {
+                        addDeployLog(`✗ Deployment finished with errors: ${data.summary.failed} failed`);
                     }
-                    html += `
-                            </ul>
+
+                    // Build final summary
+                    const alertClass = data.success ? 'alert-success' : 'alert-warning';
+                    let html = `
+                        <div class="alert ${alertClass} py-2 mb-2">
+                            <strong><i class="bi bi-${data.success ? 'check-circle' : 'exclamation-triangle'}"></i>
+                                Deployment Complete:</strong>
+                            ${data.summary.successful}/${data.summary.total} successful
                         </div>
                     `;
+
+                    // Show log console
+                    html += `
+                        <div class="bg-dark text-light rounded p-2 mb-2" style="max-height: 150px; overflow-y: auto; font-family: monospace; font-size: 0.75rem;">
+                            <pre style="margin: 0; white-space: pre-wrap;">${escapeHtml(deployLogLines.join('\n'))}</pre>
+                        </div>
+                    `;
+
+                    // Show node results
+                    if (data.results && data.results.length > 0) {
+                        html += '<ul class="list-unstyled mb-0 small">';
+                        for (const r of data.results) {
+                            const icon = r.success ? 'check-circle text-success' : 'x-circle text-danger';
+                            const message = r.success ? r.message : r.error;
+                            html += `
+                                <li>
+                                    <i class="bi bi-${icon}"></i>
+                                    <code>${r.hex_id}</code>: ${escapeHtml(message || 'Unknown')}
+                                </li>
+                            `;
+                        }
+                        html += '</ul>';
+                    }
+
+                    resultsDiv.innerHTML = html;
+                    loadDeploymentHistory();
+                    deployBtn.disabled = false;
+                    deployBtn.innerHTML = '<i class="bi bi-cloud-upload"></i> Deploy to Selected Nodes';
+                    return;
                 }
 
-                // Show action buttons
-                if (result.requires_force) {
-                    html += `
-                        <div class="d-flex gap-2">
-                            <button class="btn btn-outline-secondary btn-sm" onclick="cancelDeploy()">
-                                Cancel
-                            </button>
-                            <button class="btn btn-danger btn-sm" onclick="deployTemplate(true, true)">
-                                <i class="bi bi-exclamation-triangle"></i> Deploy Anyway (Dangerous)
-                            </button>
-                        </div>
-                        <p class="text-muted small mt-2 mb-0">
-                            <i class="bi bi-info-circle"></i>
-                            Deploying this configuration may make nodes unreachable for future remote administration.
-                        </p>
-                    `;
-                } else if (result.requires_acknowledgment) {
-                    html += `
-                        <div class="d-flex gap-2">
-                            <button class="btn btn-outline-secondary btn-sm" onclick="cancelDeploy()">
-                                Cancel
-                            </button>
-                            <button class="btn btn-warning btn-sm" onclick="deployTemplate(false, true)">
-                                <i class="bi bi-check-lg"></i> I Understand, Proceed
-                            </button>
-                        </div>
-                    `;
+                // Progress update
+                if (data.status) {
+                    addDeployLog(data.status);
                 }
 
-                resultsDiv.innerHTML = html;
-                deployBtn.disabled = false;
-                deployBtn.innerHTML = '<i class="bi bi-cloud-upload"></i> Deploy to Selected Nodes';
-                return;
-            }
+                // Track node results
+                if (data.node_result) {
+                    nodeResults.push(data.node_result);
+                }
 
-            // Normal deployment success/failure handling
-            deployBtn.innerHTML = '<span class="spinner-border spinner-border-sm"></span> Deploying...';
-            resultsDiv.innerHTML = '<div class="text-muted"><i class="bi bi-hourglass-split"></i> Deploying to nodes...</div>';
+                const progress = data.progress || 0;
+                const status = data.status || 'Processing...';
 
-            // Display results
-            let html = '';
-            if (result.summary) {
-                const alertClass = result.summary.failed === 0 ? 'alert-success' : 'alert-warning';
-                html += `
-                    <div class="alert ${alertClass} py-2 mb-2">
-                        <strong>Deployment Complete:</strong>
-                        ${result.summary.successful}/${result.summary.total} successful
+                resultsDiv.innerHTML = renderDeployProgress(status, progress, deployLogLines, nodeResults);
+
+                // Auto-scroll log
+                const logPre = document.getElementById('deployLogPre');
+                if (logPre) {
+                    logPre.parentElement.scrollTop = logPre.parentElement.scrollHeight;
+                }
+            };
+
+            eventSource.onerror = function(error) {
+                eventSource.close();
+                addDeployLog('✗ Connection error');
+                resultsDiv.innerHTML = `
+                    <div class="alert alert-danger py-2 mb-2">
+                        <i class="bi bi-x-circle"></i> Connection error during deployment
+                    </div>
+                    <div class="bg-dark text-light rounded p-2" style="max-height: 150px; overflow-y: auto; font-family: monospace; font-size: 0.75rem;">
+                        <pre style="margin: 0; white-space: pre-wrap;">${escapeHtml(deployLogLines.join('\n'))}</pre>
                     </div>
                 `;
-            }
-
-            if (result.results && result.results.length > 0) {
-                html += '<ul class="list-unstyled mb-0 small">';
-                for (const r of result.results) {
-                    const icon = r.success ? 'check-circle text-success' : 'x-circle text-danger';
-                    const message = r.success ? r.message : r.error;
-                    html += `
-                        <li>
-                            <i class="bi bi-${icon}"></i>
-                            <code>${r.hex_id}</code>: ${escapeHtml(message || 'Unknown')}
-                        </li>
-                    `;
-                }
-                html += '</ul>';
-            }
-
-            resultsDiv.innerHTML = html;
-            loadDeploymentHistory();
+                deployBtn.disabled = false;
+                deployBtn.innerHTML = '<i class="bi bi-cloud-upload"></i> Deploy to Selected Nodes';
+            };
 
         } catch (error) {
-            resultsDiv.innerHTML = `<div class="alert alert-danger py-2">${error.message}</div>`;
-        } finally {
+            addDeployLog(`✗ Error: ${error.message}`);
+            resultsDiv.innerHTML = `
+                <div class="alert alert-danger py-2 mb-2">${escapeHtml(error.message)}</div>
+                <div class="bg-dark text-light rounded p-2" style="max-height: 150px; overflow-y: auto; font-family: monospace; font-size: 0.75rem;">
+                    <pre style="margin: 0; white-space: pre-wrap;">${escapeHtml(deployLogLines.join('\n'))}</pre>
+                </div>
+            `;
             deployBtn.disabled = false;
             deployBtn.innerHTML = '<i class="bi bi-cloud-upload"></i> Deploy to Selected Nodes';
         }
