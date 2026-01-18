@@ -663,6 +663,7 @@ class AlertService:
             results["checks_run"].append("battery")
             battery_results = cls._check_battery_health()
             results["alerts_generated"] += battery_results.get("alerts", 0)
+            results["alerts_resolved"] += battery_results.get("resolved", 0)
 
             results["checks_run"].append("node_activity")
             activity_results = cls._check_node_activity()
@@ -690,8 +691,9 @@ class AlertService:
 
     @classmethod
     def _check_battery_health(cls) -> dict[str, Any]:
-        """Check battery status across all nodes."""
+        """Check battery status across all nodes and resolve alerts when battery recovers."""
         alerts_generated = 0
+        alerts_resolved = 0
 
         try:
             conn = get_db_connection()
@@ -718,8 +720,17 @@ class AlertService:
             )  # Last 24 hours
 
             rows = cursor.fetchall()
-            conn.close()
 
+            # Build a map of current battery status for all nodes
+            node_battery_status: dict[int, dict[str, Any]] = {}
+            for row in rows:
+                node_id = row["node_id"]
+                node_battery_status[node_id] = {
+                    "battery_level": row["battery_level"],
+                    "voltage": row["voltage"],
+                }
+
+            # Check for nodes that need new alerts
             for row in rows:
                 node_id = row["node_id"]
                 battery_level = row["battery_level"]
@@ -785,10 +796,69 @@ class AlertService:
                         )
                         alerts_generated += 1
 
+            # Now check for battery alerts that should be resolved
+            # (battery has recovered above thresholds)
+            cursor.execute(
+                """
+                SELECT node_id, alert_type FROM alerts
+                WHERE alert_type IN (?, ?) AND resolved = 0
+            """,
+                (AlertType.CRITICAL_BATTERY.value, AlertType.LOW_BATTERY.value),
+            )
+
+            active_battery_alerts = cursor.fetchall()
+            conn.close()
+
+            for alert_row in active_battery_alerts:
+                node_id = alert_row["node_id"]
+                alert_type_str = alert_row["alert_type"]
+
+                # Get current battery status for this node
+                status = node_battery_status.get(node_id)
+
+                if status is None:
+                    # No recent telemetry for this node, can't verify - skip
+                    continue
+
+                battery_level = status.get("battery_level")
+                voltage = status.get("voltage")
+
+                # Determine if alert should be resolved based on current values
+                should_resolve = False
+
+                if alert_type_str == AlertType.CRITICAL_BATTERY.value:
+                    # Resolve critical battery if level is now above critical threshold
+                    # Use a small hysteresis buffer (5%) to prevent flapping
+                    if battery_level is not None:
+                        if battery_level > cls._thresholds.battery_critical_percent + 5:
+                            should_resolve = True
+                    elif voltage is not None:
+                        if voltage > cls._thresholds.battery_critical_voltage + 0.1:
+                            should_resolve = True
+
+                elif alert_type_str == AlertType.LOW_BATTERY.value:
+                    # Resolve low battery if level is now above warning threshold
+                    # Use a small hysteresis buffer (5%) to prevent flapping
+                    if battery_level is not None:
+                        if battery_level > cls._thresholds.battery_warning_percent + 5:
+                            should_resolve = True
+                    elif voltage is not None:
+                        if voltage > cls._thresholds.battery_warning_voltage + 0.1:
+                            should_resolve = True
+
+                if should_resolve:
+                    alert_type = AlertType(alert_type_str)
+                    if cls.resolve_alert(alert_type, node_id):
+                        logger.info(
+                            f"Battery alert resolved for node {node_id}: "
+                            f"level={battery_level}%, voltage={voltage}V"
+                        )
+                        alerts_resolved += 1
+
         except Exception as e:
             logger.error(f"Error checking battery health: {e}")
 
-        return {"alerts": alerts_generated}
+        return {"alerts": alerts_generated, "resolved": alerts_resolved}
 
     @classmethod
     def _check_solar_charging(cls) -> dict[str, Any]:
