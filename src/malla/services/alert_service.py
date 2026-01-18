@@ -1590,3 +1590,671 @@ class AlertService:
         except Exception as e:
             logger.error(f"Error getting archived nodes: {e}")
             return []
+
+    # =========================================================================
+    # New Network Insights Methods
+    # =========================================================================
+
+    @classmethod
+    def get_network_insights(cls) -> dict[str, Any]:
+        """
+        Get network insights including health score and actionable recommendations.
+
+        Returns a health score (0-100) and a list of prioritized insights.
+        """
+        try:
+            conn = get_db_connection()
+            cursor = conn.cursor()
+            now = time.time()
+
+            insights = []
+            health_deductions = 0
+
+            # 1. Check for offline nodes (infrastructure is critical)
+            infra_offline_threshold = now - (2 * 3600)  # 2 hours
+            client_offline_threshold = now - (6 * 3600)  # 6 hours
+
+            # Check infrastructure nodes offline
+            cursor.execute(
+                """
+                SELECT n.node_id,
+                       COALESCE(n.long_name, n.short_name, printf('!%08x', n.node_id)) as name,
+                       n.role,
+                       MAX(p.timestamp) as last_seen
+                FROM node_info n
+                LEFT JOIN packet_history p ON p.from_node_id = n.node_id
+                WHERE COALESCE(n.archived, 0) = 0
+                GROUP BY n.node_id
+                HAVING last_seen IS NOT NULL
+                """
+            )
+
+            offline_infra = []
+            offline_clients = []
+
+            for row in cursor.fetchall():
+                role = row["role"]
+                last_seen = row["last_seen"]
+                is_infra = role in INFRASTRUCTURE_ROLES
+
+                if is_infra and last_seen < infra_offline_threshold:
+                    hours_offline = (now - last_seen) / 3600
+                    offline_infra.append(
+                        {"name": row["name"], "hours_offline": hours_offline}
+                    )
+                elif not is_infra and last_seen < client_offline_threshold:
+                    hours_offline = (now - last_seen) / 3600
+                    offline_clients.append(
+                        {"name": row["name"], "hours_offline": hours_offline}
+                    )
+
+            if offline_infra:
+                health_deductions += min(30, len(offline_infra) * 10)
+                insights.append(
+                    {
+                        "id": "offline_infra",
+                        "priority": "high",
+                        "icon": "router",
+                        "title": f"{len(offline_infra)} Infrastructure Node{'s' if len(offline_infra) > 1 else ''} Offline",
+                        "description": "Router or gateway nodes haven't transmitted recently. This affects network coverage.",
+                        "action": "View Nodes",
+                        "link": "/nodes?filter=offline",
+                        "value": len(offline_infra),
+                        "value_label": "nodes",
+                    }
+                )
+
+            if len(offline_clients) > 3:
+                health_deductions += min(15, len(offline_clients) * 2)
+                insights.append(
+                    {
+                        "id": "offline_clients",
+                        "priority": "medium",
+                        "icon": "phone",
+                        "title": f"{len(offline_clients)} Client Nodes Inactive",
+                        "description": "Multiple client devices haven't transmitted in over 6 hours.",
+                        "action": "View Inactive",
+                        "link": "/nodes?filter=inactive",
+                        "value": len(offline_clients),
+                        "value_label": "nodes",
+                    }
+                )
+
+            # 2. Check for low battery nodes
+            cursor.execute(
+                """
+                SELECT n.node_id,
+                       COALESCE(n.long_name, n.short_name, printf('!%08x', n.node_id)) as name,
+                       t.battery_level,
+                       t.voltage
+                FROM node_info n
+                INNER JOIN telemetry_data t ON t.node_id = n.node_id
+                WHERE COALESCE(n.archived, 0) = 0
+                  AND t.timestamp = (SELECT MAX(t2.timestamp) FROM telemetry_data t2 WHERE t2.node_id = n.node_id)
+                  AND (t.battery_level < 30 OR t.voltage < 3.4)
+                """
+            )
+
+            low_battery_nodes = cursor.fetchall()
+            critical_battery = [
+                n
+                for n in low_battery_nodes
+                if (n["battery_level"] or 100) < 15 or (n["voltage"] or 5) < 3.2
+            ]
+            warning_battery = [
+                n for n in low_battery_nodes if n not in critical_battery
+            ]
+
+            if critical_battery:
+                health_deductions += min(20, len(critical_battery) * 5)
+                insights.append(
+                    {
+                        "id": "critical_battery",
+                        "priority": "high",
+                        "icon": "battery-low",
+                        "title": f"{len(critical_battery)} Node{'s' if len(critical_battery) > 1 else ''} with Critical Battery",
+                        "description": "These nodes need immediate charging or may go offline soon.",
+                        "action": "View Battery Status",
+                        "link": "/power",
+                        "value": "<15%",
+                        "value_label": "battery",
+                    }
+                )
+
+            if warning_battery:
+                health_deductions += min(10, len(warning_battery) * 2)
+                insights.append(
+                    {
+                        "id": "low_battery",
+                        "priority": "medium",
+                        "icon": "battery-half",
+                        "title": f"{len(warning_battery)} Node{'s' if len(warning_battery) > 1 else ''} with Low Battery",
+                        "description": "Battery levels are getting low. Consider charging soon.",
+                        "action": "View Power Dashboard",
+                        "link": "/power",
+                        "value": "15-30%",
+                        "value_label": "battery",
+                    }
+                )
+
+            # 3. Check signal quality trends
+            cursor.execute(
+                """
+                SELECT AVG(snr) as avg_snr, AVG(rssi) as avg_rssi
+                FROM packet_history
+                WHERE timestamp > ? AND snr IS NOT NULL
+                """,
+                (now - 24 * 3600,),
+            )
+            signal_today = cursor.fetchone()
+
+            cursor.execute(
+                """
+                SELECT AVG(snr) as avg_snr, AVG(rssi) as avg_rssi
+                FROM packet_history
+                WHERE timestamp BETWEEN ? AND ? AND snr IS NOT NULL
+                """,
+                (now - 7 * 24 * 3600, now - 24 * 3600),
+            )
+            signal_week = cursor.fetchone()
+
+            if signal_today["avg_snr"] and signal_week["avg_snr"]:
+                snr_change = signal_today["avg_snr"] - signal_week["avg_snr"]
+                if snr_change < -3:
+                    health_deductions += 10
+                    insights.append(
+                        {
+                            "id": "signal_degraded",
+                            "priority": "medium",
+                            "icon": "reception-1",
+                            "title": "Signal Quality Declining",
+                            "description": f"Average SNR has dropped {abs(snr_change):.1f} dB compared to last week.",
+                            "action": "View Signal Data",
+                            "link": "/packets?sort=snr",
+                            "value": f"{snr_change:.1f}",
+                            "value_label": "dB change",
+                        }
+                    )
+
+            # 4. Check packet success rate
+            cursor.execute(
+                """
+                SELECT
+                    COUNT(*) as total,
+                    SUM(CASE WHEN processed_successfully = 1 THEN 1 ELSE 0 END) as successful
+                FROM packet_history
+                WHERE timestamp > ?
+                """,
+                (now - 24 * 3600,),
+            )
+            packet_stats = cursor.fetchone()
+
+            if packet_stats["total"] > 100:
+                success_rate = (
+                    packet_stats["successful"] / packet_stats["total"]
+                ) * 100
+                if success_rate < 80:
+                    health_deductions += int((80 - success_rate) / 2)
+                    insights.append(
+                        {
+                            "id": "low_success_rate",
+                            "priority": "high" if success_rate < 60 else "medium",
+                            "icon": "exclamation-triangle",
+                            "title": "Low Packet Success Rate",
+                            "description": f"Only {success_rate:.0f}% of packets are being successfully processed.",
+                            "action": "View Packets",
+                            "link": "/packets",
+                            "value": f"{success_rate:.0f}%",
+                            "value_label": "success",
+                        }
+                    )
+
+            # 5. Check for new nodes in last 24h
+            cursor.execute(
+                """
+                SELECT COUNT(*) as new_nodes
+                FROM node_info
+                WHERE last_updated > ? AND COALESCE(archived, 0) = 0
+                """,
+                (now - 24 * 3600,),
+            )
+            new_nodes = cursor.fetchone()["new_nodes"]
+
+            if new_nodes > 0:
+                insights.append(
+                    {
+                        "id": "new_nodes",
+                        "priority": "good",
+                        "icon": "plus-circle",
+                        "title": f"{new_nodes} New Node{'s' if new_nodes > 1 else ''} Discovered",
+                        "description": "New nodes have joined the network in the last 24 hours.",
+                        "action": "View New Nodes",
+                        "link": "/nodes?sort=newest",
+                        "value": new_nodes,
+                        "value_label": "nodes",
+                    }
+                )
+
+            # 6. Positive insight if everything is healthy
+            if len(insights) == 0 or (
+                len(insights) == 1 and insights[0]["priority"] == "good"
+            ):
+                insights.append(
+                    {
+                        "id": "all_healthy",
+                        "priority": "good",
+                        "icon": "check-circle",
+                        "title": "Network Operating Normally",
+                        "description": "All monitored metrics are within healthy ranges.",
+                        "action": None,
+                        "link": None,
+                        "value": None,
+                        "value_label": None,
+                    }
+                )
+
+            conn.close()
+
+            # Calculate health score
+            health_score = max(0, 100 - health_deductions)
+
+            # Sort insights by priority
+            priority_order = {"high": 0, "medium": 1, "low": 2, "good": 3}
+            insights.sort(key=lambda x: priority_order.get(x["priority"], 99))
+
+            return {
+                "health_score": health_score,
+                "insights": insights,
+                "generated_at": now,
+            }
+
+        except Exception as e:
+            logger.error(f"Error getting network insights: {e}", exc_info=True)
+            return {
+                "health_score": 0,
+                "insights": [
+                    {
+                        "id": "error",
+                        "priority": "high",
+                        "icon": "exclamation-triangle",
+                        "title": "Error Loading Insights",
+                        "description": str(e),
+                        "action": None,
+                        "link": None,
+                        "value": None,
+                        "value_label": None,
+                    }
+                ],
+                "generated_at": time.time(),
+            }
+
+    @classmethod
+    def get_activity_calendar(cls, days: int = 30) -> dict[str, Any]:
+        """
+        Get daily activity data for the last N days.
+
+        Returns packet counts, active nodes, and other metrics per day.
+        """
+        try:
+            conn = get_db_connection()
+            cursor = conn.cursor()
+            now = time.time()
+            cutoff = now - days * 86400
+
+            # Use integer division for fast day grouping (seconds per day = 86400)
+            # This avoids expensive date() function calls on each row
+            cursor.execute(
+                """
+                SELECT
+                    CAST(timestamp / 86400 AS INTEGER) as day_num,
+                    COUNT(*) as packets,
+                    COUNT(DISTINCT from_node_id) as nodes,
+                    AVG(snr) as avg_snr,
+                    CAST(SUM(CASE WHEN processed_successfully = 1 THEN 1 ELSE 0 END) AS FLOAT) /
+                        NULLIF(COUNT(*), 0) * 100 as success_rate
+                FROM packet_history
+                WHERE timestamp > ?
+                GROUP BY CAST(timestamp / 86400 AS INTEGER)
+                ORDER BY day_num ASC
+                """,
+                (cutoff,),
+            )
+
+            daily_data = []
+            max_packets = 0
+
+            for row in cursor.fetchall():
+                packets = row["packets"]
+                max_packets = max(max_packets, packets)
+                # Convert day number back to date string
+                day_timestamp = row["day_num"] * 86400
+                date_str = time.strftime("%Y-%m-%d", time.gmtime(day_timestamp))
+                daily_data.append(
+                    {
+                        "date": date_str,
+                        "packets": packets,
+                        "nodes": row["nodes"],
+                        "avg_snr": round(row["avg_snr"], 1) if row["avg_snr"] else None,
+                        "success_rate": round(row["success_rate"], 1)
+                        if row["success_rate"]
+                        else None,
+                        "peak_hour": None,  # Skip peak hour calculation for performance
+                    }
+                )
+
+            conn.close()
+
+            return {
+                "daily_activity": daily_data,
+                "max_packets": max_packets,
+                "days": days,
+            }
+
+        except Exception as e:
+            logger.error(f"Error getting activity calendar: {e}", exc_info=True)
+            return {"daily_activity": [], "max_packets": 0, "days": days}
+
+    @classmethod
+    def get_node_health_summary(cls) -> dict[str, Any]:
+        """
+        Get summary of node health status.
+
+        Categorizes nodes as healthy, warning, critical, or offline.
+        """
+        try:
+            conn = get_db_connection()
+            cursor = conn.cursor()
+            now = time.time()
+
+            # Optimization: First get last seen times from packet_history
+            # with a time filter to avoid scanning the entire table
+            cursor.execute(
+                """
+                SELECT from_node_id, MAX(timestamp) as last_seen
+                FROM packet_history
+                WHERE timestamp > ?
+                GROUP BY from_node_id
+                """,
+                (now - 7 * 86400,),  # Only look at last 7 days
+            )
+            last_seen_map = {
+                row["from_node_id"]: row["last_seen"] for row in cursor.fetchall()
+            }
+
+            # Get all active nodes with their latest telemetry
+            cursor.execute(
+                """
+                SELECT
+                    n.node_id,
+                    COALESCE(n.long_name, n.short_name, printf('!%08x', n.node_id)) as name,
+                    n.hex_id,
+                    n.role,
+                    (SELECT t.battery_level FROM telemetry_data t
+                     WHERE t.node_id = n.node_id ORDER BY t.timestamp DESC LIMIT 1) as battery_level,
+                    (SELECT t.voltage FROM telemetry_data t
+                     WHERE t.node_id = n.node_id ORDER BY t.timestamp DESC LIMIT 1) as voltage
+                FROM node_info n
+                WHERE COALESCE(n.archived, 0) = 0
+                """
+            )
+
+            healthy = 0
+            warning = 0
+            critical = 0
+            offline = 0
+            nodes_needing_attention = []
+
+            for row in cursor.fetchall():
+                node_id = row["node_id"]
+                name = row["name"]
+                hex_id = row["hex_id"]
+                role = row["role"]
+                battery = row["battery_level"]
+                voltage = row["voltage"]
+                last_seen = last_seen_map.get(node_id)
+
+                is_infra = role in INFRASTRUCTURE_ROLES
+                status = "healthy"
+                issue = None
+                value = None
+
+                # Check offline status
+                if not last_seen:
+                    status = "offline"
+                    issue = "Never seen"
+                    offline += 1
+                elif is_infra and last_seen < now - 2 * 3600:
+                    status = "critical"
+                    issue = f"Offline for {(now - last_seen) / 3600:.1f}h"
+                    critical += 1
+                elif not is_infra and last_seen < now - 6 * 3600:
+                    status = "offline"
+                    issue = f"Inactive for {(now - last_seen) / 3600:.1f}h"
+                    offline += 1
+                # Check battery status
+                elif battery is not None and battery < 15:
+                    status = "critical"
+                    issue = "Critical battery"
+                    value = f"{battery}%"
+                    critical += 1
+                elif voltage is not None and voltage < 3.2:
+                    status = "critical"
+                    issue = "Critical voltage"
+                    value = f"{voltage:.2f}V"
+                    critical += 1
+                elif battery is not None and battery < 30:
+                    status = "warning"
+                    issue = "Low battery"
+                    value = f"{battery}%"
+                    warning += 1
+                elif voltage is not None and voltage < 3.4:
+                    status = "warning"
+                    issue = "Low voltage"
+                    value = f"{voltage:.2f}V"
+                    warning += 1
+                else:
+                    healthy += 1
+
+                # Add to attention list if not healthy
+                if status != "healthy":
+                    nodes_needing_attention.append(
+                        {
+                            "node_id": node_id,
+                            "node_id_hex": hex_id or f"!{node_id:08x}",
+                            "name": name,
+                            "status": status,
+                            "issue": issue,
+                            "value": value,
+                        }
+                    )
+
+            conn.close()
+
+            # Sort by severity
+            status_order = {"critical": 0, "warning": 1, "offline": 2}
+            nodes_needing_attention.sort(
+                key=lambda x: status_order.get(x["status"], 99)
+            )
+
+            return {
+                "healthy": healthy,
+                "warning": warning,
+                "critical": critical,
+                "offline": offline,
+                "total": healthy + warning + critical + offline,
+                "nodes_needing_attention": nodes_needing_attention[:20],  # Top 20
+            }
+
+        except Exception as e:
+            logger.error(f"Error getting node health summary: {e}", exc_info=True)
+            return {
+                "healthy": 0,
+                "warning": 0,
+                "critical": 0,
+                "offline": 0,
+                "total": 0,
+                "nodes_needing_attention": [],
+            }
+
+    @classmethod
+    def get_network_vitals(cls) -> dict[str, Any]:
+        """
+        Get network vitals and comparison trends.
+        """
+        try:
+            conn = get_db_connection()
+            cursor = conn.cursor()
+            now = time.time()
+
+            # Current stats (last 24h)
+            cursor.execute(
+                """
+                SELECT
+                    COUNT(DISTINCT from_node_id) as active_nodes,
+                    COUNT(*) as packets,
+                    AVG(snr) as avg_snr,
+                    CAST(SUM(CASE WHEN processed_successfully = 1 THEN 1 ELSE 0 END) AS FLOAT) /
+                        NULLIF(COUNT(*), 0) * 100 as success_rate
+                FROM packet_history
+                WHERE timestamp > ?
+                """,
+                (now - 24 * 3600,),
+            )
+            today = cursor.fetchone()
+
+            # Yesterday stats
+            cursor.execute(
+                """
+                SELECT COUNT(*) as packets
+                FROM packet_history
+                WHERE timestamp BETWEEN ? AND ?
+                """,
+                (now - 48 * 3600, now - 24 * 3600),
+            )
+            yesterday = cursor.fetchone()
+
+            # Last week stats (average per day)
+            cursor.execute(
+                """
+                SELECT
+                    COUNT(DISTINCT from_node_id) as active_nodes,
+                    COUNT(*) / 7.0 as packets_per_day,
+                    AVG(snr) as avg_snr,
+                    CAST(SUM(CASE WHEN processed_successfully = 1 THEN 1 ELSE 0 END) AS FLOAT) /
+                        NULLIF(COUNT(*), 0) * 100 as success_rate
+                FROM packet_history
+                WHERE timestamp BETWEEN ? AND ?
+                """,
+                (now - 8 * 24 * 3600, now - 24 * 3600),
+            )
+            last_week = cursor.fetchone()
+
+            # Node counts by type
+            cursor.execute(
+                """
+                SELECT
+                    role,
+                    power_type,
+                    COUNT(*) as count
+                FROM node_info
+                WHERE COALESCE(archived, 0) = 0
+                GROUP BY role, power_type
+                """
+            )
+
+            infra_nodes = 0
+            client_nodes = 0
+            solar_nodes = 0
+
+            for row in cursor.fetchall():
+                role = row["role"]
+                power_type = row["power_type"]
+                count = row["count"]
+
+                if role in INFRASTRUCTURE_ROLES:
+                    infra_nodes += count
+                else:
+                    client_nodes += count
+
+                if power_type == "solar":
+                    solar_nodes += count
+
+            # Battery stats
+            cursor.execute(
+                """
+                SELECT
+                    AVG(t.battery_level) as avg_battery,
+                    COUNT(CASE WHEN t.battery_level < 30 THEN 1 END) as low_battery
+                FROM node_info n
+                INNER JOIN telemetry_data t ON t.node_id = n.node_id
+                WHERE COALESCE(n.archived, 0) = 0
+                  AND t.timestamp = (SELECT MAX(t2.timestamp) FROM telemetry_data t2 WHERE t2.node_id = n.node_id)
+                  AND t.battery_level IS NOT NULL
+                """
+            )
+            battery_stats = cursor.fetchone()
+
+            conn.close()
+
+            # Calculate trends
+            def calc_trend(current, previous):
+                if not previous or previous == 0:
+                    return 0
+                return ((current - previous) / previous) * 100
+
+            packets_trend = (
+                calc_trend(today["packets"], yesterday["packets"]) if yesterday else 0
+            )
+            nodes_trend = (
+                calc_trend(today["active_nodes"], last_week["active_nodes"])
+                if last_week["active_nodes"]
+                else 0
+            )
+            signal_trend = (
+                (today["avg_snr"] - last_week["avg_snr"])
+                if today["avg_snr"] and last_week["avg_snr"]
+                else 0
+            )
+            success_trend = (
+                (today["success_rate"] - last_week["success_rate"])
+                if today["success_rate"] and last_week["success_rate"]
+                else 0
+            )
+
+            return {
+                "active_nodes_24h": today["active_nodes"] or 0,
+                "packets_24h": today["packets"] or 0,
+                "avg_snr": round(today["avg_snr"], 1) if today["avg_snr"] else 0,
+                "success_rate": round(today["success_rate"], 1)
+                if today["success_rate"]
+                else 0,
+                "active_nodes_trend": round(nodes_trend, 1),
+                "packets_trend": round(packets_trend, 1),
+                "signal_trend": round(signal_trend, 1),
+                "success_trend": round(success_trend, 1),
+                "infrastructure_nodes": infra_nodes,
+                "client_nodes": client_nodes,
+                "solar_nodes": solar_nodes,
+                "low_battery_nodes": battery_stats["low_battery"] or 0,
+                "avg_battery": round(battery_stats["avg_battery"], 0)
+                if battery_stats["avg_battery"]
+                else 0,
+            }
+
+        except Exception as e:
+            logger.error(f"Error getting network vitals: {e}", exc_info=True)
+            return {
+                "active_nodes_24h": 0,
+                "packets_24h": 0,
+                "avg_snr": 0,
+                "success_rate": 0,
+                "active_nodes_trend": 0,
+                "packets_trend": 0,
+                "signal_trend": 0,
+                "success_trend": 0,
+                "infrastructure_nodes": 0,
+                "client_nodes": 0,
+                "solar_nodes": 0,
+                "low_battery_nodes": 0,
+                "avg_battery": 0,
+            }

@@ -31,11 +31,10 @@ def archived_nodes_page():
 
 @alert_bp.route("/")
 def alerts_page():
-    """Render the alerts dashboard page."""
-    # Run health checks if needed
-    AlertService.run_health_checks()
-
-    return render_template("alerts.html")
+    """Render the network insights dashboard page."""
+    # Skip health checks on page load - they run periodically in background
+    # This improves page load time significantly
+    return render_template("network_insights.html")
 
 
 @alert_bp.route("/api/list")
@@ -365,4 +364,65 @@ def api_archive_stale_nodes():
 
     except Exception as e:
         logger.error(f"Error archiving stale nodes: {e}", exc_info=True)
+        return jsonify({"error": str(e)}), 500
+
+
+# =========================================================================
+# New Network Insights API Endpoints
+# =========================================================================
+
+
+@alert_bp.route("/api/insights")
+def api_insights():
+    """
+    Get network insights and health score.
+
+    Returns smart, actionable insights based on network data analysis.
+    """
+    try:
+        insights = AlertService.get_network_insights()
+        return jsonify(insights)
+    except Exception as e:
+        logger.error(f"Error getting insights: {e}", exc_info=True)
+        return jsonify({"error": str(e)}), 500
+
+
+@alert_bp.route("/api/activity-calendar")
+def api_activity_calendar():
+    """
+    Get 30-day activity calendar data.
+
+    Returns daily packet counts, active nodes, and trends.
+    """
+    try:
+        calendar_data = AlertService.get_activity_calendar(days=30)
+        return jsonify(calendar_data)
+    except Exception as e:
+        logger.error(f"Error getting activity calendar: {e}", exc_info=True)
+        return jsonify({"error": str(e)}), 500
+
+
+@alert_bp.route("/api/node-health")
+def api_node_health():
+    """
+    Get node health distribution and nodes needing attention.
+    """
+    try:
+        health_data = AlertService.get_node_health_summary()
+        return jsonify(health_data)
+    except Exception as e:
+        logger.error(f"Error getting node health: {e}", exc_info=True)
+        return jsonify({"error": str(e)}), 500
+
+
+@alert_bp.route("/api/network-vitals")
+def api_network_vitals():
+    """
+    Get network vitals and trends.
+    """
+    try:
+        vitals = AlertService.get_network_vitals()
+        return jsonify(vitals)
+    except Exception as e:
+        logger.error(f"Error getting network vitals: {e}", exc_info=True)
         return jsonify({"error": str(e)}), 500
