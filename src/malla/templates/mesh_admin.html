@@ -3918,8 +3918,9 @@
                 if (data.nodes && data.nodes.length > 0) {
                     let html = '<option value="">Select an administrable node...</option>';
                     for (const node of data.nodes) {
-                        const displayName = node.long_name || node.short_name || node.node_hex;
-                        html += `<option value="${node.node_id}">${escapeHtml(displayName)} (${node.node_hex})</option>`;
+                        const hexId = node.hex_id || `!${node.node_id.toString(16).padStart(8, '0')}`;
+                        const displayName = node.long_name || node.short_name || hexId;
+                        html += `<option value="${node.node_id}">${escapeHtml(displayName)} (${hexId})</option>`;
                     }
                     nodeSelect.innerHTML = html;
                 } else {

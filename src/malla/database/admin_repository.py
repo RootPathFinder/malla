@@ -561,7 +561,7 @@ class AdminRepository:
     @staticmethod
     def delete_template(template_id: int) -> bool:
         """
-        Delete a configuration template.
+        Delete a configuration template and its deployment history.
 
         Args:
             template_id: The template ID to delete
@@ -572,6 +572,13 @@ class AdminRepository:
         conn = get_db_connection()
         cursor = conn.cursor()
 
+        # First delete related deployment records to avoid foreign key constraint
+        cursor.execute(
+            "DELETE FROM template_deployments WHERE template_id = ?", (template_id,)
+        )
+        deployments_deleted = cursor.rowcount
+
+        # Then delete the template
         cursor.execute("DELETE FROM config_templates WHERE id = ?", (template_id,))
 
         deleted = cursor.rowcount > 0
@@ -579,7 +586,10 @@ class AdminRepository:
         conn.close()
 
         if deleted:
-            logger.info(f"Deleted config template id={template_id}")
+            logger.info(
+                f"Deleted config template id={template_id} "
+                f"(and {deployments_deleted} deployment records)"
+            )
 
         return deleted
 
