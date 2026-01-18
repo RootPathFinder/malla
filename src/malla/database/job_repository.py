@@ -191,7 +191,8 @@ class JobRepository:
             SELECT id, job_type, target_node_id, job_name, job_data, status,
                    progress, progress_message, progress_phase, progress_current,
                    progress_total, result_data, error_message, created_at,
-                   started_at, completed_at, updated_at
+                   started_at, completed_at, updated_at, cancel_requested,
+                   pause_requested
             FROM background_jobs
             WHERE id = ?
             """,
@@ -222,6 +223,8 @@ class JobRepository:
             "started_at": row[14],
             "completed_at": row[15],
             "updated_at": row[16],
+            "cancel_requested": bool(row[17]) if row[17] is not None else False,
+            "pause_requested": bool(row[18]) if row[18] is not None else False,
         }
 
     @staticmethod
@@ -240,7 +243,8 @@ class JobRepository:
             SELECT id, job_type, target_node_id, job_name, job_data, status,
                    progress, progress_message, progress_phase, progress_current,
                    progress_total, result_data, error_message, created_at,
-                   started_at, completed_at, updated_at
+                   started_at, completed_at, updated_at, cancel_requested,
+                   pause_requested
             FROM background_jobs
             WHERE 1=1
         """
@@ -289,6 +293,8 @@ class JobRepository:
                     "started_at": row[14],
                     "completed_at": row[15],
                     "updated_at": row[16],
+                    "cancel_requested": bool(row[17]) if row[17] is not None else False,
+                    "pause_requested": bool(row[18]) if row[18] is not None else False,
                 }
             )
 

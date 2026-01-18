@@ -5757,7 +5757,7 @@
     }
 
     function renderJobRow(job) {
-        const statusBadge = getJobStatusBadge(job.status);
+        const statusBadge = getJobStatusBadge(job.status, job.cancel_requested, job.pause_requested);
         const created = job.created_at ? formatTimestamp(job.created_at) : 'Unknown';
         const progress = job.progress || 0;
 
@@ -5819,14 +5819,43 @@
             `;
         } else if (job.status === 'running') {
             // Running jobs can be paused or cancelled (request at next checkpoint)
-            actions += `
-                <button class="btn btn-sm btn-outline-warning me-1" onclick="pauseJob(${job.id})" title="Pause (will pause at next checkpoint)">
-                    <i class="bi bi-pause-fill"></i>
-                </button>
-                <button class="btn btn-sm btn-outline-danger" onclick="cancelJob(${job.id})" title="Cancel (will stop at next checkpoint)">
-                    <i class="bi bi-stop-fill"></i>
-                </button>
-            `;
+            // Disable buttons if already requested
+            const pauseDisabled = job.pause_requested || job.cancel_requested;
+            const cancelDisabled = job.cancel_requested;
+
+            if (job.pause_requested) {
+                actions += `
+                    <button class="btn btn-sm btn-warning me-1" disabled title="Pause pending...">
+                        <i class="bi bi-hourglass-split"></i>
+                    </button>
+                `;
+            } else if (job.cancel_requested) {
+                actions += `
+                    <button class="btn btn-sm btn-secondary me-1" disabled title="Cancelling...">
+                        <i class="bi bi-pause-fill"></i>
+                    </button>
+                `;
+            } else {
+                actions += `
+                    <button class="btn btn-sm btn-outline-warning me-1" onclick="pauseJob(${job.id})" title="Pause (will pause at next checkpoint)">
+                        <i class="bi bi-pause-fill"></i>
+                    </button>
+                `;
+            }
+
+            if (job.cancel_requested) {
+                actions += `
+                    <button class="btn btn-sm btn-danger" disabled title="Cancel pending...">
+                        <i class="bi bi-hourglass-split"></i>
+                    </button>
+                `;
+            } else {
+                actions += `
+                    <button class="btn btn-sm btn-outline-danger" onclick="cancelJob(${job.id})" title="Cancel (will stop at next checkpoint)">
+                        <i class="bi bi-stop-fill"></i>
+                    </button>
+                `;
+            }
         }
 
         return `
@@ -5851,7 +5880,15 @@
         }
     }
 
-    function getJobStatusBadge(status) {
+    function getJobStatusBadge(status, cancelRequested, pauseRequested) {
+        // Show transitional states first
+        if (status === 'running' && cancelRequested) {
+            return '<span class="badge bg-danger"><i class="bi bi-hourglass-split spin"></i> Cancelling...</span>';
+        }
+        if (status === 'running' && pauseRequested) {
+            return '<span class="badge bg-warning text-dark"><i class="bi bi-hourglass-split spin"></i> Pausing...</span>';
+        }
+
         const badges = {
             'queued': '<span class="badge bg-secondary"><i class="bi bi-hourglass"></i> Queued</span>',
             'running': '<span class="badge bg-primary"><i class="bi bi-arrow-repeat spin"></i> Running</span>',
@@ -5981,6 +6018,11 @@
         resumeBtn.classList.add('d-none');
         forceCancelBtn.classList.add('d-none');
 
+        // Reset button states
+        cancelBtn.disabled = false;
+        pauseBtn.disabled = false;
+        cancelBtn.innerHTML = '<i class="bi bi-x-circle me-1"></i> Cancel';
+        pauseBtn.innerHTML = '<i class="bi bi-pause-fill me-1"></i> Pause';
         if (job.status === 'queued') {
             cancelBtn.classList.remove('d-none');
             pauseBtn.classList.remove('d-none');
@@ -6000,6 +6042,16 @@
             // Also show force cancel for running jobs (in case they're stuck/orphaned)
             forceCancelBtn.classList.remove('d-none');
 
+            // Disable buttons if already requested
+            if (job.cancel_requested) {
+                cancelBtn.disabled = true;
+                cancelBtn.innerHTML = '<i class="bi bi-hourglass-split me-1"></i> Cancelling...';
+                pauseBtn.disabled = true;
+            } else if (job.pause_requested) {
+                pauseBtn.disabled = true;
+                pauseBtn.innerHTML = '<i class="bi bi-hourglass-split me-1"></i> Pausing...';
+            }
+
             // Check if this job might be stuck (not updated recently)
             if (job.updated_at) {
                 const lastUpdate = new Date(job.updated_at * 1000);
@@ -6013,7 +6065,7 @@
             }
         }
 
-        const statusBadge = getJobStatusBadge(job.status);
+        const statusBadge = getJobStatusBadge(job.status, job.cancel_requested, job.pause_requested);
         const created = job.created_at ? formatTimestamp(job.created_at) : 'Unknown';
         const started = job.started_at ? formatTimestamp(job.started_at) : '-';
         const completed = job.completed_at ? formatTimestamp(job.completed_at) : '-';
