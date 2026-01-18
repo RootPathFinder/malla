@@ -5268,8 +5268,11 @@
         document.getElementById('backupNameInput').value = '';
         document.getElementById('backupDescriptionInput').value = '';
         document.getElementById('backupProgressSection').style.display = 'none';
-        document.getElementById('startBackupBtn').disabled = false;
-        document.getElementById('startBackupBtn').innerHTML = '<i class="bi bi-cloud-download"></i> Create Backup';
+        const startBtn = document.getElementById('startBackupJobBtn');
+        if (startBtn) {
+            startBtn.disabled = false;
+            startBtn.innerHTML = '<i class="bi bi-cloud-download"></i> Create Backup';
+        }
 
         // Auto-generate backup name when node is selected
         document.getElementById('backupSourceNode').onchange = function() {
