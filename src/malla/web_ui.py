@@ -271,6 +271,12 @@ def create_app(cfg: AppConfig | None = None):  # noqa: D401
     logger.info("Initializing admin tables")
     init_admin_tables()
 
+    # Initialize job service for background jobs
+    from .services.job_service import init_job_service
+
+    logger.info("Initializing job service for background operations")
+    init_job_service()
+
     # Start periodic cache cleanup for node names
     logger.info("Starting node name cache cleanup background thread")
     start_cache_cleanup()

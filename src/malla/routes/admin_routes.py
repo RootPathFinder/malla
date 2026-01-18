@@ -1120,6 +1120,64 @@ def api_create_backup_stream():
     )
 
 
+@admin_bp.route("/api/admin/backups/job", methods=["POST"])
+def api_create_backup_job():
+    """
+    Queue a backup job for background execution.
+
+    This allows the user to start a backup and check back later for the result.
+    The backup will continue even if the browser is closed.
+
+    Request body (JSON):
+        node_id: Node ID to backup (required)
+        backup_name: Name for the backup (required)
+        description: Optional description
+
+    Returns:
+        job_id: ID of the queued job
+        queue_position: Position in the queue
+        status: "queued"
+    """
+    from ..database.job_repository import JobType
+    from ..services.job_service import get_job_service
+
+    try:
+        data = request.get_json() or {}
+
+        node_id_str = data.get("node_id")
+        backup_name = data.get("backup_name")
+        description = data.get("description", "")
+
+        if not node_id_str:
+            return jsonify({"error": "node_id is required"}), 400
+        if not backup_name:
+            return jsonify({"error": "backup_name is required"}), 400
+
+        node_id = convert_node_id(node_id_str)
+
+        job_service = get_job_service()
+        result = job_service.queue_job(
+            job_type=JobType.BACKUP,
+            job_name=f"Backup: {backup_name}",
+            job_data={
+                "backup_name": backup_name,
+                "description": description,
+            },
+            target_node_id=node_id,
+        )
+
+        if result["success"]:
+            return jsonify(result)
+        else:
+            return jsonify(result), 409  # Conflict with existing job
+
+    except ValueError as e:
+        return jsonify({"error": f"Invalid node_id: {e}"}), 400
+    except Exception as e:
+        logger.error(f"Error queuing backup job: {e}")
+        return jsonify({"error": str(e)}), 500
+
+
 @admin_bp.route("/api/admin/backups/restore/stream")
 def api_restore_backup_stream():
     """
@@ -1570,6 +1628,80 @@ def api_restore_backup_stream():
             "X-Accel-Buffering": "no",
         },
     )
+
+
+@admin_bp.route("/api/admin/backups/restore/job", methods=["POST"])
+def api_restore_backup_job():
+    """
+    Queue a restore job for background execution.
+
+    This allows the user to start a restore and check back later for the result.
+    The restore will continue even if the browser is closed.
+
+    Request body (JSON):
+        backup_id: ID of the backup to restore (required)
+        target_node_id: Node ID to restore to (required)
+        skip_primary_channel: Skip restoring primary channel (default: true)
+        skip_lora: Skip restoring LoRa config (default: false)
+        skip_security: Skip restoring security config (default: true)
+        reboot_after: Reboot node after restore (default: false)
+
+    Returns:
+        job_id: ID of the queued job
+        queue_position: Position in the queue
+        status: "queued"
+    """
+    from ..database.job_repository import JobType
+    from ..services.job_service import get_job_service
+
+    try:
+        data = request.get_json() or {}
+
+        backup_id = data.get("backup_id")
+        target_node_str = data.get("target_node_id")
+        skip_primary_channel = data.get("skip_primary_channel", True)
+        skip_lora = data.get("skip_lora", False)
+        skip_security = data.get("skip_security", True)
+        reboot_after = data.get("reboot_after", False)
+
+        if not backup_id:
+            return jsonify({"error": "backup_id is required"}), 400
+        if not target_node_str:
+            return jsonify({"error": "target_node_id is required"}), 400
+
+        target_node_id = convert_node_id(target_node_str)
+
+        # Get backup info for job name
+        backup = AdminRepository.get_backup(backup_id)
+        if not backup:
+            return jsonify({"error": f"Backup {backup_id} not found"}), 404
+
+        backup_name = backup.get("backup_name", f"Backup #{backup_id}")
+
+        job_service = get_job_service()
+        result = job_service.queue_job(
+            job_type=JobType.RESTORE,
+            job_name=f"Restore: {backup_name}",
+            job_data={
+                "backup_id": backup_id,
+                "skip_primary_channel": skip_primary_channel,
+                "skip_lora": skip_lora,
+                "skip_security": skip_security,
+                "reboot_after": reboot_after,
+            },
+            target_node_id=target_node_id,
+        )
+
+        if result["success"]:
+            return jsonify(result)
+        else:
+            return jsonify(result), 409  # Conflict with existing job
+
+    except ValueError as e:
+        return jsonify({"error": f"Invalid target_node_id: {e}"}), 400
+    except Exception as e:
+        logger.error(f"Error queuing restore job: {e}")
+        return jsonify({"error": str(e)}), 500
 
 
 @admin_bp.route("/api/admin/node/<node_id>/config/<config_type>", methods=["POST"])
