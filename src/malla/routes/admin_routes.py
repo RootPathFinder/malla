@@ -968,7 +968,14 @@ TEMPLATE_EXCLUDED_FIELDS = {
     ],  # Credentials are node-specific
     "display": [],  # All display settings are templateable
     "bluetooth": [],  # All bluetooth settings are templateable (including PIN for fleet)
-    "security": [],  # All security settings are templateable (admin keys for fleet)
+    "security": [
+        "public_key",
+        "private_key",
+        "is_managed",
+        "serial_enabled",
+        "debug_log_api_enabled",
+        "admin_channel_enabled",
+    ],  # Only admin_key is templateable (for standardizing admin access across fleet)
     "channel": [],  # Channel settings can be templated (name, psk, etc.)
     "channels": [],  # Full channel set (all 8 channels)
 }
