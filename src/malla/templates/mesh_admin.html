@@ -5487,6 +5487,7 @@
         document.getElementById('restoreProgressSection').style.display = 'block';
         document.getElementById('restoreCompleteSection').style.display = 'none';
         document.getElementById('startRestoreBtn').style.display = 'none';
+        document.getElementById('startRestoreJobBtn').style.display = 'none';
         document.getElementById('restoreDoneBtn').style.display = 'none';
         document.getElementById('restoreCancelBtn').style.display = 'none';
         document.getElementById('restoreModalClose').disabled = true;
@@ -6344,21 +6345,26 @@
 
     // Queue restore as background job
     async function startRestoreJob() {
-        if (!currentBackupId) {
+        // Get backup ID and target node from the restore button's dataset
+        const startBtn = document.getElementById('startRestoreBtn');
+        const backupId = startBtn?.dataset.backupId;
+        const targetNodeId = startBtn?.dataset.targetNodeId;
+
+        if (!backupId) {
             showAlert('warning', 'No backup selected');
             return;
         }
 
-        const targetNodeId = document.getElementById('restoreTargetNode').value;
         if (!targetNodeId) {
             showAlert('warning', 'Please select a target node');
             return;
         }
 
-        const skipPrimaryChannel = document.getElementById('skipPrimaryChannel')?.checked !== false;
-        const skipLora = document.getElementById('skipLoraConfig')?.checked === true;
-        const skipSecurity = document.getElementById('skipSecurityConfig')?.checked !== false;
-        const rebootAfter = document.getElementById('rebootAfterRestore')?.checked === true;
+        // Get options from the restore modal (restoreBackupModal)
+        const skipPrimaryChannel = document.getElementById('restoreSkipPrimaryChannel')?.checked !== false;
+        const skipLora = document.getElementById('restoreSkipLora')?.checked === true;
+        const skipSecurity = document.getElementById('restoreSkipSecurity')?.checked !== false;
+        const rebootAfter = document.getElementById('restoreRebootAfter')?.checked === true;
 
         const btn = document.getElementById('startRestoreJobBtn');
         if (btn) {
@@ -6367,7 +6373,7 @@
         }
 
         try {
-            const result = await jobManager.queueRestore(currentBackupId, targetNodeId, {
+            const result = await jobManager.queueRestore(backupId, targetNodeId, {
                 skipPrimaryChannel,
                 skipLora,
                 skipSecurity,
@@ -6377,8 +6383,8 @@
             if (result.success) {
                 showAlert('success', `Restore job queued (position: ${result.queue_position || 1}). You can close this and check the Jobs tab for progress.`);
 
-                // Close the modal
-                const modal = bootstrap.Modal.getInstance(document.getElementById('confirmRestoreModal'));
+                // Close the restore modal
+                const modal = bootstrap.Modal.getInstance(document.getElementById('restoreBackupModal'));
                 if (modal) modal.hide();
 
                 // Show jobs tab badge update
