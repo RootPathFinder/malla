@@ -289,7 +289,7 @@
                 <div class="navbar-nav d-flex flex-row align-items-center gap-2">
                     {% if APP_CONFIG.admin_enabled %}
                     <!-- Background Jobs Indicator -->
-                    <a id="jobs-indicator" href="{{ url_for('admin.admin_page') }}#background-jobs"
+                    <a id="jobs-indicator" href="{{ url_for('admin.admin_page') }}?tab=jobs"
                        class="btn btn-outline-light btn-sm d-flex align-items-center gap-1 d-none"
                        title="Background jobs">
                         <i class="bi bi-list-task"></i>

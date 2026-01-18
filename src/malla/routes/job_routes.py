@@ -157,6 +157,40 @@ def api_cancel_job(job_id: int):
         return jsonify({"error": str(e)}), 500
 
 
+@job_bp.route("/api/jobs/<int:job_id>/pause", methods=["POST"])
+def api_pause_job(job_id: int):
+    """Pause a queued job."""
+    try:
+        job_service = get_job_service()
+        result = job_service.pause_job(job_id)
+
+        if result["success"]:
+            return jsonify(result)
+        else:
+            return jsonify(result), 400
+
+    except Exception as e:
+        logger.error(f"Error pausing job {job_id}: {e}")
+        return jsonify({"error": str(e)}), 500
+
+
+@job_bp.route("/api/jobs/<int:job_id>/resume", methods=["POST"])
+def api_resume_job(job_id: int):
+    """Resume a paused job."""
+    try:
+        job_service = get_job_service()
+        result = job_service.resume_job(job_id)
+
+        if result["success"]:
+            return jsonify(result)
+        else:
+            return jsonify(result), 400
+
+    except Exception as e:
+        logger.error(f"Error resuming job {job_id}: {e}")
+        return jsonify({"error": str(e)}), 500
+
+
 @job_bp.route("/api/jobs/status")
 def api_job_service_status():
     """Get job service status and summary."""

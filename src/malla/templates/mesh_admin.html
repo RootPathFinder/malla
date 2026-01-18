@@ -1194,6 +1194,38 @@
     </div>
 </div>
 
+<!-- Job Details Modal -->
+<div class="modal fade" id="jobDetailsModal" tabindex="-1">
+    <div class="modal-dialog modal-lg">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h5 class="modal-title">
+                    <i class="bi bi-list-task me-2"></i>
+                    <span id="jobDetailsTitle">Job Details</span>
+                </h5>
+                <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+            </div>
+            <div class="modal-body" id="jobDetailsBody">
+                <div class="text-center py-4">
+                    <div class="spinner-border text-primary" role="status"></div>
+                </div>
+            </div>
+            <div class="modal-footer">
+                <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Close</button>
+                <button type="button" class="btn btn-outline-success d-none" id="jobDetailsResumeBtn" onclick="resumeJobFromModal()">
+                    <i class="bi bi-play-fill me-1"></i> Resume
+                </button>
+                <button type="button" class="btn btn-outline-warning d-none" id="jobDetailsPauseBtn" onclick="pauseJobFromModal()">
+                    <i class="bi bi-pause-fill me-1"></i> Pause
+                </button>
+                <button type="button" class="btn btn-outline-danger d-none" id="jobDetailsCancelBtn" onclick="cancelJobFromModal()">
+                    <i class="bi bi-x-circle me-1"></i> Cancel
+                </button>
+            </div>
+        </div>
+    </div>
+</div>
+
 <!-- Confirmation Modal -->
 <div class="modal fade" id="confirmModal" tabindex="-1">
     <div class="modal-dialog">
@@ -2557,6 +2589,28 @@
         updateConnectionStatus();
         // Start periodic check
         startConnectionCheck();
+
+        // Handle tab navigation via URL parameter
+        const urlParams = new URLSearchParams(window.location.search);
+        const tabParam = urlParams.get('tab');
+        if (tabParam) {
+            const tabMap = {
+                'nodes': 'nodes-tab',
+                'commands': 'commands-tab',
+                'templates': 'templates-tab',
+                'backups': 'backups-tab',
+                'jobs': 'jobs-tab',
+                'log': 'log-tab'
+            };
+            const tabId = tabMap[tabParam];
+            if (tabId) {
+                const tabEl = document.getElementById(tabId);
+                if (tabEl) {
+                    const tab = new bootstrap.Tab(tabEl);
+                    tab.show();
+                }
+            }
+        }
     });
 
     // Set gateway node
@@ -5608,6 +5662,8 @@
             `;
         } else if (job.status === 'queued' && job.queue_position) {
             progressBar = `<small class="text-muted">Position: ${job.queue_position}</small>`;
+        } else if (job.status === 'paused') {
+            progressBar = '<small class="text-warning"><i class="bi bi-pause-fill"></i> Paused</small>';
         } else if (job.status === 'completed') {
             progressBar = '<small class="text-success">Done</small>';
         } else if (job.status === 'failed') {
@@ -5615,22 +5671,38 @@
         }
 
         let actions = '';
+        // Details button - always show for all jobs
+        actions += `
+            <button class="btn btn-sm btn-outline-secondary me-1" onclick="viewJobDetails(${job.id})" title="Details">
+                <i class="bi bi-eye"></i>
+            </button>
+        `;
+
         if (job.status === 'queued') {
-            actions = `
+            actions += `
+                <button class="btn btn-sm btn-outline-warning me-1" onclick="pauseJob(${job.id})" title="Pause">
+                    <i class="bi bi-pause-fill"></i>
+                </button>
                 <button class="btn btn-sm btn-outline-danger" onclick="cancelJob(${job.id})" title="Cancel">
                     <i class="bi bi-x"></i>
                 </button>
             `;
-        } else if (job.status === 'completed' || job.status === 'failed') {
-            actions = `
-                <button class="btn btn-sm btn-outline-secondary" onclick="viewJobDetails(${job.id})" title="Details">
-                    <i class="bi bi-eye"></i>
+        } else if (job.status === 'paused') {
+            actions += `
+                <button class="btn btn-sm btn-outline-success me-1" onclick="resumeJob(${job.id})" title="Resume">
+                    <i class="bi bi-play-fill"></i>
+                </button>
+                <button class="btn btn-sm btn-outline-danger" onclick="cancelJob(${job.id})" title="Cancel">
+                    <i class="bi bi-x"></i>
                 </button>
             `;
+        } else if (job.status === 'running') {
+            // Running jobs can't be paused or cancelled currently
+            actions += '<span class="text-muted small">In progress...</span>';
         }
 
         return `
-            <tr id="job-row-${job.id}">
+            <tr id="job-row-${job.id}" class="job-row" style="cursor: pointer;" onclick="viewJobDetails(${job.id})">
                 <td>${statusBadge}</td>
                 <td>
                     <strong>${escapeHtml(job.job_name)}</strong>
@@ -5639,7 +5711,7 @@
                 </td>
                 <td>${progressBar}</td>
                 <td><small>${created}</small></td>
-                <td>${actions}</td>
+                <td onclick="event.stopPropagation()">${actions}</td>
             </tr>
         `;
     }
@@ -5655,9 +5727,10 @@
         const badges = {
             'queued': '<span class="badge bg-secondary"><i class="bi bi-hourglass"></i> Queued</span>',
             'running': '<span class="badge bg-primary"><i class="bi bi-arrow-repeat spin"></i> Running</span>',
+            'paused': '<span class="badge bg-warning text-dark"><i class="bi bi-pause-fill"></i> Paused</span>',
             'completed': '<span class="badge bg-success"><i class="bi bi-check-circle"></i> Completed</span>',
             'failed': '<span class="badge bg-danger"><i class="bi bi-x-circle"></i> Failed</span>',
-            'cancelled': '<span class="badge bg-warning"><i class="bi bi-slash-circle"></i> Cancelled</span>'
+            'cancelled': '<span class="badge bg-secondary"><i class="bi bi-slash-circle"></i> Cancelled</span>'
         };
         return badges[status] || `<span class="badge bg-secondary">${escapeHtml(status)}</span>`;
     }
@@ -5678,25 +5751,269 @@
         }
     }
 
+    async function pauseJob(jobId) {
+        try {
+            const result = await jobManager.pauseJob(jobId);
+            if (result.success) {
+                showAlert('info', 'Job paused');
+                refreshJobsList();
+            } else {
+                showAlert('warning', result.error || 'Could not pause job');
+            }
+        } catch (error) {
+            showAlert('danger', `Error: ${error.message}`);
+        }
+    }
+
+    async function resumeJob(jobId) {
+        try {
+            const result = await jobManager.resumeJob(jobId);
+            if (result.success) {
+                showAlert('success', 'Job resumed');
+                refreshJobsList();
+            } else {
+                showAlert('warning', result.error || 'Could not resume job');
+            }
+        } catch (error) {
+            showAlert('danger', `Error: ${error.message}`);
+        }
+    }
+
+    let currentJobDetailsId = null;
+    let jobDetailsPollingInterval = null;
+
     async function viewJobDetails(jobId) {
+        currentJobDetailsId = jobId;
+        const modal = new bootstrap.Modal(document.getElementById('jobDetailsModal'));
+        modal.show();
+
+        // Start polling for updates if job is active
+        await refreshJobDetails(jobId);
+    }
+
+    async function refreshJobDetails(jobId) {
         try {
             const job = await jobManager.getJob(jobId);
+            renderJobDetailsModal(job);
 
-            // Show details in a modal or alert
-            let details = `Job: ${job.job_name}\n`;
-            details += `Type: ${job.job_type}\n`;
-            details += `Status: ${job.status}\n`;
-
-            if (job.result_data) {
-                details += `\nResult: ${JSON.stringify(job.result_data, null, 2)}`;
+            // Set up polling for active jobs
+            if (job.status === 'running' || job.status === 'queued') {
+                if (!jobDetailsPollingInterval) {
+                    jobDetailsPollingInterval = setInterval(async () => {
+                        if (currentJobDetailsId) {
+                            try {
+                                const updatedJob = await jobManager.getJob(currentJobDetailsId);
+                                renderJobDetailsModal(updatedJob);
+                                if (updatedJob.status !== 'running' && updatedJob.status !== 'queued') {
+                                    clearJobDetailsPolling();
+                                }
+                            } catch (e) {
+                                clearJobDetailsPolling();
+                            }
+                        }
+                    }, 1500);
+                }
             }
-            if (job.error_message) {
-                details += `\nError: ${job.error_message}`;
-            }
-
-            alert(details);
         } catch (error) {
-            showAlert('danger', `Error loading job details: ${error.message}`);
+            document.getElementById('jobDetailsBody').innerHTML = `
+                <div class="alert alert-danger">
+                    <i class="bi bi-exclamation-triangle me-2"></i>
+                    Error loading job details: ${escapeHtml(error.message)}
+                </div>
+            `;
+        }
+    }
+
+    function clearJobDetailsPolling() {
+        if (jobDetailsPollingInterval) {
+            clearInterval(jobDetailsPollingInterval);
+            jobDetailsPollingInterval = null;
+        }
+    }
+
+    // Stop polling when modal is closed
+    document.getElementById('jobDetailsModal')?.addEventListener('hidden.bs.modal', function() {
+        clearJobDetailsPolling();
+        currentJobDetailsId = null;
+    });
+
+    function renderJobDetailsModal(job) {
+        const titleEl = document.getElementById('jobDetailsTitle');
+        const bodyEl = document.getElementById('jobDetailsBody');
+        const cancelBtn = document.getElementById('jobDetailsCancelBtn');
+        const pauseBtn = document.getElementById('jobDetailsPauseBtn');
+        const resumeBtn = document.getElementById('jobDetailsResumeBtn');
+
+        titleEl.textContent = job.job_name || 'Job Details';
+
+        // Show/hide action buttons based on status
+        cancelBtn.classList.add('d-none');
+        pauseBtn.classList.add('d-none');
+        resumeBtn.classList.add('d-none');
+
+        if (job.status === 'queued') {
+            cancelBtn.classList.remove('d-none');
+            pauseBtn.classList.remove('d-none');
+        } else if (job.status === 'paused') {
+            cancelBtn.classList.remove('d-none');
+            resumeBtn.classList.remove('d-none');
+        }
+
+        const statusBadge = getJobStatusBadge(job.status);
+        const created = job.created_at ? formatTimestamp(job.created_at) : 'Unknown';
+        const started = job.started_at ? formatTimestamp(job.started_at) : '-';
+        const completed = job.completed_at ? formatTimestamp(job.completed_at) : '-';
+
+        let progressSection = '';
+        if (job.status === 'running') {
+            const progress = job.progress || 0;
+            progressSection = `
+                <div class="mb-4">
+                    <h6 class="text-muted mb-2">Progress</h6>
+                    <div class="progress mb-2" style="height: 20px;">
+                        <div class="progress-bar progress-bar-striped progress-bar-animated"
+                             style="width: ${progress}%">
+                            ${progress}%
+                        </div>
+                    </div>
+                    <div class="text-muted small">${escapeHtml(job.progress_message || 'Processing...')}</div>
+                </div>
+            `;
+        } else if (job.status === 'queued' && job.queue_position) {
+            progressSection = `
+                <div class="mb-4">
+                    <h6 class="text-muted mb-2">Queue Status</h6>
+                    <div class="alert alert-info">
+                        <i class="bi bi-hourglass me-2"></i>
+                        Position in queue: <strong>${job.queue_position}</strong>
+                    </div>
+                </div>
+            `;
+        } else if (job.status === 'paused') {
+            progressSection = `
+                <div class="mb-4">
+                    <h6 class="text-muted mb-2">Status</h6>
+                    <div class="alert alert-warning">
+                        <i class="bi bi-pause-fill me-2"></i>
+                        This job is paused. Click <strong>Resume</strong> to continue.
+                    </div>
+                </div>
+            `;
+        }
+
+        let resultSection = '';
+        if (job.status === 'completed' && job.result_data) {
+            resultSection = `
+                <div class="mb-4">
+                    <h6 class="text-muted mb-2">Result</h6>
+                    <pre class="bg-light p-3 rounded" style="max-height: 200px; overflow-y: auto;"><code>${escapeHtml(JSON.stringify(job.result_data, null, 2))}</code></pre>
+                </div>
+            `;
+        }
+
+        let errorSection = '';
+        if (job.status === 'failed' && job.error_message) {
+            errorSection = `
+                <div class="mb-4">
+                    <h6 class="text-muted mb-2">Error</h6>
+                    <div class="alert alert-danger">
+                        <i class="bi bi-exclamation-triangle me-2"></i>
+                        ${escapeHtml(job.error_message)}
+                    </div>
+                </div>
+            `;
+        }
+
+        bodyEl.innerHTML = `
+            <div class="row mb-3">
+                <div class="col-md-6">
+                    <table class="table table-sm table-borderless">
+                        <tr>
+                            <td class="text-muted" style="width: 100px;">Status:</td>
+                            <td>${statusBadge}</td>
+                        </tr>
+                        <tr>
+                            <td class="text-muted">Type:</td>
+                            <td><code>${escapeHtml(job.job_type)}</code></td>
+                        </tr>
+                        <tr>
+                            <td class="text-muted">Job ID:</td>
+                            <td><code>${job.id}</code></td>
+                        </tr>
+                    </table>
+                </div>
+                <div class="col-md-6">
+                    <table class="table table-sm table-borderless">
+                        <tr>
+                            <td class="text-muted" style="width: 100px;">Created:</td>
+                            <td>${created}</td>
+                        </tr>
+                        <tr>
+                            <td class="text-muted">Started:</td>
+                            <td>${started}</td>
+                        </tr>
+                        <tr>
+                            <td class="text-muted">Completed:</td>
+                            <td>${completed}</td>
+                        </tr>
+                    </table>
+                </div>
+            </div>
+            ${progressSection}
+            ${resultSection}
+            ${errorSection}
+        `;
+    }
+
+    async function cancelJobFromModal() {
+        if (!currentJobDetailsId) return;
+        if (!confirm('Cancel this job?')) return;
+
+        try {
+            const result = await jobManager.cancelJob(currentJobDetailsId);
+            if (result.success) {
+                showAlert('info', 'Job cancelled');
+                refreshJobsList();
+                bootstrap.Modal.getInstance(document.getElementById('jobDetailsModal')).hide();
+            } else {
+                showAlert('warning', result.error || 'Could not cancel job');
+            }
+        } catch (error) {
+            showAlert('danger', `Error: ${error.message}`);
+        }
+    }
+
+    async function pauseJobFromModal() {
+        if (!currentJobDetailsId) return;
+
+        try {
+            const result = await jobManager.pauseJob(currentJobDetailsId);
+            if (result.success) {
+                showAlert('info', 'Job paused');
+                refreshJobsList();
+                refreshJobDetails(currentJobDetailsId);
+            } else {
+                showAlert('warning', result.error || 'Could not pause job');
+            }
+        } catch (error) {
+            showAlert('danger', `Error: ${error.message}`);
+        }
+    }
+
+    async function resumeJobFromModal() {
+        if (!currentJobDetailsId) return;
+
+        try {
+            const result = await jobManager.resumeJob(currentJobDetailsId);
+            if (result.success) {
+                showAlert('success', 'Job resumed');
+                refreshJobsList();
+                refreshJobDetails(currentJobDetailsId);
+            } else {
+                showAlert('warning', result.error || 'Could not resume job');
+            }
+        } catch (error) {
+            showAlert('danger', `Error: ${error.message}`);
         }
     }
 

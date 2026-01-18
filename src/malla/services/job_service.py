@@ -276,6 +276,26 @@ class JobService:
                 "error": "Job cannot be cancelled (already running or completed)",
             }
 
+    def pause_job(self, job_id: int) -> dict[str, Any]:
+        """Pause a queued job."""
+        if JobRepository.pause_job(job_id):
+            return {"success": True, "message": "Job paused"}
+        else:
+            return {
+                "success": False,
+                "error": "Job cannot be paused (only queued jobs can be paused)",
+            }
+
+    def resume_job(self, job_id: int) -> dict[str, Any]:
+        """Resume a paused job."""
+        if JobRepository.resume_job(job_id):
+            return {"success": True, "message": "Job resumed"}
+        else:
+            return {
+                "success": False,
+                "error": "Job cannot be resumed (not in paused state)",
+            }
+
     def get_job_progress_log(
         self, job_id: int, limit: int = 100
     ) -> list[dict[str, Any]]:

@@ -148,6 +148,44 @@ class JobManager {
     }
 
     /**
+     * Pause a queued job
+     * @param {number} jobId - Job ID to pause
+     * @returns {Promise<Object>} Pause result
+     */
+    async pauseJob(jobId) {
+        const response = await fetch(`/api/jobs/${jobId}/pause`, {
+            method: 'POST'
+        });
+
+        const result = await response.json();
+
+        if (result.success) {
+            this.stopPolling(jobId);
+        }
+
+        return result;
+    }
+
+    /**
+     * Resume a paused job
+     * @param {number} jobId - Job ID to resume
+     * @returns {Promise<Object>} Resume result
+     */
+    async resumeJob(jobId) {
+        const response = await fetch(`/api/jobs/${jobId}/resume`, {
+            method: 'POST'
+        });
+
+        const result = await response.json();
+
+        if (result.success) {
+            this.startPolling(jobId);
+        }
+
+        return result;
+    }
+
+    /**
      * Start polling for job updates
      * @param {number} jobId - Job ID to poll
      */

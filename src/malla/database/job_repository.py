@@ -20,6 +20,7 @@ class JobStatus(str, Enum):
 
     QUEUED = "queued"
     RUNNING = "running"
+    PAUSED = "paused"
     COMPLETED = "completed"
     FAILED = "failed"
     CANCELLED = "cancelled"
@@ -614,6 +615,75 @@ class JobRepository:
 
         if rows_affected > 0:
             logger.info(f"Job {job_id} cancelled")
+            return True
+        return False
+
+    @staticmethod
+    def pause_job(job_id: int) -> bool:
+        """
+        Pause a queued job.
+
+        Returns True if the job was paused, False otherwise.
+        Running jobs cannot be paused - only queued jobs.
+        """
+        conn = get_db_connection()
+        cursor = conn.cursor()
+
+        # Only pause if queued
+        cursor.execute(
+            """
+            UPDATE background_jobs
+            SET status = ?, updated_at = ?
+            WHERE id = ? AND status = ?
+            """,
+            (
+                JobStatus.PAUSED.value,
+                time.time(),
+                job_id,
+                JobStatus.QUEUED.value,
+            ),
+        )
+
+        rows_affected = cursor.rowcount
+        conn.commit()
+        conn.close()
+
+        if rows_affected > 0:
+            logger.info(f"Job {job_id} paused")
+            return True
+        return False
+
+    @staticmethod
+    def resume_job(job_id: int) -> bool:
+        """
+        Resume a paused job (put it back in queue).
+
+        Returns True if the job was resumed, False otherwise.
+        """
+        conn = get_db_connection()
+        cursor = conn.cursor()
+
+        # Only resume if paused
+        cursor.execute(
+            """
+            UPDATE background_jobs
+            SET status = ?, updated_at = ?
+            WHERE id = ? AND status = ?
+            """,
+            (
+                JobStatus.QUEUED.value,
+                time.time(),
+                job_id,
+                JobStatus.PAUSED.value,
+            ),
+        )
+
+        rows_affected = cursor.rowcount
+        conn.commit()
+        conn.close()
+
+        if rows_affected > 0:
+            logger.info(f"Job {job_id} resumed")
             return True
         return False
 
