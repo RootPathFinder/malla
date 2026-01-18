@@ -503,6 +503,518 @@ CHANNEL_FIELDS = [
 
 
 # ============================================================================
+# Module Config Field Definitions
+# ============================================================================
+
+MQTT_MODULE_FIELDS = [
+    FieldMetadata(
+        name="enabled",
+        label="Enabled",
+        field_type=FieldType.BOOLEAN,
+        description="Enable MQTT module",
+    ),
+    FieldMetadata(
+        name="address",
+        label="Server Address",
+        field_type=FieldType.TEXT,
+        description="MQTT broker address",
+    ),
+    FieldMetadata(
+        name="username",
+        label="Username",
+        field_type=FieldType.TEXT,
+        description="MQTT username",
+    ),
+    FieldMetadata(
+        name="password",
+        label="Password",
+        field_type=FieldType.PASSWORD,
+        description="MQTT password",
+    ),
+    FieldMetadata(
+        name="encryption_enabled",
+        label="Encryption Enabled",
+        field_type=FieldType.BOOLEAN,
+        description="Enable encryption for MQTT messages",
+    ),
+    FieldMetadata(
+        name="json_enabled",
+        label="JSON Enabled",
+        field_type=FieldType.BOOLEAN,
+        description="Send messages as JSON",
+    ),
+    FieldMetadata(
+        name="tls_enabled",
+        label="TLS Enabled",
+        field_type=FieldType.BOOLEAN,
+        description="Use TLS for MQTT connection",
+    ),
+    FieldMetadata(
+        name="root",
+        label="Root Topic",
+        field_type=FieldType.TEXT,
+        description="Root topic for MQTT messages",
+    ),
+    FieldMetadata(
+        name="proxy_to_client_enabled",
+        label="Proxy to Client",
+        field_type=FieldType.BOOLEAN,
+        description="Proxy messages to connected clients",
+    ),
+    FieldMetadata(
+        name="map_reporting_enabled",
+        label="Map Reporting",
+        field_type=FieldType.BOOLEAN,
+        description="Report node position to map server",
+    ),
+]
+
+SERIAL_MODULE_FIELDS = [
+    FieldMetadata(
+        name="enabled",
+        label="Enabled",
+        field_type=FieldType.BOOLEAN,
+        description="Enable serial module",
+    ),
+    FieldMetadata(
+        name="echo",
+        label="Echo",
+        field_type=FieldType.BOOLEAN,
+        description="Echo received characters",
+    ),
+    FieldMetadata(
+        name="rxd",
+        label="RXD Pin",
+        field_type=FieldType.NUMBER,
+        description="RX pin number",
+    ),
+    FieldMetadata(
+        name="txd",
+        label="TXD Pin",
+        field_type=FieldType.NUMBER,
+        description="TX pin number",
+    ),
+    FieldMetadata(
+        name="baud",
+        label="Baud Rate",
+        field_type=FieldType.NUMBER,
+        description="Serial baud rate",
+    ),
+    FieldMetadata(
+        name="timeout",
+        label="Timeout",
+        field_type=FieldType.NUMBER,
+        description="Timeout in seconds",
+    ),
+]
+
+TELEMETRY_MODULE_FIELDS = [
+    FieldMetadata(
+        name="device_update_interval",
+        label="Device Update Interval",
+        field_type=FieldType.NUMBER,
+        description="Interval for device metrics (seconds)",
+        unit="seconds",
+    ),
+    FieldMetadata(
+        name="environment_update_interval",
+        label="Environment Update Interval",
+        field_type=FieldType.NUMBER,
+        description="Interval for environment metrics (seconds)",
+        unit="seconds",
+    ),
+    FieldMetadata(
+        name="environment_measurement_enabled",
+        label="Environment Measurement",
+        field_type=FieldType.BOOLEAN,
+        description="Enable environment sensor readings",
+    ),
+    FieldMetadata(
+        name="environment_screen_enabled",
+        label="Environment on Screen",
+        field_type=FieldType.BOOLEAN,
+        description="Show environment data on screen",
+    ),
+    FieldMetadata(
+        name="environment_display_fahrenheit",
+        label="Display Fahrenheit",
+        field_type=FieldType.BOOLEAN,
+        description="Show temperature in Fahrenheit",
+    ),
+    FieldMetadata(
+        name="air_quality_enabled",
+        label="Air Quality",
+        field_type=FieldType.BOOLEAN,
+        description="Enable air quality sensor",
+    ),
+    FieldMetadata(
+        name="air_quality_interval",
+        label="Air Quality Interval",
+        field_type=FieldType.NUMBER,
+        description="Interval for air quality readings (seconds)",
+        unit="seconds",
+    ),
+    FieldMetadata(
+        name="power_measurement_enabled",
+        label="Power Measurement",
+        field_type=FieldType.BOOLEAN,
+        description="Enable power measurement",
+    ),
+    FieldMetadata(
+        name="power_update_interval",
+        label="Power Update Interval",
+        field_type=FieldType.NUMBER,
+        description="Interval for power measurements (seconds)",
+        unit="seconds",
+    ),
+]
+
+EXTNOTIF_MODULE_FIELDS = [
+    FieldMetadata(
+        name="enabled",
+        label="Enabled",
+        field_type=FieldType.BOOLEAN,
+        description="Enable external notifications",
+    ),
+    FieldMetadata(
+        name="output_ms",
+        label="Output Duration",
+        field_type=FieldType.NUMBER,
+        description="Duration of notification in milliseconds",
+        unit="ms",
+    ),
+    FieldMetadata(
+        name="output",
+        label="Output Pin",
+        field_type=FieldType.NUMBER,
+        description="GPIO pin for notification output",
+    ),
+    FieldMetadata(
+        name="output_vibra",
+        label="Vibration Pin",
+        field_type=FieldType.NUMBER,
+        description="GPIO pin for vibration motor",
+    ),
+    FieldMetadata(
+        name="output_buzzer",
+        label="Buzzer Pin",
+        field_type=FieldType.NUMBER,
+        description="GPIO pin for buzzer",
+    ),
+    FieldMetadata(
+        name="active",
+        label="Active High",
+        field_type=FieldType.BOOLEAN,
+        description="Output is active high",
+    ),
+    FieldMetadata(
+        name="alert_message",
+        label="Alert on Message",
+        field_type=FieldType.BOOLEAN,
+        description="Alert on incoming messages",
+    ),
+    FieldMetadata(
+        name="alert_message_vibra",
+        label="Vibrate on Message",
+        field_type=FieldType.BOOLEAN,
+        description="Vibrate on incoming messages",
+    ),
+    FieldMetadata(
+        name="alert_message_buzzer",
+        label="Buzzer on Message",
+        field_type=FieldType.BOOLEAN,
+        description="Buzzer on incoming messages",
+    ),
+    FieldMetadata(
+        name="alert_bell",
+        label="Alert on Bell",
+        field_type=FieldType.BOOLEAN,
+        description="Alert on bell character",
+    ),
+    FieldMetadata(
+        name="alert_bell_vibra",
+        label="Vibrate on Bell",
+        field_type=FieldType.BOOLEAN,
+        description="Vibrate on bell character",
+    ),
+    FieldMetadata(
+        name="alert_bell_buzzer",
+        label="Buzzer on Bell",
+        field_type=FieldType.BOOLEAN,
+        description="Buzzer on bell character",
+    ),
+    FieldMetadata(
+        name="use_pwm",
+        label="Use PWM",
+        field_type=FieldType.BOOLEAN,
+        description="Use PWM for buzzer tones",
+    ),
+]
+
+STOREFORWARD_MODULE_FIELDS = [
+    FieldMetadata(
+        name="enabled",
+        label="Enabled",
+        field_type=FieldType.BOOLEAN,
+        description="Enable store and forward module",
+    ),
+    FieldMetadata(
+        name="heartbeat",
+        label="Heartbeat",
+        field_type=FieldType.BOOLEAN,
+        description="Send heartbeat messages",
+    ),
+    FieldMetadata(
+        name="records",
+        label="Records",
+        field_type=FieldType.NUMBER,
+        description="Maximum number of records to store",
+    ),
+    FieldMetadata(
+        name="history_return_max",
+        label="History Return Max",
+        field_type=FieldType.NUMBER,
+        description="Maximum messages to return in history",
+    ),
+    FieldMetadata(
+        name="history_return_window",
+        label="History Return Window",
+        field_type=FieldType.NUMBER,
+        description="Time window for history in minutes",
+        unit="minutes",
+    ),
+]
+
+RANGETEST_MODULE_FIELDS = [
+    FieldMetadata(
+        name="enabled",
+        label="Enabled",
+        field_type=FieldType.BOOLEAN,
+        description="Enable range test module",
+    ),
+    FieldMetadata(
+        name="sender",
+        label="Sender",
+        field_type=FieldType.NUMBER,
+        description="Sender interval in seconds (0=receiver mode)",
+        unit="seconds",
+    ),
+    FieldMetadata(
+        name="save",
+        label="Save Results",
+        field_type=FieldType.BOOLEAN,
+        description="Save results to file system",
+    ),
+]
+
+CANNEDMSG_MODULE_FIELDS = [
+    FieldMetadata(
+        name="enabled",
+        label="Enabled",
+        field_type=FieldType.BOOLEAN,
+        description="Enable canned message module",
+    ),
+    FieldMetadata(
+        name="allow_input_source",
+        label="Allow Input Source",
+        field_type=FieldType.NUMBER,
+        description="Input source for canned messages",
+    ),
+    FieldMetadata(
+        name="send_bell",
+        label="Send Bell",
+        field_type=FieldType.BOOLEAN,
+        description="Send bell character with messages",
+    ),
+]
+
+AUDIO_MODULE_FIELDS = [
+    FieldMetadata(
+        name="codec2_enabled",
+        label="Codec2 Enabled",
+        field_type=FieldType.BOOLEAN,
+        description="Enable Codec2 audio codec",
+    ),
+    FieldMetadata(
+        name="ptt_pin",
+        label="PTT Pin",
+        field_type=FieldType.NUMBER,
+        description="GPIO pin for push-to-talk",
+    ),
+    FieldMetadata(
+        name="bitrate",
+        label="Bitrate",
+        field_type=FieldType.NUMBER,
+        description="Audio bitrate",
+    ),
+    FieldMetadata(
+        name="i2s_ws",
+        label="I2S WS Pin",
+        field_type=FieldType.NUMBER,
+        description="I2S word select pin",
+    ),
+    FieldMetadata(
+        name="i2s_sd",
+        label="I2S SD Pin",
+        field_type=FieldType.NUMBER,
+        description="I2S serial data pin",
+    ),
+    FieldMetadata(
+        name="i2s_din",
+        label="I2S DIN Pin",
+        field_type=FieldType.NUMBER,
+        description="I2S data input pin",
+    ),
+    FieldMetadata(
+        name="i2s_sck",
+        label="I2S SCK Pin",
+        field_type=FieldType.NUMBER,
+        description="I2S serial clock pin",
+    ),
+]
+
+REMOTEHARDWARE_MODULE_FIELDS = [
+    FieldMetadata(
+        name="enabled",
+        label="Enabled",
+        field_type=FieldType.BOOLEAN,
+        description="Enable remote hardware module",
+    ),
+    FieldMetadata(
+        name="allow_undefined_pin_access",
+        label="Allow Undefined Pin Access",
+        field_type=FieldType.BOOLEAN,
+        description="Allow access to undefined GPIO pins",
+    ),
+]
+
+NEIGHBORINFO_MODULE_FIELDS = [
+    FieldMetadata(
+        name="enabled",
+        label="Enabled",
+        field_type=FieldType.BOOLEAN,
+        description="Enable neighbor info module",
+    ),
+    FieldMetadata(
+        name="update_interval",
+        label="Update Interval",
+        field_type=FieldType.NUMBER,
+        description="Interval for neighbor info updates (seconds)",
+        unit="seconds",
+    ),
+]
+
+AMBIENTLIGHTING_MODULE_FIELDS = [
+    FieldMetadata(
+        name="led_state",
+        label="LED State",
+        field_type=FieldType.BOOLEAN,
+        description="LED on/off state",
+    ),
+    FieldMetadata(
+        name="current",
+        label="Current",
+        field_type=FieldType.NUMBER,
+        description="LED current in mA",
+        unit="mA",
+    ),
+    FieldMetadata(
+        name="red",
+        label="Red",
+        field_type=FieldType.NUMBER,
+        description="Red component (0-255)",
+        min_value=0,
+        max_value=255,
+    ),
+    FieldMetadata(
+        name="green",
+        label="Green",
+        field_type=FieldType.NUMBER,
+        description="Green component (0-255)",
+        min_value=0,
+        max_value=255,
+    ),
+    FieldMetadata(
+        name="blue",
+        label="Blue",
+        field_type=FieldType.NUMBER,
+        description="Blue component (0-255)",
+        min_value=0,
+        max_value=255,
+    ),
+]
+
+DETECTIONSENSOR_MODULE_FIELDS = [
+    FieldMetadata(
+        name="enabled",
+        label="Enabled",
+        field_type=FieldType.BOOLEAN,
+        description="Enable detection sensor module",
+    ),
+    FieldMetadata(
+        name="minimum_broadcast_secs",
+        label="Minimum Broadcast Interval",
+        field_type=FieldType.NUMBER,
+        description="Minimum seconds between broadcasts",
+        unit="seconds",
+    ),
+    FieldMetadata(
+        name="state_broadcast_secs",
+        label="State Broadcast Interval",
+        field_type=FieldType.NUMBER,
+        description="Seconds between state broadcasts",
+        unit="seconds",
+    ),
+    FieldMetadata(
+        name="send_bell",
+        label="Send Bell",
+        field_type=FieldType.BOOLEAN,
+        description="Send bell character with detection",
+    ),
+    FieldMetadata(
+        name="name",
+        label="Sensor Name",
+        field_type=FieldType.TEXT,
+        description="Name of the detection sensor",
+    ),
+    FieldMetadata(
+        name="monitor_pin",
+        label="Monitor Pin",
+        field_type=FieldType.NUMBER,
+        description="GPIO pin to monitor",
+    ),
+    FieldMetadata(
+        name="detection_triggered_high",
+        label="Triggered High",
+        field_type=FieldType.BOOLEAN,
+        description="Detection triggers on high signal",
+    ),
+    FieldMetadata(
+        name="use_pullup",
+        label="Use Pullup",
+        field_type=FieldType.BOOLEAN,
+        description="Enable internal pullup resistor",
+    ),
+]
+
+PAXCOUNTER_MODULE_FIELDS = [
+    FieldMetadata(
+        name="enabled",
+        label="Enabled",
+        field_type=FieldType.BOOLEAN,
+        description="Enable PAX counter module",
+    ),
+    FieldMetadata(
+        name="paxcounter_update_interval",
+        label="Update Interval",
+        field_type=FieldType.NUMBER,
+        description="Interval for PAX counter updates (seconds)",
+        unit="seconds",
+    ),
+]
+
+
+# ============================================================================
 # Config Metadata Lookup
 # ============================================================================
 
@@ -517,6 +1029,22 @@ CONFIG_METADATA: dict[str, list[FieldMetadata]] = {
     "channel": CHANNEL_FIELDS,
 }
 
+MODULE_CONFIG_METADATA: dict[str, list[FieldMetadata]] = {
+    "mqtt": MQTT_MODULE_FIELDS,
+    "serial": SERIAL_MODULE_FIELDS,
+    "extnotif": EXTNOTIF_MODULE_FIELDS,
+    "storeforward": STOREFORWARD_MODULE_FIELDS,
+    "rangetest": RANGETEST_MODULE_FIELDS,
+    "telemetry": TELEMETRY_MODULE_FIELDS,
+    "cannedmsg": CANNEDMSG_MODULE_FIELDS,
+    "audio": AUDIO_MODULE_FIELDS,
+    "remotehardware": REMOTEHARDWARE_MODULE_FIELDS,
+    "neighborinfo": NEIGHBORINFO_MODULE_FIELDS,
+    "ambientlighting": AMBIENTLIGHTING_MODULE_FIELDS,
+    "detectionsensor": DETECTIONSENSOR_MODULE_FIELDS,
+    "paxcounter": PAXCOUNTER_MODULE_FIELDS,
+}
+
 
 def get_config_metadata(config_type: str) -> list[FieldMetadata]:
     """
@@ -529,6 +1057,19 @@ def get_config_metadata(config_type: str) -> list[FieldMetadata]:
         List of FieldMetadata for the config type
     """
     return CONFIG_METADATA.get(config_type.lower(), [])
+
+
+def get_module_config_metadata(module_type: str) -> list[FieldMetadata]:
+    """
+    Get field metadata for a module config type.
+
+    Args:
+        module_type: The module type (mqtt, serial, etc.)
+
+    Returns:
+        List of FieldMetadata for the module type
+    """
+    return MODULE_CONFIG_METADATA.get(module_type.lower(), [])
 
 
 def get_config_schema(config_type: str) -> list[dict[str, Any]]:
@@ -558,6 +1099,33 @@ def get_config_schema(config_type: str) -> list[dict[str, Any]]:
     ]
 
 
+def get_module_config_schema(module_type: str) -> list[dict[str, Any]]:
+    """
+    Get module config field schema as JSON-serializable dict.
+
+    Args:
+        module_type: The module type (mqtt, serial, etc.)
+
+    Returns:
+        List of field definitions suitable for JSON response
+    """
+    fields = get_module_config_metadata(module_type)
+    return [
+        {
+            "name": f.name,
+            "label": f.label,
+            "type": f.field_type.value,
+            "description": f.description,
+            "min": f.min_value,
+            "max": f.max_value,
+            "enum": f.enum_values,
+            "readonly": f.readonly,
+            "unit": f.unit,
+        }
+        for f in fields
+    ]
+
+
 def get_all_config_schemas() -> dict[str, list[dict[str, Any]]]:
     """
     Get all config schemas.
@@ -568,4 +1136,17 @@ def get_all_config_schemas() -> dict[str, list[dict[str, Any]]]:
     return {
         config_type: get_config_schema(config_type)
         for config_type in CONFIG_METADATA.keys()
+    }
+
+
+def get_all_module_config_schemas() -> dict[str, list[dict[str, Any]]]:
+    """
+    Get all module config schemas.
+
+    Returns:
+        Dict of module type to field schemas
+    """
+    return {
+        module_type: get_module_config_schema(module_type)
+        for module_type in MODULE_CONFIG_METADATA.keys()
     }

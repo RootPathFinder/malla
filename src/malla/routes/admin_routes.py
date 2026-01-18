@@ -580,13 +580,15 @@ def api_get_node_module_config(node_id, module_type):
         )
 
         if result.success:
+            from ..services.config_metadata import get_module_config_schema
+
             return jsonify(
                 {
                     "success": True,
                     "node_id": node_id_int,
                     "module_type": module_type,
                     "config": result.response,
-                    "schema": [],  # TODO: Add module config schemas
+                    "schema": get_module_config_schema(module_type),
                     "log_id": result.log_id,
                     "attempts": result.attempts,
                     "retry_info": result.retry_info,
