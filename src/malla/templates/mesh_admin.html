@@ -1351,6 +1351,169 @@
         </div>
     </div>
 </div>
+
+<!-- Restore Backup Modal -->
+<div class="modal fade" id="restoreBackupModal" tabindex="-1" data-bs-backdrop="static" data-bs-keyboard="false">
+    <div class="modal-dialog modal-lg">
+        <div class="modal-content">
+            <div class="modal-header bg-warning-subtle">
+                <h5 class="modal-title">
+                    <i class="bi bi-arrow-counterclockwise"></i> Restore Backup to Node
+                </h5>
+                <button type="button" class="btn-close" data-bs-dismiss="modal" id="restoreModalClose"></button>
+            </div>
+            <div class="modal-body">
+                <!-- Pre-Restore Configuration (shown before restore starts) -->
+                <div id="restoreConfigSection">
+                    <div class="alert alert-warning">
+                        <i class="bi bi-exclamation-triangle"></i>
+                        <strong>Warning:</strong> This will overwrite the target node's configuration with the backup data.
+                        Make sure you understand the implications before proceeding.
+                    </div>
+
+                    <div class="card mb-3">
+                        <div class="card-body">
+                            <h6><i class="bi bi-info-circle"></i> Backup Details</h6>
+                            <table class="table table-sm mb-0">
+                                <tr><td><strong>Name:</strong></td><td id="restoreBackupName">-</td></tr>
+                                <tr><td><strong>Original Node:</strong></td><td id="restoreOriginalNode">-</td></tr>
+                                <tr><td><strong>Created:</strong></td><td id="restoreBackupCreated">-</td></tr>
+                            </table>
+                        </div>
+                    </div>
+
+                    <div class="card mb-3">
+                        <div class="card-body">
+                            <h6><i class="bi bi-sliders"></i> Restore Options</h6>
+
+                            <div class="form-check mb-2">
+                                <input class="form-check-input" type="checkbox" id="restoreSkipPrimaryChannel" checked>
+                                <label class="form-check-label" for="restoreSkipPrimaryChannel">
+                                    <strong>Skip Primary Channel (Channel 0)</strong>
+                                    <small class="text-muted d-block">Recommended: Prevents losing mesh connectivity during restore</small>
+                                </label>
+                            </div>
+
+                            <div class="form-check mb-2">
+                                <input class="form-check-input" type="checkbox" id="restoreSkipLora">
+                                <label class="form-check-label" for="restoreSkipLora">
+                                    <strong>Skip LoRa Configuration</strong>
+                                    <small class="text-muted d-block">Keep current radio settings (frequency, bandwidth, etc.)</small>
+                                </label>
+                            </div>
+
+                            <div class="form-check mb-2">
+                                <input class="form-check-input" type="checkbox" id="restoreSkipSecurity" checked>
+                                <label class="form-check-label" for="restoreSkipSecurity">
+                                    <strong>Skip Security Configuration</strong>
+                                    <small class="text-muted d-block">Recommended: Keep current admin keys to maintain access</small>
+                                </label>
+                            </div>
+
+                            <div class="form-check mb-2">
+                                <input class="form-check-input" type="checkbox" id="restoreRebootAfter">
+                                <label class="form-check-label" for="restoreRebootAfter">
+                                    <strong>Reboot Node After Restore</strong>
+                                    <small class="text-muted d-block">Required for some settings to take effect</small>
+                                </label>
+                            </div>
+                        </div>
+                    </div>
+
+                    <div class="card bg-light">
+                        <div class="card-body">
+                            <h6><i class="bi bi-list-check"></i> Configurations to Restore</h6>
+                            <div class="row">
+                                <div class="col-md-4">
+                                    <strong>Core Configs:</strong>
+                                    <span id="restoreCoreCount" class="badge bg-primary">0</span>
+                                </div>
+                                <div class="col-md-4">
+                                    <strong>Module Configs:</strong>
+                                    <span id="restoreModuleCount" class="badge bg-info">0</span>
+                                </div>
+                                <div class="col-md-4">
+                                    <strong>Channels:</strong>
+                                    <span id="restoreChannelCount" class="badge bg-success">0</span>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Restore Progress Section (shown during restore) -->
+                <div id="restoreProgressSection" style="display: none;">
+                    <div class="card">
+                        <div class="card-body">
+                            <div class="d-flex align-items-center mb-3">
+                                <span class="spinner-border spinner-border-sm text-warning me-2" id="restoreSpinner"></span>
+                                <strong id="restoreProgressStatus">Starting restore...</strong>
+                            </div>
+
+                            <div class="progress mb-2" style="height: 20px;">
+                                <div class="progress-bar progress-bar-striped progress-bar-animated bg-warning"
+                                     role="progressbar"
+                                     id="restoreProgressBar"
+                                     style="width: 0%">0%</div>
+                            </div>
+
+                            <div class="mb-3">
+                                <small class="text-muted" id="restoreProgressDetails">Initializing...</small>
+                            </div>
+
+                            <!-- Restore Log -->
+                            <div class="bg-dark text-light rounded p-2" style="max-height: 200px; overflow-y: auto; font-family: monospace; font-size: 0.8rem;" id="restoreLogContainer">
+                            </div>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Restore Complete Section (shown after restore) -->
+                <div id="restoreCompleteSection" style="display: none;">
+                    <div class="text-center py-4">
+                        <i class="bi bi-check-circle-fill text-success" style="font-size: 4rem;" id="restoreSuccessIcon"></i>
+                        <i class="bi bi-x-circle-fill text-danger" style="font-size: 4rem; display: none;" id="restoreFailIcon"></i>
+                        <h4 class="mt-3" id="restoreCompleteTitle">Restore Complete</h4>
+                        <p class="text-muted" id="restoreCompleteMessage">Configuration has been restored successfully.</p>
+                    </div>
+
+                    <div class="row" id="restoreResultsSummary">
+                        <div class="col-md-6">
+                            <div class="card border-success mb-2">
+                                <div class="card-body py-2">
+                                    <strong class="text-success">Successful:</strong>
+                                    <span id="restoreSuccessCount" class="badge bg-success">0</span>
+                                </div>
+                            </div>
+                        </div>
+                        <div class="col-md-6">
+                            <div class="card border-danger mb-2">
+                                <div class="card-body py-2">
+                                    <strong class="text-danger">Failed:</strong>
+                                    <span id="restoreFailCount" class="badge bg-danger">0</span>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+
+                    <div id="restoreErrorDetails" style="display: none;" class="mt-3">
+                        <h6 class="text-danger">Failed Items:</h6>
+                        <ul class="list-group list-group-flush small" id="restoreErrorList"></ul>
+                    </div>
+                </div>
+            </div>
+            <div class="modal-footer">
+                <button type="button" class="btn btn-secondary" data-bs-dismiss="modal" id="restoreCancelBtn">Cancel</button>
+                <button type="button" class="btn btn-warning" id="startRestoreBtn" onclick="startRestore()">
+                    <i class="bi bi-arrow-counterclockwise"></i> Start Restore
+                </button>
+                <button type="button" class="btn btn-primary" id="restoreDoneBtn" style="display: none;" data-bs-dismiss="modal">
+                    <i class="bi bi-check"></i> Done
+                </button>
+            </div>
+        </div>
+    </div>
+</div>
 {% endblock %}
 
 {% block extra_js %}
@@ -4902,12 +5065,211 @@
         const targetNodeId = document.getElementById('restoreTargetNode').value;
         if (!targetNodeId || !currentBackupData) return;
 
-        const confirmText = `Are you sure you want to restore this backup to the selected node? This will overwrite the node's current configuration.`;
-        if (!confirm(confirmText)) return;
+        // Populate the restore modal with backup details
+        const backup = currentBackupData;
+        const backupData = backup.backup_data || {};
 
-        // TODO: Implement restore functionality
-        // This would iterate through all configs in the backup and apply them
-        showAlert('info', 'Restore functionality coming soon. For now, you can export the backup and manually apply configs.');
+        document.getElementById('restoreBackupName').textContent = backup.backup_name || 'Unknown';
+        document.getElementById('restoreOriginalNode').textContent =
+            backup.node_long_name || backup.node_short_name || backup.node_hex_id || 'Unknown';
+        document.getElementById('restoreBackupCreated').textContent =
+            backup.created_at ? formatAdminDateTime(new Date(backup.created_at * 1000)) : 'Unknown';
+
+        // Count items to restore
+        const coreConfigs = Object.keys(backupData.core_configs || {});
+        const moduleConfigs = Object.keys(backupData.module_configs || {});
+        const channels = Object.keys(backupData.channels || {});
+
+        document.getElementById('restoreCoreCount').textContent = coreConfigs.length;
+        document.getElementById('restoreModuleCount').textContent = moduleConfigs.length;
+        document.getElementById('restoreChannelCount').textContent = channels.length;
+
+        // Reset modal state
+        document.getElementById('restoreConfigSection').style.display = 'block';
+        document.getElementById('restoreProgressSection').style.display = 'none';
+        document.getElementById('restoreCompleteSection').style.display = 'none';
+        document.getElementById('startRestoreBtn').style.display = 'inline-block';
+        document.getElementById('restoreDoneBtn').style.display = 'none';
+        document.getElementById('restoreCancelBtn').style.display = 'inline-block';
+        document.getElementById('restoreModalClose').disabled = false;
+
+        // Store target node for startRestore
+        document.getElementById('startRestoreBtn').dataset.targetNodeId = targetNodeId;
+        document.getElementById('startRestoreBtn').dataset.backupId = currentBackupId;
+
+        // Show the modal
+        const modal = new bootstrap.Modal(document.getElementById('restoreBackupModal'));
+        modal.show();
+    }
+
+    async function startRestore() {
+        const startBtn = document.getElementById('startRestoreBtn');
+        const targetNodeId = startBtn.dataset.targetNodeId;
+        const backupId = startBtn.dataset.backupId;
+
+        if (!targetNodeId || !backupId) {
+            showAlert('danger', 'Missing target node or backup information');
+            return;
+        }
+
+        // Get restore options
+        const skipPrimaryChannel = document.getElementById('restoreSkipPrimaryChannel').checked;
+        const skipLora = document.getElementById('restoreSkipLora').checked;
+        const skipSecurity = document.getElementById('restoreSkipSecurity').checked;
+        const rebootAfter = document.getElementById('restoreRebootAfter').checked;
+
+        // Update UI for progress mode
+        document.getElementById('restoreConfigSection').style.display = 'none';
+        document.getElementById('restoreProgressSection').style.display = 'block';
+        document.getElementById('restoreCompleteSection').style.display = 'none';
+        document.getElementById('startRestoreBtn').style.display = 'none';
+        document.getElementById('restoreDoneBtn').style.display = 'none';
+        document.getElementById('restoreCancelBtn').style.display = 'none';
+        document.getElementById('restoreModalClose').disabled = true;
+
+        const logContainer = document.getElementById('restoreLogContainer');
+        logContainer.innerHTML = '';
+
+        function addLogEntry(message, type = 'info') {
+            const colorMap = {
+                'success': '#28a745',
+                'error': '#dc3545',
+                'warning': '#ffc107',
+                'info': '#17a2b8'
+            };
+            const entry = document.createElement('div');
+            entry.style.color = colorMap[type] || '#adb5bd';
+            entry.textContent = `[${new Date().toLocaleTimeString()}] ${message}`;
+            logContainer.appendChild(entry);
+            logContainer.scrollTop = logContainer.scrollHeight;
+        }
+
+        addLogEntry('Starting restore process...');
+
+        // Build URL with options
+        const params = new URLSearchParams({
+            backup_id: backupId,
+            target_node_id: targetNodeId,
+            skip_primary_channel: skipPrimaryChannel,
+            skip_lora: skipLora,
+            skip_security: skipSecurity,
+            reboot_after: rebootAfter
+        });
+
+        try {
+            const eventSource = new EventSource(`/api/admin/backups/restore/stream?${params}`);
+
+            eventSource.onmessage = function(event) {
+                const data = JSON.parse(event.data);
+
+                if (data.complete) {
+                    eventSource.close();
+                    showRestoreComplete(data);
+                } else {
+                    // Update progress
+                    const progress = data.progress || 0;
+                    document.getElementById('restoreProgressBar').style.width = `${progress}%`;
+                    document.getElementById('restoreProgressBar').textContent = `${progress}%`;
+                    document.getElementById('restoreProgressStatus').textContent = data.status || 'Processing...';
+
+                    if (data.current && data.total) {
+                        document.getElementById('restoreProgressDetails').textContent =
+                            `${data.current} of ${data.total} configurations (${data.phase || 'processing'})`;
+                    }
+
+                    // Add log entry based on status
+                    if (data.config_success === true) {
+                        addLogEntry(data.status, 'success');
+                    } else if (data.config_success === false) {
+                        addLogEntry(data.status + (data.config_error ? ` - ${data.config_error}` : ''), 'error');
+                    } else if (data.status) {
+                        addLogEntry(data.status);
+                    }
+                }
+            };
+
+            eventSource.onerror = function(error) {
+                eventSource.close();
+                addLogEntry('Connection error - restore may have failed', 'error');
+                showRestoreComplete({
+                    complete: true,
+                    success: false,
+                    error: 'Connection to server lost'
+                });
+            };
+
+        } catch (error) {
+            addLogEntry(`Error: ${error.message}`, 'error');
+            showRestoreComplete({
+                complete: true,
+                success: false,
+                error: error.message
+            });
+        }
+    }
+
+    function showRestoreComplete(data) {
+        document.getElementById('restoreProgressSection').style.display = 'none';
+        document.getElementById('restoreCompleteSection').style.display = 'block';
+        document.getElementById('startRestoreBtn').style.display = 'none';
+        document.getElementById('restoreDoneBtn').style.display = 'inline-block';
+        document.getElementById('restoreCancelBtn').style.display = 'none';
+        document.getElementById('restoreModalClose').disabled = false;
+        document.getElementById('restoreSpinner').style.display = 'none';
+
+        if (data.success) {
+            document.getElementById('restoreSuccessIcon').style.display = 'inline';
+            document.getElementById('restoreFailIcon').style.display = 'none';
+            document.getElementById('restoreCompleteTitle').textContent = 'Restore Complete';
+            document.getElementById('restoreCompleteTitle').className = 'mt-3 text-success';
+            document.getElementById('restoreCompleteMessage').textContent =
+                data.message || 'Configuration has been restored successfully.';
+
+            if (data.reboot_after) {
+                document.getElementById('restoreCompleteMessage').textContent +=
+                    ' The node will reboot shortly to apply changes.';
+            }
+
+            document.getElementById('restoreSuccessCount').textContent = data.total_restored || 0;
+            document.getElementById('restoreFailCount').textContent = data.total_failed || 0;
+
+            if (data.failed_restores && data.failed_restores.length > 0) {
+                document.getElementById('restoreErrorDetails').style.display = 'block';
+                const errorList = document.getElementById('restoreErrorList');
+                errorList.innerHTML = data.failed_restores.map(err =>
+                    `<li class="list-group-item list-group-item-danger py-1">${escapeHtml(err)}</li>`
+                ).join('');
+            } else {
+                document.getElementById('restoreErrorDetails').style.display = 'none';
+            }
+
+            showAlert('success', `Restored ${data.total_restored || 0} configurations successfully`);
+        } else {
+            document.getElementById('restoreSuccessIcon').style.display = 'none';
+            document.getElementById('restoreFailIcon').style.display = 'inline';
+            document.getElementById('restoreCompleteTitle').textContent = 'Restore Failed';
+            document.getElementById('restoreCompleteTitle').className = 'mt-3 text-danger';
+            document.getElementById('restoreCompleteMessage').textContent =
+                data.error || 'Failed to restore configuration.';
+
+            document.getElementById('restoreSuccessCount').textContent = 0;
+            document.getElementById('restoreFailCount').textContent =
+                data.failed_restores ? data.failed_restores.length : 1;
+
+            if (data.failed_restores && data.failed_restores.length > 0) {
+                document.getElementById('restoreErrorDetails').style.display = 'block';
+                const errorList = document.getElementById('restoreErrorList');
+                errorList.innerHTML = data.failed_restores.map(err =>
+                    `<li class="list-group-item list-group-item-danger py-1">${escapeHtml(err)}</li>`
+                ).join('');
+            } else {
+                document.getElementById('restoreErrorDetails').style.display = 'none';
+            }
+
+            showAlert('danger', data.error || 'Restore failed');
+        }
+
+        document.getElementById('restoreResultsSummary').style.display = 'flex';
     }
 
     // Load backups when tab is shown

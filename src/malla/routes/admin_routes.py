@@ -1118,6 +1118,458 @@ def api_create_backup_stream():
     )
 
 
+@admin_bp.route("/api/admin/backups/restore/stream")
+def api_restore_backup_stream():
+    """
+    SSE endpoint to restore a backup to a node with real-time progress updates.
+
+    This performs a safe restore by:
+    1. Validating the backup data
+    2. Optionally creating a pre-restore backup of the target node
+    3. Restoring core configs first (most critical)
+    4. Restoring module configs
+    5. Restoring channels (skipping primary channel by default for safety)
+    6. Optionally rebooting the node to apply changes
+
+    Returns a Server-Sent Events stream with progress messages during restore.
+    """
+    from ..services.admin_service import ConfigType, ModuleConfigType
+
+    backup_id_str = request.args.get("backup_id")
+    target_node_str = request.args.get("target_node_id")
+    skip_primary_channel = request.args.get("skip_primary_channel", "true") == "true"
+    skip_lora = request.args.get("skip_lora", "false") == "true"
+    skip_security = request.args.get("skip_security", "true") == "true"
+    reboot_after = request.args.get("reboot_after", "false") == "true"
+
+    def generate():
+        def send_event(data: dict) -> str:
+            return f"data: {json.dumps(data)}\n\n"
+
+        # Validate inputs
+        if not backup_id_str:
+            yield send_event(
+                {"complete": True, "success": False, "error": "backup_id is required"}
+            )
+            return
+        if not target_node_str:
+            yield send_event(
+                {
+                    "complete": True,
+                    "success": False,
+                    "error": "target_node_id is required",
+                }
+            )
+            return
+
+        # Convert IDs
+        try:
+            backup_id = int(backup_id_str)
+        except (ValueError, TypeError):
+            yield send_event(
+                {
+                    "complete": True,
+                    "success": False,
+                    "error": f"Invalid backup_id: {backup_id_str}",
+                }
+            )
+            return
+
+        try:
+            target_node_id = convert_node_id(target_node_str)
+        except (ValueError, TypeError):
+            yield send_event(
+                {
+                    "complete": True,
+                    "success": False,
+                    "error": f"Invalid target_node_id: {target_node_str}",
+                }
+            )
+            return
+
+        # Fetch backup from database
+        yield send_event(
+            {
+                "status": "Loading backup data...",
+                "progress": 0,
+                "phase": "init",
+            }
+        )
+
+        backup = AdminRepository.get_backup(backup_id)
+        if not backup:
+            yield send_event(
+                {
+                    "complete": True,
+                    "success": False,
+                    "error": f"Backup not found: {backup_id}",
+                }
+            )
+            return
+
+        # Parse backup data
+        try:
+            backup_data = (
+                json.loads(backup["backup_data"])
+                if isinstance(backup["backup_data"], str)
+                else backup["backup_data"]
+            )
+        except json.JSONDecodeError as e:
+            yield send_event(
+                {
+                    "complete": True,
+                    "success": False,
+                    "error": f"Invalid backup data format: {e}",
+                }
+            )
+            return
+
+        admin_service = get_admin_service()
+
+        # Define what we're restoring
+        core_configs = backup_data.get("core_configs", {})
+        module_configs = backup_data.get("module_configs", {})
+        channels = backup_data.get("channels", {})
+
+        # Build list of items to restore
+        items_to_restore = []
+
+        # Core configs (map keys to ConfigType)
+        core_config_map = {
+            "device": ConfigType.DEVICE,
+            "position": ConfigType.POSITION,
+            "power": ConfigType.POWER,
+            "network": ConfigType.NETWORK,
+            "display": ConfigType.DISPLAY,
+            "lora": ConfigType.LORA,
+            "bluetooth": ConfigType.BLUETOOTH,
+            "security": ConfigType.SECURITY,
+        }
+
+        for config_name, config_type in core_config_map.items():
+            if config_name in core_configs:
+                # Apply skip filters
+                if config_name == "lora" and skip_lora:
+                    continue
+                if config_name == "security" and skip_security:
+                    continue
+                items_to_restore.append(("core", config_name, config_type))
+
+        # Module configs (map keys to ModuleConfigType)
+        module_config_map = {
+            "mqtt": ModuleConfigType.MQTT,
+            "serial": ModuleConfigType.SERIAL,
+            "extnotif": ModuleConfigType.EXTNOTIF,
+            "storeforward": ModuleConfigType.STOREFORWARD,
+            "rangetest": ModuleConfigType.RANGETEST,
+            "telemetry": ModuleConfigType.TELEMETRY,
+            "cannedmsg": ModuleConfigType.CANNEDMSG,
+            "audio": ModuleConfigType.AUDIO,
+            "remotehardware": ModuleConfigType.REMOTEHARDWARE,
+            "neighborinfo": ModuleConfigType.NEIGHBORINFO,
+            "ambientlighting": ModuleConfigType.AMBIENTLIGHTING,
+            "detectionsensor": ModuleConfigType.DETECTIONSENSOR,
+            "paxcounter": ModuleConfigType.PAXCOUNTER,
+        }
+
+        for module_name, module_type in module_config_map.items():
+            if module_name in module_configs:
+                items_to_restore.append(("module", module_name, module_type))
+
+        # Channels (skip primary if requested)
+        for channel_idx_str in channels.keys():
+            channel_idx = int(channel_idx_str)
+            if channel_idx == 0 and skip_primary_channel:
+                continue
+            items_to_restore.append(("channel", channel_idx_str, channel_idx))
+
+        total_items = len(items_to_restore)
+        if total_items == 0:
+            yield send_event(
+                {
+                    "complete": True,
+                    "success": False,
+                    "error": "No configurations to restore in backup",
+                }
+            )
+            return
+
+        current_item = 0
+        successful_restores = []
+        errors = []
+
+        yield send_event(
+            {
+                "status": f"Starting restore of {total_items} configurations...",
+                "progress": 1,
+                "phase": "restoring",
+                "total_items": total_items,
+                "skip_primary_channel": skip_primary_channel,
+                "skip_lora": skip_lora,
+                "skip_security": skip_security,
+            }
+        )
+
+        try:
+            # Restore core configs first
+            for item_type, item_name, item_enum in items_to_restore:
+                current_item += 1
+                progress = int((current_item / total_items) * 95) + 2
+
+                if item_type == "core":
+                    yield send_event(
+                        {
+                            "status": f"Restoring {item_name.upper()} config...",
+                            "progress": progress,
+                            "phase": "core",
+                            "current": current_item,
+                            "total": total_items,
+                            "config_name": item_name.upper(),
+                        }
+                    )
+
+                    # Extract the config data - need to handle nested structure
+                    config_data = core_configs.get(item_name, {})
+                    # The backup stores data like {"device": {...}} - extract inner
+                    if item_name in config_data:
+                        config_data = config_data[item_name]
+
+                    result = admin_service.set_config(
+                        target_node_id=target_node_id,
+                        config_type=item_enum,
+                        config_data=config_data,
+                    )
+
+                    if result.success:
+                        successful_restores.append(f"core:{item_name}")
+                        yield send_event(
+                            {
+                                "status": f"✓ {item_name.upper()} config restored",
+                                "progress": progress,
+                                "phase": "core",
+                                "current": current_item,
+                                "total": total_items,
+                                "config_name": item_name.upper(),
+                                "config_success": True,
+                            }
+                        )
+                    else:
+                        error_msg = result.error or "Unknown error"
+                        errors.append(f"core:{item_name}: {error_msg}")
+                        yield send_event(
+                            {
+                                "status": f"✗ {item_name.upper()} config failed",
+                                "progress": progress,
+                                "phase": "core",
+                                "current": current_item,
+                                "total": total_items,
+                                "config_name": item_name.upper(),
+                                "config_success": False,
+                                "config_error": error_msg,
+                            }
+                        )
+
+                elif item_type == "module":
+                    yield send_event(
+                        {
+                            "status": f"Restoring {item_name.upper()} module...",
+                            "progress": progress,
+                            "phase": "module",
+                            "current": current_item,
+                            "total": total_items,
+                            "config_name": item_name.upper(),
+                        }
+                    )
+
+                    # Extract module config data
+                    module_data = module_configs.get(item_name, {})
+                    # Handle nested structure like {"mqtt": {...}}
+                    if item_name in module_data:
+                        module_data = module_data[item_name]
+
+                    result = admin_service.set_module_config(
+                        target_node_id=target_node_id,
+                        module_config_type=item_enum,
+                        module_data=module_data,
+                    )
+
+                    if result.success:
+                        successful_restores.append(f"module:{item_name}")
+                        yield send_event(
+                            {
+                                "status": f"✓ {item_name.upper()} module restored",
+                                "progress": progress,
+                                "phase": "module",
+                                "current": current_item,
+                                "total": total_items,
+                                "config_name": item_name.upper(),
+                                "config_success": True,
+                            }
+                        )
+                    else:
+                        error_msg = result.error or "Unknown error"
+                        errors.append(f"module:{item_name}: {error_msg}")
+                        yield send_event(
+                            {
+                                "status": f"✗ {item_name.upper()} module failed",
+                                "progress": progress,
+                                "phase": "module",
+                                "current": current_item,
+                                "total": total_items,
+                                "config_name": item_name.upper(),
+                                "config_success": False,
+                                "config_error": error_msg,
+                            }
+                        )
+
+                elif item_type == "channel":
+                    channel_idx = item_enum
+                    yield send_event(
+                        {
+                            "status": f"Restoring Channel {channel_idx}...",
+                            "progress": progress,
+                            "phase": "channels",
+                            "current": current_item,
+                            "total": total_items,
+                            "config_name": f"Channel {channel_idx}",
+                        }
+                    )
+
+                    # Extract channel data
+                    channel_data = channels.get(item_name, {})
+                    # Handle nested structure
+                    if "channel" in channel_data:
+                        channel_info = channel_data["channel"]
+                        # Build the channel data for set_channel
+                        set_channel_data = {
+                            "role": channel_info.get("role", 0),
+                            "name": channel_info.get("settings", {}).get("name", ""),
+                            "psk": channel_info.get("settings", {}).get("psk", ""),
+                            "position_precision": channel_info.get("settings", {})
+                            .get("module_settings", {})
+                            .get("position_precision", 0),
+                        }
+                    else:
+                        set_channel_data = channel_data
+
+                    result = admin_service.set_channel(
+                        target_node_id=target_node_id,
+                        channel_index=channel_idx,
+                        channel_data=set_channel_data,
+                    )
+
+                    if result.success:
+                        successful_restores.append(f"channel:{channel_idx}")
+                        yield send_event(
+                            {
+                                "status": f"✓ Channel {channel_idx} restored",
+                                "progress": progress,
+                                "phase": "channels",
+                                "current": current_item,
+                                "total": total_items,
+                                "config_name": f"Channel {channel_idx}",
+                                "config_success": True,
+                            }
+                        )
+                    else:
+                        error_msg = result.error or "Unknown error"
+                        errors.append(f"channel:{channel_idx}: {error_msg}")
+                        yield send_event(
+                            {
+                                "status": f"✗ Channel {channel_idx} failed",
+                                "progress": progress,
+                                "phase": "channels",
+                                "current": current_item,
+                                "total": total_items,
+                                "config_name": f"Channel {channel_idx}",
+                                "config_success": False,
+                                "config_error": error_msg,
+                            }
+                        )
+
+                # Small delay between configs to avoid overwhelming the node
+                time.sleep(0.5)
+
+            # Reboot if requested and restore was successful
+            if reboot_after and successful_restores:
+                yield send_event(
+                    {
+                        "status": "Sending reboot command to apply changes...",
+                        "progress": 98,
+                        "phase": "reboot",
+                    }
+                )
+
+                reboot_result = admin_service.reboot_node(
+                    target_node_id=target_node_id,
+                    delay_seconds=5,
+                )
+
+                if reboot_result.success:
+                    yield send_event(
+                        {
+                            "status": "Node will reboot in 5 seconds",
+                            "progress": 99,
+                            "phase": "reboot",
+                            "reboot_sent": True,
+                        }
+                    )
+                else:
+                    yield send_event(
+                        {
+                            "status": f"Reboot command failed: {reboot_result.error}",
+                            "progress": 99,
+                            "phase": "reboot",
+                            "reboot_sent": False,
+                            "reboot_error": reboot_result.error,
+                        }
+                    )
+
+            # Final result
+            if successful_restores:
+                yield send_event(
+                    {
+                        "complete": True,
+                        "success": True,
+                        "message": f"Restored {len(successful_restores)} configurations",
+                        "successful_restores": successful_restores,
+                        "failed_restores": errors,
+                        "total_restored": len(successful_restores),
+                        "total_failed": len(errors),
+                        "reboot_after": reboot_after,
+                    }
+                )
+            else:
+                yield send_event(
+                    {
+                        "complete": True,
+                        "success": False,
+                        "error": "Failed to restore any configurations",
+                        "failed_restores": errors,
+                    }
+                )
+
+        except Exception as e:
+            logger.error(f"Error during restore stream: {e}")
+            yield send_event(
+                {
+                    "complete": True,
+                    "success": False,
+                    "error": str(e),
+                }
+            )
+
+    return Response(
+        stream_with_context(generate()),
+        mimetype="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache",
+            "Connection": "keep-alive",
+            "X-Accel-Buffering": "no",
+        },
+    )
+
+
 @admin_bp.route("/api/admin/node/<node_id>/config/<config_type>", methods=["POST"])
 def api_set_node_config(node_id, config_type):
     """Set configuration on a remote node."""

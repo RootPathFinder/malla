@@ -1471,6 +1471,115 @@ class AdminService:
                 response={"message": "Config sent (no confirmation received)"},
             )
 
+    def set_module_config(
+        self,
+        target_node_id: int,
+        module_config_type: ModuleConfigType,
+        module_data: dict[str, Any],
+    ) -> AdminCommandResult:
+        """
+        Set module configuration on a remote node.
+
+        Args:
+            target_node_id: The target node ID
+            module_config_type: The type of module configuration to set
+            module_data: Dictionary of module config values to set
+
+        Returns:
+            AdminCommandResult with success/failure info
+        """
+        gateway_id = self.gateway_node_id
+        if not gateway_id:
+            return AdminCommandResult(
+                success=False,
+                error="No gateway node configured",
+            )
+
+        conn_type = self.connection_type
+
+        # Log the command
+        log_id = AdminRepository.log_admin_command(
+            target_node_id=target_node_id,
+            command_type="set_module_config",
+            command_data=json.dumps(
+                {
+                    "module_config_type": module_config_type.name,
+                    "module_data": module_data,
+                    "connection_type": conn_type.value,
+                }
+            ),
+        )
+
+        # Send the request using appropriate publisher
+        publisher = self._get_publisher()
+
+        module_type_str = module_config_type.name.lower()
+
+        if conn_type == AdminConnectionType.TCP:
+            packet_id = publisher.send_set_module_config(
+                target_node_id=target_node_id,
+                module_type=module_type_str,
+                module_data=module_data,
+            )
+        else:
+            # MQTT set_module_config not yet implemented
+            AdminRepository.update_admin_log_status(
+                log_id=log_id,
+                status="failed",
+                error_message="set_module_config not supported via MQTT",
+            )
+            return AdminCommandResult(
+                success=False,
+                log_id=log_id,
+                error="set_module_config is only supported via TCP connection",
+            )
+
+        if packet_id is None:
+            AdminRepository.update_admin_log_status(
+                log_id=log_id,
+                status="failed",
+                error_message=f"Failed to send message via {conn_type.value}",
+            )
+            return AdminCommandResult(
+                success=False,
+                log_id=log_id,
+                error=f"Failed to send admin message via {conn_type.value}",
+            )
+
+        # Wait for response/acknowledgment
+        response = publisher.get_response(packet_id, timeout=30.0)
+
+        if response:
+            AdminRepository.update_admin_log_status(
+                log_id=log_id,
+                status="success",
+                response_data=json.dumps(
+                    {"message": "Module config updated successfully"}
+                ),
+            )
+
+            return AdminCommandResult(
+                success=True,
+                packet_id=packet_id,
+                log_id=log_id,
+                response={"message": "Module config updated successfully"},
+            )
+        else:
+            # Even without response, the config may have been applied
+            AdminRepository.update_admin_log_status(
+                log_id=log_id,
+                status="success",
+                response_data=json.dumps(
+                    {"message": "Module config sent (no confirmation received)"}
+                ),
+            )
+            return AdminCommandResult(
+                success=True,
+                packet_id=packet_id,
+                log_id=log_id,
+                response={"message": "Module config sent (no confirmation received)"},
+            )
+
     def set_channel(
         self,
         target_node_id: int,

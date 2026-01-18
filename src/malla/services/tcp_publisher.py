@@ -555,6 +555,122 @@ class TCPPublisher:
             want_response=True,
         )
 
+    def send_set_module_config(
+        self,
+        target_node_id: int,
+        module_type: str,
+        module_data: dict,
+    ) -> int | None:
+        """
+        Set module configuration on a target node.
+
+        Args:
+            target_node_id: The target node ID
+            module_type: The module type (mqtt, serial, telemetry, etc.)
+            module_data: Dictionary of module config values to set
+
+        Returns:
+            Packet ID if sent successfully
+        """
+        from meshtastic.protobuf import module_config_pb2
+
+        admin_msg = admin_pb2.AdminMessage()
+        module_config = module_config_pb2.ModuleConfig()
+
+        module_type_lower = module_type.lower()
+
+        if module_type_lower == "mqtt":
+            for key, value in module_data.items():
+                if hasattr(module_config.mqtt, key):
+                    setattr(module_config.mqtt, key, value)
+            admin_msg.set_module_config.CopyFrom(module_config)
+
+        elif module_type_lower == "serial":
+            for key, value in module_data.items():
+                if hasattr(module_config.serial, key):
+                    setattr(module_config.serial, key, value)
+            admin_msg.set_module_config.CopyFrom(module_config)
+
+        elif module_type_lower == "extnotif":
+            for key, value in module_data.items():
+                if hasattr(module_config.external_notification, key):
+                    setattr(module_config.external_notification, key, value)
+            admin_msg.set_module_config.CopyFrom(module_config)
+
+        elif module_type_lower == "storeforward":
+            for key, value in module_data.items():
+                if hasattr(module_config.store_forward, key):
+                    setattr(module_config.store_forward, key, value)
+            admin_msg.set_module_config.CopyFrom(module_config)
+
+        elif module_type_lower == "rangetest":
+            for key, value in module_data.items():
+                if hasattr(module_config.range_test, key):
+                    setattr(module_config.range_test, key, value)
+            admin_msg.set_module_config.CopyFrom(module_config)
+
+        elif module_type_lower == "telemetry":
+            for key, value in module_data.items():
+                if hasattr(module_config.telemetry, key):
+                    setattr(module_config.telemetry, key, value)
+            admin_msg.set_module_config.CopyFrom(module_config)
+
+        elif module_type_lower == "cannedmsg":
+            for key, value in module_data.items():
+                if hasattr(module_config.canned_message, key):
+                    setattr(module_config.canned_message, key, value)
+            admin_msg.set_module_config.CopyFrom(module_config)
+
+        elif module_type_lower == "audio":
+            for key, value in module_data.items():
+                if hasattr(module_config.audio, key):
+                    setattr(module_config.audio, key, value)
+            admin_msg.set_module_config.CopyFrom(module_config)
+
+        elif module_type_lower == "remotehardware":
+            for key, value in module_data.items():
+                if hasattr(module_config.remote_hardware, key):
+                    setattr(module_config.remote_hardware, key, value)
+            admin_msg.set_module_config.CopyFrom(module_config)
+
+        elif module_type_lower == "neighborinfo":
+            for key, value in module_data.items():
+                if hasattr(module_config.neighbor_info, key):
+                    setattr(module_config.neighbor_info, key, value)
+            admin_msg.set_module_config.CopyFrom(module_config)
+
+        elif module_type_lower == "ambientlighting":
+            for key, value in module_data.items():
+                if hasattr(module_config.ambient_lighting, key):
+                    setattr(module_config.ambient_lighting, key, value)
+            admin_msg.set_module_config.CopyFrom(module_config)
+
+        elif module_type_lower == "detectionsensor":
+            for key, value in module_data.items():
+                if hasattr(module_config.detection_sensor, key):
+                    setattr(module_config.detection_sensor, key, value)
+            admin_msg.set_module_config.CopyFrom(module_config)
+
+        elif module_type_lower == "paxcounter":
+            for key, value in module_data.items():
+                if hasattr(module_config.paxcounter, key):
+                    setattr(module_config.paxcounter, key, value)
+            admin_msg.set_module_config.CopyFrom(module_config)
+
+        else:
+            logger.error(f"Unknown module type: {module_type}")
+            return None
+
+        logger.info(
+            f"Sending set_module_config for {module_type} to !{target_node_id:08x}"
+        )
+
+        return self.send_admin_message(
+            target_node_id=target_node_id,
+            admin_message=admin_msg,
+            want_response=True,
+        )
+
     def send_set_channel(
         self,
         target_node_id: int,
