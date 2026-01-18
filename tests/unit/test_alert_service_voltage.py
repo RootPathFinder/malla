@@ -3,7 +3,9 @@ Unit tests for AlertService voltage handling.
 """
 
 import time
+
 import pytest
+
 from malla.database import get_db_connection
 from malla.services.alert_service import AlertService
 
@@ -123,7 +125,7 @@ class TestAlertServiceVoltage:
         """Test that _check_battery_health ignores 0.00V readings."""
 
         # Run battery check
-        results = AlertService._check_battery_health()
+        AlertService._check_battery_health()
 
         # Should not generate alerts for 0.00V if ignored correctly
         # If it picked up 0.00V, it would generate a CRITICAL_BATTERY alert

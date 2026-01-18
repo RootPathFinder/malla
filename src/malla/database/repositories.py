@@ -2154,9 +2154,12 @@ class NodeRepository:
                                 {"x": ts, "y": metrics.battery_level}
                             )
                         if metrics.HasField("voltage") and metrics.voltage > 0:
-                            metrics_history["voltage"].append(
-                                {"x": ts, "y": metrics.voltage / 1000.0}
-                            )
+                            # Handle both millivolts (>1000) and volts (<1000) formats
+                            # Some firmware sends mV, some sends V
+                            voltage = metrics.voltage
+                            if voltage > 1000:
+                                voltage = voltage / 1000.0
+                            metrics_history["voltage"].append({"x": ts, "y": voltage})
                         if metrics.HasField("channel_utilization"):
                             metrics_history["channel_utilization"].append(
                                 {"x": ts, "y": metrics.channel_utilization}
