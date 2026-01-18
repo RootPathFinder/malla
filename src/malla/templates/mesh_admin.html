@@ -5818,8 +5818,11 @@
                 </button>
             `;
         } else if (job.status === 'running') {
-            // Running jobs can be cancelled (request cancellation)
+            // Running jobs can be paused or cancelled (request at next checkpoint)
             actions += `
+                <button class="btn btn-sm btn-outline-warning me-1" onclick="pauseJob(${job.id})" title="Pause (will pause at next checkpoint)">
+                    <i class="bi bi-pause-fill"></i>
+                </button>
                 <button class="btn btn-sm btn-outline-danger" onclick="cancelJob(${job.id})" title="Cancel (will stop at next checkpoint)">
                     <i class="bi bi-stop-fill"></i>
                 </button>
@@ -5985,10 +5988,14 @@
             cancelBtn.classList.remove('d-none');
             resumeBtn.classList.remove('d-none');
         } else if (job.status === 'running') {
-            // Running jobs can be cancelled (request cancellation)
+            // Running jobs can be paused or cancelled (request at next checkpoint)
             cancelBtn.classList.remove('d-none');
             cancelBtn.innerHTML = '<i class="bi bi-stop-fill me-1"></i> Stop Job';
             cancelBtn.title = 'Request cancellation - job will stop at next checkpoint';
+
+            // Show pause button for running jobs
+            pauseBtn.classList.remove('d-none');
+            pauseBtn.title = 'Request pause - job will pause at next checkpoint';
 
             // Also show force cancel for running jobs (in case they're stuck/orphaned)
             forceCancelBtn.classList.remove('d-none');

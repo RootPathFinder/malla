@@ -71,6 +71,51 @@ class JobProgressCallback:
         """Check if job cancellation was requested."""
         return JobRepository.is_cancel_requested(self.job_id)
 
+    def is_pause_requested(self) -> bool:
+        """Check if job pause was requested."""
+        return JobRepository.is_pause_requested(self.job_id)
+
+    def check_paused(self) -> None:
+        """
+        Check if pause was requested and pause the job if so.
+
+        This blocks until the job is resumed or cancelled.
+        Should be called at safe checkpoints in job handlers.
+        """
+        if not self.is_pause_requested():
+            return
+
+        # Set the job to paused status
+        JobRepository.set_job_paused(self.job_id)
+
+        # Wait until job is resumed (status changes from PAUSED) or cancelled
+        import time as time_module
+
+        while True:
+            # Check for cancellation first
+            if JobRepository.is_cancel_requested(self.job_id):
+                raise JobCancelledException("Job cancelled by user")
+
+            # Check if job is still paused
+            job = JobRepository.get_job(self.job_id)
+            if not job or job.get("status") != JobStatus.PAUSED.value:
+                # Job was resumed or something changed
+                break
+
+            # Wait a bit before checking again
+            time_module.sleep(0.5)
+
+    def check_cancelled_and_paused(self) -> None:
+        """
+        Check for both cancellation and pause requests.
+
+        This is a convenience method that should be called at checkpoints
+        in job handlers. It first checks for cancellation (throws exception)
+        then checks for pause (blocks until resumed).
+        """
+        self.check_cancelled()
+        self.check_paused()
+
 
 class JobService:
     """
@@ -331,14 +376,23 @@ class JobService:
         }
 
     def pause_job(self, job_id: int) -> dict[str, Any]:
-        """Pause a queued job."""
+        """Pause a queued or running job."""
+        # First try to pause a queued job (immediate pause)
         if JobRepository.pause_job(job_id):
             return {"success": True, "message": "Job paused"}
-        else:
+
+        # Try to request pause for a running job
+        if JobRepository.request_pause_running_job(job_id):
             return {
-                "success": False,
-                "error": "Job cannot be paused (only queued jobs can be paused)",
+                "success": True,
+                "message": "Pause requested (job will pause at next checkpoint)",
             }
+
+        # Job is neither queued nor running
+        return {
+            "success": False,
+            "error": "Job cannot be paused (only queued or running jobs can be paused)",
+        }
 
     def resume_job(self, job_id: int) -> dict[str, Any]:
         """Resume a paused job."""
@@ -570,8 +624,8 @@ class JobService:
         progress.update(0, "Fetching core configurations...", "core", 0, total_items)
 
         for name, config_type in core_configs:
-            # Check for cancellation before each request
-            progress.check_cancelled()
+            # Check for cancellation/pause before each request
+            progress.check_cancelled_and_paused()
 
             current_item += 1
             prog_pct = int((current_item / total_items) * 100)
@@ -635,8 +689,8 @@ class JobService:
         )
 
         for name, module_type in module_configs:
-            # Check for cancellation before each request
-            progress.check_cancelled()
+            # Check for cancellation/pause before each request
+            progress.check_cancelled_and_paused()
 
             current_item += 1
             prog_pct = int((current_item / total_items) * 100)
@@ -699,8 +753,8 @@ class JobService:
         )
 
         for channel_idx in channels:
-            # Check for cancellation before each request
-            progress.check_cancelled()
+            # Check for cancellation/pause before each request
+            progress.check_cancelled_and_paused()
 
             current_item += 1
             prog_pct = int((current_item / total_items) * 100)
@@ -904,8 +958,8 @@ class JobService:
 
         # Restore items
         for item_type, item_name, item_enum in items_to_restore:
-            # Check for cancellation before each request
-            progress.check_cancelled()
+            # Check for cancellation/pause before each request
+            progress.check_cancelled_and_paused()
 
             current_item += 1
             prog_pct = int((current_item / total_items) * 95) + 2
@@ -1101,8 +1155,8 @@ class JobService:
         failed = []
 
         for i, node_id in enumerate(node_ids):
-            # Check for cancellation before each command
-            progress.check_cancelled()
+            # Check for cancellation/pause before each command
+            progress.check_cancelled_and_paused()
 
             prog_pct = int(((i + 1) / total_nodes) * 100)
             progress.update(

@@ -87,6 +87,15 @@ def init_job_tables() -> None:
     except Exception:
         pass  # Column already exists
 
+    # Add pause_requested column if it doesn't exist (for existing databases)
+    try:
+        cursor.execute(
+            "ALTER TABLE background_jobs ADD COLUMN pause_requested INTEGER DEFAULT 0"
+        )
+        conn.commit()
+    except Exception:
+        pass  # Column already exists
+
     # Job progress log for detailed history
     cursor.execute("""
         CREATE TABLE IF NOT EXISTS job_progress_log (
@@ -775,10 +784,10 @@ class JobRepository:
     @staticmethod
     def pause_job(job_id: int) -> bool:
         """
-        Pause a queued job.
+        Pause a queued job (immediately changes status to paused).
 
         Returns True if the job was paused, False otherwise.
-        Running jobs cannot be paused - only queued jobs.
+        For running jobs, use request_pause_running_job instead.
         """
         conn = get_db_connection()
         cursor = conn.cursor()
@@ -808,11 +817,102 @@ class JobRepository:
         return False
 
     @staticmethod
+    def request_pause_running_job(job_id: int) -> bool:
+        """
+        Request pause of a running job.
+
+        Sets the pause_requested flag so the job handler can pause at next checkpoint.
+        Returns True if the request was set, False if job is not running.
+        """
+        conn = get_db_connection()
+        cursor = conn.cursor()
+
+        # Only request pause if running
+        cursor.execute(
+            """
+            UPDATE background_jobs
+            SET pause_requested = 1, updated_at = ?
+            WHERE id = ? AND status = ?
+            """,
+            (
+                time.time(),
+                job_id,
+                JobStatus.RUNNING.value,
+            ),
+        )
+
+        rows_affected = cursor.rowcount
+        conn.commit()
+        conn.close()
+
+        if rows_affected > 0:
+            logger.info(f"Pause requested for running job {job_id}")
+            return True
+        return False
+
+    @staticmethod
+    def is_pause_requested(job_id: int) -> bool:
+        """
+        Check if pause has been requested for a job.
+
+        Job handlers should call this periodically to check for pause requests.
+        """
+        conn = get_db_connection()
+        cursor = conn.cursor()
+
+        cursor.execute(
+            """
+            SELECT pause_requested FROM background_jobs WHERE id = ?
+            """,
+            (job_id,),
+        )
+
+        row = cursor.fetchone()
+        conn.close()
+
+        return bool(row and row[0])
+
+    @staticmethod
+    def set_job_paused(job_id: int) -> bool:
+        """
+        Set a running job to paused status (called when job handler pauses).
+
+        This also clears the pause_requested flag.
+        Returns True if successful.
+        """
+        conn = get_db_connection()
+        cursor = conn.cursor()
+
+        cursor.execute(
+            """
+            UPDATE background_jobs
+            SET status = ?, pause_requested = 0, updated_at = ?
+            WHERE id = ? AND status = ?
+            """,
+            (
+                JobStatus.PAUSED.value,
+                time.time(),
+                job_id,
+                JobStatus.RUNNING.value,
+            ),
+        )
+
+        rows_affected = cursor.rowcount
+        conn.commit()
+        conn.close()
+
+        if rows_affected > 0:
+            logger.info(f"Running job {job_id} paused at checkpoint")
+            return True
+        return False
+
+    @staticmethod
     def resume_job(job_id: int) -> bool:
         """
         Resume a paused job (put it back in queue).
 
         Returns True if the job was resumed, False otherwise.
+        Also clears any pause_requested flag.
         """
         conn = get_db_connection()
         cursor = conn.cursor()
@@ -821,7 +921,7 @@ class JobRepository:
         cursor.execute(
             """
             UPDATE background_jobs
-            SET status = ?, updated_at = ?
+            SET status = ?, pause_requested = 0, updated_at = ?
             WHERE id = ? AND status = ?
             """,
             (
