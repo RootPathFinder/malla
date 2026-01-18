@@ -543,6 +543,12 @@ class TCPPublisher:
                     setattr(config.bluetooth, key, value)
             admin_msg.set_config.CopyFrom(config)
 
+        elif config_type == "security":
+            for key, value in config_data.items():
+                if hasattr(config.security, key):
+                    setattr(config.security, key, value)
+            admin_msg.set_config.CopyFrom(config)
+
         else:
             logger.error(f"Unknown config type: {config_type}")
             return None
