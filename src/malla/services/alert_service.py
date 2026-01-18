@@ -1658,7 +1658,7 @@ class AlertService:
                         "title": f"{len(offline_infra)} Infrastructure Node{'s' if len(offline_infra) > 1 else ''} Offline",
                         "description": "Router or gateway nodes haven't transmitted recently. This affects network coverage.",
                         "action": "View Nodes",
-                        "link": "/nodes?filter=offline",
+                        "link": "/nodes",
                         "value": len(offline_infra),
                         "value_label": "nodes",
                     }
@@ -1673,8 +1673,8 @@ class AlertService:
                         "icon": "phone",
                         "title": f"{len(offline_clients)} Client Nodes Inactive",
                         "description": "Multiple client devices haven't transmitted in over 6 hours.",
-                        "action": "View Inactive",
-                        "link": "/nodes?filter=inactive",
+                        "action": "View Nodes",
+                        "link": "/nodes",
                         "value": len(offline_clients),
                         "value_label": "nodes",
                     }
@@ -1715,7 +1715,7 @@ class AlertService:
                         "title": f"{len(critical_battery)} Node{'s' if len(critical_battery) > 1 else ''} with Critical Battery",
                         "description": "These nodes need immediate charging or may go offline soon.",
                         "action": "View Battery Status",
-                        "link": "/power",
+                        "link": "/battery-analytics",
                         "value": "<15%",
                         "value_label": "battery",
                     }
@@ -1730,8 +1730,8 @@ class AlertService:
                         "icon": "battery-half",
                         "title": f"{len(warning_battery)} Node{'s' if len(warning_battery) > 1 else ''} with Low Battery",
                         "description": "Battery levels are getting low. Consider charging soon.",
-                        "action": "View Power Dashboard",
-                        "link": "/power",
+                        "action": "View Battery Analytics",
+                        "link": "/battery-analytics",
                         "value": "15-30%",
                         "value_label": "battery",
                     }
@@ -1828,8 +1828,8 @@ class AlertService:
                         "icon": "plus-circle",
                         "title": f"{new_nodes} New Node{'s' if new_nodes > 1 else ''} Discovered",
                         "description": "New nodes have joined the network in the last 24 hours.",
-                        "action": "View New Nodes",
-                        "link": "/nodes?sort=newest",
+                        "action": "View Nodes",
+                        "link": "/nodes",
                         "value": new_nodes,
                         "value_label": "nodes",
                     }
