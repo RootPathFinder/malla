@@ -62,10 +62,80 @@ class TCPPublisher:
         self._last_admin_response: dict[str, Any] | None = None
         self._admin_response_event = threading.Event()
 
+        # Connection health tracking
+        self._last_activity_time: float = 0
+        self._last_health_check_time: float = 0
+        self._health_check_timeout: float = 30.0  # seconds
+
     @property
     def is_connected(self) -> bool:
         """Check if connected to the node."""
         return self._connected and self._interface is not None
+
+    def check_connection_health(self) -> dict[str, Any]:
+        """
+        Perform a health check on the TCP connection.
+
+        This verifies the connection is actually alive by checking if
+        we can still communicate with the interface.
+
+        Returns:
+            Dictionary with health status info
+        """
+        if not self._connected or self._interface is None:
+            return {
+                "healthy": False,
+                "connected": False,
+                "reason": "Not connected",
+            }
+
+        try:
+            # Try to access the node info - this will fail if connection is dead
+            my_info = self._interface.myInfo
+            local_node = self._interface.localNode
+
+            if my_info is None and local_node is None:
+                # Connection is stale - we have an interface but it's not working
+                return {
+                    "healthy": False,
+                    "connected": True,
+                    "reason": "Connection stale - no node info available",
+                    "suggestion": "Try disconnecting and reconnecting",
+                }
+
+            # Update last activity time
+            self._last_health_check_time = time.time()
+
+            return {
+                "healthy": True,
+                "connected": True,
+                "node_id": getattr(my_info, "my_node_num", None) if my_info else None,
+                "last_activity": self._last_activity_time,
+                "last_health_check": self._last_health_check_time,
+            }
+
+        except Exception as e:
+            logger.warning(f"Connection health check failed: {e}")
+            return {
+                "healthy": False,
+                "connected": True,
+                "reason": f"Health check failed: {str(e)}",
+                "suggestion": "Connection may be stale - try reconnecting",
+            }
+
+    def reconnect(self) -> bool:
+        """
+        Force reconnection to the TCP node.
+
+        This disconnects and reconnects, useful for recovering from stale connections.
+
+        Returns:
+            True if reconnection successful
+        """
+        logger.info("Forcing TCP reconnection...")
+        self.disconnect()
+        time.sleep(0.5)  # Brief pause before reconnecting
+        return self.connect()
 
     @property
     def tcp_host(self) -> str:

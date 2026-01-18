@@ -395,12 +395,23 @@
                                 <button class="btn btn-success me-2" type="button" onclick="tcpConnect()" id="tcpConnectBtn">
                                     <i class="bi bi-plug"></i> Connect
                                 </button>
-                                <button class="btn btn-outline-danger" type="button" onclick="tcpDisconnect()" id="tcpDisconnectBtn">
+                                <button class="btn btn-outline-danger me-2" type="button" onclick="tcpDisconnect()" id="tcpDisconnectBtn">
                                     <i class="bi bi-x-circle"></i> Disconnect
+                                </button>
+                                <button class="btn btn-outline-warning" type="button" onclick="tcpReconnect()" id="tcpReconnectBtn"
+                                        title="Force reconnection - useful if connection appears stale">
+                                    <i class="bi bi-arrow-clockwise"></i> Reconnect
                                 </button>
                             </div>
                         </div>
                         <div id="tcpConnectResult" class="alert d-none mt-2" role="alert"></div>
+                        <div id="tcpHealthWarning" class="alert alert-warning d-none mt-2" role="alert">
+                            <i class="bi bi-exclamation-triangle me-2"></i>
+                            <span id="tcpHealthWarningText">Connection may be stale.</span>
+                            <button class="btn btn-sm btn-warning ms-2" onclick="tcpReconnect()">
+                                <i class="bi bi-arrow-clockwise"></i> Reconnect Now
+                            </button>
+                        </div>
                         <div class="form-text">
                             Connect directly to a Meshtastic node via TCP. The node must have WiFi enabled and be accessible on the network.
                         </div>
@@ -1414,6 +1425,31 @@
                               placeholder="e.g., Backup before firmware update to 2.5.0"></textarea>
                 </div>
 
+                <!-- Timing Settings -->
+                <div class="mb-3">
+                    <a class="text-decoration-none small" data-bs-toggle="collapse" href="#backupTimingSettings" role="button">
+                        <i class="bi bi-gear"></i> Advanced Timing Settings
+                    </a>
+                    <div class="collapse mt-2" id="backupTimingSettings">
+                        <div class="card card-body bg-light py-2">
+                            <label class="form-label small">Request Delay Mode</label>
+                            <select class="form-select form-select-sm" id="backupDelayMode" onchange="updateBackupDelayUI()">
+                                <option value="auto" selected>Auto (based on hop count)</option>
+                                <option value="fast">Fast (0s - for direct connections)</option>
+                                <option value="normal">Normal (1.5s - for most mesh nodes)</option>
+                                <option value="slow">Slow (3s - for distant nodes)</option>
+                                <option value="custom">Custom...</option>
+                            </select>
+                            <div class="form-text small">Delay between config requests to prevent mesh congestion.</div>
+                            <div class="mt-2 d-none" id="backupCustomDelayGroup">
+                                <label class="form-label small">Custom Delay (seconds)</label>
+                                <input type="number" class="form-control form-control-sm" id="backupCustomDelay"
+                                       min="0" max="10" step="0.5" value="1.5" style="width: 100px;">
+                            </div>
+                        </div>
+                    </div>
+                </div>
+
                 <!-- Progress Section -->
                 <div id="backupProgressSection" style="display: none;">
                     <div class="card bg-light">
@@ -2171,6 +2207,75 @@
         btn.innerHTML = '<i class="bi bi-x-circle"></i> Disconnect';
     }
 
+    // TCP Reconnect - force reconnection for stale connections
+    async function tcpReconnect() {
+        const reconnectBtn = document.getElementById('tcpReconnectBtn');
+        const resultDiv = document.getElementById('tcpConnectResult');
+        const healthWarning = document.getElementById('tcpHealthWarning');
+
+        if (reconnectBtn) {
+            reconnectBtn.disabled = true;
+            reconnectBtn.innerHTML = '<span class="spinner-border spinner-border-sm"></span> Reconnecting...';
+        }
+
+        try {
+            const response = await fetch('/api/admin/tcp/reconnect', {
+                method: 'POST'
+            });
+            const data = await response.json();
+
+            resultDiv.classList.remove('d-none', 'alert-success', 'alert-danger');
+            healthWarning.classList.add('d-none');
+
+            if (data.success) {
+                resultDiv.classList.add('alert-success');
+                resultDiv.innerHTML = `<i class="bi bi-check-circle"></i> Reconnected to ${data.host}:${data.port}`;
+                await updateConnectionStatus();
+            } else {
+                resultDiv.classList.add('alert-danger');
+                resultDiv.innerHTML = `<i class="bi bi-x-circle"></i> ${data.error || 'Reconnection failed'}`;
+            }
+        } catch (error) {
+            resultDiv.classList.remove('d-none', 'alert-success');
+            resultDiv.classList.add('alert-danger');
+            resultDiv.innerHTML = `<i class="bi bi-x-circle"></i> Error: ${error.message}`;
+        } finally {
+            if (reconnectBtn) {
+                reconnectBtn.disabled = false;
+                reconnectBtn.innerHTML = '<i class="bi bi-arrow-clockwise"></i> Reconnect';
+            }
+        }
+    }
+
+    // Check TCP connection health and show warning if stale
+    async function checkTcpHealth() {
+        try {
+            const statusResponse = await fetch('/api/admin/status');
+            const status = await statusResponse.json();
+
+            // Only check health if we're using TCP and supposedly connected
+            if (status.connection_type !== 'tcp' || !status.connected) {
+                return;
+            }
+
+            const healthResponse = await fetch('/api/admin/tcp/health');
+            const health = await healthResponse.json();
+
+            const healthWarning = document.getElementById('tcpHealthWarning');
+            const healthText = document.getElementById('tcpHealthWarningText');
+
+            if (health.healthy === false && health.connected) {
+                // Connection is stale
+                healthWarning.classList.remove('d-none');
+                healthText.textContent = health.reason || 'Connection may be stale.';
+            } else {
+                healthWarning.classList.add('d-none');
+            }
+        } catch (error) {
+            console.debug('TCP health check failed:', error);
+        }
+    }
+
     // Serial Port Discovery
     async function discoverSerialPorts(probe = false) {
         const selectEl = document.getElementById('serialPortSelect');
@@ -2573,6 +2678,8 @@
         // Check connection status every 10 seconds
         connectionCheckInterval = setInterval(async () => {
             await updateConnectionStatus();
+            // Also check TCP health periodically
+            await checkTcpHealth();
         }, 10000);
     }
 
@@ -6032,11 +6139,42 @@
     // Background Job Backup/Restore Functions
     // ============================================================================
 
+    // Toggle visibility of custom delay input
+    function updateBackupDelayUI() {
+        const mode = document.getElementById('backupDelayMode').value;
+        const customGroup = document.getElementById('backupCustomDelayGroup');
+        if (mode === 'custom') {
+            customGroup.classList.remove('d-none');
+        } else {
+            customGroup.classList.add('d-none');
+        }
+    }
+
+    // Get the configured delay value for backup
+    function getBackupDelayValue() {
+        const mode = document.getElementById('backupDelayMode')?.value || 'auto';
+        switch (mode) {
+            case 'auto':
+                return null;  // Let server calculate
+            case 'fast':
+                return 0;
+            case 'normal':
+                return 1.5;
+            case 'slow':
+                return 3;
+            case 'custom':
+                return parseFloat(document.getElementById('backupCustomDelay')?.value) || 1.5;
+            default:
+                return null;
+        }
+    }
+
     // Queue backup as background job instead of SSE
     async function startBackupJob() {
         const nodeId = document.getElementById('backupSourceNode').value;
         const backupName = document.getElementById('backupNameInput').value.trim();
         const description = document.getElementById('backupDescriptionInput').value.trim();
+        const interRequestDelay = getBackupDelayValue();
 
         if (!nodeId) {
             showAlert('warning', 'Please select a node to backup');
@@ -6054,7 +6192,7 @@
         }
 
         try {
-            const result = await jobManager.queueBackup(nodeId, backupName, description);
+            const result = await jobManager.queueBackup(nodeId, backupName, description, interRequestDelay);
 
             if (result.success) {
                 showAlert('success', `Backup job queued (position: ${result.queue_position || 1}). You can close this and check the Jobs tab for progress.`);

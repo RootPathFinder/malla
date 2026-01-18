@@ -24,17 +24,25 @@ class JobManager {
      * @param {string} nodeId - Node ID to backup
      * @param {string} backupName - Name for the backup
      * @param {string} description - Optional description
+     * @param {number|null} interRequestDelay - Optional custom delay between requests (null = auto)
      * @returns {Promise<Object>} Job creation result
      */
-    async queueBackup(nodeId, backupName, description = '') {
+    async queueBackup(nodeId, backupName, description = '', interRequestDelay = null) {
+        const payload = {
+            node_id: nodeId,
+            backup_name: backupName,
+            description: description
+        };
+
+        // Only include delay if explicitly set
+        if (interRequestDelay !== null) {
+            payload.inter_request_delay = interRequestDelay;
+        }
+
         const response = await fetch('/api/admin/backups/job', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({
-                node_id: nodeId,
-                backup_name: backupName,
-                description: description
-            })
+            body: JSON.stringify(payload)
         });
 
         const result = await response.json();

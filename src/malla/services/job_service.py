@@ -306,6 +306,151 @@ class JobService:
     # Job Handlers
     # =========================================================================
 
+    def _calculate_backup_delay(
+        self,
+        node_id: int,
+        job_data: dict[str, Any],
+    ) -> float:
+        """
+        Calculate the inter-request delay for backup operations.
+
+        The delay is determined by:
+        1. Explicit user setting (if provided)
+        2. Connection type (TCP/Serial = 0, MQTT = needs delay)
+        3. Estimated hop count to the node (more hops = more delay)
+
+        Args:
+            node_id: Target node ID
+            job_data: Job data containing optional delay settings
+
+        Returns:
+            Delay in seconds between config requests
+        """
+        from .admin_service import AdminConnectionType, get_admin_service
+
+        # Check for explicit user setting
+        if "inter_request_delay" in job_data:
+            return float(job_data["inter_request_delay"])
+
+        admin_service = get_admin_service()
+        conn_type = admin_service.connection_type
+
+        # Fast mode: TCP or Serial connections are direct, no mesh delay needed
+        if conn_type in (AdminConnectionType.TCP, AdminConnectionType.SERIAL):
+            gateway_id = admin_service.gateway_node_id
+            # If target is the gateway itself (directly connected), no delay
+            if gateway_id and gateway_id == node_id:
+                logger.info(
+                    f"Direct connection to node {node_id:08x}, using fast mode (no delay)"
+                )
+                return 0.0
+
+        # For MQTT or remote nodes, calculate delay based on hop count
+        base_delay = 0.5  # Minimum delay for any mesh operation
+        hop_delay = 0.5  # Additional delay per hop
+
+        # Try to get hop count from traceroute data
+        estimated_hops = self._estimate_hop_count(node_id)
+
+        if estimated_hops is not None:
+            calculated_delay = base_delay + (estimated_hops * hop_delay)
+            logger.info(
+                f"Estimated {estimated_hops} hops to node {node_id:08x}, "
+                f"using {calculated_delay:.1f}s delay"
+            )
+            return calculated_delay
+
+        # Default delay if we can't determine hop count
+        default_delay = 1.5
+        logger.info(
+            f"Could not estimate hops to node {node_id:08x}, "
+            f"using default {default_delay}s delay"
+        )
+        return default_delay
+
+    def _estimate_hop_count(self, node_id: int) -> int | None:
+        """
+        Estimate the hop count to a node based on recent traceroute data.
+
+        Args:
+            node_id: Target node ID
+
+        Returns:
+            Estimated hop count, or None if unknown
+        """
+        from ..database.repositories import TracerouteRepository
+        from .admin_service import get_admin_service
+
+        admin_service = get_admin_service()
+        gateway_id = admin_service.gateway_node_id
+
+        if not gateway_id:
+            return None
+
+        try:
+            # Look for recent traceroutes from gateway to target node
+            # This gives us actual path information
+            result = TracerouteRepository.get_traceroute_packets(
+                limit=50,
+                filters={
+                    "from_node": gateway_id,
+                    "to_node": node_id,
+                    "processed_successfully_only": True,
+                },
+            )
+
+            packets = result.get("packets", [])
+            if packets:
+                # Get the most recent successful traceroute
+                # Count hops from the route_nodes in the raw payload
+                from ..utils.traceroute_utils import parse_traceroute_payload
+
+                hop_counts = []
+                for packet in packets[:5]:  # Check last 5 traceroutes
+                    if packet.get("raw_payload"):
+                        route_data = parse_traceroute_payload(packet["raw_payload"])
+                        route_nodes = route_data.get("route_nodes", [])
+                        if route_nodes:
+                            hop_counts.append(len(route_nodes))
+
+                if hop_counts:
+                    # Use the median hop count for stability
+                    hop_counts.sort()
+                    median_hops = hop_counts[len(hop_counts) // 2]
+                    return median_hops
+
+            # Try reverse direction (target to gateway)
+            result = TracerouteRepository.get_traceroute_packets(
+                limit=50,
+                filters={
+                    "from_node": node_id,
+                    "to_node": gateway_id,
+                    "processed_successfully_only": True,
+                },
+            )
+
+            packets = result.get("packets", [])
+            if packets:
+                from ..utils.traceroute_utils import parse_traceroute_payload
+
+                hop_counts = []
+                for packet in packets[:5]:
+                    if packet.get("raw_payload"):
+                        route_data = parse_traceroute_payload(packet["raw_payload"])
+                        route_nodes = route_data.get("route_nodes", [])
+                        if route_nodes:
+                            hop_counts.append(len(route_nodes))
+
+                if hop_counts:
+                    hop_counts.sort()
+                    return hop_counts[len(hop_counts) // 2]
+
+            return None
+
+        except Exception as e:
+            logger.warning(f"Error estimating hop count to {node_id:08x}: {e}")
+            return None
+
     def _execute_backup_job(
         self, job: dict[str, Any], progress: JobProgressCallback
     ) -> dict[str, Any]:
@@ -316,6 +461,9 @@ class JobService:
         node_id = job["target_node_id"]
         backup_name = job_data.get("backup_name", "Backup")
         description = job_data.get("description", "")
+
+        # Calculate inter-request delay based on connection type and hop count
+        inter_request_delay = self._calculate_backup_delay(node_id, job_data)
 
         admin_service = get_admin_service()
 
@@ -397,6 +545,9 @@ class JobService:
                     current_item,
                     total_items,
                 )
+                # Delay between requests to prevent mesh congestion
+                if current_item < total_items:
+                    time.sleep(inter_request_delay)
             else:
                 errors.append(f"core:{name}: {result.error or 'Unknown error'}")
                 progress.update(
@@ -406,6 +557,9 @@ class JobService:
                     current_item,
                     total_items,
                 )
+                # Still delay after failures to let mesh recover
+                if current_item < total_items:
+                    time.sleep(inter_request_delay)
 
         # Fetch module configs
         progress.update(
@@ -446,6 +600,9 @@ class JobService:
                     current_item,
                     total_items,
                 )
+                # Delay between requests to prevent mesh congestion
+                if current_item < total_items:
+                    time.sleep(inter_request_delay)
             else:
                 errors.append(f"module:{name}: {result.error or 'Unknown error'}")
                 progress.update(
@@ -455,6 +612,9 @@ class JobService:
                     current_item,
                     total_items,
                 )
+                # Still delay after failures to let mesh recover
+                if current_item < total_items:
+                    time.sleep(inter_request_delay)
 
         # Fetch channels
         progress.update(
@@ -495,6 +655,9 @@ class JobService:
                     current_item,
                     total_items,
                 )
+                # Delay between requests to prevent mesh congestion
+                if current_item < total_items:
+                    time.sleep(inter_request_delay)
             else:
                 errors.append(
                     f"channel:{channel_idx}: {result.error or 'Unknown error'}"
@@ -506,6 +669,9 @@ class JobService:
                     current_item,
                     total_items,
                 )
+                # Still delay after failures to let mesh recover
+                if current_item < total_items:
+                    time.sleep(inter_request_delay)
 
         # Save backup if we got at least some configs
         if successful_configs:

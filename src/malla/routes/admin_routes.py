@@ -242,6 +242,64 @@ def api_tcp_disconnect():
         return jsonify({"error": str(e)}), 500
 
 
+@admin_bp.route("/api/admin/tcp/health")
+def api_tcp_health():
+    """Check the health of the TCP connection."""
+    try:
+        tcp_publisher = get_tcp_publisher()
+        health = tcp_publisher.check_connection_health()
+        return jsonify(health)
+    except Exception as e:
+        logger.error(f"Error checking TCP health: {e}")
+        return jsonify({"error": str(e), "healthy": False}), 500
+
+
+@admin_bp.route("/api/admin/tcp/reconnect", methods=["POST"])
+def api_tcp_reconnect():
+    """Force reconnection to the TCP node.
+
+    This is useful when the connection appears to be stale.
+    """
+    try:
+        tcp_publisher = get_tcp_publisher()
+
+        # Get current settings before reconnecting
+        host = tcp_publisher.tcp_host
+        port = tcp_publisher.tcp_port
+
+        # Reconnect
+        success = tcp_publisher.reconnect()
+
+        if success:
+            # Set connection type to TCP
+            admin_service = get_admin_service()
+            admin_service.set_connection_type("tcp")
+
+            return jsonify(
+                {
+                    "success": True,
+                    "connected": True,
+                    "host": host,
+                    "port": port,
+                    "message": "Reconnected successfully",
+                }
+            )
+        else:
+            return jsonify(
+                {
+                    "success": False,
+                    "connected": False,
+                    "host": host,
+                    "port": port,
+                    "error": "Failed to reconnect",
+                }
+            ), 500
+
+    except Exception as e:
+        logger.error(f"Error reconnecting TCP: {e}")
+        return jsonify({"error": str(e)}), 500
+
+
 # ============================================================================
 # API Routes - Serial/USB Connection
 # ============================================================================
@@ -1147,6 +1205,8 @@ def api_create_backup_job():
         node_id_str = data.get("node_id")
         backup_name = data.get("backup_name")
         description = data.get("description", "")
+        # Optional: custom inter-request delay (auto-calculated if not provided)
+        inter_request_delay = data.get("inter_request_delay")
 
         if not node_id_str:
             return jsonify({"error": "node_id is required"}), 400
@@ -1155,14 +1215,23 @@ def api_create_backup_job():
 
         node_id = convert_node_id(node_id_str)
 
+        job_data = {
+            "backup_name": backup_name,
+            "description": description,
+        }
+
+        # Only include delay if explicitly set (otherwise auto-calculated)
+        if inter_request_delay is not None:
+            try:
+                job_data["inter_request_delay"] = float(inter_request_delay)
+            except (TypeError, ValueError):
+                return jsonify({"error": "inter_request_delay must be a number"}), 400
+
         job_service = get_job_service()
         result = job_service.queue_job(
             job_type=JobType.BACKUP,
             job_name=f"Backup: {backup_name}",
-            job_data={
-                "backup_name": backup_name,
-                "description": description,
-            },
+            job_data=job_data,
             target_node_id=node_id,
         )
 
