@@ -4116,7 +4116,7 @@ class BatteryAnalyticsRepository:
                            ni.power_analysis_timestamp
                     FROM node_info ni
                     INNER JOIN telemetry_data td ON ni.node_id = td.node_id
-                    WHERE td.voltage IS NOT NULL
+                    WHERE td.voltage IS NOT NULL OR td.battery_level IS NOT NULL
                     GROUP BY ni.node_id
                     """
                 )
@@ -4130,7 +4130,7 @@ class BatteryAnalyticsRepository:
                            ni.power_analysis_timestamp
                     FROM node_info ni
                     INNER JOIN telemetry_data td ON ni.node_id = td.node_id
-                    WHERE td.voltage IS NOT NULL
+                    WHERE (td.voltage IS NOT NULL OR td.battery_level IS NOT NULL)
                       AND (
                         ni.power_type IS NULL
                         OR ni.power_type = 'unknown'
@@ -4154,7 +4154,7 @@ class BatteryAnalyticsRepository:
                     node_row["power_type"] if node_row["power_type"] else "unknown"
                 )
 
-                # Get voltage history from last 7 days (or more if available)
+                # Get voltage history from last 7 days first
                 # This ensures we capture daily patterns for solar detection
                 seven_days_ago = current_time - (7 * 24 * 3600)
                 cursor.execute(
@@ -4170,12 +4170,124 @@ class BatteryAnalyticsRepository:
                 )
 
                 telemetry_rows = cursor.fetchall()
-                if len(telemetry_rows) < 10:
+
+                # If insufficient data in 7 days, extend to 30 days
+                if len(telemetry_rows) < 3:
+                    thirty_days_ago = current_time - (30 * 24 * 3600)
+                    cursor.execute(
+                        """
+                        SELECT voltage, battery_level, timestamp
+                        FROM telemetry_data
+                        WHERE node_id = ?
+                          AND (voltage IS NOT NULL OR battery_level IS NOT NULL)
+                          AND timestamp > ?
+                        ORDER BY timestamp ASC
+                        """,
+                        (node_id, thirty_days_ago),
+                    )
+                    telemetry_rows = cursor.fetchall()
+                    if telemetry_rows:
+                        logger.debug(
+                            f"Extended analysis to 30 days for {node_name}: "
+                            f"found {len(telemetry_rows)} readings"
+                        )
+
+                # Fast-path: Check for strong battery_level signals even with minimal data
+                # Battery level 101 is a clear indicator of USB/mains power
+                if len(telemetry_rows) >= 1:
+                    battery_101_count = sum(
+                        1 for r in telemetry_rows if r["battery_level"] == 101
+                    )
+                    total_with_battery = sum(
+                        1 for r in telemetry_rows if r["battery_level"] is not None
+                    )
+
+                    # If majority of readings show 101%, classify as mains
+                    if (
+                        total_with_battery >= 1
+                        and battery_101_count / total_with_battery >= 0.5
+                    ):
+                        cursor.execute(
+                            """
+                            UPDATE node_info
+                            SET power_type = 'mains', power_type_reason = ?, power_analysis_timestamp = ?
+                            WHERE node_id = ?
+                            """,
+                            (
+                                f"USB Powered (battery_level=101% in {battery_101_count}/{total_with_battery} readings)",
+                                current_time,
+                                node_id,
+                            ),
+                        )
+                        if old_power_type != "mains":
+                            updated_counts["mains"] += 1
+                            logger.info(
+                                f"Fast-path: {node_name} ({node_id}): {old_power_type} -> mains (USB powered)"
+                            )
+                        continue
+
+                # For nodes with 1-2 readings, use voltage-based heuristics
+                if len(telemetry_rows) < 3:
+                    # Extract voltage data
+                    valid_voltages = [
+                        r["voltage"] * 1000
+                        if r["voltage"] and r["voltage"] < 1
+                        else r["voltage"]
+                        for r in telemetry_rows
+                        if r["voltage"] is not None
+                    ]
+                    valid_batteries = [
+                        r["battery_level"]
+                        for r in telemetry_rows
+                        if r["battery_level"] is not None
+                    ]
+
+                    # Make minimal data classification
+                    power_type = None
+                    reason = None
+
+                    if valid_voltages:
+                        max_v = max(valid_voltages)
+                        min_v = min(valid_voltages)
+
+                        # High stable voltage (>4.0V) strongly suggests mains power
+                        if min_v >= 4.0:
+                            power_type = "mains"
+                            reason = f"High voltage ({min_v:.2f}V+) with limited data"
+                        # Large voltage variation in few readings suggests battery drain
+                        elif len(valid_voltages) >= 2 and (max_v - min_v) > 0.1:
+                            power_type = "battery"
+                            reason = f"Voltage variation ({min_v:.2f}-{max_v:.2f}V) suggests battery"
+                        # Low voltage with moderate battery suggests battery powered
+                        elif (
+                            valid_batteries
+                            and min_v < 3.9
+                            and max(valid_batteries) < 90
+                        ):
+                            power_type = "battery"
+                            reason = f"Low voltage ({min_v:.2f}V) with {max(valid_batteries)}% battery"
+
+                    if power_type:
+                        cursor.execute(
+                            """
+                            UPDATE node_info
+                            SET power_type = ?, power_type_reason = ?, power_analysis_timestamp = ?
+                            WHERE node_id = ?
+                            """,
+                            (power_type, reason, current_time, node_id),
+                        )
+                        if old_power_type != power_type:
+                            updated_counts[power_type] += 1
+                            logger.info(
+                                f"Minimal-data: {node_name} ({node_id}): {old_power_type} -> {power_type} ({reason})"
+                            )
+                        continue
+
                     logger.debug(
                         f"Insufficient data for {node_name} ({node_id}): "
-                        f"only {len(telemetry_rows)} readings in last 7 days"
+                        f"only {len(telemetry_rows)} readings, no clear pattern"
                     )
-                    continue  # Not enough data
+                    continue
 
                 # Analyze voltage patterns
                 voltages = []
