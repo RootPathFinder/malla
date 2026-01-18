@@ -21,11 +21,19 @@ from ..database.job_repository import (
 logger = logging.getLogger(__name__)
 
 
+class JobCancelledException(Exception):
+    """Exception raised when a job is cancelled."""
+
+    pass
+
+
 class JobProgressCallback:
     """Callback handler for job progress updates."""
 
     def __init__(self, job_id: int):
         self.job_id = job_id
+        self.errors: list[str] = []
+        self.warnings: list[str] = []
 
     def update(
         self,
@@ -34,8 +42,17 @@ class JobProgressCallback:
         phase: str | None = None,
         current: int | None = None,
         total: int | None = None,
+        is_error: bool = False,
+        is_warning: bool = False,
     ) -> None:
         """Update job progress."""
+        # Track errors and warnings
+        if message:
+            if is_error:
+                self.errors.append(message)
+            elif is_warning:
+                self.warnings.append(message)
+
         JobRepository.update_job_progress(
             job_id=self.job_id,
             progress=progress,
@@ -44,6 +61,15 @@ class JobProgressCallback:
             current=current,
             total=total,
         )
+
+    def check_cancelled(self) -> None:
+        """Check if job was cancelled and raise exception if so."""
+        if JobRepository.is_cancel_requested(self.job_id):
+            raise JobCancelledException("Job cancelled by user")
+
+    def is_cancelled(self) -> bool:
+        """Check if job cancellation was requested."""
+        return JobRepository.is_cancel_requested(self.job_id)
 
 
 class JobService:
@@ -179,6 +205,12 @@ class JobService:
                 f"{'success' if result.get('success') else 'failed'}"
             )
 
+        except JobCancelledException:
+            logger.info(f"Job {job_id} was cancelled by user")
+            JobRepository.update_job_status(
+                job_id, JobStatus.CANCELLED, "Cancelled by user"
+            )
+
         except Exception as e:
             logger.error(f"Job {job_id} failed with exception: {e}", exc_info=True)
             JobRepository.complete_job(
@@ -267,14 +299,22 @@ class JobService:
         return JobRepository.get_active_jobs(target_node_id)
 
     def cancel_job(self, job_id: int) -> dict[str, Any]:
-        """Cancel a queued job."""
+        """Cancel a queued or running job."""
+        # First try to cancel if queued
         if JobRepository.cancel_job(job_id):
             return {"success": True, "message": "Job cancelled"}
-        else:
+
+        # If not queued, try to request cancellation of running job
+        if JobRepository.request_cancel_running_job(job_id):
             return {
-                "success": False,
-                "error": "Job cannot be cancelled (already running or completed)",
+                "success": True,
+                "message": "Cancellation requested - job will stop at next checkpoint",
             }
+
+        return {
+            "success": False,
+            "error": "Job cannot be cancelled (already completed or failed)",
+        }
 
     def pause_job(self, job_id: int) -> dict[str, Any]:
         """Pause a queued job."""
@@ -516,6 +556,9 @@ class JobService:
         progress.update(0, "Fetching core configurations...", "core", 0, total_items)
 
         for name, config_type in core_configs:
+            # Check for cancellation before each request
+            progress.check_cancelled()
+
             current_item += 1
             prog_pct = int((current_item / total_items) * 100)
 
@@ -549,13 +592,20 @@ class JobService:
                 if current_item < total_items:
                     time.sleep(inter_request_delay)
             else:
-                errors.append(f"core:{name}: {result.error or 'Unknown error'}")
+                error_detail = result.error or "Unknown error"
+                # Check if it's a timeout
+                is_timeout = "timeout" in error_detail.lower()
+                error_msg = f"✗ {name} config failed: {error_detail}"
+                if is_timeout:
+                    error_msg = f"⏱ {name} config timeout: {error_detail}"
+                errors.append(f"core:{name}: {error_detail}")
                 progress.update(
                     prog_pct,
-                    f"✗ {name} config failed",
+                    error_msg,
                     "core",
                     current_item,
                     total_items,
+                    is_error=True,
                 )
                 # Still delay after failures to let mesh recover
                 if current_item < total_items:
@@ -571,6 +621,9 @@ class JobService:
         )
 
         for name, module_type in module_configs:
+            # Check for cancellation before each request
+            progress.check_cancelled()
+
             current_item += 1
             prog_pct = int((current_item / total_items) * 100)
 
@@ -604,13 +657,19 @@ class JobService:
                 if current_item < total_items:
                     time.sleep(inter_request_delay)
             else:
-                errors.append(f"module:{name}: {result.error or 'Unknown error'}")
+                error_detail = result.error or "Unknown error"
+                is_timeout = "timeout" in error_detail.lower()
+                error_msg = f"✗ {name} module failed: {error_detail}"
+                if is_timeout:
+                    error_msg = f"⏱ {name} module timeout: {error_detail}"
+                errors.append(f"module:{name}: {error_detail}")
                 progress.update(
                     prog_pct,
-                    f"✗ {name} module failed",
+                    error_msg,
                     "module",
                     current_item,
                     total_items,
+                    is_error=True,
                 )
                 # Still delay after failures to let mesh recover
                 if current_item < total_items:
@@ -626,6 +685,9 @@ class JobService:
         )
 
         for channel_idx in channels:
+            # Check for cancellation before each request
+            progress.check_cancelled()
+
             current_item += 1
             prog_pct = int((current_item / total_items) * 100)
 
@@ -659,15 +721,19 @@ class JobService:
                 if current_item < total_items:
                     time.sleep(inter_request_delay)
             else:
-                errors.append(
-                    f"channel:{channel_idx}: {result.error or 'Unknown error'}"
-                )
+                error_detail = result.error or "Unknown error"
+                is_timeout = "timeout" in error_detail.lower()
+                error_msg = f"✗ Channel {channel_idx} failed: {error_detail}"
+                if is_timeout:
+                    error_msg = f"⏱ Channel {channel_idx} timeout: {error_detail}"
+                errors.append(f"channel:{channel_idx}: {error_detail}")
                 progress.update(
                     prog_pct,
-                    f"✗ Channel {channel_idx} failed",
+                    error_msg,
                     "channels",
                     current_item,
                     total_items,
+                    is_error=True,
                 )
                 # Still delay after failures to let mesh recover
                 if current_item < total_items:
@@ -824,6 +890,9 @@ class JobService:
 
         # Restore items
         for item_type, item_name, item_enum in items_to_restore:
+            # Check for cancellation before each request
+            progress.check_cancelled()
+
             current_item += 1
             prog_pct = int((current_item / total_items) * 95) + 2
 
@@ -857,13 +926,20 @@ class JobService:
                     )
                 else:
                     error_msg = result.error or "Unknown error"
+                    is_timeout = "timeout" in error_msg.lower()
+                    display_msg = f"✗ {item_name.upper()} config failed: {error_msg}"
+                    if is_timeout:
+                        display_msg = (
+                            f"⏱ {item_name.upper()} config timeout: {error_msg}"
+                        )
                     errors.append(f"core:{item_name}: {error_msg}")
                     progress.update(
                         prog_pct,
-                        f"✗ {item_name.upper()} config failed",
+                        display_msg,
                         "core",
                         current_item,
                         total_items,
+                        is_error=True,
                     )
 
             elif item_type == "module":
@@ -896,13 +972,20 @@ class JobService:
                     )
                 else:
                     error_msg = result.error or "Unknown error"
+                    is_timeout = "timeout" in error_msg.lower()
+                    display_msg = f"✗ {item_name.upper()} module failed: {error_msg}"
+                    if is_timeout:
+                        display_msg = (
+                            f"⏱ {item_name.upper()} module timeout: {error_msg}"
+                        )
                     errors.append(f"module:{item_name}: {error_msg}")
                     progress.update(
                         prog_pct,
-                        f"✗ {item_name.upper()} module failed",
+                        display_msg,
                         "module",
                         current_item,
                         total_items,
+                        is_error=True,
                     )
 
             elif item_type == "channel":
@@ -933,13 +1016,18 @@ class JobService:
                     )
                 else:
                     error_msg = result.error or "Unknown error"
+                    is_timeout = "timeout" in error_msg.lower()
+                    display_msg = f"✗ Channel {channel_idx} failed: {error_msg}"
+                    if is_timeout:
+                        display_msg = f"⏱ Channel {channel_idx} timeout: {error_msg}"
                     errors.append(f"channel:{channel_idx}: {error_msg}")
                     progress.update(
                         prog_pct,
-                        f"✗ Channel {channel_idx} failed",
+                        display_msg,
                         "channel",
                         current_item,
                         total_items,
+                        is_error=True,
                     )
 
         # Reboot if requested
@@ -999,6 +1087,9 @@ class JobService:
         failed = []
 
         for i, node_id in enumerate(node_ids):
+            # Check for cancellation before each command
+            progress.check_cancelled()
+
             prog_pct = int(((i + 1) / total_nodes) * 100)
             progress.update(
                 prog_pct,
@@ -1017,14 +1108,46 @@ class JobService:
                     failed.append(
                         {"node_id": node_id, "error": f"Unknown command: {command}"}
                     )
+                    progress.update(
+                        prog_pct,
+                        f"✗ Unknown command: {command}",
+                        "executing",
+                        i + 1,
+                        total_nodes,
+                        is_error=True,
+                    )
                     continue
 
                 if result.success:
                     successful.append(node_id)
+                    progress.update(
+                        prog_pct,
+                        f"✓ {command} sent to node !{node_id:08x}",
+                        "executing",
+                        i + 1,
+                        total_nodes,
+                    )
                 else:
-                    failed.append({"node_id": node_id, "error": result.error})
+                    error_msg = result.error or "Unknown error"
+                    failed.append({"node_id": node_id, "error": error_msg})
+                    progress.update(
+                        prog_pct,
+                        f"✗ {command} failed for !{node_id:08x}: {error_msg}",
+                        "executing",
+                        i + 1,
+                        total_nodes,
+                        is_error=True,
+                    )
             except Exception as e:
                 failed.append({"node_id": node_id, "error": str(e)})
+                progress.update(
+                    prog_pct,
+                    f"✗ {command} error for !{node_id:08x}: {e}",
+                    "executing",
+                    i + 1,
+                    total_nodes,
+                    is_error=True,
+                )
 
         progress.update(
             100, f"Completed {len(successful)}/{total_nodes} nodes", "complete"

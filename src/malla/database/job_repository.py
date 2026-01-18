@@ -70,12 +70,22 @@ def init_job_tables() -> None:
             progress_total INTEGER DEFAULT 0,
             result_data TEXT,
             error_message TEXT,
+            cancel_requested INTEGER DEFAULT 0,
             created_at REAL NOT NULL,
             started_at REAL,
             completed_at REAL,
             updated_at REAL NOT NULL
         )
     """)
+
+    # Add cancel_requested column if it doesn't exist (for existing databases)
+    try:
+        cursor.execute(
+            "ALTER TABLE background_jobs ADD COLUMN cancel_requested INTEGER DEFAULT 0"
+        )
+        conn.commit()
+    except Exception:
+        pass  # Column already exists
 
     # Job progress log for detailed history
     cursor.execute("""
@@ -617,6 +627,62 @@ class JobRepository:
             logger.info(f"Job {job_id} cancelled")
             return True
         return False
+
+    @staticmethod
+    def request_cancel_running_job(job_id: int) -> bool:
+        """
+        Request cancellation of a running job.
+
+        Sets the cancel_requested flag so the job handler can check and stop.
+        Returns True if the request was set, False if job is not running.
+        """
+        conn = get_db_connection()
+        cursor = conn.cursor()
+
+        # Only request cancel if running
+        cursor.execute(
+            """
+            UPDATE background_jobs
+            SET cancel_requested = 1, updated_at = ?
+            WHERE id = ? AND status = ?
+            """,
+            (
+                time.time(),
+                job_id,
+                JobStatus.RUNNING.value,
+            ),
+        )
+
+        rows_affected = cursor.rowcount
+        conn.commit()
+        conn.close()
+
+        if rows_affected > 0:
+            logger.info(f"Cancellation requested for running job {job_id}")
+            return True
+        return False
+
+    @staticmethod
+    def is_cancel_requested(job_id: int) -> bool:
+        """
+        Check if cancellation has been requested for a job.
+
+        Job handlers should call this periodically to check for cancellation.
+        """
+        conn = get_db_connection()
+        cursor = conn.cursor()
+
+        cursor.execute(
+            """
+            SELECT cancel_requested FROM background_jobs WHERE id = ?
+            """,
+            (job_id,),
+        )
+
+        row = cursor.fetchone()
+        conn.close()
+
+        return bool(row and row[0])
 
     @staticmethod
     def pause_job(job_id: int) -> bool:

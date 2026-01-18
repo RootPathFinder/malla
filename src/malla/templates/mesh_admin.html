@@ -5760,12 +5760,21 @@
 
         let progressBar = '';
         if (job.status === 'running') {
+            // Check if the progress message indicates an error or timeout
+            const progressMsg = job.progress_message || '';
+            const isError = progressMsg.startsWith('✗') || progressMsg.includes('failed');
+            const isTimeout = progressMsg.startsWith('⏱') || progressMsg.includes('timeout');
+            let msgClass = 'text-muted';
+            if (isError) msgClass = 'text-danger';
+            else if (isTimeout) msgClass = 'text-warning';
+            else if (progressMsg.startsWith('✓')) msgClass = 'text-success';
+
             progressBar = `
                 <div class="progress" style="height: 6px; min-width: 100px;">
                     <div class="progress-bar progress-bar-striped progress-bar-animated"
                          style="width: ${progress}%"></div>
                 </div>
-                <small class="text-muted">${escapeHtml(job.progress_message || '')}</small>
+                <small class="${msgClass}">${escapeHtml(progressMsg)}</small>
             `;
         } else if (job.status === 'queued' && job.queue_position) {
             progressBar = `<small class="text-muted">Position: ${job.queue_position}</small>`;
@@ -5775,6 +5784,8 @@
             progressBar = '<small class="text-success">Done</small>';
         } else if (job.status === 'failed') {
             progressBar = `<small class="text-danger">${escapeHtml(job.error_message || 'Failed')}</small>`;
+        } else if (job.status === 'cancelled') {
+            progressBar = '<small class="text-secondary"><i class="bi bi-slash-circle"></i> Cancelled</small>';
         }
 
         let actions = '';
@@ -5804,8 +5815,12 @@
                 </button>
             `;
         } else if (job.status === 'running') {
-            // Running jobs can't be paused or cancelled currently
-            actions += '<span class="text-muted small">In progress...</span>';
+            // Running jobs can be cancelled (request cancellation)
+            actions += `
+                <button class="btn btn-sm btn-outline-danger" onclick="cancelJob(${job.id})" title="Cancel (will stop at next checkpoint)">
+                    <i class="bi bi-stop-fill"></i>
+                </button>
+            `;
         }
 
         return `
@@ -5964,6 +5979,11 @@
         } else if (job.status === 'paused') {
             cancelBtn.classList.remove('d-none');
             resumeBtn.classList.remove('d-none');
+        } else if (job.status === 'running') {
+            // Running jobs can be cancelled (request cancellation)
+            cancelBtn.classList.remove('d-none');
+            cancelBtn.innerHTML = '<i class="bi bi-stop-fill me-1"></i> Stop Job';
+            cancelBtn.title = 'Request cancellation - job will stop at next checkpoint';
         }
 
         const statusBadge = getJobStatusBadge(job.status);
@@ -5974,6 +5994,15 @@
         let progressSection = '';
         if (job.status === 'running') {
             const progress = job.progress || 0;
+            // Check if the progress message indicates an error or timeout
+            const progressMsg = job.progress_message || 'Processing...';
+            const isError = progressMsg.startsWith('✗') || progressMsg.includes('failed');
+            const isTimeout = progressMsg.startsWith('⏱') || progressMsg.includes('timeout');
+            let msgClass = 'text-muted';
+            if (isError) msgClass = 'text-danger fw-bold';
+            else if (isTimeout) msgClass = 'text-warning fw-bold';
+            else if (progressMsg.startsWith('✓')) msgClass = 'text-success';
+
             progressSection = `
                 <div class="mb-4">
                     <h6 class="text-muted mb-2">Progress</h6>
@@ -5983,7 +6012,7 @@
                             ${progress}%
                         </div>
                     </div>
-                    <div class="text-muted small">${escapeHtml(job.progress_message || 'Processing...')}</div>
+                    <div class="${msgClass} small">${escapeHtml(progressMsg)}</div>
                 </div>
             `;
         } else if (job.status === 'queued' && job.queue_position) {
