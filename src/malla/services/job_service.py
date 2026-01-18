@@ -864,10 +864,16 @@ class JobService:
         job_data = job["job_data"]
         target_node_id = job["target_node_id"]
         backup_id = job_data.get("backup_id")
-        skip_primary_channel = job_data.get("skip_primary_channel", True)
         skip_lora = job_data.get("skip_lora", False)
         skip_security = job_data.get("skip_security", True)
         reboot_after = job_data.get("reboot_after", False)
+
+        # Selective restore: if lists are provided, only restore those items
+        selected_core_configs = job_data.get("selected_core_configs")  # list or None
+        selected_module_configs = job_data.get(
+            "selected_module_configs"
+        )  # list or None
+        selected_channels = job_data.get("selected_channels")  # list or None
 
         # Get backup data
         backup = AdminRepository.get_backup(backup_id)
@@ -903,6 +909,11 @@ class JobService:
 
         for config_name, config_type in core_config_map.items():
             if config_name in core_configs:
+                # Check if selective restore is enabled and if this config is selected
+                if selected_core_configs is not None:
+                    if config_name not in selected_core_configs:
+                        continue
+                # Skip overrides even if selected
                 if config_name == "lora" and skip_lora:
                     continue
                 if config_name == "security" and skip_security:
@@ -928,13 +939,19 @@ class JobService:
 
         for module_name, module_type in module_config_map.items():
             if module_name in module_configs:
+                # Check if selective restore is enabled and if this module is selected
+                if selected_module_configs is not None:
+                    if module_name not in selected_module_configs:
+                        continue
                 items_to_restore.append(("module", module_name, module_type))
 
         # Channels
         for channel_idx_str in channels.keys():
             channel_idx = int(channel_idx_str)
-            if channel_idx == 0 and skip_primary_channel:
-                continue
+            # Check if selective restore is enabled and if this channel is selected
+            if selected_channels is not None:
+                if channel_idx_str not in selected_channels:
+                    continue
             items_to_restore.append(("channel", channel_idx_str, channel_idx))
 
         total_items = len(items_to_restore)

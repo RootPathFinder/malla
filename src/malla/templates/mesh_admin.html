@@ -1518,18 +1518,10 @@
                             <h6><i class="bi bi-sliders"></i> Restore Options</h6>
 
                             <div class="form-check mb-2">
-                                <input class="form-check-input" type="checkbox" id="restoreSkipPrimaryChannel" checked>
-                                <label class="form-check-label" for="restoreSkipPrimaryChannel">
-                                    <strong>Skip Primary Channel (Channel 0)</strong>
-                                    <small class="text-muted d-block">Recommended: Prevents losing mesh connectivity during restore</small>
-                                </label>
-                            </div>
-
-                            <div class="form-check mb-2">
                                 <input class="form-check-input" type="checkbox" id="restoreSkipLora">
                                 <label class="form-check-label" for="restoreSkipLora">
                                     <strong>Skip LoRa Configuration</strong>
-                                    <small class="text-muted d-block">Keep current radio settings (frequency, bandwidth, etc.)</small>
+                                    <small class="text-muted d-block">Keep current radio settings (frequency, bandwidth, etc.) even if selected below</small>
                                 </label>
                             </div>
 
@@ -1551,23 +1543,82 @@
                         </div>
                     </div>
 
-                    <div class="card bg-light">
+                    <!-- Selective Restore Configuration -->
+                    <div class="card mb-3">
+                        <div class="card-header bg-light d-flex justify-content-between align-items-center">
+                            <h6 class="mb-0"><i class="bi bi-list-check"></i> Select What to Restore</h6>
+                            <div>
+                                <button type="button" class="btn btn-sm btn-outline-secondary me-1" onclick="selectAllRestoreItems(true)">
+                                    <i class="bi bi-check-all"></i> Select All
+                                </button>
+                                <button type="button" class="btn btn-sm btn-outline-secondary" onclick="selectAllRestoreItems(false)">
+                                    <i class="bi bi-x"></i> Deselect All
+                                </button>
+                            </div>
+                        </div>
                         <div class="card-body">
-                            <h6><i class="bi bi-list-check"></i> Configurations to Restore</h6>
-                            <div class="row">
-                                <div class="col-md-4">
-                                    <strong>Core Configs:</strong>
-                                    <span id="restoreCoreCount" class="badge bg-primary">0</span>
+                            <!-- Core Configs Section -->
+                            <div class="mb-3">
+                                <div class="d-flex align-items-center mb-2">
+                                    <input class="form-check-input me-2" type="checkbox" id="restoreSelectAllCore" onchange="toggleRestoreCategory('core', this.checked)">
+                                    <strong class="text-primary">
+                                        <i class="bi bi-gear"></i> Core Configs
+                                        <span id="restoreCoreCount" class="badge bg-primary ms-1">0</span>
+                                    </strong>
+                                    <button type="button" class="btn btn-link btn-sm ms-auto p-0" data-bs-toggle="collapse" data-bs-target="#restoreCoreConfigsList">
+                                        <i class="bi bi-chevron-down"></i>
+                                    </button>
                                 </div>
-                                <div class="col-md-4">
-                                    <strong>Module Configs:</strong>
-                                    <span id="restoreModuleCount" class="badge bg-info">0</span>
-                                </div>
-                                <div class="col-md-4">
-                                    <strong>Channels:</strong>
-                                    <span id="restoreChannelCount" class="badge bg-success">0</span>
+                                <div class="collapse" id="restoreCoreConfigsList">
+                                    <div class="ms-4 ps-1 border-start" id="restoreCoreConfigsContainer">
+                                        <!-- Dynamically populated -->
+                                    </div>
                                 </div>
                             </div>
+
+                            <!-- Module Configs Section -->
+                            <div class="mb-3">
+                                <div class="d-flex align-items-center mb-2">
+                                    <input class="form-check-input me-2" type="checkbox" id="restoreSelectAllModules" onchange="toggleRestoreCategory('module', this.checked)">
+                                    <strong class="text-info">
+                                        <i class="bi bi-puzzle"></i> Module Configs
+                                        <span id="restoreModuleCount" class="badge bg-info ms-1">0</span>
+                                    </strong>
+                                    <button type="button" class="btn btn-link btn-sm ms-auto p-0" data-bs-toggle="collapse" data-bs-target="#restoreModuleConfigsList">
+                                        <i class="bi bi-chevron-down"></i>
+                                    </button>
+                                </div>
+                                <div class="collapse" id="restoreModuleConfigsList">
+                                    <div class="ms-4 ps-1 border-start" id="restoreModuleConfigsContainer">
+                                        <!-- Dynamically populated -->
+                                    </div>
+                                </div>
+                            </div>
+
+                            <!-- Channels Section -->
+                            <div>
+                                <div class="d-flex align-items-center mb-2">
+                                    <input class="form-check-input me-2" type="checkbox" id="restoreSelectAllChannels" onchange="toggleRestoreCategory('channel', this.checked)">
+                                    <strong class="text-success">
+                                        <i class="bi bi-broadcast"></i> Channels
+                                        <span id="restoreChannelCount" class="badge bg-success ms-1">0</span>
+                                    </strong>
+                                    <button type="button" class="btn btn-link btn-sm ms-auto p-0" data-bs-toggle="collapse" data-bs-target="#restoreChannelsList">
+                                        <i class="bi bi-chevron-down"></i>
+                                    </button>
+                                </div>
+                                <div class="collapse" id="restoreChannelsList">
+                                    <div class="ms-4 ps-1 border-start" id="restoreChannelsContainer">
+                                        <!-- Dynamically populated -->
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+                        <div class="card-footer bg-light">
+                            <small class="text-muted">
+                                <i class="bi bi-info-circle"></i>
+                                Selected: <span id="restoreSelectedCount" class="fw-bold">0</span> items
+                            </small>
                         </div>
                     </div>
                 </div>
@@ -5303,14 +5354,24 @@
         document.getElementById('restoreBackupCreated').textContent =
             backup.created_at ? formatAdminDateTime(new Date(backup.created_at * 1000)) : 'Unknown';
 
-        // Count items to restore
+        // Get items from backup
         const coreConfigs = Object.keys(backupData.core_configs || {});
         const moduleConfigs = Object.keys(backupData.module_configs || {});
         const channels = Object.keys(backupData.channels || {});
 
+        // Update counts
         document.getElementById('restoreCoreCount').textContent = coreConfigs.length;
         document.getElementById('restoreModuleCount').textContent = moduleConfigs.length;
         document.getElementById('restoreChannelCount').textContent = channels.length;
+
+        // Populate checkboxes for selective restore
+        populateRestoreCheckboxes('core', coreConfigs, backupData.core_configs || {});
+        populateRestoreCheckboxes('module', moduleConfigs, backupData.module_configs || {});
+        populateRestoreChannelCheckboxes(channels, backupData.channels || {});
+
+        // Select all items by default
+        selectAllRestoreItems(true);
+        updateRestoreSelectedCount();
 
         // Reset modal state
         document.getElementById('restoreConfigSection').style.display = 'block';
@@ -5328,6 +5389,157 @@
         // Show the modal
         const modal = new bootstrap.Modal(document.getElementById('restoreBackupModal'));
         modal.show();
+    }
+
+    // Friendly display names for config types
+    const configDisplayNames = {
+        // Core configs
+        device: 'Device Settings',
+        position: 'Position Settings',
+        power: 'Power Settings',
+        network: 'Network Settings',
+        display: 'Display Settings',
+        lora: 'LoRa Radio Settings',
+        bluetooth: 'Bluetooth Settings',
+        security: 'Security Settings',
+        // Module configs
+        mqtt: 'MQTT Module',
+        serial: 'Serial Module',
+        extnotif: 'External Notifications',
+        storeforward: 'Store & Forward',
+        rangetest: 'Range Test',
+        telemetry: 'Telemetry Module',
+        cannedmsg: 'Canned Messages',
+        audio: 'Audio Module',
+        remotehardware: 'Remote Hardware',
+        neighborinfo: 'Neighbor Info',
+        ambientlighting: 'Ambient Lighting',
+        detectionsensor: 'Detection Sensor',
+        paxcounter: 'PAX Counter'
+    };
+
+    function populateRestoreCheckboxes(category, items, configData) {
+        const container = document.getElementById(`restore${category.charAt(0).toUpperCase() + category.slice(1)}ConfigsContainer`);
+        if (!container) return;
+
+        container.innerHTML = '';
+
+        items.forEach(item => {
+            const displayName = configDisplayNames[item.toLowerCase()] || item;
+            const checkboxId = `restore_${category}_${item}`;
+
+            const div = document.createElement('div');
+            div.className = 'form-check mb-1';
+            div.innerHTML = `
+                <input class="form-check-input restore-item-checkbox" type="checkbox"
+                       id="${checkboxId}"
+                       data-category="${category}"
+                       data-item="${item}"
+                       onchange="updateRestoreCategoryCheckbox('${category}'); updateRestoreSelectedCount()">
+                <label class="form-check-label small" for="${checkboxId}">
+                    ${displayName}
+                </label>
+            `;
+            container.appendChild(div);
+        });
+    }
+
+    function populateRestoreChannelCheckboxes(channelKeys, channelsData) {
+        const container = document.getElementById('restoreChannelsContainer');
+        if (!container) return;
+
+        container.innerHTML = '';
+
+        // Sort channel keys numerically
+        const sortedKeys = channelKeys.sort((a, b) => parseInt(a) - parseInt(b));
+
+        sortedKeys.forEach(channelIdx => {
+            const channelData = channelsData[channelIdx] || {};
+            const channelName = channelData.settings?.name || `Channel ${channelIdx}`;
+            const isPrimary = parseInt(channelIdx) === 0;
+            const checkboxId = `restore_channel_${channelIdx}`;
+
+            const div = document.createElement('div');
+            div.className = 'form-check mb-1';
+            div.innerHTML = `
+                <input class="form-check-input restore-item-checkbox" type="checkbox"
+                       id="${checkboxId}"
+                       data-category="channel"
+                       data-item="${channelIdx}"
+                       onchange="updateRestoreCategoryCheckbox('channel'); updateRestoreSelectedCount()">
+                <label class="form-check-label small" for="${checkboxId}">
+                    ${isPrimary ? '<span class="badge bg-warning text-dark me-1">Primary</span>' : ''}
+                    Channel ${channelIdx}${channelName ? `: ${channelName}` : ''}
+                </label>
+            `;
+            container.appendChild(div);
+        });
+    }
+
+    function toggleRestoreCategory(category, checked) {
+        const checkboxes = document.querySelectorAll(`.restore-item-checkbox[data-category="${category}"]`);
+        checkboxes.forEach(cb => cb.checked = checked);
+        updateRestoreSelectedCount();
+    }
+
+    function updateRestoreCategoryCheckbox(category) {
+        const categoryCheckbox = document.getElementById(`restoreSelectAll${category.charAt(0).toUpperCase() + category.slice(1)}${category === 'channel' ? 's' : 's'}`);
+        const checkboxes = document.querySelectorAll(`.restore-item-checkbox[data-category="${category}"]`);
+
+        if (!categoryCheckbox || checkboxes.length === 0) return;
+
+        const allChecked = Array.from(checkboxes).every(cb => cb.checked);
+        const someChecked = Array.from(checkboxes).some(cb => cb.checked);
+
+        categoryCheckbox.checked = allChecked;
+        categoryCheckbox.indeterminate = someChecked && !allChecked;
+    }
+
+    function selectAllRestoreItems(checked) {
+        // Select/deselect all category checkboxes
+        ['restoreSelectAllCore', 'restoreSelectAllModules', 'restoreSelectAllChannels'].forEach(id => {
+            const cb = document.getElementById(id);
+            if (cb) {
+                cb.checked = checked;
+                cb.indeterminate = false;
+            }
+        });
+
+        // Select/deselect all individual checkboxes
+        document.querySelectorAll('.restore-item-checkbox').forEach(cb => {
+            cb.checked = checked;
+        });
+
+        updateRestoreSelectedCount();
+    }
+
+    function updateRestoreSelectedCount() {
+        const count = document.querySelectorAll('.restore-item-checkbox:checked').length;
+        const countEl = document.getElementById('restoreSelectedCount');
+        if (countEl) countEl.textContent = count;
+    }
+
+    function getSelectedRestoreItems() {
+        const selected = {
+            coreConfigs: [],
+            moduleConfigs: [],
+            channels: []
+        };
+
+        document.querySelectorAll('.restore-item-checkbox:checked').forEach(cb => {
+            const category = cb.dataset.category;
+            const item = cb.dataset.item;
+
+            if (category === 'core') {
+                selected.coreConfigs.push(item);
+            } else if (category === 'module') {
+                selected.moduleConfigs.push(item);
+            } else if (category === 'channel') {
+                selected.channels.push(item);
+            }
+        });
+
+        return selected;
     }
 
     // Load backups when tab is shown
@@ -6053,8 +6265,17 @@
             return;
         }
 
+        // Get selected items for selective restore
+        const selectedItems = getSelectedRestoreItems();
+
+        if (selectedItems.coreConfigs.length === 0 &&
+            selectedItems.moduleConfigs.length === 0 &&
+            selectedItems.channels.length === 0) {
+            showAlert('warning', 'Please select at least one item to restore');
+            return;
+        }
+
         // Get options from the restore modal (restoreBackupModal)
-        const skipPrimaryChannel = document.getElementById('restoreSkipPrimaryChannel')?.checked !== false;
         const skipLora = document.getElementById('restoreSkipLora')?.checked === true;
         const skipSecurity = document.getElementById('restoreSkipSecurity')?.checked !== false;
         const rebootAfter = document.getElementById('restoreRebootAfter')?.checked === true;
@@ -6067,10 +6288,12 @@
 
         try {
             const result = await jobManager.queueRestore(backupId, targetNodeId, {
-                skipPrimaryChannel,
                 skipLora,
                 skipSecurity,
-                rebootAfter
+                rebootAfter,
+                selectedCoreConfigs: selectedItems.coreConfigs,
+                selectedModuleConfigs: selectedItems.moduleConfigs,
+                selectedChannels: selectedItems.channels
             });
 
             if (result.success) {

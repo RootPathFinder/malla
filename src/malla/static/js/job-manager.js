@@ -68,10 +68,13 @@ class JobManager {
             body: JSON.stringify({
                 backup_id: backupId,
                 target_node_id: targetNodeId,
-                skip_primary_channel: options.skipPrimaryChannel !== false,
                 skip_lora: options.skipLora || false,
                 skip_security: options.skipSecurity !== false,
-                reboot_after: options.rebootAfter || false
+                reboot_after: options.rebootAfter || false,
+                // Selective restore: specify which items to restore
+                selected_core_configs: options.selectedCoreConfigs || null,
+                selected_module_configs: options.selectedModuleConfigs || null,
+                selected_channels: options.selectedChannels || null
             })
         });
 

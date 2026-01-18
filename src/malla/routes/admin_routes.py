@@ -1716,10 +1716,12 @@ def api_restore_backup_job():
     Request body (JSON):
         backup_id: ID of the backup to restore (required)
         target_node_id: Node ID to restore to (required)
-        skip_primary_channel: Skip restoring primary channel (default: true)
         skip_lora: Skip restoring LoRa config (default: false)
         skip_security: Skip restoring security config (default: true)
         reboot_after: Reboot node after restore (default: false)
+        selected_core_configs: List of core config names to restore (optional, default: all)
+        selected_module_configs: List of module config names to restore (optional, default: all)
+        selected_channels: List of channel indices to restore (optional, default: all)
 
     Returns:
         job_id: ID of the queued job
@@ -1734,10 +1736,14 @@ def api_restore_backup_job():
 
         backup_id = data.get("backup_id")
         target_node_str = data.get("target_node_id")
-        skip_primary_channel = data.get("skip_primary_channel", True)
         skip_lora = data.get("skip_lora", False)
         skip_security = data.get("skip_security", True)
         reboot_after = data.get("reboot_after", False)
+
+        # Selective restore options
+        selected_core_configs = data.get("selected_core_configs")  # None = all
+        selected_module_configs = data.get("selected_module_configs")  # None = all
+        selected_channels = data.get("selected_channels")  # None = all
 
         if not backup_id:
             return jsonify({"error": "backup_id is required"}), 400
@@ -1759,10 +1765,12 @@ def api_restore_backup_job():
             job_name=f"Restore: {backup_name}",
             job_data={
                 "backup_id": backup_id,
-                "skip_primary_channel": skip_primary_channel,
                 "skip_lora": skip_lora,
                 "skip_security": skip_security,
                 "reboot_after": reboot_after,
+                "selected_core_configs": selected_core_configs,
+                "selected_module_configs": selected_module_configs,
+                "selected_channels": selected_channels,
             },
             target_node_id=target_node_id,
         )
