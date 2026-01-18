@@ -782,7 +782,7 @@
                                         <i class="bi bi-ui-checks"></i> Form
                                     </button>
                                     <button type="button" class="btn btn-outline-secondary" onclick="showJsonView()">
-                                        <i class="bi bi-code-square"></i> JSON
+                                        <i class="bi bi-code-square"></i> JSON/Log
                                     </button>
                                 </div>
                             </div>
@@ -2586,6 +2586,8 @@
         commandLogLines = [];
         const container = document.getElementById('commandResponse');
         container.innerHTML = '<pre id="commandLogPre" style="margin: 0; font-family: monospace; font-size: 0.85rem; white-space: pre-wrap; max-height: 300px; overflow-y: auto;"></pre>';
+        // Auto-switch to JSON/Log view when starting a command
+        showJsonView();
     }
 
     function addCommandLog(message, isSpinnerLine = false) {
