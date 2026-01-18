@@ -6,8 +6,16 @@ Provides REST API endpoints and page routes for the Mesh Admin functionality.
 
 import json
 import logging
+import time
 
-from flask import Blueprint, Response, jsonify, render_template, request
+from flask import (
+    Blueprint,
+    Response,
+    jsonify,
+    render_template,
+    request,
+    stream_with_context,
+)
 
 from ..config import get_config
 from ..database.admin_repository import AdminRepository
@@ -753,6 +761,361 @@ def api_update_backup(backup_id):
     except Exception as e:
         logger.error(f"Error updating backup: {e}")
         return jsonify({"error": str(e)}), 500
+
+
+@admin_bp.route("/api/admin/backups/stream")
+def api_create_backup_stream():
+    """
+    SSE endpoint to create a backup with real-time progress updates.
+
+    Returns a Server-Sent Events stream with progress messages during backup.
+    """
+    from ..services.admin_service import ConfigType, ModuleConfigType
+
+    node_id_str = request.args.get("node_id")
+    backup_name = request.args.get("backup_name")
+    description = request.args.get("description", "")
+
+    def generate():
+        def send_event(data: dict) -> str:
+            return f"data: {json.dumps(data)}\n\n"
+
+        # Validate inputs
+        if not node_id_str:
+            yield send_event(
+                {"complete": True, "success": False, "error": "node_id is required"}
+            )
+            return
+        if not backup_name:
+            yield send_event(
+                {"complete": True, "success": False, "error": "backup_name is required"}
+            )
+            return
+
+        # Convert node ID
+        try:
+            node_id = convert_node_id(node_id_str)
+        except (ValueError, TypeError):
+            yield send_event(
+                {
+                    "complete": True,
+                    "success": False,
+                    "error": f"Invalid node_id: {node_id_str}",
+                }
+            )
+            return
+
+        admin_service = get_admin_service()
+
+        # Define all items to fetch
+        core_configs = [
+            ("DEVICE", ConfigType.DEVICE),
+            ("POSITION", ConfigType.POSITION),
+            ("POWER", ConfigType.POWER),
+            ("NETWORK", ConfigType.NETWORK),
+            ("DISPLAY", ConfigType.DISPLAY),
+            ("LORA", ConfigType.LORA),
+            ("BLUETOOTH", ConfigType.BLUETOOTH),
+            ("SECURITY", ConfigType.SECURITY),
+        ]
+
+        module_configs = [
+            ("MQTT", ModuleConfigType.MQTT),
+            ("SERIAL", ModuleConfigType.SERIAL),
+            ("EXTNOTIF", ModuleConfigType.EXTNOTIF),
+            ("STOREFORWARD", ModuleConfigType.STOREFORWARD),
+            ("RANGETEST", ModuleConfigType.RANGETEST),
+            ("TELEMETRY", ModuleConfigType.TELEMETRY),
+            ("CANNEDMSG", ModuleConfigType.CANNEDMSG),
+            ("AUDIO", ModuleConfigType.AUDIO),
+            ("REMOTEHARDWARE", ModuleConfigType.REMOTEHARDWARE),
+            ("NEIGHBORINFO", ModuleConfigType.NEIGHBORINFO),
+            ("AMBIENTLIGHTING", ModuleConfigType.AMBIENTLIGHTING),
+            ("DETECTIONSENSOR", ModuleConfigType.DETECTIONSENSOR),
+            ("PAXCOUNTER", ModuleConfigType.PAXCOUNTER),
+        ]
+
+        channels = list(range(8))
+
+        total_items = len(core_configs) + len(module_configs) + len(channels)
+        current_item = 0
+
+        backup_data: dict = {
+            "backup_version": 1,
+            "target_node_id": node_id,
+            "created_at": time.time(),
+            "core_configs": {},
+            "module_configs": {},
+            "channels": {},
+        }
+
+        errors: list = []
+        successful_configs: list = []
+
+        try:
+            # Fetch core configs
+            yield send_event(
+                {
+                    "status": "Fetching core configurations...",
+                    "progress": 0,
+                    "phase": "core",
+                    "current": 0,
+                    "total": total_items,
+                }
+            )
+
+            for name, config_type in core_configs:
+                current_item += 1
+                progress = int((current_item / total_items) * 100)
+
+                yield send_event(
+                    {
+                        "status": f"Fetching {name} config...",
+                        "progress": progress,
+                        "phase": "core",
+                        "current": current_item,
+                        "total": total_items,
+                        "config_name": name,
+                    }
+                )
+
+                result = admin_service.get_config(
+                    target_node_id=node_id,
+                    config_type=config_type,
+                    max_retries=3,
+                    retry_delay=2.0,
+                    timeout=30.0,
+                )
+
+                if result.success and result.response:
+                    backup_data["core_configs"][name.lower()] = result.response
+                    successful_configs.append(f"core:{name}")
+                    yield send_event(
+                        {
+                            "status": f"✓ {name} config retrieved",
+                            "progress": progress,
+                            "phase": "core",
+                            "current": current_item,
+                            "total": total_items,
+                            "config_name": name,
+                            "config_success": True,
+                        }
+                    )
+                else:
+                    errors.append(f"core:{name}: {result.error or 'Unknown error'}")
+                    yield send_event(
+                        {
+                            "status": f"✗ {name} config failed",
+                            "progress": progress,
+                            "phase": "core",
+                            "current": current_item,
+                            "total": total_items,
+                            "config_name": name,
+                            "config_success": False,
+                            "config_error": result.error,
+                        }
+                    )
+
+            # Fetch module configs
+            yield send_event(
+                {
+                    "status": "Fetching module configurations...",
+                    "progress": int((current_item / total_items) * 100),
+                    "phase": "module",
+                    "current": current_item,
+                    "total": total_items,
+                }
+            )
+
+            for name, module_type in module_configs:
+                current_item += 1
+                progress = int((current_item / total_items) * 100)
+
+                yield send_event(
+                    {
+                        "status": f"Fetching {name} module...",
+                        "progress": progress,
+                        "phase": "module",
+                        "current": current_item,
+                        "total": total_items,
+                        "config_name": name,
+                    }
+                )
+
+                result = admin_service.get_module_config(
+                    target_node_id=node_id,
+                    module_config_type=module_type,
+                    max_retries=3,
+                    retry_delay=2.0,
+                    timeout=30.0,
+                )
+
+                if result.success and result.response:
+                    backup_data["module_configs"][name.lower()] = result.response
+                    successful_configs.append(f"module:{name}")
+                    yield send_event(
+                        {
+                            "status": f"✓ {name} module retrieved",
+                            "progress": progress,
+                            "phase": "module",
+                            "current": current_item,
+                            "total": total_items,
+                            "config_name": name,
+                            "config_success": True,
+                        }
+                    )
+                else:
+                    errors.append(f"module:{name}: {result.error or 'Unknown error'}")
+                    yield send_event(
+                        {
+                            "status": f"✗ {name} module failed",
+                            "progress": progress,
+                            "phase": "module",
+                            "current": current_item,
+                            "total": total_items,
+                            "config_name": name,
+                            "config_success": False,
+                            "config_error": result.error,
+                        }
+                    )
+
+            # Fetch channels
+            yield send_event(
+                {
+                    "status": "Fetching channel configurations...",
+                    "progress": int((current_item / total_items) * 100),
+                    "phase": "channels",
+                    "current": current_item,
+                    "total": total_items,
+                }
+            )
+
+            for channel_idx in channels:
+                current_item += 1
+                progress = int((current_item / total_items) * 100)
+
+                yield send_event(
+                    {
+                        "status": f"Fetching Channel {channel_idx}...",
+                        "progress": progress,
+                        "phase": "channels",
+                        "current": current_item,
+                        "total": total_items,
+                        "config_name": f"Channel {channel_idx}",
+                    }
+                )
+
+                result = admin_service.get_channel(
+                    target_node_id=node_id,
+                    channel_index=channel_idx,
+                    max_retries=3,
+                    retry_delay=2.0,
+                    timeout=30.0,
+                )
+
+                if result.success and result.response:
+                    backup_data["channels"][str(channel_idx)] = result.response
+                    successful_configs.append(f"channel:{channel_idx}")
+                    yield send_event(
+                        {
+                            "status": f"✓ Channel {channel_idx} retrieved",
+                            "progress": progress,
+                            "phase": "channels",
+                            "current": current_item,
+                            "total": total_items,
+                            "config_name": f"Channel {channel_idx}",
+                            "config_success": True,
+                        }
+                    )
+                else:
+                    errors.append(
+                        f"channel:{channel_idx}: {result.error or 'Unknown error'}"
+                    )
+                    yield send_event(
+                        {
+                            "status": f"✗ Channel {channel_idx} failed",
+                            "progress": progress,
+                            "phase": "channels",
+                            "current": current_item,
+                            "total": total_items,
+                            "config_name": f"Channel {channel_idx}",
+                            "config_success": False,
+                            "config_error": result.error,
+                        }
+                    )
+
+            # Save backup if we got at least some configs
+            if successful_configs:
+                yield send_event(
+                    {
+                        "status": "Saving backup to database...",
+                        "progress": 98,
+                        "phase": "saving",
+                    }
+                )
+
+                # Get node info for metadata
+                node_long_name = None
+                node_short_name = None
+                node_hex_id = f"!{node_id:08x}"
+
+                if "device" in backup_data["core_configs"]:
+                    device_config = backup_data["core_configs"]["device"]
+                    node_long_name = device_config.get("device", {}).get("owner", None)
+                    node_short_name = device_config.get("device", {}).get(
+                        "owner_short", None
+                    )
+
+                backup_id = AdminRepository.create_backup(
+                    node_id=node_id,
+                    backup_name=backup_name,
+                    backup_data=json.dumps(backup_data),
+                    description=description,
+                    node_long_name=node_long_name,
+                    node_short_name=node_short_name,
+                    node_hex_id=node_hex_id,
+                )
+
+                yield send_event(
+                    {
+                        "complete": True,
+                        "success": True,
+                        "backup_id": backup_id,
+                        "backup_name": backup_name,
+                        "successful_configs": successful_configs,
+                        "failed_configs": errors,
+                        "total_configs": len(successful_configs) + len(errors),
+                    }
+                )
+            else:
+                yield send_event(
+                    {
+                        "complete": True,
+                        "success": False,
+                        "error": "Failed to retrieve any configuration from node",
+                        "failed_configs": errors,
+                    }
+                )
+
+        except Exception as e:
+            logger.error(f"Error during backup stream: {e}")
+            yield send_event(
+                {
+                    "complete": True,
+                    "success": False,
+                    "error": str(e),
+                }
+            )
+
+    return Response(
+        stream_with_context(generate()),
+        mimetype="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache",
+            "Connection": "keep-alive",
+            "X-Accel-Buffering": "no",
+        },
+    )
 
 
 @admin_bp.route("/api/admin/node/<node_id>/config/<config_type>", methods=["POST"])

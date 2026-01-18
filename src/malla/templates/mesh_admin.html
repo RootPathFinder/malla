@@ -4715,7 +4715,9 @@
         modal.show();
     }
 
-    async function startBackup() {
+    let backupEventSource = null;
+
+    function startBackup() {
         const nodeId = document.getElementById('backupSourceNode').value;
         const backupName = document.getElementById('backupNameInput').value.trim();
         const description = document.getElementById('backupDescriptionInput').value.trim();
@@ -4733,67 +4735,123 @@
         btn.disabled = true;
         btn.innerHTML = '<i class="bi bi-arrow-clockwise spin"></i> Creating backup...';
 
-        // Show progress
-        document.getElementById('backupProgressSection').style.display = 'block';
-        document.getElementById('backupProgressStatus').textContent = 'Connecting to node...';
-        document.getElementById('backupProgressBar').style.width = '5%';
-        document.getElementById('backupProgressDetails').textContent = 'This may take several minutes for a full backup.';
+        // Show progress section
+        const progressSection = document.getElementById('backupProgressSection');
+        const progressStatus = document.getElementById('backupProgressStatus');
+        const progressBar = document.getElementById('backupProgressBar');
+        const progressDetails = document.getElementById('backupProgressDetails');
+        const spinner = document.getElementById('backupSpinner');
 
-        try {
-            const response = await fetch('/api/admin/backups', {
-                method: 'POST',
-                headers: {'Content-Type': 'application/json'},
-                body: JSON.stringify({
-                    node_id: nodeId,
-                    backup_name: backupName,
-                    description: description
-                })
-            });
+        progressSection.style.display = 'block';
+        progressStatus.textContent = 'Connecting to node...';
+        progressBar.style.width = '0%';
+        progressBar.className = 'progress-bar progress-bar-striped progress-bar-animated';
+        progressDetails.textContent = 'Starting backup...';
+        spinner.style.display = '';
 
-            const data = await response.json();
+        // Close any existing SSE connection
+        if (backupEventSource) {
+            backupEventSource.close();
+        }
 
-            if (data.success) {
-                document.getElementById('backupProgressStatus').textContent = 'Backup complete!';
-                document.getElementById('backupProgressBar').style.width = '100%';
-                document.getElementById('backupProgressBar').classList.remove('progress-bar-animated');
-                document.getElementById('backupProgressBar').classList.add('bg-success');
-                document.getElementById('backupSpinner').style.display = 'none';
+        // Build SSE URL with query params
+        const params = new URLSearchParams({
+            node_id: nodeId,
+            backup_name: backupName,
+            description: description
+        });
 
-                const successCount = data.successful_configs?.length || 0;
-                const failedCount = data.failed_configs?.length || 0;
-                document.getElementById('backupProgressDetails').textContent =
-                    `Retrieved ${successCount} configs successfully` + (failedCount > 0 ? `, ${failedCount} failed` : '');
+        backupEventSource = new EventSource(`/api/admin/backups/stream?${params.toString()}`);
 
-                showAlert('success', `Backup "${backupName}" created successfully`);
+        backupEventSource.onmessage = function(event) {
+            const data = JSON.parse(event.data);
 
-                // Close modal after delay
-                setTimeout(() => {
-                    bootstrap.Modal.getInstance(document.getElementById('createBackupModal')).hide();
-                    loadBackups();
-                    if (data.backup_id) {
-                        selectBackup(data.backup_id);
-                    }
-                }, 1500);
+            if (data.complete) {
+                backupEventSource.close();
+                backupEventSource = null;
 
+                if (data.success) {
+                    progressStatus.textContent = '✓ Backup complete!';
+                    progressBar.style.width = '100%';
+                    progressBar.className = 'progress-bar bg-success';
+                    spinner.style.display = 'none';
+
+                    const successCount = data.successful_configs?.length || 0;
+                    const failedCount = data.failed_configs?.length || 0;
+                    progressDetails.textContent =
+                        `Retrieved ${successCount} configs` + (failedCount > 0 ? `, ${failedCount} failed` : '');
+
+                    showAlert('success', `Backup "${backupName}" created successfully`);
+
+                    // Close modal after delay
+                    setTimeout(() => {
+                        bootstrap.Modal.getInstance(document.getElementById('createBackupModal')).hide();
+                        loadBackups();
+                        if (data.backup_id) {
+                            selectBackup(data.backup_id);
+                        }
+                    }, 1500);
+                } else {
+                    progressStatus.textContent = '✗ Backup failed';
+                    progressBar.className = 'progress-bar bg-danger';
+                    progressDetails.textContent = data.error || 'Unknown error';
+                    spinner.style.display = 'none';
+                    showAlert('danger', data.error || 'Failed to create backup');
+                    btn.disabled = false;
+                    btn.innerHTML = '<i class="bi bi-cloud-download"></i> Retry';
+                }
             } else {
-                document.getElementById('backupProgressStatus').textContent = 'Backup failed';
-                document.getElementById('backupProgressBar').classList.remove('progress-bar-animated');
-                document.getElementById('backupProgressBar').classList.add('bg-danger');
-                document.getElementById('backupProgressDetails').textContent = data.error || 'Unknown error';
-                showAlert('danger', data.error || 'Failed to create backup');
-                btn.disabled = false;
-                btn.innerHTML = '<i class="bi bi-cloud-download"></i> Retry';
-            }
+                // Progress update
+                progressStatus.textContent = data.status || 'Working...';
+                progressBar.style.width = `${data.progress || 0}%`;
 
-        } catch (error) {
-            document.getElementById('backupProgressStatus').textContent = 'Error';
-            document.getElementById('backupProgressBar').classList.add('bg-danger');
-            document.getElementById('backupProgressDetails').textContent = error.message;
-            showAlert('danger', `Error: ${error.message}`);
+                // Build detailed progress info
+                let details = '';
+                if (data.current && data.total) {
+                    details = `${data.current}/${data.total} items`;
+                    if (data.phase) {
+                        const phaseLabels = {
+                            'core': 'Core Configs',
+                            'module': 'Module Configs',
+                            'channels': 'Channels',
+                            'saving': 'Saving'
+                        };
+                        details += ` (${phaseLabels[data.phase] || data.phase})`;
+                    }
+                }
+                progressDetails.textContent = details;
+
+                // Update status icon based on config result
+                if (data.config_success !== undefined) {
+                    const icon = data.config_success ? '✓' : '✗';
+                    const color = data.config_success ? 'text-success' : 'text-warning';
+                    // Could add a detailed log here if desired
+                }
+            }
+        };
+
+        backupEventSource.onerror = function(error) {
+            console.error('Backup SSE error:', error);
+            backupEventSource.close();
+            backupEventSource = null;
+
+            progressStatus.textContent = '✗ Connection error';
+            progressBar.className = 'progress-bar bg-danger';
+            progressDetails.textContent = 'Lost connection to server';
+            spinner.style.display = 'none';
+            showAlert('danger', 'Connection error during backup');
             btn.disabled = false;
             btn.innerHTML = '<i class="bi bi-cloud-download"></i> Retry';
-        }
+        };
     }
+
+    // Clean up SSE on modal close
+    document.getElementById('createBackupModal')?.addEventListener('hidden.bs.modal', function() {
+        if (backupEventSource) {
+            backupEventSource.close();
+            backupEventSource = null;
+        }
+    });
 
     async function deleteBackup() {
         if (!currentBackupId) return;
