@@ -463,11 +463,15 @@
 (function() {
     let insightsData = null;
     let calendarData = null;
+    let refreshInterval = null;
 
     document.addEventListener('DOMContentLoaded', function() {
         loadAllData();
 
         document.getElementById('refreshBtn').addEventListener('click', loadAllData);
+
+        // Auto-refresh every 60 seconds
+        refreshInterval = setInterval(loadAllData, 60000);
     });
 
     async function loadAllData() {
@@ -685,16 +689,25 @@
             return;
         }
 
-        container.innerHTML = health.nodes_needing_attention.map(node => `
+        container.innerHTML = health.nodes_needing_attention.map(node => {
+            // Determine badge text based on issue type
+            let badgeText = node.value || '';
+            if (!badgeText && node.issue) {
+                if (node.issue.includes('Offline')) badgeText = 'Offline';
+                else if (node.issue.includes('Inactive')) badgeText = 'Inactive';
+                else if (node.issue.includes('Never')) badgeText = 'Unknown';
+                else badgeText = node.status;
+            }
+            return `
             <a href="/node/${node.node_id_hex}" class="node-health-item text-decoration-none">
                 <div class="node-health-indicator ${node.status}"></div>
                 <div class="flex-grow-1">
                     <div class="fw-medium">${escapeHtml(node.name || node.node_id_hex)}</div>
                     <small class="text-muted">${escapeHtml(node.issue)}</small>
                 </div>
-                ${node.value ? `<span class="badge bg-${node.status === 'critical' ? 'danger' : 'warning'}">${node.value}</span>` : ''}
+                <span class="badge bg-${node.status === 'critical' ? 'danger' : node.status === 'warning' ? 'warning' : 'secondary'}">${badgeText}</span>
             </a>
-        `).join('');
+        `}).join('');
     }
 
     function renderVitals(vitals) {
