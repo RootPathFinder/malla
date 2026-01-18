@@ -1474,13 +1474,9 @@
             </div>
             <div class="modal-footer">
                 <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Cancel</button>
-                <button type="button" class="btn btn-outline-primary" id="startBackupJobBtn" onclick="startBackupJob()"
-                        title="Run backup in background - you can close this and check progress later">
-                    <i class="bi bi-cloud-arrow-up"></i> Run in Background
-                </button>
-                <button type="button" class="btn btn-primary" id="startBackupBtn" onclick="startBackup()"
-                        title="Run backup with live progress updates - keep this window open">
-                    <i class="bi bi-cloud-download"></i> Create Backup (Live)
+                <button type="button" class="btn btn-primary" id="startBackupJobBtn" onclick="startBackupJob()"
+                        title="Create backup as a background job">
+                    <i class="bi bi-cloud-download"></i> Create Backup
                 </button>
             </div>
         </div>
@@ -1639,13 +1635,9 @@
             </div>
             <div class="modal-footer">
                 <button type="button" class="btn btn-secondary" data-bs-dismiss="modal" id="restoreCancelBtn">Cancel</button>
-                <button type="button" class="btn btn-outline-warning" id="startRestoreJobBtn" onclick="startRestoreJob()"
-                        title="Run restore in background - you can close this and check progress later">
-                    <i class="bi bi-cloud-arrow-up"></i> Run in Background
-                </button>
-                <button type="button" class="btn btn-warning" id="startRestoreBtn" onclick="startRestore()"
-                        title="Run restore with live progress updates - keep this window open">
-                    <i class="bi bi-arrow-counterclockwise"></i> Start Restore (Live)
+                <button type="button" class="btn btn-warning" id="startRestoreJobBtn" onclick="startRestoreJob()"
+                        title="Restore backup as a background job">
+                    <i class="bi bi-arrow-counterclockwise"></i> Start Restore
                 </button>
                 <button type="button" class="btn btn-primary" id="restoreDoneBtn" style="display: none;" data-bs-dismiss="modal">
                     <i class="bi bi-check"></i> Done
@@ -5244,135 +5236,7 @@
 
     let backupEventSource = null;
 
-    function startBackup() {
-        const nodeId = document.getElementById('backupSourceNode').value;
-        const backupName = document.getElementById('backupNameInput').value.trim();
-        const description = document.getElementById('backupDescriptionInput').value.trim();
-
-        if (!nodeId) {
-            showAlert('warning', 'Please select a node to backup');
-            return;
-        }
-        if (!backupName) {
-            showAlert('warning', 'Please enter a backup name');
-            return;
-        }
-
-        const btn = document.getElementById('startBackupBtn');
-        btn.disabled = true;
-        btn.innerHTML = '<i class="bi bi-arrow-clockwise spin"></i> Creating backup...';
-
-        // Show progress section
-        const progressSection = document.getElementById('backupProgressSection');
-        const progressStatus = document.getElementById('backupProgressStatus');
-        const progressBar = document.getElementById('backupProgressBar');
-        const progressDetails = document.getElementById('backupProgressDetails');
-        const spinner = document.getElementById('backupSpinner');
-
-        progressSection.style.display = 'block';
-        progressStatus.textContent = 'Connecting to node...';
-        progressBar.style.width = '0%';
-        progressBar.className = 'progress-bar progress-bar-striped progress-bar-animated';
-        progressDetails.textContent = 'Starting backup...';
-        spinner.style.display = '';
-
-        // Close any existing SSE connection
-        if (backupEventSource) {
-            backupEventSource.close();
-        }
-
-        // Build SSE URL with query params
-        const params = new URLSearchParams({
-            node_id: nodeId,
-            backup_name: backupName,
-            description: description
-        });
-
-        backupEventSource = new EventSource(`/api/admin/backups/stream?${params.toString()}`);
-
-        backupEventSource.onmessage = function(event) {
-            const data = JSON.parse(event.data);
-
-            if (data.complete) {
-                backupEventSource.close();
-                backupEventSource = null;
-
-                if (data.success) {
-                    progressStatus.textContent = '✓ Backup complete!';
-                    progressBar.style.width = '100%';
-                    progressBar.className = 'progress-bar bg-success';
-                    spinner.style.display = 'none';
-
-                    const successCount = data.successful_configs?.length || 0;
-                    const failedCount = data.failed_configs?.length || 0;
-                    progressDetails.textContent =
-                        `Retrieved ${successCount} configs` + (failedCount > 0 ? `, ${failedCount} failed` : '');
-
-                    showAlert('success', `Backup "${backupName}" created successfully`);
-
-                    // Close modal after delay
-                    setTimeout(() => {
-                        bootstrap.Modal.getInstance(document.getElementById('createBackupModal')).hide();
-                        loadBackups();
-                        if (data.backup_id) {
-                            selectBackup(data.backup_id);
-                        }
-                    }, 1500);
-                } else {
-                    progressStatus.textContent = '✗ Backup failed';
-                    progressBar.className = 'progress-bar bg-danger';
-                    progressDetails.textContent = data.error || 'Unknown error';
-                    spinner.style.display = 'none';
-                    showAlert('danger', data.error || 'Failed to create backup');
-                    btn.disabled = false;
-                    btn.innerHTML = '<i class="bi bi-cloud-download"></i> Retry';
-                }
-            } else {
-                // Progress update
-                progressStatus.textContent = data.status || 'Working...';
-                progressBar.style.width = `${data.progress || 0}%`;
-
-                // Build detailed progress info
-                let details = '';
-                if (data.current && data.total) {
-                    details = `${data.current}/${data.total} items`;
-                    if (data.phase) {
-                        const phaseLabels = {
-                            'core': 'Core Configs',
-                            'module': 'Module Configs',
-                            'channels': 'Channels',
-                            'saving': 'Saving'
-                        };
-                        details += ` (${phaseLabels[data.phase] || data.phase})`;
-                    }
-                }
-                progressDetails.textContent = details;
-
-                // Update status icon based on config result
-                if (data.config_success !== undefined) {
-                    const icon = data.config_success ? '✓' : '✗';
-                    const color = data.config_success ? 'text-success' : 'text-warning';
-                    // Could add a detailed log here if desired
-                }
-            }
-        };
-
-        backupEventSource.onerror = function(error) {
-            console.error('Backup SSE error:', error);
-            backupEventSource.close();
-            backupEventSource = null;
-
-            progressStatus.textContent = '✗ Connection error';
-            progressBar.className = 'progress-bar bg-danger';
-            progressDetails.textContent = 'Lost connection to server';
-            spinner.style.display = 'none';
-            showAlert('danger', 'Connection error during backup');
-            btn.disabled = false;
-            btn.innerHTML = '<i class="bi bi-cloud-download"></i> Retry';
-        };
-    }
-
-    // Clean up SSE on modal close
+    // Clean up SSE on modal close (for any leftover connections)
     document.getElementById('createBackupModal')?.addEventListener('hidden.bs.modal', function() {
         if (backupEventSource) {
             backupEventSource.close();
@@ -5452,189 +5316,18 @@
         document.getElementById('restoreConfigSection').style.display = 'block';
         document.getElementById('restoreProgressSection').style.display = 'none';
         document.getElementById('restoreCompleteSection').style.display = 'none';
-        document.getElementById('startRestoreBtn').style.display = 'inline-block';
+        document.getElementById('startRestoreJobBtn').style.display = 'inline-block';
         document.getElementById('restoreDoneBtn').style.display = 'none';
         document.getElementById('restoreCancelBtn').style.display = 'inline-block';
         document.getElementById('restoreModalClose').disabled = false;
 
-        // Store target node for startRestore
-        document.getElementById('startRestoreBtn').dataset.targetNodeId = targetNodeId;
-        document.getElementById('startRestoreBtn').dataset.backupId = currentBackupId;
+        // Store target node for startRestoreJob
+        document.getElementById('startRestoreJobBtn').dataset.targetNodeId = targetNodeId;
+        document.getElementById('startRestoreJobBtn').dataset.backupId = currentBackupId;
 
         // Show the modal
         const modal = new bootstrap.Modal(document.getElementById('restoreBackupModal'));
         modal.show();
-    }
-
-    async function startRestore() {
-        const startBtn = document.getElementById('startRestoreBtn');
-        const targetNodeId = startBtn.dataset.targetNodeId;
-        const backupId = startBtn.dataset.backupId;
-
-        if (!targetNodeId || !backupId) {
-            showAlert('danger', 'Missing target node or backup information');
-            return;
-        }
-
-        // Get restore options
-        const skipPrimaryChannel = document.getElementById('restoreSkipPrimaryChannel').checked;
-        const skipLora = document.getElementById('restoreSkipLora').checked;
-        const skipSecurity = document.getElementById('restoreSkipSecurity').checked;
-        const rebootAfter = document.getElementById('restoreRebootAfter').checked;
-
-        // Update UI for progress mode
-        document.getElementById('restoreConfigSection').style.display = 'none';
-        document.getElementById('restoreProgressSection').style.display = 'block';
-        document.getElementById('restoreCompleteSection').style.display = 'none';
-        document.getElementById('startRestoreBtn').style.display = 'none';
-        document.getElementById('startRestoreJobBtn').style.display = 'none';
-        document.getElementById('restoreDoneBtn').style.display = 'none';
-        document.getElementById('restoreCancelBtn').style.display = 'none';
-        document.getElementById('restoreModalClose').disabled = true;
-
-        const logContainer = document.getElementById('restoreLogContainer');
-        logContainer.innerHTML = '';
-
-        function addLogEntry(message, type = 'info') {
-            const colorMap = {
-                'success': '#28a745',
-                'error': '#dc3545',
-                'warning': '#ffc107',
-                'info': '#17a2b8'
-            };
-            const entry = document.createElement('div');
-            entry.style.color = colorMap[type] || '#adb5bd';
-            entry.textContent = `[${new Date().toLocaleTimeString()}] ${message}`;
-            logContainer.appendChild(entry);
-            logContainer.scrollTop = logContainer.scrollHeight;
-        }
-
-        addLogEntry('Starting restore process...');
-
-        // Build URL with options
-        const params = new URLSearchParams({
-            backup_id: backupId,
-            target_node_id: targetNodeId,
-            skip_primary_channel: skipPrimaryChannel,
-            skip_lora: skipLora,
-            skip_security: skipSecurity,
-            reboot_after: rebootAfter
-        });
-
-        try {
-            const eventSource = new EventSource(`/api/admin/backups/restore/stream?${params}`);
-
-            eventSource.onmessage = function(event) {
-                const data = JSON.parse(event.data);
-
-                if (data.complete) {
-                    eventSource.close();
-                    showRestoreComplete(data);
-                } else {
-                    // Update progress
-                    const progress = data.progress || 0;
-                    document.getElementById('restoreProgressBar').style.width = `${progress}%`;
-                    document.getElementById('restoreProgressBar').textContent = `${progress}%`;
-                    document.getElementById('restoreProgressStatus').textContent = data.status || 'Processing...';
-
-                    if (data.current && data.total) {
-                        document.getElementById('restoreProgressDetails').textContent =
-                            `${data.current} of ${data.total} configurations (${data.phase || 'processing'})`;
-                    }
-
-                    // Add log entry based on status
-                    if (data.config_success === true) {
-                        addLogEntry(data.status, 'success');
-                    } else if (data.config_success === false) {
-                        addLogEntry(data.status + (data.config_error ? ` - ${data.config_error}` : ''), 'error');
-                    } else if (data.status) {
-                        addLogEntry(data.status);
-                    }
-                }
-            };
-
-            eventSource.onerror = function(error) {
-                eventSource.close();
-                addLogEntry('Connection error - restore may have failed', 'error');
-                showRestoreComplete({
-                    complete: true,
-                    success: false,
-                    error: 'Connection to server lost'
-                });
-            };
-
-        } catch (error) {
-            addLogEntry(`Error: ${error.message}`, 'error');
-            showRestoreComplete({
-                complete: true,
-                success: false,
-                error: error.message
-            });
-        }
-    }
-
-    function showRestoreComplete(data) {
-        document.getElementById('restoreProgressSection').style.display = 'none';
-        document.getElementById('restoreCompleteSection').style.display = 'block';
-        document.getElementById('startRestoreBtn').style.display = 'none';
-        document.getElementById('restoreDoneBtn').style.display = 'inline-block';
-        document.getElementById('restoreCancelBtn').style.display = 'none';
-        document.getElementById('restoreModalClose').disabled = false;
-        document.getElementById('restoreSpinner').style.display = 'none';
-
-        if (data.success) {
-            document.getElementById('restoreSuccessIcon').style.display = 'inline';
-            document.getElementById('restoreFailIcon').style.display = 'none';
-            document.getElementById('restoreCompleteTitle').textContent = 'Restore Complete';
-            document.getElementById('restoreCompleteTitle').className = 'mt-3 text-success';
-            document.getElementById('restoreCompleteMessage').textContent =
-                data.message || 'Configuration has been restored successfully.';
-
-            if (data.reboot_after) {
-                document.getElementById('restoreCompleteMessage').textContent +=
-                    ' The node will reboot shortly to apply changes.';
-            }
-
-            document.getElementById('restoreSuccessCount').textContent = data.total_restored || 0;
-            document.getElementById('restoreFailCount').textContent = data.total_failed || 0;
-
-            if (data.failed_restores && data.failed_restores.length > 0) {
-                document.getElementById('restoreErrorDetails').style.display = 'block';
-                const errorList = document.getElementById('restoreErrorList');
-                errorList.innerHTML = data.failed_restores.map(err =>
-                    `<li class="list-group-item list-group-item-danger py-1">${escapeHtml(err)}</li>`
-                ).join('');
-            } else {
-                document.getElementById('restoreErrorDetails').style.display = 'none';
-            }
-
-            showAlert('success', `Restored ${data.total_restored || 0} configurations successfully`);
-        } else {
-            document.getElementById('restoreSuccessIcon').style.display = 'none';
-            document.getElementById('restoreFailIcon').style.display = 'inline';
-            document.getElementById('restoreCompleteTitle').textContent = 'Restore Failed';
-            document.getElementById('restoreCompleteTitle').className = 'mt-3 text-danger';
-            document.getElementById('restoreCompleteMessage').textContent =
-                data.error || 'Failed to restore configuration.';
-
-            document.getElementById('restoreSuccessCount').textContent = 0;
-            document.getElementById('restoreFailCount').textContent =
-                data.failed_restores ? data.failed_restores.length : 1;
-
-            if (data.failed_restores && data.failed_restores.length > 0) {
-                document.getElementById('restoreErrorDetails').style.display = 'block';
-                const errorList = document.getElementById('restoreErrorList');
-                errorList.innerHTML = data.failed_restores.map(err =>
-                    `<li class="list-group-item list-group-item-danger py-1">${escapeHtml(err)}</li>`
-                ).join('');
-            } else {
-                document.getElementById('restoreErrorDetails').style.display = 'none';
-            }
-
-            showAlert('danger', data.error || 'Restore failed');
-        }
-
-        document.getElementById('restoreResultsSummary').style.display = 'flex';
     }
 
     // Load backups when tab is shown
@@ -6338,7 +6031,7 @@
         } finally {
             if (btn) {
                 btn.disabled = false;
-                btn.innerHTML = '<i class="bi bi-cloud-arrow-up"></i> Run in Background';
+                btn.innerHTML = '<i class="bi bi-cloud-download"></i> Create Backup';
             }
         }
     }
@@ -6346,7 +6039,7 @@
     // Queue restore as background job
     async function startRestoreJob() {
         // Get backup ID and target node from the restore button's dataset
-        const startBtn = document.getElementById('startRestoreBtn');
+        const startBtn = document.getElementById('startRestoreJobBtn');
         const backupId = startBtn?.dataset.backupId;
         const targetNodeId = startBtn?.dataset.targetNodeId;
 
@@ -6397,7 +6090,7 @@
         } finally {
             if (btn) {
                 btn.disabled = false;
-                btn.innerHTML = '<i class="bi bi-cloud-arrow-up"></i> Run in Background';
+                btn.innerHTML = '<i class="bi bi-arrow-counterclockwise"></i> Start Restore';
             }
         }
     }
