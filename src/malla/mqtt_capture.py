@@ -1370,8 +1370,8 @@ def on_message(client: mqtt.Client, userdata: Any, msg: mqtt.MQTTMessage) -> Non
                 battery_level = (
                     metrics.battery_level if metrics.HasField("battery_level") else None
                 )
-                voltage_raw = metrics.voltage if metrics.HasField("voltage") else None
-                voltage = voltage_raw / 1000.0 if voltage_raw else None
+                # Note: voltage from protobuf is already in volts (not millivolts)
+                voltage = metrics.voltage if metrics.HasField("voltage") else None
                 channel_util = (
                     metrics.channel_utilization
                     if metrics.HasField("channel_utilization")

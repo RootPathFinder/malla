@@ -2129,6 +2129,13 @@ class AlertService:
                 role = row["role"]
                 battery = row["battery_level"]
                 voltage = row["voltage"]
+
+                # Fix incorrectly stored voltage values (divided by 1000 when they shouldn't have been)
+                # Valid battery voltages are typically between 2.5V and 5V
+                # If voltage is below 0.5V, it's likely stored incorrectly and needs to be multiplied
+                if voltage is not None and voltage > 0 and voltage < 0.5:
+                    voltage = voltage * 1000  # Convert back to volts
+
                 last_seen = last_seen_map.get(node_id)
 
                 is_infra = role in INFRASTRUCTURE_ROLES
