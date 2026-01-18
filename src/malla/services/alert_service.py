@@ -202,6 +202,25 @@ class AlertService:
     # Track node baselines for anomaly detection
     _node_baselines: dict[int, dict[str, Any]] = {}
 
+    @staticmethod
+    def _correct_voltage(voltage: float | None) -> float | None:
+        """
+        Correct incorrectly stored voltage values.
+
+        Some voltage values were stored divided by 1000 due to a bug.
+        Valid battery voltages are typically between 2.5V and 5V.
+        If voltage is below 0.5V, it's likely stored incorrectly.
+
+        Args:
+            voltage: Raw voltage value from database
+
+        Returns:
+            Corrected voltage value in volts
+        """
+        if voltage is not None and voltage > 0 and voltage < 0.5:
+            return voltage * 1000  # Convert back to volts
+        return voltage
+
     @classmethod
     def is_infrastructure_node(cls, role: str | None) -> bool:
         """
@@ -733,7 +752,7 @@ class AlertService:
             for row in rows:
                 node_id = row["node_id"]
                 battery = row["battery_level"]
-                voltage = row["voltage"]
+                voltage = cls._correct_voltage(row["voltage"])
                 node_battery_status[node_id] = {
                     "battery_level": battery,
                     "voltage": voltage,
@@ -753,7 +772,7 @@ class AlertService:
             for row in rows:
                 node_id = row["node_id"]
                 battery_level = row["battery_level"]
-                voltage = row["voltage"]
+                voltage = cls._correct_voltage(row["voltage"])
 
                 # Check battery percentage
                 if battery_level is not None and battery_level > 0:
@@ -1792,7 +1811,7 @@ class AlertService:
 
             for n in all_nodes_battery:
                 batt = n["battery_level"]
-                volt = n["voltage"]
+                volt = cls._correct_voltage(n["voltage"])
                 is_low = False
 
                 if batt is not None and batt < 30:
@@ -1801,13 +1820,16 @@ class AlertService:
                     is_low = True
 
                 if is_low:
-                    low_battery_nodes.append(n)
+                    low_battery_nodes.append({**dict(n), "_corrected_voltage": volt})
 
             critical_battery = [
                 n
                 for n in low_battery_nodes
                 if (n["battery_level"] is not None and n["battery_level"] < 15)
-                or (n["voltage"] is not None and n["voltage"] < 3.2)
+                or (
+                    n.get("_corrected_voltage") is not None
+                    and n.get("_corrected_voltage") < 3.2
+                )
             ]
             warning_battery = [
                 n for n in low_battery_nodes if n not in critical_battery
@@ -2128,13 +2150,7 @@ class AlertService:
                 hex_id = row["hex_id"]
                 role = row["role"]
                 battery = row["battery_level"]
-                voltage = row["voltage"]
-
-                # Fix incorrectly stored voltage values (divided by 1000 when they shouldn't have been)
-                # Valid battery voltages are typically between 2.5V and 5V
-                # If voltage is below 0.5V, it's likely stored incorrectly and needs to be multiplied
-                if voltage is not None and voltage > 0 and voltage < 0.5:
-                    voltage = voltage * 1000  # Convert back to volts
+                voltage = cls._correct_voltage(row["voltage"])
 
                 last_seen = last_seen_map.get(node_id)
 
