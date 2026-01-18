@@ -1232,6 +1232,9 @@
                 <button type="button" class="btn btn-outline-danger d-none" id="jobDetailsCancelBtn" onclick="cancelJobFromModal()">
                     <i class="bi bi-x-circle me-1"></i> Cancel
                 </button>
+                <button type="button" class="btn btn-danger d-none" id="jobDetailsForceCancelBtn" onclick="forceCancelJobFromModal()" title="Force cancel this job (use if job is stuck)">
+                    <i class="bi bi-exclamation-triangle me-1"></i> Force Cancel
+                </button>
             </div>
         </div>
     </div>
@@ -5965,6 +5968,7 @@
         const cancelBtn = document.getElementById('jobDetailsCancelBtn');
         const pauseBtn = document.getElementById('jobDetailsPauseBtn');
         const resumeBtn = document.getElementById('jobDetailsResumeBtn');
+        const forceCancelBtn = document.getElementById('jobDetailsForceCancelBtn');
 
         titleEl.textContent = job.job_name || 'Job Details';
 
@@ -5972,6 +5976,7 @@
         cancelBtn.classList.add('d-none');
         pauseBtn.classList.add('d-none');
         resumeBtn.classList.add('d-none');
+        forceCancelBtn.classList.add('d-none');
 
         if (job.status === 'queued') {
             cancelBtn.classList.remove('d-none');
@@ -5984,6 +5989,21 @@
             cancelBtn.classList.remove('d-none');
             cancelBtn.innerHTML = '<i class="bi bi-stop-fill me-1"></i> Stop Job';
             cancelBtn.title = 'Request cancellation - job will stop at next checkpoint';
+
+            // Also show force cancel for running jobs (in case they're stuck/orphaned)
+            forceCancelBtn.classList.remove('d-none');
+
+            // Check if this job might be stuck (not updated recently)
+            if (job.updated_at) {
+                const lastUpdate = new Date(job.updated_at * 1000);
+                const now = new Date();
+                const minutesSinceUpdate = (now - lastUpdate) / 1000 / 60;
+                if (minutesSinceUpdate > 2) {
+                    // Job hasn't been updated in 2+ minutes, highlight force cancel
+                    forceCancelBtn.classList.add('animate__animated', 'animate__pulse');
+                    forceCancelBtn.title = `Job may be stuck (last update ${Math.floor(minutesSinceUpdate)} min ago). Use force cancel to stop it.`;
+                }
+            }
         }
 
         const statusBadge = getJobStatusBadge(job.status);
@@ -6113,6 +6133,24 @@
                 bootstrap.Modal.getInstance(document.getElementById('jobDetailsModal')).hide();
             } else {
                 showAlert('warning', result.error || 'Could not cancel job');
+            }
+        } catch (error) {
+            showAlert('danger', `Error: ${error.message}`);
+        }
+    }
+
+    async function forceCancelJobFromModal() {
+        if (!currentJobDetailsId) return;
+        if (!confirm('Force cancel this job? This is useful for stuck/orphaned jobs that are not responding to normal cancellation.')) return;
+
+        try {
+            const result = await jobManager.forceCancelJob(currentJobDetailsId);
+            if (result.success) {
+                showAlert('info', 'Job force cancelled');
+                refreshJobsList();
+                bootstrap.Modal.getInstance(document.getElementById('jobDetailsModal')).hide();
+            } else {
+                showAlert('warning', result.error || 'Could not force cancel job');
             }
         } catch (error) {
             showAlert('danger', `Error: ${error.message}`);

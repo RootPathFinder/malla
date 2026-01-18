@@ -298,8 +298,22 @@ class JobService:
         """Get all queued or running jobs."""
         return JobRepository.get_active_jobs(target_node_id)
 
-    def cancel_job(self, job_id: int) -> dict[str, Any]:
-        """Cancel a queued or running job."""
+    def cancel_job(self, job_id: int, force: bool = False) -> dict[str, Any]:
+        """Cancel a queued or running job.
+
+        Args:
+            job_id: The job ID to cancel
+            force: If True, force cancel even if running (for orphaned jobs)
+        """
+        # If force cancel requested, do it directly
+        if force:
+            if JobRepository.force_cancel_job(job_id):
+                return {"success": True, "message": "Job force cancelled"}
+            return {
+                "success": False,
+                "error": "Job cannot be cancelled (already completed or not found)",
+            }
+
         # First try to cancel if queued
         if JobRepository.cancel_job(job_id):
             return {"success": True, "message": "Job cancelled"}
@@ -1233,10 +1247,18 @@ def get_job_service() -> JobService:
 
 def init_job_service() -> JobService:
     """Initialize and start the job service."""
-    from ..database.job_repository import init_job_tables
+    from ..database.job_repository import JobRepository, init_job_tables
 
     # Initialize database tables
     init_job_tables()
+
+    # Clean up any orphaned jobs from previous server runs
+    # Jobs running for more than 10 minutes are considered orphaned on startup
+    orphaned_count = JobRepository.cleanup_orphaned_jobs(max_running_time_seconds=600)
+    if orphaned_count > 0:
+        logger.info(
+            f"Cleaned up {orphaned_count} orphaned jobs from previous server run"
+        )
 
     # Get and start the service
     service = get_job_service()

@@ -663,6 +663,94 @@ class JobRepository:
         return False
 
     @staticmethod
+    def force_cancel_job(job_id: int) -> bool:
+        """
+        Force cancel a job regardless of its status.
+
+        This is useful for orphaned jobs that are stuck in 'running' state
+        after a server restart. Directly sets the job to cancelled status.
+
+        Returns True if the job was cancelled, False if not found.
+        """
+        conn = get_db_connection()
+        cursor = conn.cursor()
+
+        # Force cancel any job that's not already completed/cancelled/failed
+        cursor.execute(
+            """
+            UPDATE background_jobs
+            SET status = ?, completed_at = ?, updated_at = ?,
+                error_message = ?, cancel_requested = 1
+            WHERE id = ? AND status IN (?, ?, ?)
+            """,
+            (
+                JobStatus.CANCELLED.value,
+                time.time(),
+                time.time(),
+                "Force cancelled (job was orphaned or unresponsive)",
+                job_id,
+                JobStatus.QUEUED.value,
+                JobStatus.RUNNING.value,
+                JobStatus.PAUSED.value,
+            ),
+        )
+
+        rows_affected = cursor.rowcount
+        conn.commit()
+        conn.close()
+
+        if rows_affected > 0:
+            logger.info(f"Job {job_id} force cancelled")
+            return True
+        return False
+
+    @staticmethod
+    def cleanup_orphaned_jobs(max_running_time_seconds: int = 3600) -> int:
+        """
+        Clean up jobs that have been running for too long (likely orphaned).
+
+        This should be called on server startup to clean up any jobs that
+        were running when the server was stopped.
+
+        Args:
+            max_running_time_seconds: Jobs running longer than this are considered orphaned
+
+        Returns:
+            Number of jobs cleaned up
+        """
+        conn = get_db_connection()
+        cursor = conn.cursor()
+
+        cutoff_time = time.time() - max_running_time_seconds
+
+        # Find orphaned running jobs (running for too long)
+        cursor.execute(
+            """
+            UPDATE background_jobs
+            SET status = ?, completed_at = ?, updated_at = ?,
+                error_message = ?
+            WHERE status = ? AND started_at < ?
+            """,
+            (
+                JobStatus.FAILED.value,
+                time.time(),
+                time.time(),
+                "Job failed: Server was restarted while job was running",
+                JobStatus.RUNNING.value,
+                cutoff_time,
+            ),
+        )
+
+        rows_affected = cursor.rowcount
+        conn.commit()
+        conn.close()
+
+        if rows_affected > 0:
+            logger.info(f"Cleaned up {rows_affected} orphaned running jobs")
+
+        return rows_affected
+
+    @staticmethod
     def is_cancel_requested(job_id: int) -> bool:
         """
         Check if cancellation has been requested for a job.

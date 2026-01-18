@@ -142,10 +142,15 @@ def api_get_job_progress(job_id: int):
 
 @job_bp.route("/api/jobs/<int:job_id>/cancel", methods=["POST"])
 def api_cancel_job(job_id: int):
-    """Cancel a queued job."""
+    """Cancel a queued or running job.
+
+    Query parameters:
+        force: If 'true', force cancel even if running (for orphaned jobs)
+    """
     try:
+        force = request.args.get("force", "false").lower() == "true"
         job_service = get_job_service()
-        result = job_service.cancel_job(job_id)
+        result = job_service.cancel_job(job_id, force=force)
 
         if result["success"]:
             return jsonify(result)

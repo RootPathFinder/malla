@@ -139,10 +139,15 @@ class JobManager {
     /**
      * Cancel a queued job
      * @param {number} jobId - Job ID to cancel
+     * @param {boolean} force - Force cancel even if running (for orphaned jobs)
      * @returns {Promise<Object>} Cancellation result
      */
-    async cancelJob(jobId) {
-        const response = await fetch(`/api/jobs/${jobId}/cancel`, {
+    async cancelJob(jobId, force = false) {
+        const url = force
+            ? `/api/jobs/${jobId}/cancel?force=true`
+            : `/api/jobs/${jobId}/cancel`;
+
+        const response = await fetch(url, {
             method: 'POST'
         });
 
@@ -153,6 +158,15 @@ class JobManager {
         }
 
         return result;
+    }
+
+    /**
+     * Force cancel a stuck/orphaned job
+     * @param {number} jobId - Job ID to force cancel
+     * @returns {Promise<Object>} Cancellation result
+     */
+    async forceCancelJob(jobId) {
+        return this.cancelJob(jobId, true);
     }
 
     /**
