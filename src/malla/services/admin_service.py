@@ -424,10 +424,13 @@ class AdminService:
         publisher = self._get_publisher()
         gateway_id = self.gateway_node_id
 
-        # Get local node ID from the connected publisher
+        # Get local node ID and name from the connected publisher
         local_node_id = None
+        local_node_name = None
         if hasattr(publisher, "get_local_node_id"):
             local_node_id = publisher.get_local_node_id()
+        if hasattr(publisher, "get_local_node_name"):
+            local_node_name = publisher.get_local_node_name()
 
         status: dict[str, Any] = {
             "enabled": self.is_enabled(),
@@ -437,6 +440,7 @@ class AdminService:
             "gateway_node_hex": f"!{gateway_id:08x}" if gateway_id else None,
             "local_node_id": local_node_id,
             "local_node_hex": f"!{local_node_id:08x}" if local_node_id else None,
+            "local_node_name": local_node_name,
         }
 
         # Add connection-specific details

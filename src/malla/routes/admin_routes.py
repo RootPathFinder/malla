@@ -178,6 +178,7 @@ def api_tcp_connect():
 
         if tcp_publisher.connect():
             local_node_id = tcp_publisher.get_local_node_id()
+            local_node_name = tcp_publisher.get_local_node_name()
 
             # Set connection type to TCP
             admin_service = get_admin_service()
@@ -193,6 +194,7 @@ def api_tcp_connect():
                     "local_node_hex": f"!{local_node_id:08x}"
                     if local_node_id
                     else None,
+                    "local_node_name": local_node_name,
                 }
             )
         else:
@@ -279,6 +281,7 @@ def api_serial_connect():
 
         if serial_publisher.connect(port=port):
             local_node_id = serial_publisher.get_local_node_id()
+            local_node_name = serial_publisher.get_local_node_name()
 
             # Set connection type to Serial
             admin_service = get_admin_service()
@@ -293,6 +296,7 @@ def api_serial_connect():
                     "local_node_hex": f"!{local_node_id:08x}"
                     if local_node_id
                     else None,
+                    "local_node_name": local_node_name,
                 }
             )
         else:

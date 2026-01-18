@@ -1532,8 +1532,12 @@
 
             if (success) {
                 resultDiv.classList.add('alert-success');
+                let nodeInfo = data.local_node_hex || '';
+                if (data.local_node_name) {
+                    nodeInfo = `${data.local_node_name} (${data.local_node_hex})`;
+                }
                 resultDiv.innerHTML = `<i class="bi bi-check-circle"></i> Connected to ${data.host}:${data.port}` +
-                    (data.local_node_hex ? ` (Local Node: ${data.local_node_hex})` : '');
+                    (nodeInfo ? ` - ${nodeInfo}` : '');
                 await updateConnectionStatus();
             } else {
                 resultDiv.classList.add('alert-danger');
@@ -1839,8 +1843,12 @@
 
             if (success) {
                 resultDiv.classList.add('alert-success');
+                let nodeInfo = data.local_node_hex || '';
+                if (data.local_node_name) {
+                    nodeInfo = `${data.local_node_name} (${data.local_node_hex})`;
+                }
                 resultDiv.innerHTML = `<i class="bi bi-check-circle"></i> Connected to ${data.port}` +
-                    (data.local_node_hex ? ` (Local Node: ${data.local_node_hex})` : '');
+                    (nodeInfo ? ` - ${nodeInfo}` : '');
                 await updateConnectionStatus();
             } else {
                 resultDiv.classList.add('alert-danger');
@@ -1919,7 +1927,11 @@
             if (data.connected) {
                 let statusText = 'Connected';
                 if (data.local_node_hex) {
-                    statusText = `Connected (${data.local_node_hex})`;
+                    if (data.local_node_name) {
+                        statusText = `Connected - ${data.local_node_name} (${data.local_node_hex})`;
+                    } else {
+                        statusText = `Connected (${data.local_node_hex})`;
+                    }
                 }
                 statusSpan.innerHTML = `<span class="status-indicator status-connected"></span>${statusText}`;
                 // Disable connect buttons, enable disconnect buttons

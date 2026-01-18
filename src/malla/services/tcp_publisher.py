@@ -292,6 +292,17 @@ class TCPPublisher:
             return self._interface.localNode.nodeNum
         return None
 
+    def get_local_node_name(self) -> str | None:
+        """Get the local node's long name from the connected interface."""
+        if self._interface and self._interface.localNode:
+            node_num = self._interface.localNode.nodeNum
+            if node_num and self._interface.nodes:
+                node_hex = f"!{node_num:08x}"
+                node_info = self._interface.nodes.get(node_hex, {}) or {}
+                if "user" in node_info:
+                    return node_info["user"].get("longName")
+        return None
+
     def _get_admin_channel_index(self) -> int:
         """
         Get the admin channel index from the local node.
