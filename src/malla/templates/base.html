@@ -288,6 +288,13 @@
                 <!-- Timezone Toggle, Temperature Toggle, and Dark Mode Toggle -->
                 <div class="navbar-nav d-flex flex-row align-items-center gap-2">
                     {% if APP_CONFIG.admin_enabled %}
+                    <!-- Background Jobs Indicator -->
+                    <a id="jobs-indicator" href="{{ url_for('admin.admin_page') }}#background-jobs"
+                       class="btn btn-outline-light btn-sm d-flex align-items-center gap-1 d-none"
+                       title="Background jobs">
+                        <i class="bi bi-list-task"></i>
+                        <span class="jobs-count badge bg-primary ms-1">0</span>
+                    </a>
                     <!-- Node Connection Indicator -->
                     <a id="node-connection-indicator" href="{{ url_for('admin.admin_page') }}"
                        class="btn btn-outline-light btn-sm d-flex align-items-center gap-1 disconnected"
@@ -517,6 +524,76 @@
 
         // Make reinitializeTooltips available globally for dynamic content
         window.reinitializeTooltips = reinitializeTooltips;
+    </script>
+
+    <!-- Background Jobs Indicator -->
+    <script>
+    (function() {
+        const jobsIndicator = document.getElementById('jobs-indicator');
+        if (!jobsIndicator) return;  // Admin not enabled
+
+        const jobsCount = jobsIndicator.querySelector('.jobs-count');
+        let pollInterval = null;
+
+        async function updateJobsIndicator() {
+            try {
+                const response = await fetch('/api/jobs/active');
+                if (!response.ok) return;
+
+                const data = await response.json();
+                const activeJobs = data.jobs || [];
+                const runningCount = activeJobs.filter(j => j.status === 'running').length;
+                const queuedCount = activeJobs.filter(j => j.status === 'queued').length;
+                const totalActive = runningCount + queuedCount;
+
+                if (totalActive > 0) {
+                    jobsIndicator.classList.remove('d-none');
+                    jobsCount.textContent = totalActive;
+
+                    // Update styling based on state
+                    if (runningCount > 0) {
+                        jobsIndicator.classList.remove('btn-outline-light');
+                        jobsIndicator.classList.add('btn-warning');
+                        jobsIndicator.title = `${runningCount} running, ${queuedCount} queued`;
+                    } else {
+                        jobsIndicator.classList.remove('btn-warning');
+                        jobsIndicator.classList.add('btn-outline-light');
+                        jobsIndicator.title = `${queuedCount} jobs queued`;
+                    }
+                } else {
+                    jobsIndicator.classList.add('d-none');
+                }
+            } catch (error) {
+                console.debug('Failed to fetch jobs status:', error);
+            }
+        }
+
+        function startPolling() {
+            updateJobsIndicator();
+            pollInterval = setInterval(updateJobsIndicator, 3000);
+        }
+
+        function stopPolling() {
+            if (pollInterval) {
+                clearInterval(pollInterval);
+                pollInterval = null;
+            }
+        }
+
+        // Start polling when page becomes visible, stop when hidden
+        document.addEventListener('visibilitychange', () => {
+            if (document.hidden) {
+                stopPolling();
+            } else {
+                startPolling();
+            }
+        });
+
+        // Initial start
+        if (!document.hidden) {
+            startPolling();
+        }
+    })();
     </script>
 
     {% block extra_js %}{% endblock %}
