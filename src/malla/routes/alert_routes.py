@@ -408,7 +408,14 @@ def api_node_health():
     Get node health distribution and nodes needing attention.
     """
     try:
+        logger.info("Fetching node health summary...")
         health_data = AlertService.get_node_health_summary()
+        logger.info(
+            f"Node health: {health_data.get('healthy', 0)} healthy, "
+            f"{health_data.get('warning', 0)} warning, "
+            f"{health_data.get('critical', 0)} critical, "
+            f"{health_data.get('offline', 0)} offline"
+        )
         return jsonify(health_data)
     except Exception as e:
         logger.error(f"Error getting node health: {e}", exc_info=True)

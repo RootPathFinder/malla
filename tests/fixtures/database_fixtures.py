@@ -158,6 +158,38 @@ class DatabaseFixtures:
             "CREATE INDEX IF NOT EXISTS idx_mesh_packet_id ON packet_history(mesh_packet_id)"
         )
 
+        # Telemetry data table for device metrics (battery, voltage, etc.)
+        cursor.execute("""
+            CREATE TABLE IF NOT EXISTS telemetry_data (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                timestamp REAL NOT NULL,
+                node_id INTEGER NOT NULL,
+                battery_level INTEGER,
+                voltage REAL,
+                channel_utilization REAL,
+                air_util_tx REAL,
+                uptime_seconds INTEGER,
+                FOREIGN KEY (node_id) REFERENCES node_info(node_id)
+            )
+        """)
+
+        # Alerts table for health monitoring
+        cursor.execute("""
+            CREATE TABLE IF NOT EXISTS alerts (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                alert_type TEXT NOT NULL,
+                severity TEXT NOT NULL,
+                node_id INTEGER,
+                title TEXT NOT NULL,
+                message TEXT,
+                timestamp REAL NOT NULL,
+                resolved INTEGER DEFAULT 0,
+                resolved_at REAL,
+                metadata TEXT,
+                FOREIGN KEY (node_id) REFERENCES node_info(node_id)
+            )
+        """)
+
     def create_sample_nodes(self) -> list[dict[str, Any]]:
         """Create test node data with variety of node types."""
         import time

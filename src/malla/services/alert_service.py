@@ -644,8 +644,13 @@ class AlertService:
         now = time.time()
 
         if not force and (now - cls._last_check) < cls._CHECK_INTERVAL:
+            logger.debug(
+                f"Health check skipped: last check was {now - cls._last_check:.0f}s ago "
+                f"(interval: {cls._CHECK_INTERVAL}s)"
+            )
             return {"skipped": True, "reason": "within_check_interval"}
 
+        logger.info(f"Running health checks (force={force})...")
         cls._last_check = now
         results = {
             "timestamp": now,
@@ -702,6 +707,7 @@ class AlertService:
             # Get latest valid battery telemetry for each node
             # We fetch battery and voltage separately to handle cases where they are sent in different packets
             # or where one value is 0/invalid
+            logger.debug("Fetching battery health data from telemetry_data table...")
             cursor.execute(
                 """
                 SELECT
@@ -718,15 +724,30 @@ class AlertService:
             )
 
             rows = cursor.fetchall()
+            logger.debug(f"Battery health check: found {len(rows)} active nodes")
 
             # Build a map of current battery status for all nodes
             node_battery_status: dict[int, dict[str, Any]] = {}
+            nodes_with_battery = 0
+            nodes_with_voltage = 0
             for row in rows:
                 node_id = row["node_id"]
+                battery = row["battery_level"]
+                voltage = row["voltage"]
                 node_battery_status[node_id] = {
-                    "battery_level": row["battery_level"],
-                    "voltage": row["voltage"],
+                    "battery_level": battery,
+                    "voltage": voltage,
                 }
+                if battery is not None and battery > 0:
+                    nodes_with_battery += 1
+                if voltage is not None and voltage > 0:
+                    nodes_with_voltage += 1
+
+            logger.info(
+                f"Battery health: {len(rows)} nodes checked, "
+                f"{nodes_with_battery} with battery data, "
+                f"{nodes_with_voltage} with voltage data"
+            )
 
             # Check for nodes that need new alerts
             for row in rows:
@@ -2048,6 +2069,7 @@ class AlertService:
 
         Categorizes nodes as healthy, warning, critical, or offline.
         """
+        logger.debug("Getting node health summary...")
         try:
             conn = get_db_connection()
             cursor = conn.cursor()
@@ -2088,13 +2110,19 @@ class AlertService:
                 """
             )
 
+            all_rows = cursor.fetchall()
+            logger.debug(
+                f"Node health summary: fetched {len(all_rows)} nodes, "
+                f"{len(last_seen_map)} with recent activity"
+            )
+
             healthy = 0
             warning = 0
             critical = 0
             offline = 0
             nodes_needing_attention = []
 
-            for row in cursor.fetchall():
+            for row in all_rows:
                 node_id = row["node_id"]
                 name = row["name"]
                 hex_id = row["hex_id"]
