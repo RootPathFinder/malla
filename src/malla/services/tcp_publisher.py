@@ -181,7 +181,39 @@ class TCPPublisher:
             decoded = packet.get("decoded", {})
             portnum = decoded.get("portnum")
 
-            if portnum == "ADMIN_APP":
+            # Handle routing packets (ACK/NAK responses)
+            if portnum == "ROUTING_APP":
+                routing = decoded.get("routing", {})
+                error_reason = routing.get("errorReason", "NONE")
+                request_id = packet.get("requestId")
+
+                if request_id:
+                    logger.info(
+                        f"Received routing response for request {request_id}: {error_reason}"
+                    )
+
+                    response_data = {
+                        "packet": packet,
+                        "received_at": time.time(),
+                        "from_node": packet.get("fromId") or packet.get("from"),
+                        "routing": routing,
+                        "error_reason": error_reason,
+                        "is_ack": error_reason == "NONE",
+                        "is_nak": error_reason != "NONE",
+                        "decoded": decoded,
+                    }
+
+                    with self._response_lock:
+                        if request_id in self._pending_responses:
+                            self._pending_responses[request_id] = response_data
+                            if request_id in self._response_events:
+                                self._response_events[request_id].set()
+
+                    # Also update general response tracking
+                    self._last_admin_response = response_data
+                    self._admin_response_event.set()
+
+            elif portnum == "ADMIN_APP":
                 from_node = packet.get("fromId") or packet.get("from")
                 logger.info(f"Received admin response from {from_node}")
 
@@ -208,6 +240,8 @@ class TCPPublisher:
                     "from_node": from_node,
                     "admin_message": admin_message,
                     "decoded": decoded,
+                    "is_ack": True,  # Admin response implies ACK
+                    "is_nak": False,
                 }
 
                 # Signal any waiting requests
@@ -544,6 +578,9 @@ class TCPPublisher:
             admin_msg.set_config.CopyFrom(config)
 
         elif config_type == "security":
+            logger.info(
+                f"Processing security config with keys: {list(config_data.keys())}"
+            )
             for key, value in config_data.items():
                 if hasattr(config.security, key):
                     # Handle repeated fields (admin_key, etc.) specially
@@ -558,20 +595,42 @@ class TCPPublisher:
                                     try:
                                         import base64
 
-                                        field.append(base64.b64decode(item))
+                                        decoded = base64.b64decode(item)
+                                        logger.info(
+                                            f"Security {key}: decoded base64 to {len(decoded)} bytes"
+                                        )
+                                        field.append(decoded)
                                     except Exception:
                                         try:
-                                            field.append(bytes.fromhex(item))
+                                            decoded = bytes.fromhex(item)
+                                            logger.info(
+                                                f"Security {key}: decoded hex to {len(decoded)} bytes"
+                                            )
+                                            field.append(decoded)
                                         except Exception:
+                                            logger.warning(
+                                                f"Security {key}: using raw string encoding"
+                                            )
                                             field.append(item.encode())
                                 elif isinstance(item, bytes):
+                                    logger.info(
+                                        f"Security {key}: adding {len(item)} raw bytes"
+                                    )
                                     field.append(item)
                                 else:
+                                    logger.info(
+                                        f"Security {key}: adding value of type {type(item)}"
+                                    )
                                     field.append(item)
+                        logger.info(f"Security {key}: added {len(field)} items")
                     else:
                         # Regular field
+                        logger.info(f"Security {key}: setting to {value}")
                         setattr(config.security, key, value)
+                else:
+                    logger.warning(f"Security config: unknown field '{key}' - skipping")
             admin_msg.set_config.CopyFrom(config)
+            logger.info(f"Security config prepared: {config.security}")
 
         else:
             logger.error(f"Unknown config type: {config_type}")

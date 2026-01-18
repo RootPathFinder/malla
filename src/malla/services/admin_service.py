@@ -1443,32 +1443,51 @@ class AdminService:
         response = publisher.get_response(packet_id, timeout=30.0)
 
         if response:
+            # Check if this was a NAK (negative acknowledgement)
+            is_nak = response.get("is_nak", False)
+            error_reason = response.get("error_reason", "")
+
+            if is_nak:
+                error_msg = f"Node rejected config: {error_reason}"
+                AdminRepository.update_admin_log_status(
+                    log_id=log_id,
+                    status="failed",
+                    error_message=error_msg,
+                )
+                return AdminCommandResult(
+                    success=False,
+                    packet_id=packet_id,
+                    log_id=log_id,
+                    error=error_msg,
+                )
+
             AdminRepository.update_admin_log_status(
                 log_id=log_id,
                 status="success",
-                response_data=json.dumps({"message": "Config updated successfully"}),
+                response_data=json.dumps({"message": "Config updated - ACK received"}),
             )
 
             return AdminCommandResult(
                 success=True,
                 packet_id=packet_id,
                 log_id=log_id,
-                response={"message": "Config updated successfully"},
+                response={
+                    "message": "Config updated - ACK received",
+                    "acknowledged": True,
+                },
             )
         else:
-            # Even without response, the config may have been applied
+            # No response means we don't know if it was received
             AdminRepository.update_admin_log_status(
                 log_id=log_id,
-                status="success",
-                response_data=json.dumps(
-                    {"message": "Config sent (no confirmation received)"}
-                ),
+                status="failed",
+                error_message="No acknowledgement received - config may not have been applied",
             )
             return AdminCommandResult(
-                success=True,
+                success=False,
                 packet_id=packet_id,
                 log_id=log_id,
-                response={"message": "Config sent (no confirmation received)"},
+                error="No acknowledgement received - config may not have been applied",
             )
 
     def set_module_config(
@@ -1550,11 +1569,29 @@ class AdminService:
         response = publisher.get_response(packet_id, timeout=30.0)
 
         if response:
+            # Check if this was a NAK (negative acknowledgement)
+            is_nak = response.get("is_nak", False)
+            error_reason = response.get("error_reason", "")
+
+            if is_nak:
+                error_msg = f"Node rejected module config: {error_reason}"
+                AdminRepository.update_admin_log_status(
+                    log_id=log_id,
+                    status="failed",
+                    error_message=error_msg,
+                )
+                return AdminCommandResult(
+                    success=False,
+                    packet_id=packet_id,
+                    log_id=log_id,
+                    error=error_msg,
+                )
+
             AdminRepository.update_admin_log_status(
                 log_id=log_id,
                 status="success",
                 response_data=json.dumps(
-                    {"message": "Module config updated successfully"}
+                    {"message": "Module config updated - ACK received"}
                 ),
             )
 
@@ -1562,22 +1599,23 @@ class AdminService:
                 success=True,
                 packet_id=packet_id,
                 log_id=log_id,
-                response={"message": "Module config updated successfully"},
+                response={
+                    "message": "Module config updated - ACK received",
+                    "acknowledged": True,
+                },
             )
         else:
-            # Even without response, the config may have been applied
+            # No response means we don't know if it was received
             AdminRepository.update_admin_log_status(
                 log_id=log_id,
-                status="success",
-                response_data=json.dumps(
-                    {"message": "Module config sent (no confirmation received)"}
-                ),
+                status="failed",
+                error_message="No acknowledgement received - module config may not have been applied",
             )
             return AdminCommandResult(
-                success=True,
+                success=False,
                 packet_id=packet_id,
                 log_id=log_id,
-                response={"message": "Module config sent (no confirmation received)"},
+                error="No acknowledgement received - module config may not have been applied",
             )
 
     def set_channel(
@@ -1657,32 +1695,51 @@ class AdminService:
         response = publisher.get_response(packet_id, timeout=30.0)
 
         if response:
+            # Check if this was a NAK (negative acknowledgement)
+            is_nak = response.get("is_nak", False)
+            error_reason = response.get("error_reason", "")
+
+            if is_nak:
+                error_msg = f"Node rejected channel config: {error_reason}"
+                AdminRepository.update_admin_log_status(
+                    log_id=log_id,
+                    status="failed",
+                    error_message=error_msg,
+                )
+                return AdminCommandResult(
+                    success=False,
+                    packet_id=packet_id,
+                    log_id=log_id,
+                    error=error_msg,
+                )
+
             AdminRepository.update_admin_log_status(
                 log_id=log_id,
                 status="success",
-                response_data=json.dumps({"message": "Channel updated successfully"}),
+                response_data=json.dumps({"message": "Channel updated - ACK received"}),
             )
 
             return AdminCommandResult(
                 success=True,
                 packet_id=packet_id,
                 log_id=log_id,
-                response={"message": "Channel updated successfully"},
+                response={
+                    "message": "Channel updated - ACK received",
+                    "acknowledged": True,
+                },
             )
         else:
-            # Even without response, the channel may have been applied
+            # No response means we don't know if it was received
             AdminRepository.update_admin_log_status(
                 log_id=log_id,
-                status="success",
-                response_data=json.dumps(
-                    {"message": "Channel sent (no confirmation received)"}
-                ),
+                status="failed",
+                error_message="No acknowledgement received - channel config may not have been applied",
             )
             return AdminCommandResult(
-                success=True,
+                success=False,
                 packet_id=packet_id,
                 log_id=log_id,
-                response={"message": "Channel sent (no confirmation received)"},
+                error="No acknowledgement received - channel config may not have been applied",
             )
 
     def get_config_schema(self, config_type: str) -> list[dict[str, Any]]:
