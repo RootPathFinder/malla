@@ -109,6 +109,31 @@ def init_admin_tables() -> None:
         "CREATE INDEX IF NOT EXISTS idx_deployments_node ON template_deployments(node_id, deployed_at DESC)"
     )
 
+    # Table for node configuration backups
+    cursor.execute("""
+        CREATE TABLE IF NOT EXISTS node_backups (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            node_id INTEGER NOT NULL,
+            backup_name TEXT NOT NULL,
+            description TEXT,
+            backup_data TEXT NOT NULL,
+            created_at REAL NOT NULL,
+            node_long_name TEXT,
+            node_short_name TEXT,
+            node_hex_id TEXT,
+            hardware_model TEXT,
+            firmware_version TEXT
+        )
+    """)
+
+    # Index for backup queries
+    cursor.execute(
+        "CREATE INDEX IF NOT EXISTS idx_backups_node ON node_backups(node_id, created_at DESC)"
+    )
+    cursor.execute(
+        "CREATE INDEX IF NOT EXISTS idx_backups_name ON node_backups(backup_name)"
+    )
+
     conn.commit()
     conn.close()
     logger.info("Admin tables initialized")
@@ -787,3 +812,191 @@ class AdminRepository:
         conn.close()
 
         return [dict(row) for row in rows]
+
+    # =========================
+    # Node Backup Methods
+    # =========================
+
+    @staticmethod
+    def create_backup(
+        node_id: int,
+        backup_name: str,
+        backup_data: str,
+        description: str | None = None,
+        node_long_name: str | None = None,
+        node_short_name: str | None = None,
+        node_hex_id: str | None = None,
+        hardware_model: str | None = None,
+        firmware_version: str | None = None,
+    ) -> int:
+        """
+        Create a new node configuration backup.
+
+        Args:
+            node_id: The node ID the backup was taken from
+            backup_name: Name/label for this backup
+            backup_data: JSON string containing all config data
+            description: Optional description
+            node_long_name: Long name of the node at backup time
+            node_short_name: Short name of the node at backup time
+            node_hex_id: Hex ID of the node
+            hardware_model: Hardware model at backup time
+            firmware_version: Firmware version at backup time
+
+        Returns:
+            The ID of the created backup
+        """
+        conn = get_db_connection()
+        cursor = conn.cursor()
+
+        cursor.execute(
+            """
+            INSERT INTO node_backups
+            (node_id, backup_name, description, backup_data, created_at,
+             node_long_name, node_short_name, node_hex_id, hardware_model, firmware_version)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                node_id,
+                backup_name,
+                description,
+                backup_data,
+                time.time(),
+                node_long_name,
+                node_short_name,
+                node_hex_id,
+                hardware_model,
+                firmware_version,
+            ),
+        )
+
+        backup_id = cursor.lastrowid
+        conn.commit()
+        conn.close()
+
+        return backup_id  # type: ignore[return-value]
+
+    @staticmethod
+    def get_backup(backup_id: int) -> dict[str, Any] | None:
+        """
+        Get a backup by ID.
+
+        Args:
+            backup_id: The backup ID
+
+        Returns:
+            Backup record as dict, or None if not found
+        """
+        conn = get_db_connection()
+        cursor = conn.cursor()
+
+        cursor.execute("SELECT * FROM node_backups WHERE id = ?", (backup_id,))
+        row = cursor.fetchone()
+        conn.close()
+
+        return dict(row) if row else None
+
+    @staticmethod
+    def get_backups(
+        node_id: int | None = None,
+        limit: int = 100,
+    ) -> list[dict[str, Any]]:
+        """
+        Get backups, optionally filtered by node.
+
+        Args:
+            node_id: Optional node ID to filter by
+            limit: Maximum number of backups to return
+
+        Returns:
+            List of backup records
+        """
+        conn = get_db_connection()
+        cursor = conn.cursor()
+
+        if node_id:
+            cursor.execute(
+                """
+                SELECT * FROM node_backups
+                WHERE node_id = ?
+                ORDER BY created_at DESC LIMIT ?
+                """,
+                (node_id, limit),
+            )
+        else:
+            cursor.execute(
+                "SELECT * FROM node_backups ORDER BY created_at DESC LIMIT ?",
+                (limit,),
+            )
+
+        rows = cursor.fetchall()
+        conn.close()
+
+        return [dict(row) for row in rows]
+
+    @staticmethod
+    def delete_backup(backup_id: int) -> bool:
+        """
+        Delete a backup by ID.
+
+        Args:
+            backup_id: The backup ID to delete
+
+        Returns:
+            True if deleted, False if not found
+        """
+        conn = get_db_connection()
+        cursor = conn.cursor()
+
+        cursor.execute("DELETE FROM node_backups WHERE id = ?", (backup_id,))
+        deleted = cursor.rowcount > 0
+        conn.commit()
+        conn.close()
+
+        return deleted
+
+    @staticmethod
+    def update_backup(
+        backup_id: int,
+        backup_name: str | None = None,
+        description: str | None = None,
+    ) -> bool:
+        """
+        Update a backup's metadata.
+
+        Args:
+            backup_id: The backup ID to update
+            backup_name: New name (optional)
+            description: New description (optional)
+
+        Returns:
+            True if updated, False if not found
+        """
+        updates = []
+        params: list[Any] = []
+
+        if backup_name is not None:
+            updates.append("backup_name = ?")
+            params.append(backup_name)
+        if description is not None:
+            updates.append("description = ?")
+            params.append(description)
+
+        if not updates:
+            return False
+
+        params.append(backup_id)
+
+        conn = get_db_connection()
+        cursor = conn.cursor()
+
+        cursor.execute(
+            f"UPDATE node_backups SET {', '.join(updates)} WHERE id = ?",
+            params,
+        )
+
+        updated = cursor.rowcount > 0
+        conn.commit()
+        conn.close()
+
+        return updated

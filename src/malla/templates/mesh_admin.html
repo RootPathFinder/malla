@@ -504,6 +504,12 @@
                     </button>
                 </li>
                 <li class="nav-item" role="presentation">
+                    <button class="nav-link" id="backups-tab" data-bs-toggle="tab"
+                            data-bs-target="#backups-pane" type="button" role="tab">
+                        <i class="bi bi-cloud-download"></i> Node Backups
+                    </button>
+                </li>
+                <li class="nav-item" role="presentation">
                     <button class="nav-link" id="log-tab" data-bs-toggle="tab"
                             data-bs-target="#log-pane" type="button" role="tab">
                         <i class="bi bi-journal-text"></i> Audit Log
@@ -954,6 +960,161 @@
                     </div>
                 </div>
 
+                <!-- Node Backups Tab -->
+                <div class="tab-pane fade" id="backups-pane" role="tabpanel">
+                    <div class="row">
+                        <!-- Backups List -->
+                        <div class="col-md-5">
+                            <div class="d-flex justify-content-between align-items-center mb-3">
+                                <h6 class="mb-0"><i class="bi bi-cloud-download"></i> Saved Backups</h6>
+                                <button class="btn btn-primary btn-sm" onclick="showCreateBackupModal()">
+                                    <i class="bi bi-plus-lg"></i> Create Backup
+                                </button>
+                            </div>
+                            <div class="mb-2">
+                                <select class="form-select form-select-sm" id="backupNodeFilter" onchange="loadBackups()">
+                                    <option value="">All Nodes</option>
+                                    {% for node in administrable_nodes %}
+                                    <option value="{{ node.node_id }}">
+                                        {{ node.long_name or node.short_name or node.hex_id }}
+                                    </option>
+                                    {% endfor %}
+                                </select>
+                            </div>
+                            <div id="backupsList" class="list-group" style="max-height: 500px; overflow-y: auto;">
+                                <div class="text-center py-3 text-muted">
+                                    <i class="bi bi-arrow-clockwise spin"></i> Loading backups...
+                                </div>
+                            </div>
+                        </div>
+
+                        <!-- Backup Viewer -->
+                        <div class="col-md-7">
+                            <div id="backupViewerSection" style="display: none;">
+                                <div class="d-flex justify-content-between align-items-center mb-3">
+                                    <h6 class="mb-0" id="backupViewerTitle">
+                                        <i class="bi bi-archive"></i> Backup Details
+                                    </h6>
+                                    <div class="btn-group btn-group-sm">
+                                        <button class="btn btn-outline-primary" onclick="downloadBackup()" title="Download as JSON">
+                                            <i class="bi bi-download"></i> Export
+                                        </button>
+                                        <button class="btn btn-outline-danger" onclick="deleteBackup()">
+                                            <i class="bi bi-trash"></i> Delete
+                                        </button>
+                                    </div>
+                                </div>
+
+                                <div class="card mb-3">
+                                    <div class="card-body">
+                                        <div class="row">
+                                            <div class="col-md-6">
+                                                <strong>Name:</strong> <span id="backupName">-</span><br>
+                                                <strong>Node:</strong> <span id="backupNode">-</span><br>
+                                                <strong>Created:</strong> <span id="backupCreated">-</span>
+                                            </div>
+                                            <div class="col-md-6">
+                                                <strong>Description:</strong><br>
+                                                <span id="backupDescription" class="text-muted">-</span>
+                                            </div>
+                                        </div>
+                                    </div>
+                                </div>
+
+                                <div class="accordion" id="backupContentsAccordion">
+                                    <!-- Core Configs -->
+                                    <div class="accordion-item">
+                                        <h2 class="accordion-header">
+                                            <button class="accordion-button" type="button" data-bs-toggle="collapse"
+                                                    data-bs-target="#coreConfigsCollapse">
+                                                <i class="bi bi-gear me-2"></i> Core Configurations
+                                                <span class="badge bg-primary ms-2" id="coreConfigsCount">0</span>
+                                            </button>
+                                        </h2>
+                                        <div id="coreConfigsCollapse" class="accordion-collapse collapse show"
+                                             data-bs-parent="#backupContentsAccordion">
+                                            <div class="accordion-body" id="coreConfigsContent">
+                                                <p class="text-muted">Select a backup to view contents</p>
+                                            </div>
+                                        </div>
+                                    </div>
+
+                                    <!-- Module Configs -->
+                                    <div class="accordion-item">
+                                        <h2 class="accordion-header">
+                                            <button class="accordion-button collapsed" type="button" data-bs-toggle="collapse"
+                                                    data-bs-target="#moduleConfigsCollapse">
+                                                <i class="bi bi-puzzle me-2"></i> Module Configurations
+                                                <span class="badge bg-info ms-2" id="moduleConfigsCount">0</span>
+                                            </button>
+                                        </h2>
+                                        <div id="moduleConfigsCollapse" class="accordion-collapse collapse"
+                                             data-bs-parent="#backupContentsAccordion">
+                                            <div class="accordion-body" id="moduleConfigsContent">
+                                                <p class="text-muted">Select a backup to view contents</p>
+                                            </div>
+                                        </div>
+                                    </div>
+
+                                    <!-- Channels -->
+                                    <div class="accordion-item">
+                                        <h2 class="accordion-header">
+                                            <button class="accordion-button collapsed" type="button" data-bs-toggle="collapse"
+                                                    data-bs-target="#channelsCollapse">
+                                                <i class="bi bi-broadcast me-2"></i> Channels
+                                                <span class="badge bg-success ms-2" id="channelsCount">0</span>
+                                            </button>
+                                        </h2>
+                                        <div id="channelsCollapse" class="accordion-collapse collapse"
+                                             data-bs-parent="#backupContentsAccordion">
+                                            <div class="accordion-body" id="channelsContent">
+                                                <p class="text-muted">Select a backup to view contents</p>
+                                            </div>
+                                        </div>
+                                    </div>
+                                </div>
+
+                                <!-- Restore Section -->
+                                <div class="card mt-3 border-warning">
+                                    <div class="card-header bg-warning-subtle">
+                                        <i class="bi bi-exclamation-triangle"></i> Restore to Node
+                                    </div>
+                                    <div class="card-body">
+                                        <p class="small text-muted mb-2">
+                                            Restoring will apply this backup's configuration to the selected node.
+                                            This is a potentially destructive operation.
+                                        </p>
+                                        <div class="row g-2">
+                                            <div class="col-md-8">
+                                                <select class="form-select form-select-sm" id="restoreTargetNode">
+                                                    <option value="">Select target node...</option>
+                                                    {% for node in administrable_nodes %}
+                                                    <option value="{{ node.node_id }}">
+                                                        {{ node.long_name or node.short_name or node.hex_id }}
+                                                    </option>
+                                                    {% endfor %}
+                                                </select>
+                                            </div>
+                                            <div class="col-md-4">
+                                                <button class="btn btn-warning btn-sm w-100" onclick="restoreBackup()"
+                                                        id="restoreBackupBtn" disabled>
+                                                    <i class="bi bi-arrow-counterclockwise"></i> Restore
+                                                </button>
+                                            </div>
+                                        </div>
+                                    </div>
+                                </div>
+                            </div>
+
+                            <!-- No Backup Selected Placeholder -->
+                            <div id="noBackupSelected" class="text-center py-5 text-muted">
+                                <i class="bi bi-cloud-download" style="font-size: 3rem;"></i>
+                                <p class="mt-3">Select a backup to view its contents,<br>or create a new backup from a node.</p>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+
                 <!-- Audit Log Tab -->
                 <div class="tab-pane fade" id="log-pane" role="tabpanel">
                     <div class="mb-3">
@@ -1113,6 +1274,78 @@
                 <button type="button" class="btn btn-success" id="saveExtractedTemplateBtn" style="display: none;"
                         onclick="saveExtractedTemplate()">
                     <i class="bi bi-save"></i> Create Template
+                </button>
+            </div>
+        </div>
+    </div>
+</div>
+
+<!-- Create Backup Modal -->
+<div class="modal fade" id="createBackupModal" tabindex="-1">
+    <div class="modal-dialog">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h5 class="modal-title">
+                    <i class="bi bi-cloud-download"></i> Create Node Backup
+                </h5>
+                <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+            </div>
+            <div class="modal-body">
+                <p class="text-muted mb-3">
+                    Create a full backup of a node's configuration including all core configs,
+                    module configs, and channels. This can be used to restore the node later.
+                </p>
+
+                <div class="mb-3">
+                    <label class="form-label">Source Node</label>
+                    <select class="form-select" id="backupSourceNode">
+                        <option value="">Select an administrable node...</option>
+                        {% for node in administrable_nodes %}
+                        <option value="{{ node.node_id }}" data-hex="{{ node.hex_id }}"
+                                data-name="{{ node.long_name or node.short_name or 'Unknown' }}">
+                            {{ node.long_name or node.short_name or node.hex_id }}
+                            ({{ node.hex_id or ('!' + '%08x'|format(node.node_id)) }})
+                        </option>
+                        {% endfor %}
+                    </select>
+                </div>
+
+                <div class="mb-3">
+                    <label class="form-label">Backup Name</label>
+                    <input type="text" class="form-control" id="backupNameInput"
+                           placeholder="e.g., My Node - Pre-Update Backup">
+                    <div class="form-text">A descriptive name for this backup</div>
+                </div>
+
+                <div class="mb-3">
+                    <label class="form-label">Description (optional)</label>
+                    <textarea class="form-control" id="backupDescriptionInput" rows="2"
+                              placeholder="e.g., Backup before firmware update to 2.5.0"></textarea>
+                </div>
+
+                <!-- Progress Section -->
+                <div id="backupProgressSection" style="display: none;">
+                    <div class="card bg-light">
+                        <div class="card-body py-2">
+                            <div class="d-flex align-items-center mb-2">
+                                <span class="spinner-border spinner-border-sm text-primary me-2" id="backupSpinner"></span>
+                                <strong id="backupProgressStatus">Starting backup...</strong>
+                            </div>
+                            <div class="progress" style="height: 8px;">
+                                <div class="progress-bar progress-bar-striped progress-bar-animated"
+                                     role="progressbar"
+                                     id="backupProgressBar"
+                                     style="width: 0%"></div>
+                            </div>
+                            <small class="text-muted mt-1 d-block" id="backupProgressDetails"></small>
+                        </div>
+                    </div>
+                </div>
+            </div>
+            <div class="modal-footer">
+                <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Cancel</button>
+                <button type="button" class="btn btn-primary" id="startBackupBtn" onclick="startBackup()">
+                    <i class="bi bi-cloud-download"></i> Create Backup
                 </button>
             </div>
         </div>
@@ -4309,5 +4542,319 @@
             btn.innerHTML = '<i class="bi bi-save"></i> Create Template';
         }
     }
+
+    // ============================================================================
+    // Node Backup Functions
+    // ============================================================================
+
+    let currentBackupId = null;
+    let currentBackupData = null;
+
+    async function loadBackups() {
+        const backupsList = document.getElementById('backupsList');
+        const nodeFilter = document.getElementById('backupNodeFilter').value;
+
+        backupsList.innerHTML = '<div class="text-center py-3 text-muted"><i class="bi bi-arrow-clockwise spin"></i> Loading backups...</div>';
+
+        try {
+            let url = '/api/admin/backups';
+            if (nodeFilter) {
+                url += `?node_id=${nodeFilter}`;
+            }
+
+            const response = await fetch(url);
+            const data = await response.json();
+
+            if (data.backups && data.backups.length > 0) {
+                let html = '';
+                for (const backup of data.backups) {
+                    const created = formatAdminDateTime(new Date(backup.created_at * 1000));
+                    const nodeName = backup.node_long_name || backup.node_short_name || backup.node_hex_id || `!${backup.node_id.toString(16).padStart(8, '0')}`;
+                    const summary = backup.config_summary;
+                    const configCount = (summary?.core_configs || 0) + (summary?.module_configs || 0) + (summary?.channels || 0);
+
+                    html += `
+                        <a href="#" class="list-group-item list-group-item-action ${backup.id === currentBackupId ? 'active' : ''}"
+                           onclick="selectBackup(${backup.id}); return false;">
+                            <div class="d-flex justify-content-between align-items-center">
+                                <strong>${escapeHtml(backup.backup_name)}</strong>
+                                <span class="badge bg-secondary">${configCount} configs</span>
+                            </div>
+                            <small class="text-muted d-block">
+                                <i class="bi bi-router"></i> ${escapeHtml(nodeName)}
+                            </small>
+                            <small class="text-muted">
+                                <i class="bi bi-clock"></i> ${created}
+                            </small>
+                        </a>
+                    `;
+                }
+                backupsList.innerHTML = html;
+            } else {
+                backupsList.innerHTML = `
+                    <div class="text-center py-4 text-muted">
+                        <i class="bi bi-inbox" style="font-size: 2rem;"></i>
+                        <p class="mt-2 mb-0">No backups found</p>
+                    </div>
+                `;
+            }
+        } catch (error) {
+            backupsList.innerHTML = `<div class="alert alert-danger m-2">Error: ${error.message}</div>`;
+        }
+    }
+
+    async function selectBackup(backupId) {
+        currentBackupId = backupId;
+
+        // Update list selection
+        document.querySelectorAll('#backupsList .list-group-item').forEach(item => {
+            item.classList.remove('active');
+        });
+
+        try {
+            const response = await fetch(`/api/admin/backups/${backupId}`);
+            const backup = await response.json();
+
+            if (backup.error) {
+                showAlert('danger', backup.error);
+                return;
+            }
+
+            currentBackupData = backup;
+
+            // Show viewer section
+            document.getElementById('noBackupSelected').style.display = 'none';
+            document.getElementById('backupViewerSection').style.display = 'block';
+
+            // Populate metadata
+            const nodeName = backup.node_long_name || backup.node_short_name || backup.node_hex_id || `!${backup.node_id.toString(16).padStart(8, '0')}`;
+            document.getElementById('backupName').textContent = backup.backup_name;
+            document.getElementById('backupNode').innerHTML = `<code>${escapeHtml(nodeName)}</code>`;
+            document.getElementById('backupCreated').textContent = formatAdminDateTime(new Date(backup.created_at * 1000));
+            document.getElementById('backupDescription').textContent = backup.description || 'No description';
+
+            const data = backup.backup_data || {};
+
+            // Core configs
+            const coreConfigs = data.core_configs || {};
+            document.getElementById('coreConfigsCount').textContent = Object.keys(coreConfigs).length;
+            let coreHtml = '';
+            for (const [key, value] of Object.entries(coreConfigs)) {
+                coreHtml += `
+                    <div class="mb-2">
+                        <strong class="text-primary">${key.toUpperCase()}</strong>
+                        <pre class="bg-light p-2 rounded small mb-0" style="max-height: 150px; overflow-y: auto;">${escapeHtml(JSON.stringify(value, null, 2))}</pre>
+                    </div>
+                `;
+            }
+            document.getElementById('coreConfigsContent').innerHTML = coreHtml || '<p class="text-muted">No core configs in backup</p>';
+
+            // Module configs
+            const moduleConfigs = data.module_configs || {};
+            document.getElementById('moduleConfigsCount').textContent = Object.keys(moduleConfigs).length;
+            let moduleHtml = '';
+            for (const [key, value] of Object.entries(moduleConfigs)) {
+                moduleHtml += `
+                    <div class="mb-2">
+                        <strong class="text-info">${key.toUpperCase()}</strong>
+                        <pre class="bg-light p-2 rounded small mb-0" style="max-height: 150px; overflow-y: auto;">${escapeHtml(JSON.stringify(value, null, 2))}</pre>
+                    </div>
+                `;
+            }
+            document.getElementById('moduleConfigsContent').innerHTML = moduleHtml || '<p class="text-muted">No module configs in backup</p>';
+
+            // Channels
+            const channels = data.channels || {};
+            document.getElementById('channelsCount').textContent = Object.keys(channels).length;
+            let channelHtml = '';
+            for (const [idx, value] of Object.entries(channels)) {
+                const chName = value.settings?.name || `Channel ${idx}`;
+                channelHtml += `
+                    <div class="mb-2">
+                        <strong class="text-success">Channel ${idx}: ${escapeHtml(chName)}</strong>
+                        <pre class="bg-light p-2 rounded small mb-0" style="max-height: 150px; overflow-y: auto;">${escapeHtml(JSON.stringify(value, null, 2))}</pre>
+                    </div>
+                `;
+            }
+            document.getElementById('channelsContent').innerHTML = channelHtml || '<p class="text-muted">No channels in backup</p>';
+
+            // Enable restore button when target is selected
+            const restoreSelect = document.getElementById('restoreTargetNode');
+            restoreSelect.onchange = function() {
+                document.getElementById('restoreBackupBtn').disabled = !this.value;
+            };
+
+            // Reload the backups list to update selection
+            loadBackups();
+
+        } catch (error) {
+            showAlert('danger', `Error loading backup: ${error.message}`);
+        }
+    }
+
+    function showCreateBackupModal() {
+        // Reset form
+        document.getElementById('backupSourceNode').value = '';
+        document.getElementById('backupNameInput').value = '';
+        document.getElementById('backupDescriptionInput').value = '';
+        document.getElementById('backupProgressSection').style.display = 'none';
+        document.getElementById('startBackupBtn').disabled = false;
+        document.getElementById('startBackupBtn').innerHTML = '<i class="bi bi-cloud-download"></i> Create Backup';
+
+        // Auto-generate backup name when node is selected
+        document.getElementById('backupSourceNode').onchange = function() {
+            const option = this.options[this.selectedIndex];
+            if (option.value) {
+                const nodeName = option.dataset.name || 'Node';
+                const date = new Date().toISOString().split('T')[0];
+                document.getElementById('backupNameInput').value = `${nodeName} - Backup ${date}`;
+            }
+        };
+
+        const modal = new bootstrap.Modal(document.getElementById('createBackupModal'));
+        modal.show();
+    }
+
+    async function startBackup() {
+        const nodeId = document.getElementById('backupSourceNode').value;
+        const backupName = document.getElementById('backupNameInput').value.trim();
+        const description = document.getElementById('backupDescriptionInput').value.trim();
+
+        if (!nodeId) {
+            showAlert('warning', 'Please select a node to backup');
+            return;
+        }
+        if (!backupName) {
+            showAlert('warning', 'Please enter a backup name');
+            return;
+        }
+
+        const btn = document.getElementById('startBackupBtn');
+        btn.disabled = true;
+        btn.innerHTML = '<i class="bi bi-arrow-clockwise spin"></i> Creating backup...';
+
+        // Show progress
+        document.getElementById('backupProgressSection').style.display = 'block';
+        document.getElementById('backupProgressStatus').textContent = 'Connecting to node...';
+        document.getElementById('backupProgressBar').style.width = '5%';
+        document.getElementById('backupProgressDetails').textContent = 'This may take several minutes for a full backup.';
+
+        try {
+            const response = await fetch('/api/admin/backups', {
+                method: 'POST',
+                headers: {'Content-Type': 'application/json'},
+                body: JSON.stringify({
+                    node_id: nodeId,
+                    backup_name: backupName,
+                    description: description
+                })
+            });
+
+            const data = await response.json();
+
+            if (data.success) {
+                document.getElementById('backupProgressStatus').textContent = 'Backup complete!';
+                document.getElementById('backupProgressBar').style.width = '100%';
+                document.getElementById('backupProgressBar').classList.remove('progress-bar-animated');
+                document.getElementById('backupProgressBar').classList.add('bg-success');
+                document.getElementById('backupSpinner').style.display = 'none';
+
+                const successCount = data.successful_configs?.length || 0;
+                const failedCount = data.failed_configs?.length || 0;
+                document.getElementById('backupProgressDetails').textContent =
+                    `Retrieved ${successCount} configs successfully` + (failedCount > 0 ? `, ${failedCount} failed` : '');
+
+                showAlert('success', `Backup "${backupName}" created successfully`);
+
+                // Close modal after delay
+                setTimeout(() => {
+                    bootstrap.Modal.getInstance(document.getElementById('createBackupModal')).hide();
+                    loadBackups();
+                    if (data.backup_id) {
+                        selectBackup(data.backup_id);
+                    }
+                }, 1500);
+
+            } else {
+                document.getElementById('backupProgressStatus').textContent = 'Backup failed';
+                document.getElementById('backupProgressBar').classList.remove('progress-bar-animated');
+                document.getElementById('backupProgressBar').classList.add('bg-danger');
+                document.getElementById('backupProgressDetails').textContent = data.error || 'Unknown error';
+                showAlert('danger', data.error || 'Failed to create backup');
+                btn.disabled = false;
+                btn.innerHTML = '<i class="bi bi-cloud-download"></i> Retry';
+            }
+
+        } catch (error) {
+            document.getElementById('backupProgressStatus').textContent = 'Error';
+            document.getElementById('backupProgressBar').classList.add('bg-danger');
+            document.getElementById('backupProgressDetails').textContent = error.message;
+            showAlert('danger', `Error: ${error.message}`);
+            btn.disabled = false;
+            btn.innerHTML = '<i class="bi bi-cloud-download"></i> Retry';
+        }
+    }
+
+    async function deleteBackup() {
+        if (!currentBackupId) return;
+
+        const backup = currentBackupData;
+        const confirmText = `Delete backup "${backup?.backup_name || 'this backup'}"? This action cannot be undone.`;
+
+        if (!confirm(confirmText)) return;
+
+        try {
+            const response = await fetch(`/api/admin/backups/${currentBackupId}`, {
+                method: 'DELETE'
+            });
+
+            const data = await response.json();
+
+            if (data.success) {
+                showAlert('success', 'Backup deleted');
+                currentBackupId = null;
+                currentBackupData = null;
+                document.getElementById('backupViewerSection').style.display = 'none';
+                document.getElementById('noBackupSelected').style.display = 'block';
+                loadBackups();
+            } else {
+                showAlert('danger', data.error || 'Failed to delete backup');
+            }
+        } catch (error) {
+            showAlert('danger', `Error: ${error.message}`);
+        }
+    }
+
+    function downloadBackup() {
+        if (!currentBackupData) return;
+
+        const dataStr = JSON.stringify(currentBackupData.backup_data, null, 2);
+        const blob = new Blob([dataStr], {type: 'application/json'});
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement('a');
+        a.href = url;
+        a.download = `${currentBackupData.backup_name.replace(/[^a-zA-Z0-9-_]/g, '_')}_backup.json`;
+        document.body.appendChild(a);
+        a.click();
+        document.body.removeChild(a);
+        URL.revokeObjectURL(url);
+    }
+
+    async function restoreBackup() {
+        const targetNodeId = document.getElementById('restoreTargetNode').value;
+        if (!targetNodeId || !currentBackupData) return;
+
+        const confirmText = `Are you sure you want to restore this backup to the selected node? This will overwrite the node's current configuration.`;
+        if (!confirm(confirmText)) return;
+
+        // TODO: Implement restore functionality
+        // This would iterate through all configs in the backup and apply them
+        showAlert('info', 'Restore functionality coming soon. For now, you can export the backup and manually apply configs.');
+    }
+
+    // Load backups when tab is shown
+    document.getElementById('backups-tab')?.addEventListener('shown.bs.tab', function() {
+        loadBackups();
+    });
 </script>
 {% endblock %}

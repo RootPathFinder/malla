@@ -1736,6 +1736,200 @@ class AdminService:
 
         return result
 
+    def create_backup(
+        self,
+        target_node_id: int,
+        backup_name: str,
+        description: str | None = None,
+        max_retries: int = 3,
+        retry_delay: float = 2.0,
+        timeout: float = 30.0,
+    ) -> AdminCommandResult:
+        """
+        Create a full configuration backup of a remote node.
+
+        This method retrieves all core configs, module configs, and channels
+        from the target node and saves them as a complete backup.
+
+        Args:
+            target_node_id: The target node ID to backup
+            backup_name: Name for the backup
+            description: Optional description
+            max_retries: Maximum number of retry attempts for each config
+            retry_delay: Seconds to wait between retries
+            timeout: Seconds to wait for each response
+
+        Returns:
+            AdminCommandResult with backup details
+        """
+        backup_data: dict[str, Any] = {
+            "backup_version": 1,
+            "target_node_id": target_node_id,
+            "created_at": time.time(),
+            "core_configs": {},
+            "module_configs": {},
+            "channels": {},
+        }
+
+        errors: list[str] = []
+        successful_configs: list[str] = []
+
+        # Get all core configs
+        core_config_types = [
+            ConfigType.DEVICE,
+            ConfigType.POSITION,
+            ConfigType.POWER,
+            ConfigType.NETWORK,
+            ConfigType.DISPLAY,
+            ConfigType.LORA,
+            ConfigType.BLUETOOTH,
+            ConfigType.SECURITY,
+        ]
+
+        for config_type in core_config_types:
+            result = self.get_config(
+                target_node_id=target_node_id,
+                config_type=config_type,
+                max_retries=max_retries,
+                retry_delay=retry_delay,
+                timeout=timeout,
+            )
+            if result.success and result.response:
+                backup_data["core_configs"][config_type.name.lower()] = result.response
+                successful_configs.append(f"core:{config_type.name}")
+            else:
+                errors.append(
+                    f"core:{config_type.name}: {result.error or 'Unknown error'}"
+                )
+
+        # Get all module configs
+        module_config_types = [
+            ModuleConfigType.MQTT,
+            ModuleConfigType.SERIAL,
+            ModuleConfigType.EXTNOTIF,
+            ModuleConfigType.STOREFORWARD,
+            ModuleConfigType.RANGETEST,
+            ModuleConfigType.TELEMETRY,
+            ModuleConfigType.CANNEDMSG,
+            ModuleConfigType.AUDIO,
+            ModuleConfigType.REMOTEHARDWARE,
+            ModuleConfigType.NEIGHBORINFO,
+            ModuleConfigType.AMBIENTLIGHTING,
+            ModuleConfigType.DETECTIONSENSOR,
+            ModuleConfigType.PAXCOUNTER,
+        ]
+
+        for module_type in module_config_types:
+            result = self.get_module_config(
+                target_node_id=target_node_id,
+                module_config_type=module_type,
+                max_retries=max_retries,
+                retry_delay=retry_delay,
+                timeout=timeout,
+            )
+            if result.success and result.response:
+                backup_data["module_configs"][module_type.name.lower()] = (
+                    result.response
+                )
+                successful_configs.append(f"module:{module_type.name}")
+            else:
+                errors.append(
+                    f"module:{module_type.name}: {result.error or 'Unknown error'}"
+                )
+
+        # Get all 8 channels
+        for channel_idx in range(8):
+            result = self.get_channel(
+                target_node_id=target_node_id,
+                channel_index=channel_idx,
+                max_retries=max_retries,
+                retry_delay=retry_delay,
+                timeout=timeout,
+            )
+            if result.success and result.response:
+                backup_data["channels"][str(channel_idx)] = result.response
+                successful_configs.append(f"channel:{channel_idx}")
+            else:
+                errors.append(
+                    f"channel:{channel_idx}: {result.error or 'Unknown error'}"
+                )
+
+        # Get node info for metadata
+        node_long_name = None
+        node_short_name = None
+        node_hex_id = f"!{target_node_id:08x}"
+        hardware_model = None
+        firmware_version = None
+
+        # Try to get node info from device config if available
+        if "device" in backup_data["core_configs"]:
+            device_config = backup_data["core_configs"]["device"]
+            node_long_name = device_config.get("device", {}).get("owner", None)
+            node_short_name = device_config.get("device", {}).get("owner_short", None)
+
+        # Log the backup
+        log_id = AdminRepository.log_admin_command(
+            target_node_id=target_node_id,
+            command_type="create_backup",
+            command_data=json.dumps(
+                {
+                    "backup_name": backup_name,
+                    "successful_configs": len(successful_configs),
+                    "failed_configs": len(errors),
+                }
+            ),
+        )
+
+        # Save to database if we got at least some configs
+        if successful_configs:
+            backup_id = AdminRepository.create_backup(
+                node_id=target_node_id,
+                backup_name=backup_name,
+                backup_data=json.dumps(backup_data),
+                description=description,
+                node_long_name=node_long_name,
+                node_short_name=node_short_name,
+                node_hex_id=node_hex_id,
+                hardware_model=hardware_model,
+                firmware_version=firmware_version,
+            )
+
+            AdminRepository.update_admin_log_status(
+                log_id=log_id,
+                status="success" if not errors else "partial",
+                response_data=json.dumps(
+                    {
+                        "backup_id": backup_id,
+                        "successful": successful_configs,
+                        "failed": errors,
+                    }
+                ),
+            )
+
+            return AdminCommandResult(
+                success=True,
+                log_id=log_id,
+                response={
+                    "backup_id": backup_id,
+                    "backup_name": backup_name,
+                    "successful_configs": successful_configs,
+                    "failed_configs": errors,
+                    "total_configs": len(successful_configs) + len(errors),
+                },
+            )
+        else:
+            AdminRepository.update_admin_log_status(
+                log_id=log_id,
+                status="failed",
+                error_message="No configs retrieved",
+            )
+
+            return AdminCommandResult(
+                success=False,
+                log_id=log_id,
+                error="Failed to retrieve any configuration from node",
+            )
+
     @staticmethod
     def _module_config_to_dict(
         module_config: module_config_pb2.ModuleConfig,

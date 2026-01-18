@@ -600,6 +600,161 @@ def api_get_node_module_config(node_id, module_type):
         return jsonify({"error": str(e)}), 500
 
 
+# =========================
+# Node Backup Endpoints
+# =========================
+
+
+@admin_bp.route("/api/admin/backups")
+def api_get_backups():
+    """Get all node backups, optionally filtered by node."""
+    try:
+        node_id = request.args.get("node_id")
+        node_id_int = convert_node_id(node_id) if node_id else None
+        limit = request.args.get("limit", 100, type=int)
+
+        backups = AdminRepository.get_backups(node_id=node_id_int, limit=limit)
+
+        # Parse backup_data JSON for summary info
+        for backup in backups:
+            try:
+                data = json.loads(backup.get("backup_data", "{}"))
+                backup["config_summary"] = {
+                    "core_configs": len(data.get("core_configs", {})),
+                    "module_configs": len(data.get("module_configs", {})),
+                    "channels": len(data.get("channels", {})),
+                }
+                # Remove large data from list response
+                del backup["backup_data"]
+            except (json.JSONDecodeError, KeyError):
+                backup["config_summary"] = {"error": "Invalid backup data"}
+
+        return jsonify({"backups": backups})
+    except Exception as e:
+        logger.error(f"Error getting backups: {e}")
+        return jsonify({"error": str(e)}), 500
+
+
+@admin_bp.route("/api/admin/backups/<int:backup_id>")
+def api_get_backup(backup_id):
+    """Get a specific backup by ID with full data."""
+    try:
+        backup = AdminRepository.get_backup(backup_id)
+        if not backup:
+            return jsonify({"error": "Backup not found"}), 404
+
+        # Parse backup_data JSON
+        try:
+            backup["backup_data"] = json.loads(backup.get("backup_data", "{}"))
+        except json.JSONDecodeError:
+            backup["backup_data"] = {"error": "Invalid backup data"}
+
+        return jsonify(backup)
+    except Exception as e:
+        logger.error(f"Error getting backup: {e}")
+        return jsonify({"error": str(e)}), 500
+
+
+@admin_bp.route("/api/admin/backups", methods=["POST"])
+def api_create_backup():
+    """Create a new backup from a remote node (streaming SSE)."""
+    try:
+        data = request.get_json()
+        if not data:
+            return jsonify({"error": "No JSON data provided"}), 400
+
+        node_id = data.get("node_id")
+        backup_name = data.get("backup_name")
+
+        if not node_id:
+            return jsonify({"error": "node_id is required"}), 400
+        if not backup_name:
+            return jsonify({"error": "backup_name is required"}), 400
+
+        node_id_int = convert_node_id(node_id)
+        description = data.get("description", "")
+        max_retries = data.get("max_retries", 3)
+        retry_delay = data.get("retry_delay", 2.0)
+        timeout = data.get("timeout", 30.0)
+
+        admin_service = get_admin_service()
+        result = admin_service.create_backup(
+            target_node_id=node_id_int,
+            backup_name=backup_name,
+            description=description,
+            max_retries=max_retries,
+            retry_delay=retry_delay,
+            timeout=timeout,
+        )
+
+        if result.success:
+            return jsonify(
+                {
+                    "success": True,
+                    "backup_id": result.response.get("backup_id")
+                    if result.response
+                    else None,
+                    "backup_name": backup_name,
+                    "successful_configs": result.response.get("successful_configs", [])
+                    if result.response
+                    else [],
+                    "failed_configs": result.response.get("failed_configs", [])
+                    if result.response
+                    else [],
+                    "log_id": result.log_id,
+                }
+            )
+        else:
+            return jsonify(
+                {
+                    "success": False,
+                    "error": result.error,
+                    "log_id": result.log_id,
+                }
+            ), 200
+
+    except Exception as e:
+        logger.error(f"Error creating backup: {e}")
+        return jsonify({"error": str(e)}), 500
+
+
+@admin_bp.route("/api/admin/backups/<int:backup_id>", methods=["DELETE"])
+def api_delete_backup(backup_id):
+    """Delete a backup."""
+    try:
+        deleted = AdminRepository.delete_backup(backup_id)
+        if deleted:
+            return jsonify({"success": True, "message": "Backup deleted"})
+        else:
+            return jsonify({"error": "Backup not found"}), 404
+    except Exception as e:
+        logger.error(f"Error deleting backup: {e}")
+        return jsonify({"error": str(e)}), 500
+
+
+@admin_bp.route("/api/admin/backups/<int:backup_id>", methods=["PUT"])
+def api_update_backup(backup_id):
+    """Update backup metadata (name, description)."""
+    try:
+        data = request.get_json()
+        if not data:
+            return jsonify({"error": "No JSON data provided"}), 400
+
+        updated = AdminRepository.update_backup(
+            backup_id=backup_id,
+            backup_name=data.get("backup_name"),
+            description=data.get("description"),
+        )
+
+        if updated:
+            return jsonify({"success": True, "message": "Backup updated"})
+        else:
+            return jsonify({"error": "Backup not found or no changes"}), 404
+    except Exception as e:
+        logger.error(f"Error updating backup: {e}")
+        return jsonify({"error": str(e)}), 500
+
+
 @admin_bp.route("/api/admin/node/<node_id>/config/<config_type>", methods=["POST"])
 def api_set_node_config(node_id, config_type):
     """Set configuration on a remote node."""
