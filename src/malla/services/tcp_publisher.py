@@ -546,7 +546,31 @@ class TCPPublisher:
         elif config_type == "security":
             for key, value in config_data.items():
                 if hasattr(config.security, key):
-                    setattr(config.security, key, value)
+                    # Handle repeated fields (admin_key, etc.) specially
+                    field = getattr(config.security, key)
+                    if hasattr(field, "extend"):
+                        # This is a repeated field - clear and extend
+                        field.clear()
+                        if isinstance(value, (list, tuple)):
+                            for item in value:
+                                if isinstance(item, str):
+                                    # Convert base64 or hex string to bytes
+                                    try:
+                                        import base64
+
+                                        field.append(base64.b64decode(item))
+                                    except Exception:
+                                        try:
+                                            field.append(bytes.fromhex(item))
+                                        except Exception:
+                                            field.append(item.encode())
+                                elif isinstance(item, bytes):
+                                    field.append(item)
+                                else:
+                                    field.append(item)
+                    else:
+                        # Regular field
+                        setattr(config.security, key, value)
             admin_msg.set_config.CopyFrom(config)
 
         else:
