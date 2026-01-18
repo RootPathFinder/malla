@@ -525,6 +525,81 @@ def api_get_node_config(node_id, config_type):
         return jsonify({"error": str(e)}), 500
 
 
+@admin_bp.route("/api/admin/node/<node_id>/moduleconfig/<module_type>")
+def api_get_node_module_config(node_id, module_type):
+    """Get module configuration from a remote node."""
+    from ..services.admin_service import ModuleConfigType
+
+    try:
+        node_id_int = convert_node_id(node_id)
+
+        # Map module type string to enum
+        module_type_map = {
+            "mqtt": ModuleConfigType.MQTT,
+            "serial": ModuleConfigType.SERIAL,
+            "extnotif": ModuleConfigType.EXTNOTIF,
+            "storeforward": ModuleConfigType.STOREFORWARD,
+            "rangetest": ModuleConfigType.RANGETEST,
+            "telemetry": ModuleConfigType.TELEMETRY,
+            "cannedmsg": ModuleConfigType.CANNEDMSG,
+            "audio": ModuleConfigType.AUDIO,
+            "remotehardware": ModuleConfigType.REMOTEHARDWARE,
+            "neighborinfo": ModuleConfigType.NEIGHBORINFO,
+            "ambientlighting": ModuleConfigType.AMBIENTLIGHTING,
+            "detectionsensor": ModuleConfigType.DETECTIONSENSOR,
+            "paxcounter": ModuleConfigType.PAXCOUNTER,
+        }
+
+        if module_type.lower() not in module_type_map:
+            return jsonify(
+                {
+                    "error": f"Invalid module type. Valid types: {list(module_type_map.keys())}",
+                }
+            ), 400
+
+        # Get retry parameters from query string
+        max_retries = request.args.get("max_retries", 3, type=int)
+        retry_delay = request.args.get("retry_delay", 2.0, type=float)
+        timeout = request.args.get("timeout", 30.0, type=float)
+
+        admin_service = get_admin_service()
+        result = admin_service.get_module_config(
+            target_node_id=node_id_int,
+            module_config_type=module_type_map[module_type.lower()],
+            max_retries=max_retries,
+            retry_delay=retry_delay,
+            timeout=timeout,
+        )
+
+        if result.success:
+            return jsonify(
+                {
+                    "success": True,
+                    "node_id": node_id_int,
+                    "module_type": module_type,
+                    "config": result.response,
+                    "schema": [],  # TODO: Add module config schemas
+                    "log_id": result.log_id,
+                    "attempts": result.attempts,
+                    "retry_info": result.retry_info,
+                }
+            )
+        else:
+            return jsonify(
+                {
+                    "success": False,
+                    "error": result.error,
+                    "log_id": result.log_id,
+                    "attempts": result.attempts,
+                    "retry_info": result.retry_info,
+                }
+            ), 200
+
+    except Exception as e:
+        logger.error(f"Error getting node module config: {e}")
+        return jsonify({"error": str(e)}), 500
+
+
 @admin_bp.route("/api/admin/node/<node_id>/config/<config_type>", methods=["POST"])
 def api_set_node_config(node_id, config_type):
     """Set configuration on a remote node."""

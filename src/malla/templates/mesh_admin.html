@@ -647,44 +647,106 @@
 
                             <div class="mb-3">
                                 <label class="form-label">Configuration Requests</label>
-                                <div class="d-flex flex-wrap gap-2">
-                                    <button class="btn btn-outline-secondary command-btn"
-                                            onclick="getConfig('device')">
+                                <div class="d-flex flex-wrap gap-2" id="configRequestBtns">
+                                    <button class="btn btn-outline-secondary command-btn config-req-btn"
+                                            data-config="device" onclick="getConfig('device', this)">
                                         <i class="bi bi-cpu"></i> Device
                                     </button>
-                                    <button class="btn btn-outline-secondary command-btn"
-                                            onclick="getConfig('lora')">
+                                    <button class="btn btn-outline-secondary command-btn config-req-btn"
+                                            data-config="lora" onclick="getConfig('lora', this)">
                                         <i class="bi bi-broadcast"></i> LoRa
                                     </button>
-                                    <button class="btn btn-outline-secondary command-btn"
-                                            onclick="getConfig('position')">
+                                    <button class="btn btn-outline-secondary command-btn config-req-btn"
+                                            data-config="position" onclick="getConfig('position', this)">
                                         <i class="bi bi-geo-alt"></i> Position
                                     </button>
-                                    <button class="btn btn-outline-secondary command-btn"
-                                            onclick="getConfig('power')">
+                                    <button class="btn btn-outline-secondary command-btn config-req-btn"
+                                            data-config="power" onclick="getConfig('power', this)">
                                         <i class="bi bi-battery-charging"></i> Power
                                     </button>
-                                    <button class="btn btn-outline-secondary command-btn"
-                                            onclick="getConfig('network')">
+                                    <button class="btn btn-outline-secondary command-btn config-req-btn"
+                                            data-config="network" onclick="getConfig('network', this)">
                                         <i class="bi bi-wifi"></i> Network
                                     </button>
-                                    <button class="btn btn-outline-secondary command-btn"
-                                            onclick="getConfig('display')">
+                                    <button class="btn btn-outline-secondary command-btn config-req-btn"
+                                            data-config="display" onclick="getConfig('display', this)">
                                         <i class="bi bi-display"></i> Display
                                     </button>
-                                    <button class="btn btn-outline-secondary command-btn"
-                                            onclick="getConfig('bluetooth')">
+                                    <button class="btn btn-outline-secondary command-btn config-req-btn"
+                                            data-config="bluetooth" onclick="getConfig('bluetooth', this)">
                                         <i class="bi bi-bluetooth"></i> Bluetooth
+                                    </button>
+                                    <button class="btn btn-outline-secondary command-btn config-req-btn"
+                                            data-config="security" onclick="getConfig('security', this)">
+                                        <i class="bi bi-shield-lock"></i> Security
+                                    </button>
+                                </div>
+                            </div>
+
+                            <div class="mb-3">
+                                <label class="form-label">Module Configuration Requests</label>
+                                <div class="d-flex flex-wrap gap-2" id="moduleConfigRequestBtns">
+                                    <button class="btn btn-outline-primary btn-sm command-btn config-req-btn"
+                                            data-config="mqtt" onclick="getModuleConfig('mqtt', this)">
+                                        <i class="bi bi-cloud"></i> MQTT
+                                    </button>
+                                    <button class="btn btn-outline-primary btn-sm command-btn config-req-btn"
+                                            data-config="serial" onclick="getModuleConfig('serial', this)">
+                                        <i class="bi bi-usb-plug"></i> Serial
+                                    </button>
+                                    <button class="btn btn-outline-primary btn-sm command-btn config-req-btn"
+                                            data-config="telemetry" onclick="getModuleConfig('telemetry', this)">
+                                        <i class="bi bi-graph-up"></i> Telemetry
+                                    </button>
+                                    <button class="btn btn-outline-primary btn-sm command-btn config-req-btn"
+                                            data-config="neighborinfo" onclick="getModuleConfig('neighborinfo', this)">
+                                        <i class="bi bi-people"></i> NeighborInfo
+                                    </button>
+                                    <button class="btn btn-outline-primary btn-sm command-btn config-req-btn"
+                                            data-config="storeforward" onclick="getModuleConfig('storeforward', this)">
+                                        <i class="bi bi-hdd-stack"></i> Store&amp;Forward
+                                    </button>
+                                    <button class="btn btn-outline-primary btn-sm command-btn config-req-btn"
+                                            data-config="rangetest" onclick="getModuleConfig('rangetest', this)">
+                                        <i class="bi bi-rulers"></i> Range Test
+                                    </button>
+                                    <button class="btn btn-outline-primary btn-sm command-btn config-req-btn"
+                                            data-config="extnotif" onclick="getModuleConfig('extnotif', this)">
+                                        <i class="bi bi-bell"></i> Ext Notif
+                                    </button>
+                                    <button class="btn btn-outline-primary btn-sm command-btn config-req-btn"
+                                            data-config="cannedmsg" onclick="getModuleConfig('cannedmsg', this)">
+                                        <i class="bi bi-chat-square-text"></i> Canned Msg
+                                    </button>
+                                    <button class="btn btn-outline-primary btn-sm command-btn config-req-btn"
+                                            data-config="audio" onclick="getModuleConfig('audio', this)">
+                                        <i class="bi bi-volume-up"></i> Audio
+                                    </button>
+                                    <button class="btn btn-outline-primary btn-sm command-btn config-req-btn"
+                                            data-config="remotehardware" onclick="getModuleConfig('remotehardware', this)">
+                                        <i class="bi bi-toggles"></i> Remote HW
+                                    </button>
+                                    <button class="btn btn-outline-primary btn-sm command-btn config-req-btn"
+                                            data-config="ambientlighting" onclick="getModuleConfig('ambientlighting', this)">
+                                        <i class="bi bi-lightbulb"></i> Ambient Light
+                                    </button>
+                                    <button class="btn btn-outline-primary btn-sm command-btn config-req-btn"
+                                            data-config="detectionsensor" onclick="getModuleConfig('detectionsensor', this)">
+                                        <i class="bi bi-radar"></i> Detection
+                                    </button>
+                                    <button class="btn btn-outline-primary btn-sm command-btn config-req-btn"
+                                            data-config="paxcounter" onclick="getModuleConfig('paxcounter', this)">
+                                        <i class="bi bi-person-walking"></i> Paxcounter
                                     </button>
                                 </div>
                             </div>
 
                             <div class="mb-3">
                                 <label class="form-label">Channel Requests</label>
-                                <div class="d-flex flex-wrap gap-2">
+                                <div class="d-flex flex-wrap gap-2" id="channelRequestBtns">
                                     {% for i in range(8) %}
-                                    <button class="btn btn-outline-info btn-sm"
-                                            onclick="getChannel({{ i }})">
+                                    <button class="btn btn-outline-info btn-sm config-req-btn"
+                                            data-channel="{{ i }}" onclick="getChannel({{ i }}, this)">
                                         Ch {{ i }}
                                     </button>
                                     {% endfor %}
@@ -2186,8 +2248,32 @@
         addCommandLog(`${symbol} ${message}`);
     }
 
+    // Helper to highlight the active config button
+    function highlightConfigButton(btn) {
+        // Remove highlight from all config request buttons
+        document.querySelectorAll('.config-req-btn').forEach(b => {
+            b.classList.remove('btn-primary', 'btn-success', 'active');
+            // Restore original outline style
+            if (b.closest('#moduleConfigRequestBtns')) {
+                b.classList.add('btn-outline-primary');
+            } else if (b.closest('#channelRequestBtns')) {
+                b.classList.add('btn-outline-info');
+            } else {
+                b.classList.add('btn-outline-secondary');
+            }
+        });
+
+        // Highlight the clicked button
+        if (btn) {
+            btn.classList.remove('btn-outline-secondary', 'btn-outline-primary', 'btn-outline-info');
+            btn.classList.add('btn-primary', 'active');
+        }
+    }
+
     // Get configuration with retry support
-    async function getConfig(configType) {
+    async function getConfig(configType, btn = null) {
+        highlightConfigButton(btn);
+
         const nodeId = document.getElementById('targetNodeInput').value.trim();
         if (!nodeId) {
             alert('Please enter a target node ID');
@@ -2249,6 +2335,78 @@
                 const attemptsMsg = data.attempts ? ` after ${data.attempts} attempts` : '';
                 finalizeCommandLog(`Failed${attemptsMsg}: ${data.error}`, false);
                 showAlert('danger', `Failed to get config: ${data.error}`);
+            }
+        } catch (error) {
+            stopCommandSpinner();
+            finalizeCommandLog(`Error: ${error.message}`, false);
+            showAlert('danger', `Error: ${error.message}`);
+        }
+    }
+
+    // Get module configuration with retry support
+    async function getModuleConfig(moduleType, btn = null) {
+        highlightConfigButton(btn);
+
+        const nodeId = document.getElementById('targetNodeInput').value.trim();
+        if (!nodeId) {
+            alert('Please enter a target node ID');
+            return;
+        }
+
+        const maxRetries = 3;
+        const retryDelay = 2.0;
+        const timeout = 30.0;
+
+        // Initialize command log
+        initCommandLog();
+        addCommandLog(`Requesting ${moduleType} module config from ${nodeId}`);
+        addCommandLog(`Settings: max_retries=${maxRetries}, retry_delay=${retryDelay}s, timeout=${timeout}s`);
+        hideConfigForm();
+
+        startCommandSpinner(`Sending request (attempt 1/${maxRetries})...`);
+
+        try {
+            const url = `/api/admin/node/${encodeURIComponent(nodeId)}/moduleconfig/${moduleType}?max_retries=${maxRetries}&retry_delay=${retryDelay}&timeout=${timeout}`;
+            const response = await fetch(url);
+            const data = await response.json();
+
+            stopCommandSpinner();
+
+            // Log retry information if available
+            if (data.retry_info && data.retry_info.length > 0) {
+                addCommandLog(`─── Attempt Summary ───`);
+                for (const attempt of data.retry_info) {
+                    const statusSymbol = attempt.status === 'success' ? '✓' : (attempt.status === 'timeout' ? '⏱' : '✗');
+                    addCommandLog(`  ${statusSymbol} Attempt ${attempt.attempt}/${attempt.max_attempts}: ${attempt.status}${attempt.error ? ' - ' + attempt.error : ''}`);
+                }
+                addCommandLog(`─────────────────────`);
+            }
+
+            if (data.success) {
+                currentConfigType = moduleType;
+                currentConfigData = data.config;
+                currentConfigSchema = data.schema;
+
+                const attemptsMsg = data.attempts > 1 ? ` (took ${data.attempts} attempts)` : '';
+                finalizeCommandLog(`Module config received successfully${attemptsMsg}`);
+
+                // Render the form if we have schema
+                if (data.schema && data.config) {
+                    renderConfigForm(moduleType, data.config, data.schema);
+                    showConfigForm();
+                }
+
+                // Also append raw JSON to log
+                addCommandLog('');
+                addCommandLog('─── Response Data ───');
+                const jsonLines = JSON.stringify(data.config, null, 2).split('\n');
+                for (const line of jsonLines) {
+                    addCommandLog(line);
+                }
+            } else {
+                const attemptsMsg = data.attempts ? ` after ${data.attempts} attempts` : '';
+                finalizeCommandLog(`Failed${attemptsMsg}: ${data.error}`, false);
+                showAlert('danger', `Failed to get module config: ${data.error}`);
             }
         } catch (error) {
             stopCommandSpinner();
@@ -2408,7 +2566,9 @@
     }
 
     // Get channel with retry support
-    async function getChannel(channelIndex) {
+    async function getChannel(channelIndex, btn = null) {
+        highlightConfigButton(btn);
+
         const nodeId = document.getElementById('targetNodeInput').value.trim();
         if (!nodeId) {
             alert('Please enter a target node ID');

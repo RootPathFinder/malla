@@ -12,7 +12,7 @@ from dataclasses import dataclass
 from enum import Enum
 from typing import Any, Protocol
 
-from meshtastic import config_pb2, mesh_pb2
+from meshtastic.protobuf import config_pb2, mesh_pb2, module_config_pb2
 
 from ..config import get_config
 from ..database.admin_repository import AdminRepository
@@ -143,6 +143,13 @@ class AdminPublisher(Protocol):
         config_type: int = 1,
     ) -> int | None: ...
 
+    def send_get_module_config(
+        self,
+        target_node_id: int,
+        from_node_id: int | None = None,
+        module_config_type: int = 0,
+    ) -> int | None: ...
+
     def send_get_channel(
         self,
         target_node_id: int,
@@ -196,6 +203,27 @@ class ConfigType(Enum):
     LORA = 5
     BLUETOOTH = 6
     SECURITY = 7
+
+
+class ModuleConfigType(Enum):
+    """Module configuration types that can be requested.
+
+    Values must match meshtastic.admin_pb2.AdminMessage.ModuleConfigType enum.
+    """
+
+    MQTT = 0
+    SERIAL = 1
+    EXTNOTIF = 2
+    STOREFORWARD = 3
+    RANGETEST = 4
+    TELEMETRY = 5
+    CANNEDMSG = 6
+    AUDIO = 7
+    REMOTEHARDWARE = 8
+    NEIGHBORINFO = 9
+    AMBIENTLIGHTING = 10
+    DETECTIONSENSOR = 11
+    PAXCOUNTER = 12
 
 
 @dataclass
@@ -860,6 +888,122 @@ class AdminService:
                 response_data=json.dumps(
                     {
                         "config": config_data,
+                        "attempts": attempts,
+                    }
+                ),
+            )
+
+            return AdminCommandResult(
+                success=True,
+                log_id=log_id,
+                response=config_data,
+                attempts=attempts,
+                retry_info=retry_info,
+            )
+        else:
+            last_error = "No response received"
+            if retry_info:
+                last_attempt = retry_info[-1]
+                last_error = last_attempt.get("error", "Unknown error")
+
+            AdminRepository.update_admin_log_status(
+                log_id=log_id,
+                status="timeout",
+                error_message=f"Failed after {attempts} attempts: {last_error}",
+            )
+            return AdminCommandResult(
+                success=False,
+                log_id=log_id,
+                error=f"No response after {attempts} attempts (timeout)",
+                attempts=attempts,
+                retry_info=retry_info,
+            )
+
+    def get_module_config(
+        self,
+        target_node_id: int,
+        module_config_type: ModuleConfigType,
+        max_retries: int = 3,
+        retry_delay: float = 2.0,
+        timeout: float = 30.0,
+    ) -> AdminCommandResult:
+        """
+        Request module configuration from a remote node with retry support.
+
+        Args:
+            target_node_id: The target node ID
+            module_config_type: The type of module configuration to request
+            max_retries: Maximum number of retry attempts (default 3)
+            retry_delay: Seconds to wait between retries (default 2.0)
+            timeout: Seconds to wait for each response (default 30.0)
+
+        Returns:
+            AdminCommandResult with module config data and retry info
+        """
+        gateway_id = self.gateway_node_id
+        if not gateway_id:
+            return AdminCommandResult(
+                success=False,
+                error="No gateway node configured",
+            )
+
+        conn_type = self.connection_type
+        publisher = self._get_publisher()
+
+        # Log the command
+        log_id = AdminRepository.log_admin_command(
+            target_node_id=target_node_id,
+            command_type="get_module_config",
+            command_data=json.dumps(
+                {
+                    "module_config_type": module_config_type.name,
+                    "connection_type": conn_type.value,
+                    "max_retries": max_retries,
+                }
+            ),
+        )
+
+        # Define send function for retry helper
+        def send_func() -> int | None:
+            if conn_type == AdminConnectionType.TCP:
+                return publisher.send_get_module_config(
+                    target_node_id=target_node_id,
+                    module_config_type=module_config_type.value,
+                )
+            else:
+                return publisher.send_get_module_config(
+                    target_node_id=target_node_id,
+                    from_node_id=gateway_id,
+                    module_config_type=module_config_type.value,
+                )
+
+        # Define response parser
+        def parse_response(response: dict[str, Any]) -> dict[str, Any] | None:
+            admin_msg = response.get("admin_message")
+            if admin_msg and admin_msg.HasField("get_module_config_response"):
+                module_config = admin_msg.get_module_config_response
+                return self._module_config_to_dict(module_config)
+            return None
+
+        # Send with retry
+        success, config_data, retry_info = self._send_with_retry(
+            send_func=send_func,
+            response_parser=parse_response,
+            max_retries=max_retries,
+            retry_delay=retry_delay,
+            timeout=timeout,
+            command_name=f"get_module_config({module_config_type.name})",
+        )
+
+        attempts = len(retry_info)
+
+        if success and config_data:
+            AdminRepository.update_admin_log_status(
+                log_id=log_id,
+                status="success",
+                response_data=json.dumps(
+                    {
+                        "module_config": config_data,
                         "attempts": attempts,
                     }
                 ),
@@ -1588,6 +1732,160 @@ class AdminService:
                 "serial_enabled": config.security.serial_enabled,
                 "debug_log_api_enabled": config.security.debug_log_api_enabled,
                 "admin_channel_enabled": config.security.admin_channel_enabled,
+            }
+
+        return result
+
+    @staticmethod
+    def _module_config_to_dict(
+        module_config: module_config_pb2.ModuleConfig,
+    ) -> dict[str, Any]:
+        """
+        Convert a ModuleConfig protobuf to a dictionary.
+
+        Args:
+            module_config: The ModuleConfig protobuf
+
+        Returns:
+            Dictionary representation
+        """
+        result = {}
+
+        if module_config.HasField("mqtt"):
+            result["mqtt"] = {
+                "enabled": module_config.mqtt.enabled,
+                "address": module_config.mqtt.address,
+                "username": module_config.mqtt.username,
+                "encryption_enabled": module_config.mqtt.encryption_enabled,
+                "json_enabled": module_config.mqtt.json_enabled,
+                "tls_enabled": module_config.mqtt.tls_enabled,
+                "root": module_config.mqtt.root,
+                "proxy_to_client_enabled": module_config.mqtt.proxy_to_client_enabled,
+                "map_reporting_enabled": module_config.mqtt.map_reporting_enabled,
+            }
+
+        if module_config.HasField("serial"):
+            result["serial"] = {
+                "enabled": module_config.serial.enabled,
+                "echo": module_config.serial.echo,
+                "rxd": module_config.serial.rxd,
+                "txd": module_config.serial.txd,
+                "baud": module_config.serial.baud,
+                "timeout": module_config.serial.timeout,
+                "mode": module_config.serial.mode,
+            }
+
+        if module_config.HasField("external_notification"):
+            result["extnotif"] = {
+                "enabled": module_config.external_notification.enabled,
+                "output_ms": module_config.external_notification.output_ms,
+                "output": module_config.external_notification.output,
+                "output_vibra": module_config.external_notification.output_vibra,
+                "output_buzzer": module_config.external_notification.output_buzzer,
+                "active": module_config.external_notification.active,
+                "alert_message": module_config.external_notification.alert_message,
+                "alert_message_vibra": module_config.external_notification.alert_message_vibra,
+                "alert_message_buzzer": module_config.external_notification.alert_message_buzzer,
+                "alert_bell": module_config.external_notification.alert_bell,
+                "alert_bell_vibra": module_config.external_notification.alert_bell_vibra,
+                "alert_bell_buzzer": module_config.external_notification.alert_bell_buzzer,
+                "use_pwm": module_config.external_notification.use_pwm,
+                "nag_timeout": module_config.external_notification.nag_timeout,
+            }
+
+        if module_config.HasField("store_forward"):
+            result["storeforward"] = {
+                "enabled": module_config.store_forward.enabled,
+                "heartbeat": module_config.store_forward.heartbeat,
+                "records": module_config.store_forward.records,
+                "history_return_max": module_config.store_forward.history_return_max,
+                "history_return_window": module_config.store_forward.history_return_window,
+            }
+
+        if module_config.HasField("range_test"):
+            result["rangetest"] = {
+                "enabled": module_config.range_test.enabled,
+                "sender": module_config.range_test.sender,
+                "save": module_config.range_test.save,
+            }
+
+        if module_config.HasField("telemetry"):
+            result["telemetry"] = {
+                "device_update_interval": module_config.telemetry.device_update_interval,
+                "environment_update_interval": module_config.telemetry.environment_update_interval,
+                "environment_measurement_enabled": module_config.telemetry.environment_measurement_enabled,
+                "environment_screen_enabled": module_config.telemetry.environment_screen_enabled,
+                "environment_display_fahrenheit": module_config.telemetry.environment_display_fahrenheit,
+                "air_quality_enabled": module_config.telemetry.air_quality_enabled,
+                "air_quality_interval": module_config.telemetry.air_quality_interval,
+                "power_measurement_enabled": module_config.telemetry.power_measurement_enabled,
+                "power_update_interval": module_config.telemetry.power_update_interval,
+                "power_screen_enabled": module_config.telemetry.power_screen_enabled,
+            }
+
+        if module_config.HasField("canned_message"):
+            result["cannedmsg"] = {
+                "rotary1_enabled": module_config.canned_message.rotary1_enabled,
+                "inputbroker_pin_a": module_config.canned_message.inputbroker_pin_a,
+                "inputbroker_pin_b": module_config.canned_message.inputbroker_pin_b,
+                "inputbroker_pin_press": module_config.canned_message.inputbroker_pin_press,
+                "inputbroker_event_cw": module_config.canned_message.inputbroker_event_cw,
+                "inputbroker_event_ccw": module_config.canned_message.inputbroker_event_ccw,
+                "inputbroker_event_press": module_config.canned_message.inputbroker_event_press,
+                "updown1_enabled": module_config.canned_message.updown1_enabled,
+                "enabled": module_config.canned_message.enabled,
+                "allow_input_source": module_config.canned_message.allow_input_source,
+                "send_bell": module_config.canned_message.send_bell,
+            }
+
+        if module_config.HasField("audio"):
+            result["audio"] = {
+                "codec2_enabled": module_config.audio.codec2_enabled,
+                "ptt_pin": module_config.audio.ptt_pin,
+                "bitrate": module_config.audio.bitrate,
+                "i2s_ws": module_config.audio.i2s_ws,
+                "i2s_sd": module_config.audio.i2s_sd,
+                "i2s_din": module_config.audio.i2s_din,
+                "i2s_sck": module_config.audio.i2s_sck,
+            }
+
+        if module_config.HasField("remote_hardware"):
+            result["remotehardware"] = {
+                "enabled": module_config.remote_hardware.enabled,
+                "allow_undefined_pin_access": module_config.remote_hardware.allow_undefined_pin_access,
+            }
+
+        if module_config.HasField("neighbor_info"):
+            result["neighborinfo"] = {
+                "enabled": module_config.neighbor_info.enabled,
+                "update_interval": module_config.neighbor_info.update_interval,
+            }
+
+        if module_config.HasField("ambient_lighting"):
+            result["ambientlighting"] = {
+                "led_state": module_config.ambient_lighting.led_state,
+                "current": module_config.ambient_lighting.current,
+                "red": module_config.ambient_lighting.red,
+                "green": module_config.ambient_lighting.green,
+                "blue": module_config.ambient_lighting.blue,
+            }
+
+        if module_config.HasField("detection_sensor"):
+            result["detectionsensor"] = {
+                "enabled": module_config.detection_sensor.enabled,
+                "minimum_broadcast_secs": module_config.detection_sensor.minimum_broadcast_secs,
+                "state_broadcast_secs": module_config.detection_sensor.state_broadcast_secs,
+                "send_bell": module_config.detection_sensor.send_bell,
+                "name": module_config.detection_sensor.name,
+                "monitor_pin": module_config.detection_sensor.monitor_pin,
+                "detection_trigger_type": module_config.detection_sensor.detection_trigger_type,
+                "use_pullup": module_config.detection_sensor.use_pullup,
+            }
+
+        if module_config.HasField("paxcounter"):
+            result["paxcounter"] = {
+                "enabled": module_config.paxcounter.enabled,
+                "paxcounter_update_interval": module_config.paxcounter.paxcounter_update_interval,
             }
 
         return result

@@ -610,6 +610,30 @@ class SerialPublisher:
             want_response=True,
         )
 
+    def send_get_module_config(
+        self,
+        target_node_id: int,
+        module_config_type: int,
+    ) -> int | None:
+        """
+        Request module configuration from a target node.
+
+        Args:
+            target_node_id: The target node ID
+            module_config_type: The module config type (from ModuleConfigType enum value)
+
+        Returns:
+            Packet ID if sent successfully
+        """
+        admin_msg = admin_pb2.AdminMessage()
+        admin_msg.get_module_config_request = module_config_type  # type: ignore[assignment]
+
+        return self.send_admin_message(
+            target_node_id=target_node_id,
+            admin_message=admin_msg,
+            want_response=True,
+        )
+
     def send_get_channel(
         self,
         target_node_id: int,

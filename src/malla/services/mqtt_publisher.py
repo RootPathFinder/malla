@@ -467,6 +467,28 @@ class MQTTPublisher:
 
         return self.send_admin_message(target_node_id, admin_msg, from_node_id)
 
+    def send_get_module_config(
+        self,
+        target_node_id: int,
+        from_node_id: int,
+        module_config_type: int,
+    ) -> int | None:
+        """
+        Send a request for module configuration.
+
+        Args:
+            target_node_id: The target node ID
+            from_node_id: The sender node ID
+            module_config_type: The AdminMessage module config type enum value
+
+        Returns:
+            Packet ID if sent successfully
+        """
+        admin_msg = admin_pb2.AdminMessage()
+        admin_msg.get_module_config_request = module_config_type  # type: ignore[assignment]
+
+        return self.send_admin_message(target_node_id, admin_msg, from_node_id)
+
     def send_get_channel(
         self,
         target_node_id: int,
