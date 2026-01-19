@@ -504,6 +504,12 @@
         document.addEventListener('DOMContentLoaded', function() {
             initializeNodeTooltips();
 
+            // Initialize all generic Bootstrap tooltips
+            const tooltipTriggerList = document.querySelectorAll('[data-bs-toggle="tooltip"]');
+            [...tooltipTriggerList].forEach(tooltipTriggerEl => {
+                new bootstrap.Tooltip(tooltipTriggerEl);
+            });
+
             // Initialize theme toggle tooltip
             const themeToggle = document.getElementById('theme-toggle');
             if (themeToggle) {
