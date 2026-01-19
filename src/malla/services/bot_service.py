@@ -175,6 +175,7 @@ class BotService:
         self.register_command("help", self._cmd_help, "Show available commands")
         self.register_command("nodes", self._cmd_nodes, "Count of known nodes")
         self.register_command("uptime", self._cmd_uptime, "Bot uptime")
+        self.register_command("mystats", self._cmd_mystats, "Your node statistics")
 
     @property
     def is_enabled(self) -> bool:
@@ -1319,6 +1320,123 @@ class BotService:
         except Exception as e:
             logger.error(f"Error in nodes command: {e}", exc_info=True)
             return "Node info unavailable"
+
+    def _cmd_mystats(self, ctx: CommandContext) -> str:
+        """Handle !mystats command - show requesting node's statistics."""
+        try:
+            from ..database.connection import get_db_connection
+
+            conn = get_db_connection()
+            cursor = conn.cursor()
+            node_id = ctx.sender_id
+
+            # Get node name
+            cursor.execute(
+                "SELECT long_name, short_name FROM node_info WHERE node_id = ?",
+                (node_id,),
+            )
+            node_row = cursor.fetchone()
+            node_name = (
+                node_row["short_name"] or node_row["long_name"]
+                if node_row
+                else f"!{node_id:08x}"
+            )
+            if node_name and len(node_name) > 10:
+                node_name = node_name[:10]
+
+            # Get message counts (last 24h and 7d)
+            one_day_ago = time.time() - 86400
+            seven_days_ago = time.time() - (7 * 86400)
+
+            cursor.execute(
+                """
+                SELECT COUNT(*) as cnt FROM packet_history
+                WHERE from_node_id = ? AND timestamp > ?
+                """,
+                (node_id, one_day_ago),
+            )
+            msgs_24h = cursor.fetchone()["cnt"]
+
+            cursor.execute(
+                """
+                SELECT COUNT(*) as cnt FROM packet_history
+                WHERE from_node_id = ? AND timestamp > ?
+                """,
+                (node_id, seven_days_ago),
+            )
+            msgs_7d = cursor.fetchone()["cnt"]
+
+            # Get average hop count (from hop_start - hop_limit when > 0)
+            cursor.execute(
+                """
+                SELECT AVG(hop_start - hop_limit) as avg_hops
+                FROM packet_history
+                WHERE from_node_id = ? AND timestamp > ?
+                AND hop_start IS NOT NULL AND hop_limit IS NOT NULL
+                AND hop_start > hop_limit
+                """,
+                (node_id, seven_days_ago),
+            )
+            hop_row = cursor.fetchone()
+            avg_hops = hop_row["avg_hops"] if hop_row and hop_row["avg_hops"] else 0
+
+            # Get latest telemetry
+            cursor.execute(
+                """
+                SELECT battery_level, voltage, uptime_seconds, channel_utilization
+                FROM telemetry_data
+                WHERE node_id = ?
+                ORDER BY timestamp DESC LIMIT 1
+                """,
+                (node_id,),
+            )
+            telem = cursor.fetchone()
+
+            # Calculate availability (% of 15-min windows with activity in last 24h)
+            # 24 hours = 96 fifteen-minute windows
+            cursor.execute(
+                """
+                SELECT COUNT(DISTINCT CAST(timestamp / 900 AS INTEGER)) as active_windows
+                FROM packet_history
+                WHERE from_node_id = ? AND timestamp > ?
+                """,
+                (node_id, one_day_ago),
+            )
+            active_windows = cursor.fetchone()["active_windows"]
+            availability = min(100, int((active_windows / 96.0) * 100))
+
+            conn.close()
+
+            # Build concise response (fits in ~230 bytes)
+            lines = [f"📊 {node_name}"]
+
+            # Availability and messages
+            lines.append(f"Avail: {availability}% | Msgs: {msgs_24h}/24h {msgs_7d}/7d")
+
+            # Hops info
+            if avg_hops > 0:
+                lines.append(f"Avg hops: {avg_hops:.1f}")
+
+            # Telemetry line
+            if telem:
+                telem_parts = []
+                if telem["battery_level"] is not None:
+                    telem_parts.append(f"🔋{telem['battery_level']}%")
+                if telem["voltage"] is not None:
+                    telem_parts.append(f"{telem['voltage']:.1f}V")
+                if telem["uptime_seconds"] is not None:
+                    uptime_h = telem["uptime_seconds"] // 3600
+                    telem_parts.append(f"Up:{uptime_h}h")
+                if telem["channel_utilization"] is not None:
+                    telem_parts.append(f"ChUtil:{telem['channel_utilization']:.0f}%")
+                if telem_parts:
+                    lines.append(" ".join(telem_parts))
+
+            return "\n".join(lines)
+
+        except Exception as e:
+            logger.error(f"Error in mystats command: {e}", exc_info=True)
+            return "Stats unavailable"
 
     def _cmd_uptime(self, ctx: CommandContext) -> str:
         """Handle !uptime command."""
