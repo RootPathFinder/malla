@@ -127,6 +127,15 @@ class BotService:
         self._pending_traceroutes: dict[int, tuple[int, str | None, int, float]] = {}
         self._traceroute_timeout = 60.0  # Seconds to wait for traceroute response
 
+        # Traceroute rate limiting (hardware firmware limit)
+        self._traceroute_min_interval = 30.0  # Seconds between traceroutes
+        self._traceroute_max_per_window = 3  # Max traceroutes per window
+        self._traceroute_window_seconds = 300.0  # 5 minute window
+        self._traceroute_history: list[float] = []  # Timestamps of sent traceroutes
+        self._last_traceroute_time = 0.0
+        # Queued traceroute requests: (sender_id, sender_name, channel_index, request_time)
+        self._queued_traceroutes: list[tuple[int, str | None, int, float]] = []
+
         # Statistics
         self._stats = {
             "commands_received": 0,
@@ -186,7 +195,9 @@ class BotService:
             pub.subscribe(self._on_message_received, "meshtastic.receive")
             # Also subscribe to traceroute-specific topic if it exists
             try:
-                pub.subscribe(self._on_traceroute_received, "meshtastic.receive.traceroute")
+                pub.subscribe(
+                    self._on_traceroute_received, "meshtastic.receive.traceroute"
+                )
             except Exception:
                 pass  # Topic may not exist in all meshtastic versions
             logger.info("Bot enabled - listening for commands")
@@ -662,6 +673,9 @@ class BotService:
 
         while not self._stop_event.is_set():
             try:
+                # Process any queued traceroute requests
+                self._process_queued_traceroutes()
+
                 # Wait for admin jobs if configured
                 if self._wait_for_jobs and self._has_active_jobs():
                     logger.debug("Waiting for active admin jobs to complete...")
@@ -839,7 +853,7 @@ class BotService:
             return "Status unavailable"
 
     def _cmd_traceroute(self, ctx: CommandContext) -> str:
-        """Handle !traceroute command."""
+        """Handle !traceroute command with rate limiting."""
         try:
             from .tcp_publisher import get_tcp_publisher
 
@@ -847,28 +861,167 @@ class BotService:
             if not publisher.is_connected or publisher._interface is None:
                 return "Not connected"
 
+            current_time = time.time()
+
+            # Clean up old traceroute history (outside the 5-minute window)
+            self._traceroute_history = [
+                t
+                for t in self._traceroute_history
+                if current_time - t < self._traceroute_window_seconds
+            ]
+
+            # Check if we've hit the rate limit (3 per 5 minutes)
+            if len(self._traceroute_history) >= self._traceroute_max_per_window:
+                oldest = min(self._traceroute_history)
+                wait_time = int(
+                    self._traceroute_window_seconds - (current_time - oldest)
+                )
+                return f"⏳ TR limit reached. Try in {wait_time}s"
+
+            # Check if we need to wait for the 30-second interval
+            time_since_last = current_time - self._last_traceroute_time
+            if time_since_last < self._traceroute_min_interval:
+                # Queue this request
+                wait_time = int(self._traceroute_min_interval - time_since_last)
+                self._queue_traceroute(
+                    ctx.sender_id, ctx.sender_name, ctx.channel_index
+                )
+                sender_name = ctx.sender_name or f"!{ctx.sender_id:08x}"
+                if len(sender_name) > 15:
+                    sender_name = sender_name[:12] + "..."
+                return f"⏳ TR to {sender_name} queued ({wait_time}s)"
+
+            # Execute the traceroute immediately
+            return self._execute_traceroute(
+                ctx.sender_id, ctx.sender_name, ctx.channel_index, publisher
+            )
+
+        except Exception as e:
+            logger.error(f"Error in traceroute command: {e}")
+            return "Traceroute failed"
+
+    def _queue_traceroute(
+        self, sender_id: int, sender_name: str | None, channel_index: int
+    ) -> None:
+        """Queue a traceroute request to be processed after rate limit expires."""
+        # Don't queue duplicate requests for the same sender
+        for queued in self._queued_traceroutes:
+            if queued[0] == sender_id:
+                return  # Already queued
+
+        self._queued_traceroutes.append(
+            (sender_id, sender_name, channel_index, time.time())
+        )
+        self._log_activity(
+            "traceroute_queued",
+            {
+                "target": f"!{sender_id:08x}",
+                "queue_size": len(self._queued_traceroutes),
+            },
+        )
+
+    def _execute_traceroute(
+        self,
+        sender_id: int,
+        sender_name: str | None,
+        channel_index: int,
+        publisher: Any = None,
+    ) -> str:
+        """Execute a traceroute and update rate limiting state."""
+        try:
+            if publisher is None:
+                from .tcp_publisher import get_tcp_publisher
+
+                publisher = get_tcp_publisher()
+                if not publisher.is_connected or publisher._interface is None:
+                    return "Not connected"
+
+            current_time = time.time()
+
+            # Update rate limiting state
+            self._last_traceroute_time = current_time
+            self._traceroute_history.append(current_time)
+
             # Register this as a pending traceroute so we can send results
-            self._pending_traceroutes[ctx.sender_id] = (
-                ctx.sender_id,
-                ctx.sender_name,
-                ctx.channel_index,
-                time.time(),
+            self._pending_traceroutes[sender_id] = (
+                sender_id,
+                sender_name,
+                channel_index,
+                current_time,
             )
 
             # Send traceroute to the requesting node
             publisher._interface.sendTraceRoute(
-                dest=ctx.sender_id,
+                dest=sender_id,
                 hopLimit=7,
             )
 
-            sender_name = ctx.sender_name or f"!{ctx.sender_id:08x}"
+            display_name = sender_name or f"!{sender_id:08x}"
             # Truncate name to fit payload
-            if len(sender_name) > 20:
-                sender_name = sender_name[:17] + "..."
-            return f"🔍 TR to {sender_name}..."
+            if len(display_name) > 20:
+                display_name = display_name[:17] + "..."
+
+            self._log_activity(
+                "traceroute_sent",
+                {"target": f"!{sender_id:08x}", "name": display_name},
+            )
+
+            return f"🔍 TR to {display_name}..."
         except Exception as e:
-            logger.error(f"Error in traceroute command: {e}")
+            logger.error(f"Error executing traceroute: {e}")
             return "Traceroute failed"
+
+    def _process_queued_traceroutes(self) -> None:
+        """Process any queued traceroute requests if rate limit allows."""
+        if not self._queued_traceroutes:
+            return
+
+        current_time = time.time()
+
+        # Check if we can send now
+        time_since_last = current_time - self._last_traceroute_time
+        if time_since_last < self._traceroute_min_interval:
+            return
+
+        # Clean up old traceroute history
+        self._traceroute_history = [
+            t
+            for t in self._traceroute_history
+            if current_time - t < self._traceroute_window_seconds
+        ]
+
+        # Check window limit
+        if len(self._traceroute_history) >= self._traceroute_max_per_window:
+            return
+
+        # Remove expired queued requests (older than 2 minutes)
+        self._queued_traceroutes = [
+            q for q in self._queued_traceroutes if current_time - q[3] < 120.0
+        ]
+
+        if not self._queued_traceroutes:
+            return
+
+        # Process the oldest queued request
+        sender_id, sender_name, channel_index, _ = self._queued_traceroutes.pop(0)
+
+        try:
+            from .tcp_publisher import get_tcp_publisher
+
+            publisher = get_tcp_publisher()
+            if publisher.is_connected and publisher._interface is not None:
+                result = self._execute_traceroute(
+                    sender_id, sender_name, channel_index, publisher
+                )
+                # Queue the "traceroute started" message
+                self.queue_message(
+                    text=result,
+                    destination=0xFFFFFFFF,
+                    channel_index=channel_index,
+                    priority=BotMessagePriority.NORMAL,
+                )
+        except Exception as e:
+            logger.error(f"Error processing queued traceroute: {e}")
 
     def _cmd_help(self, ctx: CommandContext) -> str:
         """Handle !help command."""
