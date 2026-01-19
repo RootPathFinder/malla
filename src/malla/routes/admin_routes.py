@@ -690,7 +690,25 @@ def api_get_backups():
 
         backups = AdminRepository.get_backups(node_id=node_id_int, limit=limit)
 
-        # Parse backup_data JSON for summary info
+        # Get current node names from node_info table
+        from ..database import get_db_connection
+
+        conn = get_db_connection()
+        cursor = conn.cursor()
+        cursor.execute("SELECT node_id, long_name, short_name, hex_id FROM node_info")
+        node_info_rows = cursor.fetchall()
+        conn.close()
+
+        # Build lookup of current node names by node_id
+        current_node_names = {}
+        for row in node_info_rows:
+            current_node_names[row["node_id"]] = {
+                "current_long_name": row["long_name"],
+                "current_short_name": row["short_name"],
+                "current_hex_id": row["hex_id"],
+            }
+
+        # Parse backup_data JSON for summary info and add current node names
         for backup in backups:
             try:
                 data = json.loads(backup.get("backup_data", "{}"))
@@ -703,6 +721,11 @@ def api_get_backups():
                 del backup["backup_data"]
             except (json.JSONDecodeError, KeyError):
                 backup["config_summary"] = {"error": "Invalid backup data"}
+
+            # Add current node name info
+            node_id_key = backup.get("node_id")
+            if node_id_key in current_node_names:
+                backup.update(current_node_names[node_id_key])
 
         return jsonify({"backups": backups})
     except Exception as e:

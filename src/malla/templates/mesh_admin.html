@@ -5663,18 +5663,21 @@
                 // Group backups by node hex ID for consistent grouping
                 const nodeGroups = {};
                 for (const backup of data.backups) {
-                    const nodeHex = backup.node_hex_id || `!${backup.node_id.toString(16).padStart(8, '0')}`;
+                    const nodeHex = backup.current_hex_id || backup.node_hex_id || `!${backup.node_id.toString(16).padStart(8, '0')}`;
                     if (!nodeGroups[nodeHex]) {
+                        // Use current node name from node_info, fallback to backup's stored name
+                        const currentName = backup.current_long_name || backup.current_short_name;
+                        const backupName = backup.node_long_name || backup.node_short_name;
                         nodeGroups[nodeHex] = {
                             nodeId: backup.node_id,
                             nodeHex: nodeHex,
-                            nodeName: backup.node_long_name || backup.node_short_name || nodeHex,
+                            nodeName: currentName || backupName || nodeHex,
                             backups: []
                         };
                     }
-                    // Update node name in case it changed (use most recent backup's name)
-                    if (backup.node_long_name || backup.node_short_name) {
-                        nodeGroups[nodeHex].nodeName = backup.node_long_name || backup.node_short_name;
+                    // If we find a current name, always prefer it over backup names
+                    if (backup.current_long_name || backup.current_short_name) {
+                        nodeGroups[nodeHex].nodeName = backup.current_long_name || backup.current_short_name;
                     }
                     nodeGroups[nodeHex].backups.push(backup);
                 }
