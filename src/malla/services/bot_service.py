@@ -485,13 +485,8 @@ class BotService:
             local_node_id = self._get_local_node_id()
             is_dm = to_id != 0xFFFFFFFF and to_id == local_node_id
 
-            # Check if we should respond on this channel
-            if not is_dm and channel_name and channel_name not in self._listen_channels:
-                # Not a DM and not on a monitored channel - ignore
-                logger.debug(
-                    f"Ignoring command on non-monitored channel: {channel_name}"
-                )
-                return
+            # Bot responds to all channels (no channel filtering)
+            # Previously filtered to only _listen_channels but this was too restrictive
 
             # Build context
             context = CommandContext(
@@ -621,10 +616,16 @@ class BotService:
 
             # Check if we're waiting for a traceroute from this node
             if from_id not in self._pending_traceroutes:
+                logger.debug(
+                    f"Received traceroute response from !{from_id:08x} but not in pending list"
+                )
                 return
 
             requester_id, requester_name, channel_index, _ = (
                 self._pending_traceroutes.pop(from_id)
+            )
+            logger.info(
+                f"Processing traceroute response from !{from_id:08x} for channel {channel_index}"
             )
 
             # Parse the traceroute data from the packet
