@@ -1998,7 +1998,36 @@ function formatUptime(seconds) {
 // Listen for temperature unit changes and re-render telemetry
 document.addEventListener('temperatureUnitChanged', function() {
     loadTelemetryData();
+    // Also update live telemetry display if active
+    updateLiveTelemetryTemperature();
 });
+
+// Update live telemetry temperature when unit changes
+function updateLiveTelemetryTemperature() {
+    const tempEl = document.getElementById('live-temperature');
+    if (!tempEl || tempEl.textContent === '--') return;
+
+    // Parse current value to get the raw celsius value
+    const currentText = tempEl.textContent;
+    let celsiusTemp;
+
+    if (currentText.includes('°F')) {
+        // Convert back from Fahrenheit to Celsius
+        const fahrenheit = parseFloat(currentText);
+        celsiusTemp = (fahrenheit - 32) * 5/9;
+    } else if (currentText.includes('°C')) {
+        celsiusTemp = parseFloat(currentText);
+    } else {
+        return; // No valid temperature
+    }
+
+    const tempUnit = localStorage.getItem('temperatureUnit') || 'celsius';
+    if (tempUnit === 'fahrenheit') {
+        tempEl.textContent = ((celsiusTemp * 9/5) + 32).toFixed(1) + '°F';
+    } else {
+        tempEl.textContent = celsiusTemp.toFixed(1) + '°C';
+    }
+}
 
 // ==================== LIVE TELEMETRY POLLING ====================
 let liveTelemetryInterval = null;
