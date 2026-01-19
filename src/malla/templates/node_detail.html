@@ -2459,53 +2459,32 @@ async function pollLiveTelemetry() {
         // Calculate timeout based on current poll interval (leave 2s buffer)
         const requestTimeout = Math.min(Math.max(liveTelemetryPollInterval - 2000, 5), 25);
 
-        // Request both device_metrics and environment_metrics in parallel
-        const [deviceResponse, envResponse] = await Promise.all([
-            fetch(`/api/admin/node/${nodeId}/telemetry/live`, {
-                method: 'POST',
-                headers: {'Content-Type': 'application/json'},
-                body: JSON.stringify({
-                    telemetry_type: 'device_metrics',
-                    timeout: requestTimeout
-                })
-            }),
-            fetch(`/api/admin/node/${nodeId}/telemetry/live`, {
-                method: 'POST',
-                headers: {'Content-Type': 'application/json'},
-                body: JSON.stringify({
-                    telemetry_type: 'environment_metrics',
-                    timeout: requestTimeout
-                })
+        const response = await fetch(`/api/admin/node/${nodeId}/telemetry/live`, {
+            method: 'POST',
+            headers: {'Content-Type': 'application/json'},
+            body: JSON.stringify({
+                telemetry_type: 'device_metrics',
+                timeout: requestTimeout
             })
-        ]);
+        });
 
         const responseTime = Date.now() - pollStartTime;
-        const deviceData = await deviceResponse.json();
-        const envData = await envResponse.json();
+        const data = await response.json();
 
         // Update polling metrics visualization
-        updatePollingMetrics(liveTelemetryPollInterval, responseTime, deviceData.success || envData.success);
+        updatePollingMetrics(liveTelemetryPollInterval, responseTime, data.success);
 
-        // Merge telemetry from both responses
-        let dm = {};
-        let env = {};
-
-        if (deviceData.success && deviceData.telemetry) {
-            const telemetry = deviceData.telemetry;
-            dm = telemetry.device_metrics || telemetry.deviceMetrics || telemetry || {};
-        }
-
-        if (envData.success && envData.telemetry) {
-            const telemetry = envData.telemetry;
-            env = telemetry.environment_metrics || telemetry.environmentMetrics || telemetry || {};
-        }
-
-        // Handle successful live response (at least one succeeded)
-        if (deviceData.success || envData.success) {
+        // Handle successful live response
+        if (data.success && data.telemetry) {
             const intervalSec = Math.round(liveTelemetryPollInterval / 1000);
             const responseSec = Math.round(responseTime/1000);
             statusIndicator.innerHTML = `<span class="badge bg-success">Live</span> <small class="text-muted ms-2">Response: ${responseSec}s | Next poll: ${intervalSec}s</small>`;
             adjustPollingInterval(responseTime, true);
+
+            const telemetry = data.telemetry;
+            // Handle both snake_case and camelCase keys from API
+            const dm = telemetry.device_metrics || telemetry.deviceMetrics || {};
+            const env = telemetry.environment_metrics || telemetry.environmentMetrics || {};
 
             updateTelemetryDisplay(dm, env);
             updateLiveCharts(dm);
@@ -2514,7 +2493,7 @@ async function pollLiveTelemetry() {
         }
 
         // Handle timeout (408) - node didn't respond in time
-        if (deviceResponse.status === 408 && envResponse.status === 408) {
+        if (response.status === 408) {
             statusIndicator.innerHTML = '<span class="badge bg-warning">No Response</span> <small class="text-muted ms-2">Node didn\'t respond (may be sleeping, distant, or not configured to reply). Retrying...</small>';
             adjustPollingInterval(responseTime, false);
             scheduleNextPoll();
@@ -2522,7 +2501,7 @@ async function pollLiveTelemetry() {
         }
 
         // Handle other errors - show error but keep trying live
-        const errorMsg = deviceData.error || envData.error || 'Unknown error';
+        const errorMsg = data.error || 'Unknown error';
         if (errorMsg.includes('TCP not connected')) {
             statusIndicator.innerHTML = '<span class="badge bg-danger">Not Connected</span> <small class="text-muted ms-2">Connect via Admin page first</small>';
         } else if (errorMsg.includes('MQTT')) {
