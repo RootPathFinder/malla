@@ -3356,6 +3356,8 @@ def api_run_compliance_fix(template_id):
     Request body:
         node_ids: List of node IDs to fix (required)
         verify_after: Whether to verify compliance after fixing (default: True)
+        reboot_after: Whether to reboot nodes after applying config (default: False)
+                      Useful for configs like Bluetooth that require a reboot.
 
     Returns:
         Job ID for tracking progress
@@ -3375,6 +3377,7 @@ def api_run_compliance_fix(template_id):
 
     node_ids = data.get("node_ids", [])
     verify_after = data.get("verify_after", True)
+    reboot_after = data.get("reboot_after", False)
 
     # Validate node_ids are administrable
     valid_node_ids = []
@@ -3441,6 +3444,7 @@ def api_run_compliance_fix(template_id):
                 "config_data": template_config,
                 "node_ids": valid_node_ids,
                 "verify_after": verify_after,
+                "reboot_after": reboot_after,
             },
             target_node_id=None,  # Multiple nodes
         )

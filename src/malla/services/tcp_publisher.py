@@ -975,10 +975,19 @@ class TCPPublisher:
             admin_msg.set_config.CopyFrom(config)
 
         elif config_type == "bluetooth":
+            logger.info(
+                f"Processing bluetooth config with keys: {list(config_data.keys())}"
+            )
             for key, value in config_data.items():
                 if hasattr(config.bluetooth, key):
+                    logger.info(f"Bluetooth {key}: setting to {value}")
                     setattr(config.bluetooth, key, value)
+                else:
+                    logger.warning(
+                        f"Bluetooth config: unknown field '{key}' - skipping"
+                    )
             admin_msg.set_config.CopyFrom(config)
+            logger.info(f"Bluetooth config prepared: {config.bluetooth}")
 
         elif config_type == "security":
             logger.info(

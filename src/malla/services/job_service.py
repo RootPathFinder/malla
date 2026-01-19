@@ -1337,6 +1337,7 @@ class JobService:
         template_type = job_data.get("template_type")
         config_data = job_data.get("config_data")
         verify_after = job_data.get("verify_after", True)
+        reboot_after = job_data.get("reboot_after", False)
 
         if not template_id or not node_ids or not template_type or not config_data:
             return {
@@ -1509,6 +1510,26 @@ class JobService:
             if not v.get("is_compliant", True) and "error" not in v
         )
 
+        # If reboot_after is set and we have nodes that sent config successfully,
+        # send reboot commands to those nodes
+        rebooted_nodes = []
+        if reboot_after and fixed_count > 0:
+            progress.update(95, "Sending reboot commands...", "rebooting")
+            for result in results:
+                if result.get("success"):
+                    node_id = result["node_id"]
+                    node_hex = result["node_hex"]
+                    try:
+                        reboot_result = admin_service.reboot_node(
+                            target_node_id=node_id,
+                            delay_seconds=5,
+                        )
+                        if reboot_result.success:
+                            rebooted_nodes.append(node_hex)
+                            logger.info(f"Reboot sent to {node_hex}")
+                    except Exception as e:
+                        logger.warning(f"Failed to reboot {node_hex}: {e}")
+
         progress.update(
             100,
             f"✓ Fixed {fixed_count}/{total_nodes}, {now_compliant} now compliant",
@@ -1525,6 +1546,8 @@ class JobService:
                 "verification_results": verification_results,
                 "now_compliant": now_compliant,
                 "still_non_compliant": still_non_compliant,
+                "template_type": template_type,
+                "rebooted_nodes": rebooted_nodes,
             },
         }
 

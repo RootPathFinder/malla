@@ -1107,7 +1107,14 @@
                                                         <strong class="text-danger"><i class="bi bi-exclamation-triangle"></i> <span id="nonCompliantCountLabel">0</span> non-compliant node(s)</strong>
                                                         <p class="text-muted small mb-0">Apply the template configuration to make them compliant.</p>
                                                     </div>
-                                                    <div class="d-flex gap-2">
+                                                    <div class="d-flex flex-column gap-2 align-items-end">
+                                                        <div class="form-check">
+                                                            <input class="form-check-input" type="checkbox" id="rebootAfterFixCheckbox">
+                                                            <label class="form-check-label small" for="rebootAfterFixCheckbox">
+                                                                <i class="bi bi-arrow-clockwise"></i> Reboot nodes after fix
+                                                                <span class="text-muted">(required for Bluetooth changes)</span>
+                                                            </label>
+                                                        </div>
                                                         <button class="btn btn-warning btn-sm" onclick="runComplianceFix()" id="runComplianceFixBtn">
                                                             <i class="bi bi-wrench"></i> Fix All Non-Compliant
                                                         </button>
@@ -5963,9 +5970,15 @@
             return;
         }
 
-        // Confirm action
+        const rebootAfter = document.getElementById('rebootAfterFixCheckbox')?.checked || false;
         const nodeCount = nonCompliantNodeIds.length;
-        if (!confirm(`Are you sure you want to apply the template configuration to ${nodeCount} non-compliant node(s)?\n\nThis will modify the node settings to match the template.`)) {
+        let confirmMsg = `Are you sure you want to apply the template configuration to ${nodeCount} non-compliant node(s)?\n\nThis will modify the node settings to match the template.`;
+        if (rebootAfter) {
+            confirmMsg += `\n\n⚠️ Nodes will be REBOOTED after configuration is applied.`;
+        }
+
+        // Confirm action
+        if (!confirm(confirmMsg)) {
             return;
         }
 
@@ -5980,6 +5993,7 @@
                 body: JSON.stringify({
                     node_ids: nonCompliantNodeIds,
                     verify_after: true,
+                    reboot_after: rebootAfter,
                 }),
             });
 
@@ -7163,6 +7177,8 @@
         const nowCompliant = data.now_compliant || 0;
         const stillNonCompliant = data.still_non_compliant || 0;
         const verificationResults = data.verification_results || [];
+        const templateType = data.template_type || '';
+        const rebootedNodes = data.rebooted_nodes || [];
 
         // Summary section
         let html = `
@@ -7187,18 +7203,53 @@
                         <small class="text-muted">Send Failed</small>
                     </div>
                     ` : ''}
+                    ${rebootedNodes.length > 0 ? `
+                    <div class="text-center">
+                        <div class="h4 mb-0 text-info">${rebootedNodes.length}</div>
+                        <small class="text-muted">Rebooted</small>
+                    </div>
+                    ` : ''}
                 </div>
         `;
+
+        // Show rebooted nodes
+        if (rebootedNodes.length > 0) {
+            html += `
+                <div class="alert alert-info py-2 mb-3">
+                    <i class="bi bi-arrow-clockwise"></i>
+                    <strong>Reboot sent to:</strong> ${rebootedNodes.map(n => escapeHtml(n)).join(', ')}
+                    <br><small class="text-muted">Configuration changes will take effect after reboot completes (~10-15 seconds).</small>
+                </div>
+            `;
+        }
 
         // Verification details for non-compliant nodes
         const nonCompliantVerifications = verificationResults.filter(v => !v.is_compliant && v.differences);
         if (nonCompliantVerifications.length > 0) {
+            // Show reboot suggestion for certain config types
+            const configTypesNeedingReboot = ['bluetooth', 'network', 'lora'];
+            const needsRebootHint = configTypesNeedingReboot.includes(templateType.toLowerCase()) && rebootedNodes.length === 0;
+
             html += `
                 <h6 class="text-muted mb-2"><i class="bi bi-exclamation-triangle text-warning"></i> Fields Not Applied</h6>
+            `;
+
+            if (needsRebootHint) {
+                html += `
+                    <div class="alert alert-warning py-2 mb-2">
+                        <i class="bi bi-lightbulb"></i>
+                        <strong>Tip:</strong> ${templateType.charAt(0).toUpperCase() + templateType.slice(1)} configuration changes typically require a <strong>node reboot</strong> to take effect.
+                        Try running the fix again with <em>"Reboot nodes after fix"</em> enabled.
+                    </div>
+                `;
+            }
+
+            html += `
                 <p class="small text-muted mb-2">
                     The following settings were sent but did not take effect. This can happen if:
                 </p>
                 <ul class="small text-muted mb-3">
+                    <li>The node requires a <strong>reboot</strong> for settings to apply</li>
                     <li>The field requires physical button press to confirm (e.g., Bluetooth PIN)</li>
                     <li>The node's firmware doesn't support this setting</li>
                     <li>The setting is protected or read-only on the node</li>
