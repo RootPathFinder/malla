@@ -3072,6 +3072,16 @@ def api_run_compliance_check(template_id):
 
     template_type = template["template_type"]
 
+    # Unwrap template_config if it's wrapped in the type key
+    # Some templates might be stored as {"bluetooth": {...}} instead of {...}
+    if (
+        isinstance(template_config, dict)
+        and len(template_config) == 1
+        and template_type in template_config
+    ):
+        template_config = template_config[template_type]
+        logger.debug(f"Unwrapped template_config from {template_type} wrapper")
+
     data = request.get_json() or {}
     specific_node_ids = data.get("node_ids")
     timeout = min(data.get("timeout", 30), 60)  # Default 30s, max 60s
@@ -3234,7 +3244,16 @@ def api_run_compliance_check(template_id):
                     continue
 
                 node_config = result.response
-                differences = compare_configs(template_config, node_config)
+                logger.info(
+                    f"Compliance check for {node_hex}: "
+                    f"fetch_type={fetch_type}, "
+                    f"node_config type={type(node_config).__name__}, "
+                    f"node_config keys={list(node_config.keys()) if isinstance(node_config, dict) else 'N/A'}, "
+                    f"template_config keys={list(template_config.keys())}"
+                )
+                differences = compare_configs(
+                    template_config, node_config, config_type=fetch_type
+                )
                 is_compliant = len(differences) == 0
 
                 AdminRepository.save_compliance_check(
@@ -3327,13 +3346,96 @@ def api_run_compliance_check(template_id):
     )
 
 
-def compare_configs(template_config: dict, node_config: dict) -> list[dict]:
+def compare_configs(
+    template_config: dict, node_config: dict, config_type: str | None = None
+) -> list[dict]:
     """
     Compare template configuration against node configuration.
+
+    The template may store config at root level (e.g., {"admin_key": [...]})
+    while node config may have it wrapped in type key (e.g., {"security": {"admin_key": [...]}}).
+
+    Args:
+        template_config: The expected configuration from template
+        node_config: The actual configuration from node
+        config_type: Optional config type (device, security, lora, etc.) to help unwrap node config
 
     Returns a list of differences found.
     """
     differences = []
+
+    # Handle None or empty node_config
+    if not node_config:
+        logger.warning(
+            f"compare_configs: node_config is empty/None. "
+            f"config_type={config_type}, template_config keys={list(template_config.keys())}"
+        )
+        # Return all template fields as missing
+        for key, value in template_config.items():
+            differences.append(
+                {
+                    "field": key,
+                    "expected": value,
+                    "actual": None,
+                    "type": "missing",
+                }
+            )
+        return differences
+
+    # Try to unwrap template_config if it's wrapped in a type key
+    actual_template_config = template_config
+    if len(template_config) == 1:
+        template_wrapper_key = list(template_config.keys())[0]
+        if template_wrapper_key in (
+            "device",
+            "lora",
+            "position",
+            "power",
+            "network",
+            "display",
+            "bluetooth",
+            "security",
+        ):
+            actual_template_config = template_config[template_wrapper_key]
+            logger.debug(
+                f"compare_configs: unwrapped template via wrapper_key={template_wrapper_key}"
+            )
+
+    # Try to unwrap node_config if it's wrapped in a type key
+    # Node configs come back as {"device": {...}} or {"security": {...}} etc.
+    actual_node_config = node_config
+
+    # Log what we received for debugging
+    logger.debug(
+        f"compare_configs: node_config keys={list(node_config.keys())}, "
+        f"config_type={config_type}"
+    )
+
+    # Check if node_config has a single key matching a config type
+    if len(node_config) == 1:
+        wrapper_key = list(node_config.keys())[0]
+        if wrapper_key in (
+            "device",
+            "lora",
+            "position",
+            "power",
+            "network",
+            "display",
+            "bluetooth",
+            "security",
+        ):
+            actual_node_config = node_config[wrapper_key]
+            logger.debug(
+                f"compare_configs: unwrapped node via wrapper_key={wrapper_key}, "
+                f"actual_node_config keys={list(actual_node_config.keys()) if isinstance(actual_node_config, dict) else 'not a dict'}"
+            )
+    elif config_type and config_type in node_config:
+        # If config_type is provided and exists in node_config, use that
+        actual_node_config = node_config[config_type]
+        logger.debug(
+            f"compare_configs: unwrapped node via config_type={config_type}, "
+            f"actual_node_config keys={list(actual_node_config.keys()) if isinstance(actual_node_config, dict) else 'not a dict'}"
+        )
 
     def compare_values(key: str, expected: Any, actual: Any, path: str = ""):
         full_key = f"{path}.{key}" if path else key
@@ -3354,6 +3456,35 @@ def compare_configs(template_config: dict, node_config: dict) -> list[dict]:
                             "type": "missing",
                         }
                     )
+        elif isinstance(expected, list) and isinstance(actual, list):
+            # Compare lists - check if they have the same elements (order-independent for keys)
+            # For admin_key and similar, convert to sets for comparison
+            expected_set = (
+                set(expected) if all(isinstance(e, str) for e in expected) else None
+            )
+            actual_set = (
+                set(actual) if all(isinstance(a, str) for a in actual) else None
+            )
+
+            if expected_set is not None and actual_set is not None:
+                if expected_set != actual_set:
+                    differences.append(
+                        {
+                            "field": full_key,
+                            "expected": expected,
+                            "actual": actual,
+                            "type": "mismatch",
+                        }
+                    )
+            elif expected != actual:
+                differences.append(
+                    {
+                        "field": full_key,
+                        "expected": expected,
+                        "actual": actual,
+                        "type": "mismatch",
+                    }
+                )
         elif expected != actual:
             differences.append(
                 {
@@ -3364,14 +3495,14 @@ def compare_configs(template_config: dict, node_config: dict) -> list[dict]:
                 }
             )
 
-    for key in template_config:
-        if key in node_config:
-            compare_values(key, template_config[key], node_config[key])
+    for key in actual_template_config:
+        if key in actual_node_config:
+            compare_values(key, actual_template_config[key], actual_node_config[key])
         else:
             differences.append(
                 {
                     "field": key,
-                    "expected": template_config[key],
+                    "expected": actual_template_config[key],
                     "actual": None,
                     "type": "missing",
                 }
