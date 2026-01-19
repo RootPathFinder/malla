@@ -552,12 +552,18 @@ class BotService:
                         reply_to_node=sender_id,
                     )
                     # Log the response
+                    dest_str = (
+                        f"DM to !{sender_id:08x}" if context.is_dm else "broadcast"
+                    )
                     self._log_activity(
                         "response_queued",
                         {
                             "command": command,
                             "response_preview": response[:100],
                             "priority": priority.name,
+                            "destination": dest_str,
+                            "channel": channel_name or f"ch{channel_index}",
+                            "is_dm": is_dm,
                         },
                     )
                 else:
@@ -641,12 +647,16 @@ class BotService:
                 priority=BotMessagePriority.NORMAL,
             )
 
+            channel_name = self._get_channel_name(channel_index)
             self._log_activity(
                 "traceroute_result",
                 {
                     "target": f"!{from_id:08x}",
-                    "hops": len(route),
-                    "has_return": len(route_back) > 0,
+                    "target_name": requester_name,
+                    "channel": channel_name or f"ch{channel_index}",
+                    "hops_forward": len(route),
+                    "hops_return": len(route_back),
+                    "status": "result received",
                 },
             )
             logger.info(f"Traceroute result sent for !{from_id:08x}")
@@ -732,25 +742,42 @@ class BotService:
 
                 # Send the message
                 success = self._send_message(msg)
+                channel_name = self._get_channel_name(msg.channel_index)
                 if success:
                     self._last_send_time = time.time()
                     self._stats["messages_sent"] += 1
+                    dest_str = (
+                        f"!{msg.destination:08x}"
+                        if msg.destination != 0xFFFFFFFF
+                        else "broadcast"
+                    )
                     self._log_activity(
                         "message_sent",
                         {
                             "text_preview": msg.text[:80],
-                            "destination": f"!{msg.destination:08x}"
-                            if msg.destination != 0xFFFFFFFF
-                            else "broadcast",
-                            "channel_index": msg.channel_index,
+                            "destination": dest_str,
+                            "channel": channel_name or f"ch{msg.channel_index}",
+                            "status": "sent",
+                            "is_dm": msg.destination != 0xFFFFFFFF,
                         },
                     )
                     logger.info(f"Bot sent: {msg.text[:50]}...")
                 else:
                     self._stats["messages_failed"] += 1
+                    dest_str = (
+                        f"!{msg.destination:08x}"
+                        if msg.destination != 0xFFFFFFFF
+                        else "broadcast"
+                    )
                     self._log_activity(
                         "message_failed",
-                        {"text_preview": msg.text[:80], "reason": "send failed"},
+                        {
+                            "text_preview": msg.text[:80],
+                            "destination": dest_str,
+                            "channel": channel_name or f"ch{msg.channel_index}",
+                            "status": "failed",
+                            "reason": "send failed",
+                        },
                         level="error",
                     )
                     logger.error(f"Failed to send bot message: {msg.text[:50]}...")
@@ -981,11 +1008,15 @@ class BotService:
         self._queued_traceroutes.append(
             (sender_id, sender_name, channel_index, time.time())
         )
+        channel_name = self._get_channel_name(channel_index)
         self._log_activity(
             "traceroute_queued",
             {
                 "target": f"!{sender_id:08x}",
+                "target_name": sender_name,
+                "channel": channel_name or f"ch{channel_index}",
                 "queue_size": len(self._queued_traceroutes),
+                "status": "queued (rate limit)",
             },
         )
 
@@ -1030,9 +1061,15 @@ class BotService:
             if len(display_name) > 20:
                 display_name = display_name[:17] + "..."
 
+            channel_name = self._get_channel_name(channel_index)
             self._log_activity(
                 "traceroute_sent",
-                {"target": f"!{sender_id:08x}", "name": display_name},
+                {
+                    "target": f"!{sender_id:08x}",
+                    "target_name": display_name,
+                    "channel": channel_name or f"ch{channel_index}",
+                    "status": "sent",
+                },
             )
 
             return f"🔍 TR to {display_name}..."
@@ -1106,20 +1143,44 @@ class BotService:
     def _cmd_nodes(self, ctx: CommandContext) -> str:
         """Handle !nodes command."""
         try:
-            from ..database.repositories import NodeRepository
+            from ..database.connection import get_db_connection
 
-            result = NodeRepository.get_nodes(limit=10000)
-            # Repository returns 'nodes' and 'total_count' keys
-            nodes = result.get("nodes", [])
-            total_count = result.get("total_count", len(nodes))
-            online = sum(1 for n in nodes if n.get("is_online", False))
-            with_position = sum(
-                1
-                for n in nodes
-                if n.get("latitude") is not None and n.get("longitude") is not None
+            conn = get_db_connection()
+            cursor = conn.cursor()
+
+            # Total nodes in database (not archived)
+            cursor.execute(
+                "SELECT COUNT(*) as cnt FROM node_info WHERE COALESCE(archived, 0) = 0"
             )
+            total_nodes = cursor.fetchone()["cnt"]
 
-            return f"📡 {total_count} nodes, {online} online, {with_position} w/pos"
+            # Nodes seen in last 15 minutes (online)
+            fifteen_min_ago = time.time() - 900
+            cursor.execute(
+                """
+                SELECT COUNT(DISTINCT from_node_id) as cnt
+                FROM packet_history
+                WHERE timestamp > ?
+                """,
+                (fifteen_min_ago,),
+            )
+            online_nodes = cursor.fetchone()["cnt"]
+
+            # Nodes with position data
+            cursor.execute(
+                """
+                SELECT COUNT(*) as cnt FROM node_info
+                WHERE latitude IS NOT NULL AND longitude IS NOT NULL
+                AND COALESCE(archived, 0) = 0
+                """
+            )
+            with_position = cursor.fetchone()["cnt"]
+
+            conn.close()
+
+            return (
+                f"📡 {total_nodes} nodes, {online_nodes} online, {with_position} w/pos"
+            )
         except Exception as e:
             logger.error(f"Error in nodes command: {e}", exc_info=True)
             return "Node info unavailable"
