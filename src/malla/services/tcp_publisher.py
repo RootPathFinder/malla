@@ -1002,6 +1002,12 @@ class TCPPublisher:
                         field.clear()
                         if isinstance(value, (list, tuple)):
                             for item in value:
+                                # Skip empty strings/None values
+                                if not item:
+                                    logger.debug(
+                                        f"Security {key}: skipping empty value"
+                                    )
+                                    continue
                                 if isinstance(item, str):
                                     # Convert base64 or hex string to bytes
                                     try:

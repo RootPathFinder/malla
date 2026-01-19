@@ -3582,11 +3582,19 @@ def compare_configs(
         elif isinstance(expected, list) and isinstance(actual, list):
             # Compare lists - check if they have the same elements (order-independent for keys)
             # For admin_key and similar, convert to sets for comparison
+            # Filter out empty strings/None values before comparison
+            expected_filtered = [e for e in expected if e]  # Remove empty/None
+            actual_filtered = [a for a in actual if a]  # Remove empty/None
+
             expected_set = (
-                set(expected) if all(isinstance(e, str) for e in expected) else None
+                set(expected_filtered)
+                if all(isinstance(e, str) for e in expected_filtered)
+                else None
             )
             actual_set = (
-                set(actual) if all(isinstance(a, str) for a in actual) else None
+                set(actual_filtered)
+                if all(isinstance(a, str) for a in actual_filtered)
+                else None
             )
 
             if expected_set is not None and actual_set is not None:
@@ -3594,17 +3602,17 @@ def compare_configs(
                     differences.append(
                         {
                             "field": full_key,
-                            "expected": expected,
-                            "actual": actual,
+                            "expected": expected_filtered,
+                            "actual": actual_filtered,
                             "type": "mismatch",
                         }
                     )
-            elif expected != actual:
+            elif expected_filtered != actual_filtered:
                 differences.append(
                     {
                         "field": full_key,
-                        "expected": expected,
-                        "actual": actual,
+                        "expected": expected_filtered,
+                        "actual": actual_filtered,
                         "type": "mismatch",
                     }
                 )

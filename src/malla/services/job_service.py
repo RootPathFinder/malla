@@ -1338,11 +1338,12 @@ class JobService:
         config_data = job_data.get("config_data")
         verify_after = job_data.get("verify_after", True)
         reboot_after = job_data.get("reboot_after", False)
+        max_retries = job_data.get("max_retries", 3)  # Default to 3 retries
 
         logger.info(
             f"Compliance fix job starting: template_id={template_id}, "
             f"template_type={template_type}, node_count={len(node_ids)}, "
-            f"reboot_after={reboot_after}"
+            f"reboot_after={reboot_after}, max_retries={max_retries}"
         )
         logger.info(f"Compliance fix config_data: {config_data}")
 
@@ -1377,58 +1378,137 @@ class JobService:
                 "error": f"Unsupported config type for remediation: {template_type}",
             }
 
+        # Helper function to verify if a node is compliant
+        def verify_node_compliant(node_id: int, node_hex: str) -> tuple[bool, list]:
+            """Verify if a node is now compliant with the template."""
+            from ..routes.admin_routes import compare_configs
+
+            try:
+                fetch_result = admin_service.get_config(
+                    node_id,
+                    config_enum,
+                    max_retries=2,
+                    retry_delay=1.0,
+                    timeout=15,
+                )
+                if fetch_result.success and fetch_result.response:
+                    differences = compare_configs(
+                        config_data,
+                        fetch_result.response,
+                        config_type=template_type,
+                    )
+                    return len(differences) == 0, differences
+                return False, [
+                    {"error": fetch_result.error or "Failed to fetch config"}
+                ]
+            except Exception as e:
+                return False, [{"error": str(e)}]
+
         progress.update(5, f"Fixing {total_nodes} non-compliant node(s)...", "fixing")
 
         for idx, node_id in enumerate(node_ids):
             node_hex = f"!{node_id:08x}"
             node_pct = int(5 + (idx / total_nodes) * 70)
+            node_success = False
+            last_error = None
+            attempts_made = 0
 
-            progress.update(
-                node_pct,
-                f"Applying {template_type} config to {node_hex} ({idx + 1}/{total_nodes})",
-                "fixing",
-                current=idx + 1,
-                total=total_nodes,
-            )
+            # Try up to max_retries times for each node
+            for attempt in range(max_retries):
+                attempts_made = attempt + 1
 
-            try:
-                result = admin_service.set_config(
-                    target_node_id=node_id,
-                    config_type=config_enum,
-                    config_data=config_data,
+                progress.update(
+                    node_pct,
+                    f"Applying {template_type} config to {node_hex} ({idx + 1}/{total_nodes})"
+                    + (
+                        f" [attempt {attempts_made}/{max_retries}]"
+                        if attempt > 0
+                        else ""
+                    ),
+                    "fixing",
+                    current=idx + 1,
+                    total=total_nodes,
                 )
 
-                if result.success:
-                    fixed_count += 1
-                    results.append(
-                        {"node_id": node_id, "node_hex": node_hex, "success": True}
+                try:
+                    result = admin_service.set_config(
+                        target_node_id=node_id,
+                        config_type=config_enum,
+                        config_data=config_data,
                     )
-                    logger.info(f"Compliance fix applied to {node_hex}")
-                else:
-                    failed_count += 1
-                    results.append(
-                        {
-                            "node_id": node_id,
-                            "node_hex": node_hex,
-                            "success": False,
-                            "error": result.error,
-                        }
-                    )
-                    logger.error(f"Failed to fix {node_hex}: {result.error}")
 
-            except Exception as e:
+                    if not result.success:
+                        last_error = result.error
+                        logger.warning(
+                            f"set_config failed for {node_hex} attempt {attempts_made}: {result.error}"
+                        )
+                        # Wait before retry with exponential backoff
+                        if attempt < max_retries - 1:
+                            delay = 2**attempt  # 1s, 2s, 4s
+                            time.sleep(delay)
+                        continue
+
+                    # set_config succeeded, now wait and verify
+                    # Wait for config to be applied (mesh network latency)
+                    time.sleep(3)
+
+                    # Verify the config was actually applied
+                    is_compliant, differences = verify_node_compliant(node_id, node_hex)
+
+                    if is_compliant:
+                        node_success = True
+                        logger.info(
+                            f"Compliance fix verified for {node_hex} on attempt {attempts_made}"
+                        )
+                        break
+                    else:
+                        last_error = (
+                            f"Config sent but not applied. Differences: {differences}"
+                        )
+                        logger.warning(
+                            f"{node_hex} still non-compliant after attempt {attempts_made}: {differences}"
+                        )
+                        # Wait before retry with exponential backoff
+                        if attempt < max_retries - 1:
+                            delay = 3 + (2**attempt)  # 4s, 5s, 7s
+                            logger.info(f"Waiting {delay}s before retry...")
+                            time.sleep(delay)
+
+                except Exception as e:
+                    last_error = str(e)
+                    logger.error(
+                        f"Error fixing {node_hex} attempt {attempts_made}: {e}"
+                    )
+                    if attempt < max_retries - 1:
+                        time.sleep(2**attempt)
+
+            if node_success:
+                fixed_count += 1
+                results.append(
+                    {
+                        "node_id": node_id,
+                        "node_hex": node_hex,
+                        "success": True,
+                        "attempts": attempts_made,
+                    }
+                )
+            else:
                 failed_count += 1
                 results.append(
                     {
                         "node_id": node_id,
                         "node_hex": node_hex,
                         "success": False,
-                        "error": str(e),
+                        "error": last_error or "Unknown error",
+                        "attempts": attempts_made,
                     }
                 )
-                logger.error(f"Error fixing {node_hex}: {e}")
+                logger.error(
+                    f"Failed to fix {node_hex} after {attempts_made} attempts: {last_error}"
+                )
 
-        # Verify compliance after fixing if requested
+        # Since we already verified during retry loop, we just need to record results
+        # But still do a final verification pass to update compliance_checks table
         verification_results = []
         if verify_after and fixed_count > 0:
             progress.update(80, "Verifying compliance after fix...", "verifying")
