@@ -2,6 +2,7 @@
 Unit tests for the WSGI application factory.
 """
 
+import tempfile
 from unittest.mock import MagicMock, patch
 
 from src.malla.wsgi import create_wsgi_app, get_application
@@ -44,13 +45,15 @@ class TestWSGIApplication:
     @patch("src.malla.web_ui.get_config")
     def test_create_wsgi_app_uses_config(self, mock_get_config):
         """Test that create_wsgi_app uses the configuration properly."""
-        # Mock the config
+        # Create a real temp file so database initialization works
+        with tempfile.NamedTemporaryFile(delete=False, suffix=".db") as temp_db:
+            temp_db_path = temp_db.name
+
+        # Mock the config with a valid temp database path
         mock_config = MagicMock()
-        mock_config.database_file = "/test/path/test.db"
+        mock_config.database_file = temp_db_path
         mock_config.secret_key = "test-secret"
         mock_config.host = "127.0.0.1"
-        mock_config.port = 5008
-        mock_config.debug = False
         mock_config.port = 5008
         mock_config.debug = False
         mock_config.name = "Test Malla"
@@ -62,5 +65,5 @@ class TestWSGIApplication:
         # Verify config was called
         mock_get_config.assert_called_once()
 
-        # Verify the app was configured
-        assert app.config["DATABASE_FILE"] == "/test/path/test.db"
+        # Verify the app was configured with the temp database path
+        assert app.config["DATABASE_FILE"] == temp_db_path
