@@ -2997,11 +2997,20 @@ def api_get_compliance_results(template_id):
                 except (json_module.JSONDecodeError, TypeError):
                     pass
 
+        # Parse template config for diff display
+        template_config = template.get("config_data")
+        if isinstance(template_config, str):
+            try:
+                template_config = json_module.loads(template_config)
+            except json_module.JSONDecodeError:
+                template_config = {}
+
         return jsonify(
             {
                 "template_id": template_id,
                 "template_name": template["name"],
                 "template_type": template["template_type"],
+                "template_config": template_config,  # Include for diff display
                 "summary": summary,
                 "results": results,
             }
@@ -3041,7 +3050,9 @@ def api_run_compliance_check(template_id):
 
         data = request.get_json() or {}
         specific_node_ids = data.get("node_ids")
-        timeout = min(data.get("timeout", 15), 30)
+        timeout = min(data.get("timeout", 30), 60)  # Default 30s, max 60s
+        max_retries = min(data.get("max_retries", 3), 5)  # Default 3 retries
+        retry_delay = data.get("retry_delay", 2.0)  # 2 seconds between retries
 
         # Get nodes to check
         admin_service = get_admin_service()
@@ -3117,18 +3128,26 @@ def api_run_compliance_check(template_id):
             node_hex = f"!{node_id:08x}"
 
             try:
-                # Fetch current config from node
+                # Fetch current config from node with patience (retries)
                 if fetch_type == "channel":
                     # For channels, use get_channel method
                     result = admin_service.get_channel(
-                        node_id, 0, max_retries=1, timeout=timeout
+                        node_id,
+                        0,
+                        max_retries=max_retries,
+                        retry_delay=retry_delay,
+                        timeout=timeout,
                     )
                 else:
                     config_type_enum = config_type_enum_map.get(fetch_type)
                     if not config_type_enum:
                         continue
                     result = admin_service.get_config(
-                        node_id, config_type_enum, max_retries=1, timeout=timeout
+                        node_id,
+                        config_type_enum,
+                        max_retries=max_retries,
+                        retry_delay=retry_delay,
+                        timeout=timeout,
                     )
 
                 if not result.success or result.response is None:
@@ -3205,6 +3224,8 @@ def api_run_compliance_check(template_id):
             {
                 "template_id": template_id,
                 "template_name": template["name"],
+                "template_type": template["template_type"],
+                "template_config": template_config,  # Include for diff display
                 "nodes_checked": len(results),
                 "compliant_count": compliant_count,
                 "non_compliant_count": non_compliant_count,

@@ -5080,6 +5080,9 @@
     // Compliance Check Functions
     // ============================================================================
 
+    // Store template config for diff display
+    let currentComplianceTemplateConfig = null;
+
     async function runComplianceCheck() {
         if (!currentTemplateId) {
             showAlert('warning', 'Please select a template first');
@@ -5095,13 +5098,15 @@
         runBtn.innerHTML = '<span class="spinner-border spinner-border-sm"></span> Checking...';
         resultsDiv.style.display = 'block';
         progressDiv.style.display = 'block';
+        progressDiv.querySelector('small').textContent = 'Checking nodes (with retries, please wait)...';
         contentDiv.innerHTML = '';
 
         try {
+            // Increased timeout and retries for patience
             const response = await fetch(`/api/admin/templates/${currentTemplateId}/compliance-check`, {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ timeout: 15 }),
+                body: JSON.stringify({ timeout: 30, max_retries: 3 }),
             });
 
             const data = await response.json();
@@ -5111,6 +5116,9 @@
                 contentDiv.innerHTML = `<div class="alert alert-danger py-2"><i class="bi bi-x-circle"></i> ${escapeHtml(data.error)}</div>`;
                 return;
             }
+
+            // Store template config for diff display
+            currentComplianceTemplateConfig = data.template_config;
 
             displayComplianceResults(data);
 
@@ -5152,6 +5160,9 @@
                 updateComplianceSummaryBadge(null);
                 return;
             }
+
+            // Store template config for diff display
+            currentComplianceTemplateConfig = data.template_config;
 
             displayComplianceResults(data);
 
@@ -5195,58 +5206,106 @@
             </div>
         `;
 
-        // Results table
+        // Results list - accordion style for non-compliant nodes
         if (data.results && data.results.length > 0) {
-            html += `
-                <div class="table-responsive" style="max-height: 200px; overflow-y: auto;">
-                    <table class="table table-sm table-hover mb-0">
-                        <thead class="table-light sticky-top">
-                            <tr>
-                                <th>Node</th>
-                                <th>Status</th>
-                                <th>Details</th>
-                            </tr>
-                        </thead>
-                        <tbody>
-            `;
+            html += `<div class="compliance-results-list" style="max-height: 350px; overflow-y: auto;">`;
 
             for (const result of data.results) {
                 const nodeName = result.node_name || result.short_name || result.node_hex || `!${result.node_id.toString(16).padStart(8, '0')}`;
                 const nodeHex = result.node_hex || `!${result.node_id.toString(16).padStart(8, '0')}`;
-
-                let statusBadge, detailsHtml;
+                const resultId = `compliance-result-${result.node_id}`;
+                const diffs = result.differences || result.diff_data || [];
 
                 if (result.error || result.error_message) {
-                    statusBadge = '<span class="badge bg-warning"><i class="bi bi-exclamation-triangle"></i> Error</span>';
-                    detailsHtml = `<span class="text-muted small">${escapeHtml(result.error || result.error_message)}</span>`;
+                    // Error case
+                    html += `
+                        <div class="card mb-2">
+                            <div class="card-body py-2 px-3">
+                                <div class="d-flex justify-content-between align-items-center">
+                                    <div>
+                                        <span class="fw-semibold">${escapeHtml(nodeName)}</span>
+                                        <code class="text-muted small ms-2">${nodeHex}</code>
+                                    </div>
+                                    <span class="badge bg-warning"><i class="bi bi-exclamation-triangle"></i> Error</span>
+                                </div>
+                                <small class="text-muted">${escapeHtml(result.error || result.error_message)}</small>
+                            </div>
+                        </div>
+                    `;
                 } else if (result.is_compliant) {
-                    statusBadge = '<span class="badge bg-success"><i class="bi bi-check-circle"></i> Compliant</span>';
-                    detailsHtml = '<span class="text-success small">All settings match</span>';
+                    // Compliant case
+                    html += `
+                        <div class="card mb-2 border-success">
+                            <div class="card-body py-2 px-3">
+                                <div class="d-flex justify-content-between align-items-center">
+                                    <div>
+                                        <span class="fw-semibold">${escapeHtml(nodeName)}</span>
+                                        <code class="text-muted small ms-2">${nodeHex}</code>
+                                    </div>
+                                    <span class="badge bg-success"><i class="bi bi-check-circle"></i> Compliant</span>
+                                </div>
+                            </div>
+                        </div>
+                    `;
                 } else {
-                    statusBadge = '<span class="badge bg-danger"><i class="bi bi-x-circle"></i> Non-Compliant</span>';
-                    const diffs = result.differences || result.diff_data || [];
-                    if (diffs.length > 0) {
-                        const diffList = diffs.slice(0, 3).map(d => `<code>${escapeHtml(d.field)}</code>`).join(', ');
-                        const moreCount = diffs.length > 3 ? ` +${diffs.length - 3} more` : '';
-                        detailsHtml = `<span class="small">${diffList}${moreCount}</span>`;
-                    } else {
-                        detailsHtml = '<span class="text-muted small">Differences found</span>';
-                    }
-                }
+                    // Non-compliant with expandable diff view
+                    html += `
+                        <div class="card mb-2 border-danger">
+                            <div class="card-header py-2 px-3 bg-danger bg-opacity-10"
+                                 style="cursor: pointer;"
+                                 onclick="toggleComplianceDiff('${resultId}')">
+                                <div class="d-flex justify-content-between align-items-center">
+                                    <div>
+                                        <i class="bi bi-chevron-right me-1" id="${resultId}-chevron"></i>
+                                        <span class="fw-semibold">${escapeHtml(nodeName)}</span>
+                                        <code class="text-muted small ms-2">${nodeHex}</code>
+                                    </div>
+                                    <span class="badge bg-danger">
+                                        <i class="bi bi-x-circle"></i> ${diffs.length} difference${diffs.length !== 1 ? 's' : ''}
+                                    </span>
+                                </div>
+                            </div>
+                            <div class="collapse" id="${resultId}">
+                                <div class="card-body py-2 px-3">
+                                    <table class="table table-sm table-bordered mb-0" style="font-size: 0.8rem;">
+                                        <thead class="table-light">
+                                            <tr>
+                                                <th style="width: 30%;">Field</th>
+                                                <th style="width: 35%;" class="text-success">Expected (Template)</th>
+                                                <th style="width: 35%;" class="text-danger">Actual (Node)</th>
+                                            </tr>
+                                        </thead>
+                                        <tbody>
+                    `;
 
-                html += `
-                    <tr>
-                        <td>
-                            <a href="/node/${result.node_id}" class="text-decoration-none">${escapeHtml(nodeName)}</a>
-                            <br><code class="text-muted small">${nodeHex}</code>
-                        </td>
-                        <td>${statusBadge}</td>
-                        <td>${detailsHtml}</td>
-                    </tr>
-                `;
+                    for (const diff of diffs) {
+                        const expectedVal = diff.expected !== null && diff.expected !== undefined
+                            ? (typeof diff.expected === 'object' ? JSON.stringify(diff.expected) : String(diff.expected))
+                            : '<em class="text-muted">not set</em>';
+                        const actualVal = diff.actual !== null && diff.actual !== undefined
+                            ? (typeof diff.actual === 'object' ? JSON.stringify(diff.actual) : String(diff.actual))
+                            : '<em class="text-muted">not set</em>';
+
+                        html += `
+                            <tr>
+                                <td><code>${escapeHtml(diff.field)}</code></td>
+                                <td class="bg-success bg-opacity-10"><code>${diff.expected !== null ? escapeHtml(expectedVal) : expectedVal}</code></td>
+                                <td class="bg-danger bg-opacity-10"><code>${diff.actual !== null ? escapeHtml(actualVal) : actualVal}</code></td>
+                            </tr>
+                        `;
+                    }
+
+                    html += `
+                                        </tbody>
+                                    </table>
+                                </div>
+                            </div>
+                        </div>
+                    `;
+                }
             }
 
-            html += '</tbody></table></div>';
+            html += `</div>`;
 
             // Last checked time
             if (summary.last_checked) {
@@ -5255,6 +5314,21 @@
         }
 
         contentDiv.innerHTML = html;
+    }
+
+    function toggleComplianceDiff(resultId) {
+        const collapseDiv = document.getElementById(resultId);
+        const chevron = document.getElementById(resultId + '-chevron');
+
+        if (collapseDiv.classList.contains('show')) {
+            collapseDiv.classList.remove('show');
+            chevron.classList.remove('bi-chevron-down');
+            chevron.classList.add('bi-chevron-right');
+        } else {
+            collapseDiv.classList.add('show');
+            chevron.classList.remove('bi-chevron-right');
+            chevron.classList.add('bi-chevron-down');
+        }
     }
 
     function updateComplianceSummaryBadge(summary) {
@@ -5288,6 +5362,9 @@
             return;
         }
 
+        const resultsDiv = document.getElementById('complianceResults');
+        const contentDiv = document.getElementById('complianceResultsContent');
+
         try {
             const response = await fetch(`/api/admin/templates/${currentTemplateId}/compliance`);
             const data = await response.json();
@@ -5297,7 +5374,17 @@
                 return;
             }
 
+            // Store template config for diff display
+            currentComplianceTemplateConfig = data.template_config;
+
+            // Update the summary badge
             updateComplianceSummaryBadge(data.summary);
+
+            // If there are results, display them automatically
+            if (data.results && data.results.length > 0) {
+                resultsDiv.style.display = 'block';
+                displayComplianceResults(data);
+            }
 
         } catch (error) {
             updateComplianceSummaryBadge(null);
