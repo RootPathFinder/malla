@@ -305,9 +305,56 @@ class TCPPublisher:
             True if reconnection successful
         """
         logger.info("Forcing TCP reconnection...")
-        self.disconnect()
-        time.sleep(0.5)  # Brief pause before reconnecting
-        return self.connect()
+
+        # Disconnect with timeout to avoid hanging on dead connections
+        self._disconnect_with_timeout(timeout=5.0)
+
+        time.sleep(1.0)  # Brief pause before reconnecting
+
+        success = self.connect()
+        if success:
+            logger.info("TCP reconnection successful")
+        else:
+            logger.error("TCP reconnection failed")
+        return success
+
+    def _disconnect_with_timeout(self, timeout: float = 5.0) -> None:
+        """
+        Disconnect with a timeout to avoid hanging on dead connections.
+
+        Args:
+            timeout: Maximum seconds to wait for graceful disconnect
+        """
+        import threading
+
+        disconnect_done = threading.Event()
+
+        def do_disconnect():
+            try:
+                self.disconnect()
+            except Exception as e:
+                logger.warning(f"Error during disconnect: {e}")
+            finally:
+                disconnect_done.set()
+
+        disconnect_thread = threading.Thread(target=do_disconnect, daemon=True)
+        disconnect_thread.start()
+
+        if not disconnect_done.wait(timeout=timeout):
+            logger.warning(f"Disconnect timed out after {timeout}s, forcing cleanup...")
+            # Force cleanup without waiting for close()
+            self._stop_keepalive()
+            try:
+                pub.unsubscribe(self._on_receive, "meshtastic.receive")
+            except Exception:
+                pass
+            try:
+                pub.unsubscribe(self._on_receive, "meshtastic.receive.admin")
+            except Exception:
+                pass
+            self._interface = None
+            self._connected = False
+            logger.info("Forced disconnect completed")
 
     @property
     def tcp_host(self) -> str:
@@ -402,6 +449,8 @@ class TCPPublisher:
 
     def disconnect(self) -> None:
         """Disconnect from the Meshtastic node."""
+        logger.info("Disconnecting from Meshtastic node...")
+
         # Stop keepalive thread first (outside of lock to avoid deadlock)
         self._stop_keepalive()
 
@@ -413,13 +462,22 @@ class TCPPublisher:
                         pub.unsubscribe(self._on_receive, "meshtastic.receive")
                     except Exception:
                         pass  # May not be subscribed
+                    try:
+                        pub.unsubscribe(self._on_receive, "meshtastic.receive.admin")
+                    except Exception:
+                        pass  # May not be subscribed
+
+                    logger.debug("Closing TCP interface...")
                     self._interface.close()
+                    logger.debug("TCP interface closed")
                 except Exception as e:
                     logger.warning(f"Error closing TCP connection: {e}")
                 finally:
                     self._interface = None
                     self._connected = False
                     logger.info("Disconnected from Meshtastic node")
+            else:
+                logger.debug("Already disconnected")
 
     def _on_receive(self, packet: dict[str, Any], interface: Any = None) -> None:
         """Handle received packets from pubsub."""
