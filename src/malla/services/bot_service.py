@@ -726,11 +726,12 @@ class BotService:
 
     def _cmd_help(self, ctx: CommandContext) -> str:
         """Handle !help command."""
-        lines = ["📖 Available Commands:"]
-        for name in sorted(self._commands.keys()):
-            desc = self._command_descriptions.get(name, "")
-            lines.append(f"  {self._command_prefix}{name} - {desc}")
-        return "\n".join(lines)
+        # Keep help message short to fit in Meshtastic payload (~230 bytes)
+        enabled_cmds = [
+            name for name in sorted(self._commands.keys()) if name not in self._disabled_commands
+        ]
+        cmd_list = " ".join(f"!{name}" for name in enabled_cmds)
+        return f"Cmds: {cmd_list}"
 
     def _cmd_nodes(self, ctx: CommandContext) -> str:
         """Handle !nodes command."""
