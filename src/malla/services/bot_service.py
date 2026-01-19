@@ -123,6 +123,10 @@ class BotService:
         self._activity_log_max_size = 100  # Keep last 100 entries
         self._activity_lock = threading.Lock()
 
+        # Pending traceroutes: maps dest_node_id -> (requester_id, requester_name, channel_index, timestamp)
+        self._pending_traceroutes: dict[int, tuple[int, str | None, int, float]] = {}
+        self._traceroute_timeout = 60.0  # Seconds to wait for traceroute response
+
         # Statistics
         self._stats = {
             "commands_received": 0,
@@ -180,6 +184,11 @@ class BotService:
         # Subscribe to meshtastic receive events
         try:
             pub.subscribe(self._on_message_received, "meshtastic.receive")
+            # Also subscribe to traceroute-specific topic if it exists
+            try:
+                pub.subscribe(self._on_traceroute_received, "meshtastic.receive.traceroute")
+            except Exception:
+                pass  # Topic may not exist in all meshtastic versions
             logger.info("Bot enabled - listening for commands")
         except Exception as e:
             logger.error(f"Failed to subscribe to meshtastic events: {e}")
@@ -195,6 +204,12 @@ class BotService:
         # Unsubscribe from events
         try:
             pub.unsubscribe(self._on_message_received, "meshtastic.receive")
+            try:
+                pub.unsubscribe(
+                    self._on_traceroute_received, "meshtastic.receive.traceroute"
+                )
+            except Exception:
+                pass
         except Exception:
             pass
 
@@ -374,7 +389,12 @@ class BotService:
             decoded = packet.get("decoded", {})
             portnum = decoded.get("portnum")
 
-            # Only process text messages
+            # Check if this is a traceroute response we're waiting for
+            if portnum == "TRACEROUTE_APP":
+                self._handle_traceroute_packet(packet)
+                return
+
+            # Only process text messages for commands
             if portnum != "TEXT_MESSAGE_APP":
                 return
 
@@ -522,6 +542,119 @@ class BotService:
         except Exception as e:
             self._stats["errors"] += 1
             logger.error(f"Error processing message for bot: {e}", exc_info=True)
+
+    def _on_traceroute_received(
+        self, packet: dict[str, Any], interface: Any = None
+    ) -> None:
+        """Handle incoming traceroute response packets (from dedicated pubsub topic)."""
+        if not self._enabled:
+            return
+        self._handle_traceroute_packet(packet)
+
+    def _handle_traceroute_packet(self, packet: dict[str, Any]) -> None:
+        """Process a traceroute packet and send results if we initiated it."""
+        try:
+            # Check if this is a traceroute we initiated
+            decoded = packet.get("decoded", {})
+            portnum = decoded.get("portnum")
+
+            if portnum != "TRACEROUTE_APP":
+                return
+
+            # Get the from/to nodes to check if this is our traceroute
+            from_id = packet.get("fromId") or packet.get("from")
+
+            if isinstance(from_id, str) and from_id.startswith("!"):
+                from_id = int(from_id[1:], 16)
+            elif not isinstance(from_id, int):
+                return
+
+            # Clean up expired pending traceroutes
+            current_time = time.time()
+            expired = [
+                k
+                for k, v in self._pending_traceroutes.items()
+                if current_time - v[3] > self._traceroute_timeout
+            ]
+            for k in expired:
+                del self._pending_traceroutes[k]
+
+            # Check if we're waiting for a traceroute from this node
+            if from_id not in self._pending_traceroutes:
+                return
+
+            requester_id, requester_name, channel_index, _ = (
+                self._pending_traceroutes.pop(from_id)
+            )
+
+            # Parse the traceroute data
+            route_discovery = decoded.get("routeDiscovery", {})
+            route = route_discovery.get("route", [])
+            route_back = route_discovery.get("routeBack", [])
+            snr_towards = route_discovery.get("snrTowards", [])
+            snr_back = route_discovery.get("snrBack", [])
+
+            # Format the response
+            response = self._format_traceroute_result(
+                route, route_back, snr_towards, snr_back
+            )
+
+            # Queue the response
+            self.queue_message(
+                text=response,
+                destination=0xFFFFFFFF,
+                channel_index=channel_index,
+                priority=BotMessagePriority.NORMAL,
+            )
+
+            self._log_activity(
+                "traceroute_result",
+                {
+                    "target": f"!{from_id:08x}",
+                    "hops": len(route),
+                    "has_return": len(route_back) > 0,
+                },
+            )
+            logger.info(f"Traceroute result sent for !{from_id:08x}")
+
+        except Exception as e:
+            logger.error(f"Error processing traceroute response: {e}", exc_info=True)
+
+    def _format_traceroute_result(
+        self,
+        route: list[int],
+        route_back: list[int],
+        snr_towards: list[float],
+        snr_back: list[float],
+    ) -> str:
+        """Format traceroute results for sending back to channel."""
+        # Build compact traceroute output that fits in ~230 bytes
+        lines = []
+
+        # Forward path
+        if route:
+            hops = len(route)
+            # Just show hop count and first/last node for brevity
+            if snr_towards:
+                avg_snr = sum(snr_towards) / len(snr_towards)
+                lines.append(f"→ {hops} hops, avg {avg_snr:.1f}dB")
+            else:
+                lines.append(f"→ {hops} hops")
+        else:
+            lines.append("→ direct")
+
+        # Return path
+        if route_back:
+            hops = len(route_back)
+            if snr_back:
+                avg_snr = sum(snr_back) / len(snr_back)
+                lines.append(f"← {hops} hops, avg {avg_snr:.1f}dB")
+            else:
+                lines.append(f"← {hops} hops")
+        else:
+            lines.append("← direct/none")
+
+        return "🔍 TR: " + " | ".join(lines)
 
     def _worker_loop(self) -> None:
         """Worker loop that sends queued messages."""
@@ -714,6 +847,14 @@ class BotService:
             if not publisher.is_connected or publisher._interface is None:
                 return "Not connected"
 
+            # Register this as a pending traceroute so we can send results
+            self._pending_traceroutes[ctx.sender_id] = (
+                ctx.sender_id,
+                ctx.sender_name,
+                ctx.channel_index,
+                time.time(),
+            )
+
             # Send traceroute to the requesting node
             publisher._interface.sendTraceRoute(
                 dest=ctx.sender_id,
@@ -724,7 +865,7 @@ class BotService:
             # Truncate name to fit payload
             if len(sender_name) > 20:
                 sender_name = sender_name[:17] + "..."
-            return f"🔍 Traceroute to {sender_name}"
+            return f"🔍 TR to {sender_name}..."
         except Exception as e:
             logger.error(f"Error in traceroute command: {e}")
             return "Traceroute failed"
