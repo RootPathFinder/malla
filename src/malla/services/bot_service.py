@@ -63,6 +63,7 @@ class CommandContext:
     channel_name: str
     received_at: float
     packet: dict[str, Any]
+    is_dm: bool = False  # True if this was a direct message to the bot
 
 
 # Type alias for command handlers
@@ -473,15 +474,24 @@ class BotService:
             channel_index = packet.get("channel", 0)
             channel_name = self._get_channel_name(channel_index)
 
+            # Check if this is a direct message to us
+            to_id = packet.get("to") or packet.get("toId")
+            if isinstance(to_id, str) and to_id.startswith("!"):
+                to_id = int(to_id[1:], 16)
+            elif not isinstance(to_id, int):
+                to_id = 0xFFFFFFFF  # Assume broadcast if unknown
+
+            # Get our local node ID to check if this is a DM to us
+            local_node_id = self._get_local_node_id()
+            is_dm = to_id != 0xFFFFFFFF and to_id == local_node_id
+
             # Check if we should respond on this channel
-            if channel_name and channel_name not in self._listen_channels:
-                # Also check if it's a direct message (to us specifically)
-                to_id = packet.get("to") or packet.get("toId")
-                if to_id == 0xFFFFFFFF:  # Broadcast
-                    logger.debug(
-                        f"Ignoring command on non-monitored channel: {channel_name}"
-                    )
-                    return
+            if not is_dm and channel_name and channel_name not in self._listen_channels:
+                # Not a DM and not on a monitored channel - ignore
+                logger.debug(
+                    f"Ignoring command on non-monitored channel: {channel_name}"
+                )
+                return
 
             # Build context
             context = CommandContext(
@@ -494,11 +504,13 @@ class BotService:
                 channel_name=channel_name or "Unknown",
                 received_at=time.time(),
                 packet=packet,
+                is_dm=is_dm,
             )
 
+            dm_indicator = " (DM)" if is_dm else ""
             logger.info(
                 f"Bot command received: {self._command_prefix}{command} "
-                f"from {context.sender_name or f'!{sender_id:08x}'}"
+                f"from {context.sender_name or f'!{sender_id:08x}'}{dm_indicator}"
             )
 
             # Log the command received
@@ -510,6 +522,7 @@ class BotService:
                     "sender_id": f"!{sender_id:08x}",
                     "sender_name": context.sender_name,
                     "channel": channel_name or f"ch{channel_index}",
+                    "is_dm": is_dm,
                 },
             )
 
@@ -529,9 +542,11 @@ class BotService:
                         if command == "ping"
                         else BotMessagePriority.NORMAL
                     )
+                    # For DMs, respond directly to sender; for channel msgs, broadcast
+                    destination = sender_id if context.is_dm else 0xFFFFFFFF
                     self.queue_message(
                         text=response,
-                        destination=0xFFFFFFFF,  # Broadcast response
+                        destination=destination,
                         channel_index=channel_index,  # Respond on same channel
                         priority=priority,
                         reply_to_node=sender_id,
@@ -813,6 +828,22 @@ class BotService:
             node = NodeRepository.get_node_details(node_id)
             if node:
                 return node.get("long_name") or node.get("short_name")
+        except Exception:
+            pass
+        return None
+
+    def _get_local_node_id(self) -> int | None:
+        """Get the local node ID (the bot's own node)."""
+        try:
+            from .tcp_publisher import get_tcp_publisher
+
+            publisher = get_tcp_publisher()
+            if not publisher.is_connected or publisher._interface is None:
+                return None
+
+            local_node = publisher._interface.localNode
+            if local_node and hasattr(local_node, "nodeNum"):
+                return local_node.nodeNum
         except Exception:
             pass
         return None
