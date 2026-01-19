@@ -1053,12 +1053,43 @@
                                             Check if your administrable nodes match this template's configuration.
                                             Useful for auditing security keys, LoRa settings, or any other config.
                                         </p>
-                                        <button class="btn btn-info btn-sm" onclick="runComplianceCheck()" id="runComplianceBtn">
-                                            <i class="bi bi-search"></i> Run Compliance Check
-                                        </button>
-                                        <button class="btn btn-outline-secondary btn-sm" onclick="loadComplianceResults()" id="loadComplianceBtn">
-                                            <i class="bi bi-arrow-repeat"></i> Load Last Results
-                                        </button>
+
+                                        <!-- Node Selection -->
+                                        <div class="mb-3">
+                                            <label class="form-label small fw-semibold">Nodes to Check</label>
+                                            <div class="d-flex gap-2 align-items-center mb-2">
+                                                <select id="complianceNodeFilter" class="form-select form-select-sm" style="width: auto;">
+                                                    <option value="all">All Admin Nodes</option>
+                                                    <option value="selected">Selected Nodes</option>
+                                                </select>
+                                                <button type="button" class="btn btn-outline-secondary btn-sm" onclick="refreshComplianceNodeList()" title="Refresh node list">
+                                                    <i class="bi bi-arrow-clockwise"></i>
+                                                </button>
+                                            </div>
+                                            <div id="complianceNodeSelector" style="display: none;">
+                                                <div class="border rounded p-2" style="max-height: 150px; overflow-y: auto; background: #fff;">
+                                                    <div id="complianceNodeList" class="d-flex flex-wrap gap-2">
+                                                        <span class="text-muted small">Loading nodes...</span>
+                                                    </div>
+                                                </div>
+                                                <div class="mt-1">
+                                                    <button type="button" class="btn btn-link btn-sm p-0" onclick="selectAllComplianceNodes(true)">Select All</button>
+                                                    <span class="text-muted mx-1">|</span>
+                                                    <button type="button" class="btn btn-link btn-sm p-0" onclick="selectAllComplianceNodes(false)">Clear All</button>
+                                                    <span class="text-muted ms-2 small" id="complianceSelectedCount"></span>
+                                                </div>
+                                            </div>
+                                        </div>
+
+                                        <div class="d-flex gap-2 flex-wrap">
+                                            <button class="btn btn-info btn-sm" onclick="runComplianceCheck()" id="runComplianceBtn">
+                                                <i class="bi bi-search"></i> Run Compliance Check
+                                            </button>
+                                            <button class="btn btn-outline-secondary btn-sm" onclick="loadComplianceResults()" id="loadComplianceBtn">
+                                                <i class="bi bi-arrow-repeat"></i> Load Last Results
+                                            </button>
+                                        </div>
+
                                         <div id="complianceResults" class="mt-3" style="display: none;">
                                             <div id="complianceProgress" class="mb-2" style="display: none;">
                                                 <div class="progress" style="height: 8px;">
@@ -1068,6 +1099,21 @@
                                                 <small class="text-muted" id="complianceProgressText">Initializing...</small>
                                             </div>
                                             <div id="complianceResultsContent"></div>
+
+                                            <!-- Fix Actions - shown when there are non-compliant nodes -->
+                                            <div id="complianceFixActions" class="mt-3 pt-3 border-top" style="display: none;">
+                                                <div class="d-flex justify-content-between align-items-center">
+                                                    <div>
+                                                        <strong class="text-danger"><i class="bi bi-exclamation-triangle"></i> <span id="nonCompliantCountLabel">0</span> non-compliant node(s)</strong>
+                                                        <p class="text-muted small mb-0">Apply the template configuration to make them compliant.</p>
+                                                    </div>
+                                                    <div class="d-flex gap-2">
+                                                        <button class="btn btn-warning btn-sm" onclick="runComplianceFix()" id="runComplianceFixBtn">
+                                                            <i class="bi bi-wrench"></i> Fix All Non-Compliant
+                                                        </button>
+                                                    </div>
+                                                </div>
+                                            </div>
                                         </div>
                                     </div>
                                 </div>
@@ -5360,10 +5406,93 @@
     // Store template config for diff display
     let currentComplianceTemplateConfig = null;
     let complianceEventSource = null;
+    let complianceAdminNodes = [];  // Cache of admin nodes for selection
+    let nonCompliantNodeIds = [];   // Track non-compliant nodes for fix action
+
+    // Initialize node filter dropdown behavior
+    document.getElementById('complianceNodeFilter')?.addEventListener('change', function() {
+        const selector = document.getElementById('complianceNodeSelector');
+        if (this.value === 'selected') {
+            selector.style.display = 'block';
+            refreshComplianceNodeList();
+        } else {
+            selector.style.display = 'none';
+        }
+    });
+
+    async function refreshComplianceNodeList() {
+        const nodeList = document.getElementById('complianceNodeList');
+        nodeList.innerHTML = '<span class="text-muted small"><i class="bi bi-arrow-clockwise spin"></i> Loading...</span>';
+
+        try {
+            const response = await fetch('/api/admin/nodes');
+            const data = await response.json();
+
+            complianceAdminNodes = data.nodes || [];
+
+            if (complianceAdminNodes.length === 0) {
+                nodeList.innerHTML = '<span class="text-muted small">No administrable nodes found</span>';
+                return;
+            }
+
+            let html = '';
+            for (const node of complianceAdminNodes) {
+                const nodeHex = node.node_hex || `!${node.node_id.toString(16).padStart(8, '0')}`;
+                const nodeName = node.long_name || node.short_name || nodeHex;
+                html += `
+                    <div class="form-check">
+                        <input class="form-check-input compliance-node-check" type="checkbox"
+                               value="${node.node_id}" id="complianceNode_${node.node_id}" checked>
+                        <label class="form-check-label small" for="complianceNode_${node.node_id}">
+                            ${escapeHtml(nodeName)} <code class="text-muted">${nodeHex}</code>
+                        </label>
+                    </div>
+                `;
+            }
+            nodeList.innerHTML = html;
+            updateComplianceSelectedCount();
+
+            // Add change handlers
+            document.querySelectorAll('.compliance-node-check').forEach(cb => {
+                cb.addEventListener('change', updateComplianceSelectedCount);
+            });
+
+        } catch (error) {
+            nodeList.innerHTML = `<span class="text-danger small">Error: ${error.message}</span>`;
+        }
+    }
+
+    function selectAllComplianceNodes(select) {
+        document.querySelectorAll('.compliance-node-check').forEach(cb => {
+            cb.checked = select;
+        });
+        updateComplianceSelectedCount();
+    }
+
+    function updateComplianceSelectedCount() {
+        const checked = document.querySelectorAll('.compliance-node-check:checked').length;
+        const total = document.querySelectorAll('.compliance-node-check').length;
+        document.getElementById('complianceSelectedCount').textContent = `${checked}/${total} selected`;
+    }
+
+    function getSelectedComplianceNodeIds() {
+        const filter = document.getElementById('complianceNodeFilter').value;
+        if (filter === 'all') {
+            return null;  // null means check all admin nodes
+        }
+        const checked = document.querySelectorAll('.compliance-node-check:checked');
+        return Array.from(checked).map(cb => parseInt(cb.value));
+    }
 
     async function runComplianceCheck() {
         if (!currentTemplateId) {
             showAlert('warning', 'Please select a template first');
+            return;
+        }
+
+        const selectedNodeIds = getSelectedComplianceNodeIds();
+        if (selectedNodeIds && selectedNodeIds.length === 0) {
+            showAlert('warning', 'Please select at least one node to check');
             return;
         }
 
@@ -5406,12 +5535,22 @@
             <div class="compliance-results-list" id="complianceResultsList" style="max-height: 350px; overflow-y: auto;"></div>
         `;
 
+        // Reset non-compliant tracking
+        nonCompliantNodeIds = [];
+        document.getElementById('complianceFixActions').style.display = 'none';
+
         try {
+            // Build request body with optional node_ids
+            const requestBody = { timeout: 30, max_retries: 3 };
+            if (selectedNodeIds) {
+                requestBody.node_ids = selectedNodeIds;
+            }
+
             // Use fetch with POST to start the SSE stream
             const response = await fetch(`/api/admin/templates/${currentTemplateId}/compliance-check`, {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ timeout: 30, max_retries: 3 }),
+                body: JSON.stringify(requestBody),
             });
 
             if (!response.ok) {
@@ -5476,6 +5615,11 @@
                 document.getElementById('complianceNonCompliantCount').textContent = event.non_compliant_count;
                 document.getElementById('complianceErrorCount').textContent = event.error_count;
 
+                // Track non-compliant nodes for fix action
+                if (!event.result.is_compliant && !event.result.error) {
+                    nonCompliantNodeIds.push(event.result.node_id);
+                }
+
                 // Update progress
                 const resultPercent = Math.round(event.current / event.total * 100);
                 progressBar.style.width = `${resultPercent}%`;
@@ -5503,6 +5647,12 @@
                 timestampDiv.className = 'text-muted small mt-2';
                 timestampDiv.textContent = `Last checked: ${timestamp}`;
                 resultsList.parentNode.appendChild(timestampDiv);
+
+                // Show fix actions if there are non-compliant nodes
+                if (nonCompliantNodeIds.length > 0) {
+                    document.getElementById('nonCompliantCountLabel').textContent = nonCompliantNodeIds.length;
+                    document.getElementById('complianceFixActions').style.display = 'block';
+                }
                 break;
         }
     }
@@ -5804,6 +5954,64 @@
             collapseDiv.classList.add('show');
             chevron.classList.remove('bi-chevron-right');
             chevron.classList.add('bi-chevron-down');
+        }
+    }
+
+    async function runComplianceFix() {
+        if (!currentTemplateId || nonCompliantNodeIds.length === 0) {
+            showAlert('warning', 'No non-compliant nodes to fix');
+            return;
+        }
+
+        // Confirm action
+        const nodeCount = nonCompliantNodeIds.length;
+        if (!confirm(`Are you sure you want to apply the template configuration to ${nodeCount} non-compliant node(s)?\n\nThis will modify the node settings to match the template.`)) {
+            return;
+        }
+
+        const fixBtn = document.getElementById('runComplianceFixBtn');
+        fixBtn.disabled = true;
+        fixBtn.innerHTML = '<span class="spinner-border spinner-border-sm"></span> Starting fix...';
+
+        try {
+            const response = await fetch(`/api/admin/templates/${currentTemplateId}/compliance-fix`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                    node_ids: nonCompliantNodeIds,
+                    verify_after: true,
+                }),
+            });
+
+            const data = await response.json();
+
+            if (!response.ok) {
+                throw new Error(data.error || 'Failed to start compliance fix');
+            }
+
+            if (data.success && data.job_id) {
+                showAlert('success', `Compliance fix job started for ${data.node_count} node(s). Check the Jobs tab for progress.`);
+
+                // Hide fix actions since job is running
+                document.getElementById('complianceFixActions').style.display = 'none';
+
+                // Switch to Jobs tab to show progress
+                const jobsTab = document.querySelector('[data-bs-target="#jobs-pane"]');
+                if (jobsTab) {
+                    jobsTab.click();
+                }
+
+                // Refresh job list
+                refreshJobsList();
+            } else {
+                throw new Error(data.error || 'Unknown error');
+            }
+
+        } catch (error) {
+            showAlert('danger', `Error: ${error.message}`);
+        } finally {
+            fixBtn.disabled = false;
+            fixBtn.innerHTML = '<i class="bi bi-wrench"></i> Fix All Non-Compliant';
         }
     }
 

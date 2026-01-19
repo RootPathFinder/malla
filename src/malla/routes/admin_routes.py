@@ -3346,6 +3346,119 @@ def api_run_compliance_check(template_id):
     )
 
 
+@admin_bp.route(
+    "/api/admin/templates/<int:template_id>/compliance-fix", methods=["POST"]
+)
+def api_run_compliance_fix(template_id):
+    """
+    Queue a background job to fix non-compliant nodes by applying the template config.
+
+    Request body:
+        node_ids: List of node IDs to fix (required)
+        verify_after: Whether to verify compliance after fixing (default: True)
+
+    Returns:
+        Job ID for tracking progress
+    """
+    import json as json_module
+
+    from ..database.job_repository import JobType
+    from ..services.job_service import get_job_service
+
+    template = AdminRepository.get_template(template_id)
+    if not template:
+        return jsonify({"error": "Template not found"}), 404
+
+    data = request.get_json()
+    if not data or not data.get("node_ids"):
+        return jsonify({"error": "node_ids is required"}), 400
+
+    node_ids = data.get("node_ids", [])
+    verify_after = data.get("verify_after", True)
+
+    # Validate node_ids are administrable
+    valid_node_ids = []
+    for node_id in node_ids:
+        if isinstance(node_id, str):
+            # Handle hex format
+            if node_id.startswith("!"):
+                node_id = int(node_id[1:], 16)
+            else:
+                try:
+                    node_id = int(node_id)
+                except ValueError:
+                    continue
+        if AdminRepository.is_node_administrable(node_id):
+            valid_node_ids.append(node_id)
+
+    if not valid_node_ids:
+        return jsonify({"error": "No valid administrable nodes provided"}), 400
+
+    # Parse template config
+    template_config = template["config_data"]
+    if isinstance(template_config, str):
+        template_config = json_module.loads(template_config)
+
+    template_type = template["template_type"]
+
+    # Unwrap template_config if it's wrapped in the type key
+    if (
+        isinstance(template_config, dict)
+        and len(template_config) == 1
+        and template_type in template_config
+    ):
+        template_config = template_config[template_type]
+
+    # Check connection
+    admin_service = get_admin_service()
+    connection_type = admin_service.connection_type.value
+    if connection_type not in ("tcp", "serial"):
+        return jsonify(
+            {
+                "error": "Compliance fix requires TCP or Serial connection. "
+                "MQTT cannot send configurations."
+            }
+        ), 400
+
+    tcp_publisher = get_tcp_publisher()
+    if not tcp_publisher.is_connected:
+        return jsonify(
+            {
+                "error": "TCP not connected. Connect via Admin page first.",
+            }
+        ), 400
+
+    # Queue the job
+    try:
+        job_service = get_job_service()
+        job_id = job_service.queue_job(
+            job_type=JobType.COMPLIANCE_FIX,
+            job_name=f"Fix compliance: {template['name']} ({len(valid_node_ids)} nodes)",
+            job_data={
+                "template_id": template_id,
+                "template_name": template["name"],
+                "template_type": template_type,
+                "config_data": template_config,
+                "node_ids": valid_node_ids,
+                "verify_after": verify_after,
+            },
+            target_node_id=None,  # Multiple nodes
+        )
+
+        return jsonify(
+            {
+                "success": True,
+                "job_id": job_id,
+                "message": f"Queued compliance fix for {len(valid_node_ids)} node(s)",
+                "node_count": len(valid_node_ids),
+            }
+        )
+
+    except Exception as e:
+        logger.error(f"Error queuing compliance fix job: {e}")
+        return jsonify({"error": str(e)}), 500
+
+
 def compare_configs(
     template_config: dict, node_config: dict, config_type: str | None = None
 ) -> list[dict]:

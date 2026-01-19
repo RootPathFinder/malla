@@ -160,6 +160,7 @@ class JobService:
             JobType.RESTORE: self._execute_restore_job,
             JobType.BULK_COMMAND: self._execute_bulk_command_job,
             JobType.CONFIG_DEPLOY: self._execute_config_deploy_job,
+            JobType.COMPLIANCE_FIX: self._execute_compliance_fix_job,
         }
 
     def start(self) -> None:
@@ -1320,6 +1321,212 @@ class JobService:
 
         except Exception as e:
             return {"success": False, "error": str(e)}
+
+    def _execute_compliance_fix_job(
+        self, job: dict[str, Any], progress: JobProgressCallback
+    ) -> dict[str, Any]:
+        """Execute a compliance fix job - apply template config to non-compliant nodes."""
+        import json as json_module
+
+        from ..database.admin_repository import AdminRepository
+        from .admin_service import ConfigType, get_admin_service
+
+        job_data = job["job_data"]
+        template_id = job_data.get("template_id")
+        node_ids = job_data.get("node_ids", [])
+        template_type = job_data.get("template_type")
+        config_data = job_data.get("config_data")
+        verify_after = job_data.get("verify_after", True)
+
+        if not template_id or not node_ids or not template_type or not config_data:
+            return {
+                "success": False,
+                "error": "Missing required fields: template_id, node_ids, template_type, config_data",
+            }
+
+        admin_service = get_admin_service()
+        total_nodes = len(node_ids)
+        fixed_count = 0
+        failed_count = 0
+        results = []
+
+        # Map template types to ConfigType enum
+        config_type_map = {
+            "device": ConfigType.DEVICE,
+            "lora": ConfigType.LORA,
+            "position": ConfigType.POSITION,
+            "power": ConfigType.POWER,
+            "network": ConfigType.NETWORK,
+            "display": ConfigType.DISPLAY,
+            "bluetooth": ConfigType.BLUETOOTH,
+            "security": ConfigType.SECURITY,
+        }
+
+        config_enum = config_type_map.get(template_type)
+        if not config_enum:
+            return {
+                "success": False,
+                "error": f"Unsupported config type for remediation: {template_type}",
+            }
+
+        progress.update(5, f"Fixing {total_nodes} non-compliant node(s)...", "fixing")
+
+        for idx, node_id in enumerate(node_ids):
+            node_hex = f"!{node_id:08x}"
+            node_pct = int(5 + (idx / total_nodes) * 70)
+
+            progress.update(
+                node_pct,
+                f"Applying {template_type} config to {node_hex} ({idx + 1}/{total_nodes})",
+                "fixing",
+                current=idx + 1,
+                total=total_nodes,
+            )
+
+            try:
+                result = admin_service.set_config(
+                    target_node_id=node_id,
+                    config_type=config_enum,
+                    config_data=config_data,
+                )
+
+                if result.success:
+                    fixed_count += 1
+                    results.append(
+                        {"node_id": node_id, "node_hex": node_hex, "success": True}
+                    )
+                    logger.info(f"Compliance fix applied to {node_hex}")
+                else:
+                    failed_count += 1
+                    results.append(
+                        {
+                            "node_id": node_id,
+                            "node_hex": node_hex,
+                            "success": False,
+                            "error": result.error,
+                        }
+                    )
+                    logger.error(f"Failed to fix {node_hex}: {result.error}")
+
+            except Exception as e:
+                failed_count += 1
+                results.append(
+                    {
+                        "node_id": node_id,
+                        "node_hex": node_hex,
+                        "success": False,
+                        "error": str(e),
+                    }
+                )
+                logger.error(f"Error fixing {node_hex}: {e}")
+
+        # Verify compliance after fixing if requested
+        verification_results = []
+        if verify_after and fixed_count > 0:
+            progress.update(80, "Verifying compliance after fix...", "verifying")
+
+            for idx, result in enumerate(results):
+                if not result["success"]:
+                    continue
+
+                node_id = result["node_id"]
+                node_hex = result["node_hex"]
+                verify_pct = int(80 + (idx / len(results)) * 15)
+
+                progress.update(
+                    verify_pct,
+                    f"Verifying {node_hex}...",
+                    "verifying",
+                    current=idx + 1,
+                    total=fixed_count,
+                )
+
+                try:
+                    # Fetch current config
+                    fetch_result = admin_service.get_config(
+                        node_id,
+                        config_enum,
+                        max_retries=2,
+                        retry_delay=1.0,
+                        timeout=15,
+                    )
+
+                    if fetch_result.success and fetch_result.response:
+                        # Compare with template
+                        from ..routes.admin_routes import compare_configs
+
+                        differences = compare_configs(
+                            config_data,
+                            fetch_result.response,
+                            config_type=template_type,
+                        )
+                        is_compliant = len(differences) == 0
+
+                        # Save compliance check result
+                        AdminRepository.save_compliance_check(
+                            template_id=template_id,
+                            node_id=node_id,
+                            is_compliant=is_compliant,
+                            diff_data=(
+                                json_module.dumps(differences) if differences else None
+                            ),
+                        )
+
+                        verification_results.append(
+                            {
+                                "node_id": node_id,
+                                "node_hex": node_hex,
+                                "is_compliant": is_compliant,
+                                "differences": differences
+                                if not is_compliant
+                                else None,
+                            }
+                        )
+                    else:
+                        verification_results.append(
+                            {
+                                "node_id": node_id,
+                                "node_hex": node_hex,
+                                "error": fetch_result.error or "Failed to verify",
+                            }
+                        )
+
+                except Exception as e:
+                    verification_results.append(
+                        {
+                            "node_id": node_id,
+                            "node_hex": node_hex,
+                            "error": str(e),
+                        }
+                    )
+
+        now_compliant = sum(
+            1 for v in verification_results if v.get("is_compliant", False)
+        )
+        still_non_compliant = sum(
+            1
+            for v in verification_results
+            if not v.get("is_compliant", True) and "error" not in v
+        )
+
+        progress.update(
+            100,
+            f"✓ Fixed {fixed_count}/{total_nodes}, {now_compliant} now compliant",
+            "complete",
+        )
+
+        return {
+            "success": failed_count == 0 or fixed_count > 0,
+            "data": {
+                "fixed_count": fixed_count,
+                "failed_count": failed_count,
+                "total_nodes": total_nodes,
+                "fix_results": results,
+                "verification_results": verification_results,
+                "now_compliant": now_compliant,
+                "still_non_compliant": still_non_compliant,
+            },
+        }
 
 
 # Singleton accessor

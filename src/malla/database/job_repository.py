@@ -33,14 +33,36 @@ class JobType(str, Enum):
     RESTORE = "restore"
     BULK_COMMAND = "bulk_command"
     CONFIG_DEPLOY = "config_deploy"
+    COMPLIANCE_FIX = "compliance_fix"
 
 
 # Job types that conflict with each other (same node)
 CONFLICTING_JOB_TYPES = {
-    JobType.BACKUP: [JobType.BACKUP, JobType.RESTORE, JobType.CONFIG_DEPLOY],
-    JobType.RESTORE: [JobType.BACKUP, JobType.RESTORE, JobType.CONFIG_DEPLOY],
-    JobType.CONFIG_DEPLOY: [JobType.BACKUP, JobType.RESTORE, JobType.CONFIG_DEPLOY],
+    JobType.BACKUP: [
+        JobType.BACKUP,
+        JobType.RESTORE,
+        JobType.CONFIG_DEPLOY,
+        JobType.COMPLIANCE_FIX,
+    ],
+    JobType.RESTORE: [
+        JobType.BACKUP,
+        JobType.RESTORE,
+        JobType.CONFIG_DEPLOY,
+        JobType.COMPLIANCE_FIX,
+    ],
+    JobType.CONFIG_DEPLOY: [
+        JobType.BACKUP,
+        JobType.RESTORE,
+        JobType.CONFIG_DEPLOY,
+        JobType.COMPLIANCE_FIX,
+    ],
     JobType.BULK_COMMAND: [JobType.BULK_COMMAND],
+    JobType.COMPLIANCE_FIX: [
+        JobType.BACKUP,
+        JobType.RESTORE,
+        JobType.CONFIG_DEPLOY,
+        JobType.COMPLIANCE_FIX,
+    ],
 }
 
 
