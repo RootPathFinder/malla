@@ -81,10 +81,12 @@ debug: false
 # admin_connection_type: "mqtt"
 
 # TCP connection settings (when admin_connection_type = "tcp")
+# Environment variables: MALLA_ADMIN_TCP_HOST, MALLA_ADMIN_TCP_PORT
 # admin_tcp_host: "192.168.1.1"
 # admin_tcp_port: 4403
 
 # Auto-connect on startup
+# Environment variables: MALLA_ADMIN_AUTO_CONNECT, MALLA_BOT_AUTO_START
 # admin_auto_connect: false  # Auto-connect TCP on Malla startup
 # bot_auto_start: false       # Auto-start the mesh bot on Malla startup
 
