@@ -1318,12 +1318,11 @@ class BotService:
             )
             online_nodes = cursor.fetchone()["cnt"]
 
-            # Nodes with position data
+            # Nodes with position data (from POSITION_APP packets)
             cursor.execute(
                 """
-                SELECT COUNT(*) as cnt FROM node_info
-                WHERE latitude IS NOT NULL AND longitude IS NOT NULL
-                AND COALESCE(archived, 0) = 0
+                SELECT COUNT(DISTINCT from_node_id) as cnt FROM packet_history
+                WHERE portnum = 3 AND raw_payload IS NOT NULL
                 """
             )
             with_position = cursor.fetchone()["cnt"]
@@ -1483,7 +1482,7 @@ class BotService:
             # Get node info
             cursor.execute(
                 """SELECT long_name, short_name, hw_model, role, primary_channel,
-                   first_seen, last_updated, latitude, longitude
+                   first_seen, last_updated
                    FROM node_info WHERE node_id = ?""",
                 (node_id,),
             )
@@ -1509,8 +1508,6 @@ class BotService:
                 lines.append(f"HW: {node['hw_model']}")
             if node["role"]:
                 lines.append(f"Role: {node['role']}")
-            if node["latitude"] and node["longitude"]:
-                lines.append(f"Pos: {node['latitude']:.4f},{node['longitude']:.4f}")
             if telem and telem["uptime_seconds"]:
                 hours = telem["uptime_seconds"] // 3600
                 lines.append(f"Node up: {hours}h")
@@ -1687,17 +1684,19 @@ class BotService:
             cursor = conn.cursor()
             one_day_ago = time.time() - 86400
 
-            # Get nodes with battery < 20%
+            # Get nodes with battery < 20% using most recent telemetry only
             cursor.execute(
                 """SELECT t.node_id, n.short_name, n.long_name,
                    t.battery_level, t.voltage
                    FROM telemetry_data t
                    JOIN node_info n ON t.node_id = n.node_id
-                   WHERE t.timestamp > ?
-                   AND t.battery_level IS NOT NULL AND t.battery_level < 20
-                   AND t.battery_level > 0
-                   GROUP BY t.node_id
-                   HAVING t.timestamp = MAX(t.timestamp)
+                   JOIN (
+                       SELECT node_id, MAX(timestamp) as max_ts
+                       FROM telemetry_data
+                       WHERE timestamp > ? AND battery_level IS NOT NULL
+                       GROUP BY node_id
+                   ) latest ON t.node_id = latest.node_id AND t.timestamp = latest.max_ts
+                   WHERE t.battery_level < 20 AND t.battery_level > 0
                    ORDER BY t.battery_level ASC LIMIT 5""",
                 (one_day_ago,),
             )
@@ -1810,58 +1809,80 @@ class BotService:
 
             import math
 
+            from meshtastic.protobuf import mesh_pb2
+
             from ..database.connection import get_db_connection
 
             target = ctx.args[0].lower().replace("!", "")
             conn = get_db_connection()
             cursor = conn.cursor()
 
-            # Get requester position
-            cursor.execute(
-                "SELECT latitude, longitude FROM node_info WHERE node_id = ?",
-                (ctx.sender_id,),
-            )
-            src = cursor.fetchone()
+            # Helper to get latest position from POSITION_APP packets
+            def get_position(node_id: int) -> tuple[float | None, float | None]:
+                cursor.execute(
+                    """SELECT raw_payload FROM packet_history
+                       WHERE from_node_id = ? AND portnum = 3 AND raw_payload IS NOT NULL
+                       ORDER BY timestamp DESC LIMIT 1""",
+                    (node_id,),
+                )
+                row = cursor.fetchone()
+                if not row:
+                    return None, None
+                try:
+                    pos = mesh_pb2.Position()
+                    pos.ParseFromString(row["raw_payload"])
+                    lat = pos.latitude_i / 1e7 if pos.latitude_i else None
+                    lon = pos.longitude_i / 1e7 if pos.longitude_i else None
+                    return lat, lon
+                except Exception:
+                    return None, None
 
-            if not src or not src["latitude"]:
+            # Get requester position
+            src_lat, src_lon = get_position(ctx.sender_id)
+            if not src_lat or not src_lon:
                 conn.close()
                 return "📍 Your position unknown"
 
             # Find target node
+            target_id = None
+            target_name = None
             if target.isalnum() and len(target) == 8:
-                # Hex node ID
                 try:
                     target_id = int(target, 16)
                     cursor.execute(
-                        "SELECT node_id, latitude, longitude, short_name FROM node_info WHERE node_id = ?",
+                        "SELECT short_name FROM node_info WHERE node_id = ?",
                         (target_id,),
                     )
+                    row = cursor.fetchone()
+                    target_name = row["short_name"] if row else None
                 except ValueError:
-                    cursor.execute(
-                        """SELECT node_id, latitude, longitude, short_name FROM node_info
-                           WHERE LOWER(short_name) LIKE ? OR LOWER(long_name) LIKE ?
-                           LIMIT 1""",
-                        (f"%{target}%", f"%{target}%"),
-                    )
-            else:
+                    pass
+
+            if target_id is None:
                 cursor.execute(
-                    """SELECT node_id, latitude, longitude, short_name FROM node_info
+                    """SELECT node_id, short_name FROM node_info
                        WHERE LOWER(short_name) LIKE ? OR LOWER(long_name) LIKE ?
                        LIMIT 1""",
                     (f"%{target}%", f"%{target}%"),
                 )
+                row = cursor.fetchone()
+                if row:
+                    target_id = row["node_id"]
+                    target_name = row["short_name"]
 
-            dst = cursor.fetchone()
+            if not target_id:
+                conn.close()
+                return f"📍 Node '{target}' not found"
+
+            dst_lat, dst_lon = get_position(target_id)
             conn.close()
 
-            if not dst:
-                return f"📍 Node '{target}' not found"
-            if not dst["latitude"]:
-                return f"📍 {dst['short_name'] or target} has no position"
+            if not dst_lat or not dst_lon:
+                return f"📍 {target_name or target} has no position"
 
             # Haversine formula
-            lat1, lon1 = math.radians(src["latitude"]), math.radians(src["longitude"])
-            lat2, lon2 = math.radians(dst["latitude"]), math.radians(dst["longitude"])
+            lat1, lon1 = math.radians(src_lat), math.radians(src_lon)
+            lat2, lon2 = math.radians(dst_lat), math.radians(dst_lon)
             dlat, dlon = lat2 - lat1, lon2 - lon1
             a = (
                 math.sin(dlat / 2) ** 2
@@ -1870,7 +1891,7 @@ class BotService:
             c = 2 * math.asin(math.sqrt(a))
             km = 6371 * c
 
-            name = dst["short_name"] or f"!{dst['node_id']:08x}"
+            name = target_name or f"!{target_id:08x}"
             if km < 1:
                 return f"📍 {name}: {km * 1000:.0f}m"
             else:
