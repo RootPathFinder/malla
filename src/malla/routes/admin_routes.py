@@ -1572,10 +1572,10 @@ def api_restore_backup_stream():
 
                     # Extract channel data
                     channel_data = channels.get(item_name, {})
-                    # Handle nested structure
+                    # Handle nested structure - check for various formats
                     if "channel" in channel_data:
+                        # Old format: {"channel": {"role": 1, "settings": {...}}}
                         channel_info = channel_data["channel"]
-                        # Build the channel data for set_channel
                         set_channel_data = {
                             "role": channel_info.get("role", 0),
                             "name": channel_info.get("settings", {}).get("name", ""),
@@ -1584,7 +1584,19 @@ def api_restore_backup_stream():
                             .get("module_settings", {})
                             .get("position_precision", 0),
                         }
+                    elif "settings" in channel_data:
+                        # Current format: {"role": 1, "settings": {"name": ..., "psk": ...}}
+                        settings = channel_data.get("settings", {})
+                        set_channel_data = {
+                            "role": channel_data.get("role", 0),
+                            "name": settings.get("name", ""),
+                            "psk": settings.get("psk", ""),
+                            "position_precision": settings.get(
+                                "module_settings", {}
+                            ).get("position_precision", 0),
+                        }
                     else:
+                        # Flat format: {"role": 1, "name": ..., "psk": ...}
                         set_channel_data = channel_data
 
                     result = admin_service.set_channel(

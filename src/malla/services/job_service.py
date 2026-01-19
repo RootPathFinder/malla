@@ -1083,7 +1083,25 @@ class JobService:
                     total_items,
                 )
 
-                channel_data = channels.get(item_name, {})
+                raw_channel_data = channels.get(item_name, {})
+                # Flatten channel data structure for set_channel
+                # Backup stores: {"index": 0, "role": 1, "settings": {"name": "...", "psk": "..."}}
+                # set_channel expects: {"role": 1, "name": "...", "psk": "..."}
+                channel_data = {}
+                if "role" in raw_channel_data:
+                    channel_data["role"] = raw_channel_data["role"]
+                settings = raw_channel_data.get("settings", {})
+                if "name" in settings:
+                    channel_data["name"] = settings["name"]
+                if "psk" in settings:
+                    channel_data["psk"] = settings["psk"]
+                if "module_settings" in settings:
+                    module_settings = settings["module_settings"]
+                    if "position_precision" in module_settings:
+                        channel_data["position_precision"] = module_settings[
+                            "position_precision"
+                        ]
+
                 result = admin_service.set_channel(
                     target_node_id=target_node_id,
                     channel_index=channel_idx,
