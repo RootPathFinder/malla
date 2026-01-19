@@ -40,9 +40,11 @@ def api_bot_status():
                     {
                         "name": name,
                         "description": bot._command_descriptions.get(name, ""),
+                        "enabled": bot.is_command_enabled(name),
                     }
                     for name in bot._commands.keys()
                 ],
+                "stats": bot.get_stats(),
             }
         )
 
@@ -317,4 +319,126 @@ def api_bot_clear_queue():
 
     except Exception as e:
         logger.error(f"Error clearing queue: {e}")
+        return jsonify({"error": str(e)}), 500
+
+
+# ============================================================================
+# API Routes - Activity Log and Stats
+# ============================================================================
+
+
+@bot_bp.route("/api/bot/activity")
+def api_bot_activity():
+    """Get bot activity log."""
+    try:
+        bot = get_bot_service()
+
+        limit = request.args.get("limit", 50, type=int)
+        since = request.args.get("since", None, type=float)
+
+        activity = bot.get_activity_log(limit=limit, since=since)
+
+        return jsonify(
+            {
+                "activity": activity,
+                "count": len(activity),
+            }
+        )
+
+    except Exception as e:
+        logger.error(f"Error getting bot activity: {e}")
+        return jsonify({"error": str(e)}), 500
+
+
+@bot_bp.route("/api/bot/stats")
+def api_bot_stats():
+    """Get bot statistics."""
+    try:
+        bot = get_bot_service()
+
+        return jsonify(bot.get_stats())
+
+    except Exception as e:
+        logger.error(f"Error getting bot stats: {e}")
+        return jsonify({"error": str(e)}), 500
+
+
+# ============================================================================
+# API Routes - Command Toggle
+# ============================================================================
+
+
+@bot_bp.route("/api/bot/command/<command_name>/enable", methods=["POST"])
+def api_bot_enable_command(command_name: str):
+    """Enable a specific bot command."""
+    try:
+        bot = get_bot_service()
+
+        if bot.enable_command(command_name):
+            return jsonify(
+                {
+                    "message": f"Command '{command_name}' enabled",
+                    "success": True,
+                    "command": command_name,
+                    "enabled": True,
+                }
+            )
+        else:
+            return jsonify({"error": f"Command '{command_name}' not found"}), 404
+
+    except Exception as e:
+        logger.error(f"Error enabling command: {e}")
+        return jsonify({"error": str(e)}), 500
+
+
+@bot_bp.route("/api/bot/command/<command_name>/disable", methods=["POST"])
+def api_bot_disable_command(command_name: str):
+    """Disable a specific bot command."""
+    try:
+        bot = get_bot_service()
+
+        if bot.disable_command(command_name):
+            return jsonify(
+                {
+                    "message": f"Command '{command_name}' disabled",
+                    "success": True,
+                    "command": command_name,
+                    "enabled": False,
+                }
+            )
+        else:
+            return jsonify({"error": f"Command '{command_name}' not found"}), 404
+
+    except Exception as e:
+        logger.error(f"Error disabling command: {e}")
+        return jsonify({"error": str(e)}), 500
+
+
+@bot_bp.route("/api/bot/command/<command_name>/toggle", methods=["POST"])
+def api_bot_toggle_command(command_name: str):
+    """Toggle a specific bot command on/off."""
+    try:
+        bot = get_bot_service()
+
+        if command_name.lower() not in bot._commands:
+            return jsonify({"error": f"Command '{command_name}' not found"}), 404
+
+        if bot.is_command_enabled(command_name):
+            bot.disable_command(command_name)
+            enabled = False
+        else:
+            bot.enable_command(command_name)
+            enabled = True
+
+        return jsonify(
+            {
+                "message": f"Command '{command_name}' {'enabled' if enabled else 'disabled'}",
+                "success": True,
+                "command": command_name,
+                "enabled": enabled,
+            }
+        )
+
+    except Exception as e:
+        logger.error(f"Error toggling command: {e}")
         return jsonify({"error": str(e)}), 500

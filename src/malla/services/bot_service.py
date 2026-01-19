@@ -115,7 +115,24 @@ class BotService:
         # Command handlers
         self._commands: dict[str, CommandHandler] = {}
         self._command_descriptions: dict[str, str] = {}  # Store descriptions separately
+        self._disabled_commands: set[str] = set()  # Commands that are disabled
         self._command_prefix = "!"
+
+        # Activity log (circular buffer)
+        self._activity_log: list[dict[str, Any]] = []
+        self._activity_log_max_size = 100  # Keep last 100 entries
+        self._activity_lock = threading.Lock()
+
+        # Statistics
+        self._stats = {
+            "commands_received": 0,
+            "commands_processed": 0,
+            "commands_ignored": 0,
+            "messages_sent": 0,
+            "messages_failed": 0,
+            "errors": 0,
+        }
+        self._start_time: float | None = None
 
         # Configuration
         self._listen_channels: set[str] = {"LongFast"}  # Channel names to listen on
@@ -198,6 +215,9 @@ class BotService:
         # Also enable message listening
         self.enable()
 
+        self._log_activity(
+            "bot_started", {"listen_channels": list(self._listen_channels)}
+        )
         logger.info("Bot worker started")
 
     def stop(self) -> None:
@@ -213,6 +233,7 @@ class BotService:
             self._worker_thread = None
 
         self._running = False
+        self._log_activity("bot_stopped", {"stats": dict(self._stats)})
         logger.info("Bot worker stopped")
 
     def register_command(
@@ -234,11 +255,75 @@ class BotService:
         self._command_descriptions[cmd_name] = description
         logger.debug(f"Registered command: {self._command_prefix}{name}")
 
+    def is_command_enabled(self, name: str) -> bool:
+        """Check if a command is enabled."""
+        return name.lower() not in self._disabled_commands
+
+    def enable_command(self, name: str) -> bool:
+        """Enable a command. Returns True if command exists."""
+        cmd_name = name.lower()
+        if cmd_name in self._commands:
+            self._disabled_commands.discard(cmd_name)
+            self._log_activity("command_enabled", {"command": cmd_name})
+            return True
+        return False
+
+    def disable_command(self, name: str) -> bool:
+        """Disable a command. Returns True if command exists."""
+        cmd_name = name.lower()
+        if cmd_name in self._commands:
+            self._disabled_commands.add(cmd_name)
+            self._log_activity("command_disabled", {"command": cmd_name})
+            return True
+        return False
+
+    def _log_activity(
+        self,
+        event_type: str,
+        data: dict[str, Any] | None = None,
+        level: str = "info",
+    ) -> None:
+        """Log an activity event."""
+        entry = {
+            "timestamp": time.time(),
+            "type": event_type,
+            "level": level,
+            "data": data or {},
+        }
+        with self._activity_lock:
+            self._activity_log.append(entry)
+            # Trim to max size
+            if len(self._activity_log) > self._activity_log_max_size:
+                self._activity_log = self._activity_log[-self._activity_log_max_size :]
+
+    def get_activity_log(
+        self, limit: int = 50, since: float | None = None
+    ) -> list[dict[str, Any]]:
+        """Get recent activity log entries."""
+        with self._activity_lock:
+            if since is not None:
+                entries = [e for e in self._activity_log if e["timestamp"] > since]
+            else:
+                entries = list(self._activity_log)
+            return entries[-limit:]
+
+    def get_stats(self) -> dict[str, Any]:
+        """Get bot statistics."""
+        uptime = None
+        if self._start_time:
+            uptime = time.time() - self._start_time
+        return {
+            **self._stats,
+            "uptime": uptime,
+            "start_time": self._start_time,
+        }
+
     def unregister_command(self, name: str) -> None:
         """Unregister a command handler."""
         cmd_name = name.lower()
         self._commands.pop(cmd_name, None)
         self._command_descriptions.pop(cmd_name, None)
+        self._disabled_commands.discard(cmd_name)
 
     def queue_message(
         self,
@@ -310,6 +395,15 @@ class BotService:
             if not text.startswith(self._command_prefix):
                 return
 
+            # Get sender info early (needed for logging)
+            sender_id_raw = packet.get("from") or packet.get("fromId")
+            if isinstance(sender_id_raw, str) and sender_id_raw.startswith("!"):
+                sender_id = int(sender_id_raw[1:], 16)
+            elif isinstance(sender_id_raw, int):
+                sender_id = sender_id_raw
+            else:
+                sender_id = 0
+
             # Parse command and args
             parts = text[len(self._command_prefix) :].strip().split()
             if not parts:
@@ -321,16 +415,28 @@ class BotService:
             # Check if we have a handler for this command
             if command not in self._commands:
                 logger.debug(f"Unknown command: {command}")
+                self._stats["commands_ignored"] += 1
+                self._log_activity(
+                    "unknown_command",
+                    {"command": command, "sender": f"!{sender_id:08x}"},
+                    level="warning",
+                )
                 return
 
-            # Get sender info
-            sender_id_raw = packet.get("from") or packet.get("fromId")
-            if isinstance(sender_id_raw, str) and sender_id_raw.startswith("!"):
-                sender_id = int(sender_id_raw[1:], 16)
-            elif isinstance(sender_id_raw, int):
-                sender_id = sender_id_raw
-            else:
-                sender_id = 0
+            # Check if command is disabled
+            if command in self._disabled_commands:
+                logger.debug(f"Command disabled: {command}")
+                self._stats["commands_ignored"] += 1
+                self._log_activity(
+                    "command_disabled_ignored",
+                    {"command": command, "sender": f"!{sender_id:08x}"},
+                    level="info",
+                )
+                return
+
+            self._stats["commands_received"] += 1
+
+            # sender_id and sender_id_raw already extracted above
 
             # Get channel info
             channel_index = packet.get("channel", 0)
@@ -364,11 +470,24 @@ class BotService:
                 f"from {context.sender_name or f'!{sender_id:08x}'}"
             )
 
+            # Log the command received
+            self._log_activity(
+                "command_received",
+                {
+                    "command": command,
+                    "args": args,
+                    "sender_id": f"!{sender_id:08x}",
+                    "sender_name": context.sender_name,
+                    "channel": channel_name or f"ch{channel_index}",
+                },
+            )
+
             # Execute handler
             handler = self._commands[command]
             try:
                 response = handler(context)
                 if response:
+                    self._stats["commands_processed"] += 1
                     # Queue the response
                     priority = (
                         BotMessagePriority.HIGH
@@ -382,10 +501,26 @@ class BotService:
                         priority=priority,
                         reply_to_node=sender_id,
                     )
+                    # Log the response
+                    self._log_activity(
+                        "response_queued",
+                        {
+                            "command": command,
+                            "response_preview": response[:100],
+                            "priority": priority.name,
+                        },
+                    )
             except Exception as e:
+                self._stats["errors"] += 1
+                self._log_activity(
+                    "command_error",
+                    {"command": command, "error": str(e)},
+                    level="error",
+                )
                 logger.error(f"Error executing command {command}: {e}", exc_info=True)
 
         except Exception as e:
+            self._stats["errors"] += 1
             logger.error(f"Error processing message for bot: {e}", exc_info=True)
 
     def _worker_loop(self) -> None:
@@ -429,8 +564,25 @@ class BotService:
                 success = self._send_message(msg)
                 if success:
                     self._last_send_time = time.time()
+                    self._stats["messages_sent"] += 1
+                    self._log_activity(
+                        "message_sent",
+                        {
+                            "text_preview": msg.text[:80],
+                            "destination": f"!{msg.destination:08x}"
+                            if msg.destination != 0xFFFFFFFF
+                            else "broadcast",
+                            "channel_index": msg.channel_index,
+                        },
+                    )
                     logger.info(f"Bot sent: {msg.text[:50]}...")
                 else:
+                    self._stats["messages_failed"] += 1
+                    self._log_activity(
+                        "message_failed",
+                        {"text_preview": msg.text[:80], "reason": "send failed"},
+                        level="error",
+                    )
                     logger.error(f"Failed to send bot message: {msg.text[:50]}...")
 
             except Exception as e:
@@ -605,7 +757,7 @@ class BotService:
 
     def _cmd_uptime(self, ctx: CommandContext) -> str:
         """Handle !uptime command."""
-        if not hasattr(self, "_start_time"):
+        if self._start_time is None:
             return "Uptime unknown"
 
         uptime_seconds = time.time() - self._start_time

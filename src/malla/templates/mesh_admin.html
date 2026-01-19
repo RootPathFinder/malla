@@ -216,6 +216,59 @@
         max-height: 300px;
         overflow-y: auto;
     }
+    /* Bot activity log styles */
+    .bot-activity-log {
+        font-size: 0.8rem;
+    }
+    .bot-activity-entry {
+        padding: 0.5rem 0.75rem;
+        border-bottom: 1px solid var(--bs-border-color);
+        display: flex;
+        align-items: flex-start;
+        gap: 0.5rem;
+    }
+    .bot-activity-entry:last-child {
+        border-bottom: none;
+    }
+    .bot-activity-entry:hover {
+        background-color: var(--bs-tertiary-bg);
+    }
+    .bot-activity-time {
+        color: var(--bs-secondary-color);
+        font-family: monospace;
+        font-size: 0.7rem;
+        white-space: nowrap;
+        min-width: 70px;
+    }
+    .bot-activity-icon {
+        width: 1.2rem;
+        text-align: center;
+    }
+    .bot-activity-icon.event-command { color: #0d6efd; }
+    .bot-activity-icon.event-response { color: #198754; }
+    .bot-activity-icon.event-error { color: #dc3545; }
+    .bot-activity-icon.event-system { color: #6c757d; }
+    .bot-activity-content {
+        flex: 1;
+        min-width: 0;
+    }
+    .bot-activity-title {
+        font-weight: 500;
+    }
+    .bot-activity-detail {
+        color: var(--bs-secondary-color);
+        font-size: 0.75rem;
+        white-space: nowrap;
+        overflow: hidden;
+        text-overflow: ellipsis;
+    }
+    .bot-cmd-toggle {
+        cursor: pointer;
+    }
+    .bot-cmd-disabled {
+        opacity: 0.5;
+        text-decoration: line-through;
+    }
     /* Admin status banner styles */
     .admin-status-banner {
         border-radius: 0.5rem;
@@ -1277,7 +1330,7 @@
                 <div class="tab-pane fade" id="bot-pane" role="tabpanel">
                     <div class="row">
                         <!-- Bot Status Card -->
-                        <div class="col-lg-6 mb-4">
+                        <div class="col-lg-4 mb-4">
                             <div class="card">
                                 <div class="card-header">
                                     <i class="bi bi-activity"></i> Bot Status
@@ -1298,14 +1351,28 @@
                                         </div>
                                     </div>
                                     <hr>
-                                    <div class="row text-center">
-                                        <div class="col">
-                                            <div class="fs-4 fw-bold" id="botQueueSize">0</div>
-                                            <small class="text-muted">Queue Size</small>
+                                    <div class="row text-center mb-3">
+                                        <div class="col-4">
+                                            <div class="fs-5 fw-bold text-primary" id="botQueueSize">0</div>
+                                            <small class="text-muted">Queue</small>
                                         </div>
-                                        <div class="col">
-                                            <div class="fs-4 fw-bold" id="botCommandCount">0</div>
-                                            <small class="text-muted">Commands</small>
+                                        <div class="col-4">
+                                            <div class="fs-5 fw-bold text-success" id="botStatsSent">0</div>
+                                            <small class="text-muted">Sent</small>
+                                        </div>
+                                        <div class="col-4">
+                                            <div class="fs-5 fw-bold text-info" id="botStatsReceived">0</div>
+                                            <small class="text-muted">Cmds</small>
+                                        </div>
+                                    </div>
+                                    <div class="small text-muted">
+                                        <div class="d-flex justify-content-between">
+                                            <span>Uptime:</span>
+                                            <span id="botUptime">--</span>
+                                        </div>
+                                        <div class="d-flex justify-content-between">
+                                            <span>Errors:</span>
+                                            <span id="botStatsErrors" class="text-danger">0</span>
                                         </div>
                                     </div>
                                 </div>
@@ -1313,70 +1380,91 @@
                         </div>
 
                         <!-- Bot Configuration Card -->
-                        <div class="col-lg-6 mb-4">
+                        <div class="col-lg-4 mb-4">
                             <div class="card">
                                 <div class="card-header">
                                     <i class="bi bi-gear"></i> Configuration
                                 </div>
                                 <div class="card-body">
-                                    <div class="mb-3">
-                                        <label class="form-label"><strong>Command Prefix</strong></label>
-                                        <div class="input-group">
-                                            <span class="input-group-text"><code>!</code></span>
-                                            <input type="text" class="form-control" value="!" disabled
-                                                   title="Command prefix is fixed to '!'">
-                                        </div>
-                                        <div class="form-text">Commands always start with <code>!</code> (e.g., !ping, !traceroute)</div>
-                                    </div>
-                                    <div class="mb-3">
-                                        <label class="form-label"><strong>Listen Channels</strong></label>
-                                        <input type="text" class="form-control" id="botListenChannels"
+                                    <div class="mb-2">
+                                        <label class="form-label small mb-1"><strong>Listen Channels</strong></label>
+                                        <input type="text" class="form-control form-control-sm" id="botListenChannels"
                                                placeholder="e.g., LongFast">
-                                        <div class="form-text">Comma-separated channel names to listen for commands</div>
                                     </div>
-                                    <div class="mb-3">
-                                        <label class="form-label"><strong>Response Channel Index</strong></label>
-                                        <input type="number" class="form-control" id="botRespondChannelIndex"
+                                    <div class="mb-2">
+                                        <label class="form-label small mb-1"><strong>Response Channel</strong></label>
+                                        <input type="number" class="form-control form-control-sm" id="botRespondChannelIndex"
                                                min="0" max="7" value="1">
-                                        <div class="form-text">Channel index to send responses on (0-7)</div>
                                     </div>
-                                    <div class="mb-3">
+                                    <div class="mb-2">
                                         <div class="form-check form-switch">
                                             <input class="form-check-input" type="checkbox" id="botWaitForJobs" checked>
-                                            <label class="form-check-label" for="botWaitForJobs">
-                                                Wait for admin jobs to complete before responding
+                                            <label class="form-check-label small" for="botWaitForJobs">
+                                                Wait for admin jobs
                                             </label>
                                         </div>
                                     </div>
-                                    <button class="btn btn-primary" onclick="saveBotConfig()">
-                                        <i class="bi bi-save"></i> Save Configuration
+                                    <button class="btn btn-primary btn-sm w-100" onclick="saveBotConfig()">
+                                        <i class="bi bi-save"></i> Save Config
+                                    </button>
+                                </div>
+                            </div>
+                        </div>
+
+                        <!-- Quick Actions Card -->
+                        <div class="col-lg-4 mb-4">
+                            <div class="card">
+                                <div class="card-header">
+                                    <i class="bi bi-lightning"></i> Quick Actions
+                                </div>
+                                <div class="card-body">
+                                    <div class="d-grid gap-2 mb-3">
+                                        <button class="btn btn-outline-success btn-sm" onclick="sendQuickMessage('🏓 Pong!')">
+                                            <i class="bi bi-broadcast"></i> Send Pong
+                                        </button>
+                                        <button class="btn btn-outline-info btn-sm" onclick="broadcastStatus()">
+                                            <i class="bi bi-bar-chart"></i> Broadcast Status
+                                        </button>
+                                    </div>
+                                    <div class="mb-2">
+                                        <div class="input-group input-group-sm">
+                                            <input type="text" class="form-control" id="botQuickMessageText" placeholder="Custom message...">
+                                            <button class="btn btn-primary" onclick="sendCustomQuickMessage()">
+                                                <i class="bi bi-send"></i>
+                                            </button>
+                                        </div>
+                                    </div>
+                                    <button class="btn btn-outline-danger btn-sm w-100" onclick="clearBotQueue()">
+                                        <i class="bi bi-trash"></i> Clear Queue
                                     </button>
                                 </div>
                             </div>
                         </div>
                     </div>
 
-                    <!-- Available Commands -->
+                    <!-- Commands with Toggle -->
                     <div class="row">
-                        <div class="col-12 mb-4">
+                        <div class="col-lg-6 mb-4">
                             <div class="card">
-                                <div class="card-header">
-                                    <i class="bi bi-terminal"></i> Available Commands
+                                <div class="card-header d-flex justify-content-between align-items-center">
+                                    <span><i class="bi bi-terminal"></i> Commands</span>
+                                    <span class="badge bg-secondary" id="botCommandCount">0</span>
                                 </div>
-                                <div class="card-body">
-                                    <div class="table-responsive">
-                                        <table class="table table-hover">
-                                            <thead>
+                                <div class="card-body p-0">
+                                    <div class="table-responsive" style="max-height: 300px; overflow-y: auto;">
+                                        <table class="table table-hover table-sm mb-0">
+                                            <thead class="sticky-top bg-body">
                                                 <tr>
+                                                    <th style="width: 50px;">Status</th>
                                                     <th>Command</th>
                                                     <th>Description</th>
                                                 </tr>
                                             </thead>
                                             <tbody id="botCommandsTable">
                                                 <tr>
-                                                    <td colspan="2" class="text-center text-muted">
+                                                    <td colspan="3" class="text-center text-muted py-3">
                                                         <div class="spinner-border spinner-border-sm" role="status"></div>
-                                                        Loading commands...
+                                                        Loading...
                                                     </td>
                                                 </tr>
                                             </tbody>
@@ -1385,74 +1473,68 @@
                                 </div>
                             </div>
                         </div>
-                    </div>
 
-                    <!-- Manual Message Sending -->
-                    <div class="row">
+                        <!-- Activity Log -->
                         <div class="col-lg-6 mb-4">
                             <div class="card">
-                                <div class="card-header">
-                                    <i class="bi bi-send"></i> Send Manual Message
+                                <div class="card-header d-flex justify-content-between align-items-center">
+                                    <span><i class="bi bi-journal-text"></i> Activity Log</span>
+                                    <div>
+                                        <button class="btn btn-outline-secondary btn-sm" onclick="clearActivityLog()" title="Clear log">
+                                            <i class="bi bi-trash"></i>
+                                        </button>
+                                        <button class="btn btn-outline-primary btn-sm" onclick="refreshBotActivity()" title="Refresh">
+                                            <i class="bi bi-arrow-clockwise"></i>
+                                        </button>
+                                    </div>
                                 </div>
-                                <div class="card-body">
-                                    <div class="mb-3">
-                                        <label class="form-label">Message Text</label>
-                                        <textarea class="form-control" id="botMessageText" rows="2"
-                                                  placeholder="Enter message to send..."></textarea>
-                                    </div>
-                                    <div class="row mb-3">
-                                        <div class="col-md-6">
-                                            <label class="form-label">Destination</label>
-                                            <select class="form-select" id="botMessageDestination">
-                                                <option value="broadcast">Broadcast (all nodes)</option>
-                                            </select>
+                                <div class="card-body p-0">
+                                    <div id="botActivityLog" class="bot-activity-log" style="max-height: 300px; overflow-y: auto;">
+                                        <div class="text-center text-muted py-4">
+                                            <i class="bi bi-clock-history fs-2"></i>
+                                            <p class="mb-0 small">No activity yet</p>
                                         </div>
-                                        <div class="col-md-6">
-                                            <label class="form-label">Priority</label>
-                                            <select class="form-select" id="botMessagePriority">
-                                                <option value="normal">Normal</option>
-                                                <option value="high">High</option>
-                                                <option value="low">Low</option>
-                                            </select>
-                                        </div>
-                                    </div>
-                                    <div class="d-flex gap-2">
-                                        <button class="btn btn-primary" onclick="sendBotMessage()">
-                                            <i class="bi bi-send"></i> Queue Message
-                                        </button>
-                                        <button class="btn btn-outline-danger" onclick="clearBotQueue()">
-                                            <i class="bi bi-trash"></i> Clear Queue
-                                        </button>
                                     </div>
                                 </div>
                             </div>
                         </div>
+                    </div>
 
-                        <!-- Quick Actions -->
-                        <div class="col-lg-6 mb-4">
+                    <!-- Manual Message Sending (collapsed by default) -->
+                    <div class="row">
+                        <div class="col-12 mb-4">
                             <div class="card">
-                                <div class="card-header">
-                                    <i class="bi bi-lightning"></i> Quick Actions
+                                <div class="card-header" data-bs-toggle="collapse" data-bs-target="#manualMessagePanel"
+                                     style="cursor: pointer;" aria-expanded="false">
+                                    <i class="bi bi-send"></i> Manual Message
+                                    <i class="bi bi-chevron-down float-end"></i>
                                 </div>
-                                <div class="card-body">
-                                    <p class="text-muted mb-3">Send common bot responses to the mesh:</p>
-                                    <div class="d-flex flex-wrap gap-2">
-                                        <button class="btn btn-outline-success" onclick="sendQuickMessage('🏓 Pong!')">
-                                            <i class="bi bi-broadcast"></i> Send Pong
+                                <div class="collapse" id="manualMessagePanel">
+                                    <div class="card-body">
+                                        <div class="row">
+                                            <div class="col-md-6 mb-3">
+                                                <label class="form-label">Message Text</label>
+                                                <textarea class="form-control" id="botMessageText" rows="2"
+                                                          placeholder="Enter message to send..."></textarea>
+                                            </div>
+                                            <div class="col-md-3 mb-3">
+                                                <label class="form-label">Destination</label>
+                                                <select class="form-select" id="botMessageDestination">
+                                                    <option value="broadcast">Broadcast</option>
+                                                </select>
+                                            </div>
+                                            <div class="col-md-3 mb-3">
+                                                <label class="form-label">Priority</label>
+                                                <select class="form-select" id="botMessagePriority">
+                                                    <option value="normal">Normal</option>
+                                                    <option value="high">High</option>
+                                                    <option value="low">Low</option>
+                                                </select>
+                                            </div>
+                                        </div>
+                                        <button class="btn btn-primary" onclick="sendBotMessage()">
+                                            <i class="bi bi-send"></i> Queue Message
                                         </button>
-                                        <button class="btn btn-outline-info" onclick="broadcastStatus()">
-                                            <i class="bi bi-bar-chart"></i> Broadcast Status
-                                        </button>
-                                    </div>
-                                    <hr>
-                                    <p class="text-muted mb-3">The bot automatically responds to these commands when running:</p>
-                                    <div class="d-flex flex-wrap gap-2">
-                                        <span class="badge bg-primary"><code>!ping</code> → Pong response</span>
-                                        <span class="badge bg-primary"><code>!status</code> → Mesh status</span>
-                                        <span class="badge bg-primary"><code>!traceroute</code> → Route to sender</span>
-                                        <span class="badge bg-secondary"><code>!help</code> → Command list</span>
-                                        <span class="badge bg-secondary"><code>!nodes</code> → Node count</span>
-                                        <span class="badge bg-secondary"><code>!uptime</code> → Bot uptime</span>
                                     </div>
                                 </div>
                             </div>
@@ -7344,22 +7426,34 @@
     // ============================================================================
 
     let botStatusInterval = null;
+    let botActivityInterval = null;
+    let lastActivityTimestamp = null;
 
     // Initialize bot status when tab is shown
     document.getElementById('bot-tab')?.addEventListener('shown.bs.tab', function() {
         refreshBotStatus();
-        // Start polling for bot status
+        refreshBotActivity();
+        // Start polling for bot status and activity
         if (!botStatusInterval) {
-            botStatusInterval = setInterval(refreshBotStatus, 5000);
+            botStatusInterval = setInterval(refreshBotStatus, 3000);
+        }
+        if (!botActivityInterval) {
+            botActivityInterval = setInterval(refreshBotActivity, 2000);
         }
     });
 
     // Stop polling when leaving bot tab
     document.querySelectorAll('#adminTabs .nav-link').forEach(tab => {
         tab.addEventListener('shown.bs.tab', function(e) {
-            if (e.target.id !== 'bot-tab' && botStatusInterval) {
-                clearInterval(botStatusInterval);
-                botStatusInterval = null;
+            if (e.target.id !== 'bot-tab') {
+                if (botStatusInterval) {
+                    clearInterval(botStatusInterval);
+                    botStatusInterval = null;
+                }
+                if (botActivityInterval) {
+                    clearInterval(botActivityInterval);
+                    botActivityInterval = null;
+                }
             }
         });
     });
@@ -7401,12 +7495,42 @@
             document.getElementById('botQueueSize').textContent = data.queue_size || 0;
             document.getElementById('botCommandCount').textContent = data.commands?.length || 0;
 
-            // Update commands table
+            // Update detailed stats
+            if (data.stats) {
+                document.getElementById('botStatsSent').textContent = data.stats.messages_sent || 0;
+                document.getElementById('botStatsReceived').textContent = data.stats.commands_processed || 0;
+                document.getElementById('botStatsErrors').textContent = data.stats.errors || 0;
+
+                // Format uptime
+                if (data.stats.uptime) {
+                    const uptime = data.stats.uptime;
+                    const hours = Math.floor(uptime / 3600);
+                    const mins = Math.floor((uptime % 3600) / 60);
+                    const secs = Math.floor(uptime % 60);
+                    if (hours > 0) {
+                        document.getElementById('botUptime').textContent = `${hours}h ${mins}m`;
+                    } else if (mins > 0) {
+                        document.getElementById('botUptime').textContent = `${mins}m ${secs}s`;
+                    } else {
+                        document.getElementById('botUptime').textContent = `${secs}s`;
+                    }
+                } else {
+                    document.getElementById('botUptime').textContent = '--';
+                }
+            }
+
+            // Update commands table with toggle switches
             updateBotCommandsTable(data.commands || []);
 
-            // Update config fields
-            document.getElementById('botListenChannels').value = (data.listen_channels || []).join(', ');
-            document.getElementById('botRespondChannelIndex').value = data.respond_channel_index || 1;
+            // Update config fields (only if not focused)
+            const listenChannelsEl = document.getElementById('botListenChannels');
+            if (document.activeElement !== listenChannelsEl) {
+                listenChannelsEl.value = (data.listen_channels || []).join(', ');
+            }
+            const respondChannelEl = document.getElementById('botRespondChannelIndex');
+            if (document.activeElement !== respondChannelEl) {
+                respondChannelEl.value = data.respond_channel_index || 1;
+            }
             document.getElementById('botWaitForJobs').checked = data.wait_for_jobs !== false;
 
         } catch (error) {
@@ -7419,18 +7543,200 @@
         if (!commands || commands.length === 0) {
             tbody.innerHTML = `
                 <tr>
-                    <td colspan="2" class="text-center text-muted">No commands registered</td>
+                    <td colspan="3" class="text-center text-muted py-3">No commands registered</td>
                 </tr>
             `;
             return;
         }
 
-        tbody.innerHTML = commands.map(cmd => `
-            <tr>
-                <td><code>!${escapeHtml(cmd.name)}</code></td>
-                <td>${escapeHtml(cmd.description || 'No description')}</td>
-            </tr>
-        `).join('');
+        tbody.innerHTML = commands.map(cmd => {
+            const isEnabled = cmd.enabled !== false;
+            return `
+                <tr class="${isEnabled ? '' : 'bot-cmd-disabled'}">
+                    <td class="text-center">
+                        <div class="form-check form-switch mb-0">
+                            <input class="form-check-input bot-cmd-toggle" type="checkbox"
+                                   ${isEnabled ? 'checked' : ''}
+                                   onchange="toggleBotCommand('${escapeHtml(cmd.name)}', this.checked)"
+                                   title="${isEnabled ? 'Click to disable' : 'Click to enable'}">
+                        </div>
+                    </td>
+                    <td><code class="${isEnabled ? '' : 'text-muted'}">!${escapeHtml(cmd.name)}</code></td>
+                    <td class="small ${isEnabled ? '' : 'text-muted'}">${escapeHtml(cmd.description || '')}</td>
+                </tr>
+            `;
+        }).join('');
+    }
+
+    async function toggleBotCommand(commandName, enabled) {
+        try {
+            const endpoint = enabled ? 'enable' : 'disable';
+            const response = await fetch(`/api/bot/command/${encodeURIComponent(commandName)}/${endpoint}`, {
+                method: 'POST'
+            });
+            const data = await response.json();
+
+            if (!data.success) {
+                showAlert('danger', data.error || `Failed to ${endpoint} command`);
+                refreshBotStatus(); // Revert UI
+            }
+        } catch (error) {
+            showAlert('danger', `Error: ${error.message}`);
+            refreshBotStatus(); // Revert UI
+        }
+    }
+
+    async function refreshBotActivity() {
+        try {
+            let url = '/api/bot/activity?limit=50';
+            if (lastActivityTimestamp) {
+                url += `&since=${lastActivityTimestamp}`;
+            }
+
+            const response = await fetch(url);
+            const data = await response.json();
+
+            if (data.error) {
+                console.error('Bot activity error:', data.error);
+                return;
+            }
+
+            if (data.activity && data.activity.length > 0) {
+                // Update last timestamp
+                lastActivityTimestamp = Math.max(...data.activity.map(a => a.timestamp));
+
+                // If this is initial load or we have new entries
+                if (!lastActivityTimestamp || data.activity.length > 0) {
+                    renderBotActivity(data.activity, !lastActivityTimestamp);
+                }
+            }
+        } catch (error) {
+            console.error('Error fetching bot activity:', error);
+        }
+    }
+
+    function renderBotActivity(activities, replace = false) {
+        const container = document.getElementById('botActivityLog');
+
+        if (replace || container.querySelector('.text-center')) {
+            container.innerHTML = '';
+        }
+
+        if (activities.length === 0 && container.children.length === 0) {
+            container.innerHTML = `
+                <div class="text-center text-muted py-4">
+                    <i class="bi bi-clock-history fs-2"></i>
+                    <p class="mb-0 small">No activity yet</p>
+                </div>
+            `;
+            return;
+        }
+
+        // Sort by timestamp descending (newest first)
+        activities.sort((a, b) => b.timestamp - a.timestamp);
+
+        activities.forEach(entry => {
+            const div = document.createElement('div');
+            div.className = 'bot-activity-entry';
+
+            const time = new Date(entry.timestamp * 1000);
+            const timeStr = time.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' });
+
+            let icon, iconClass, title, detail;
+
+            switch (entry.type) {
+                case 'command_received':
+                    icon = 'bi-arrow-down-circle';
+                    iconClass = 'event-command';
+                    title = `!${entry.data.command}`;
+                    detail = `from ${entry.data.sender_name || entry.data.sender_id}`;
+                    break;
+                case 'response_queued':
+                    icon = 'bi-arrow-up-circle';
+                    iconClass = 'event-response';
+                    title = 'Response queued';
+                    detail = entry.data.response_preview || '';
+                    break;
+                case 'message_sent':
+                    icon = 'bi-check-circle';
+                    iconClass = 'event-response';
+                    title = 'Sent';
+                    detail = entry.data.text_preview || '';
+                    break;
+                case 'message_failed':
+                    icon = 'bi-x-circle';
+                    iconClass = 'event-error';
+                    title = 'Send failed';
+                    detail = entry.data.reason || '';
+                    break;
+                case 'command_error':
+                    icon = 'bi-exclamation-triangle';
+                    iconClass = 'event-error';
+                    title = `Error: !${entry.data.command}`;
+                    detail = entry.data.error || '';
+                    break;
+                case 'bot_started':
+                    icon = 'bi-play-circle';
+                    iconClass = 'event-system';
+                    title = 'Bot started';
+                    detail = '';
+                    break;
+                case 'bot_stopped':
+                    icon = 'bi-stop-circle';
+                    iconClass = 'event-system';
+                    title = 'Bot stopped';
+                    detail = '';
+                    break;
+                case 'command_enabled':
+                    icon = 'bi-toggle-on';
+                    iconClass = 'event-system';
+                    title = `Enabled: !${entry.data.command}`;
+                    detail = '';
+                    break;
+                case 'command_disabled':
+                    icon = 'bi-toggle-off';
+                    iconClass = 'event-system';
+                    title = `Disabled: !${entry.data.command}`;
+                    detail = '';
+                    break;
+                default:
+                    icon = 'bi-info-circle';
+                    iconClass = 'event-system';
+                    title = entry.type;
+                    detail = JSON.stringify(entry.data);
+            }
+
+            div.innerHTML = `
+                <span class="bot-activity-time">${timeStr}</span>
+                <i class="bi ${icon} bot-activity-icon ${iconClass}"></i>
+                <div class="bot-activity-content">
+                    <div class="bot-activity-title">${escapeHtml(title)}</div>
+                    ${detail ? `<div class="bot-activity-detail" title="${escapeHtml(detail)}">${escapeHtml(detail)}</div>` : ''}
+                </div>
+            `;
+
+            // Insert at beginning for newest-first order
+            if (container.firstChild) {
+                container.insertBefore(div, container.firstChild);
+            } else {
+                container.appendChild(div);
+            }
+        });
+
+        // Limit displayed entries
+        while (container.children.length > 50) {
+            container.removeChild(container.lastChild);
+        }
+    }
+
+    function clearActivityLog() {
+        lastActivityTimestamp = null;
+        document.getElementById('botActivityLog').innerHTML = `
+            <div class="text-center text-muted py-4">
+                <i class="bi bi-clock-history fs-2"></i>
+                <p class="mb-0 small">No activity yet</p>
+            </div>
+        `;
     }
 
     async function startBot() {
@@ -7445,6 +7751,7 @@
             if (data.success) {
                 showAlert('success', 'Bot started successfully');
                 refreshBotStatus();
+                refreshBotActivity();
             } else {
                 showAlert('danger', data.error || 'Failed to start bot');
             }
@@ -7468,6 +7775,7 @@
             if (data.success) {
                 showAlert('success', 'Bot stopped successfully');
                 refreshBotStatus();
+                refreshBotActivity();
             } else {
                 showAlert('danger', data.error || 'Failed to stop bot');
             }
@@ -7549,7 +7857,7 @@
             const data = await response.json();
 
             if (data.success) {
-                showAlert('success', `Message queued: "${text}"`);
+                showAlert('success', `Message queued: "${text.substring(0, 30)}..."`);
                 refreshBotStatus();
             } else {
                 showAlert('danger', data.error || 'Failed to queue message');
@@ -7559,15 +7867,23 @@
         }
     }
 
+    async function sendCustomQuickMessage() {
+        const text = document.getElementById('botQuickMessageText').value.trim();
+        if (!text) {
+            showAlert('warning', 'Please enter a message');
+            return;
+        }
+        await sendQuickMessage(text);
+        document.getElementById('botQuickMessageText').value = '';
+    }
+
     async function broadcastStatus() {
-        // The bot will generate a status message when we trigger this
         try {
-            // First get the status info
             const statusResponse = await fetch('/api/bot/status');
             const botStatus = await statusResponse.json();
 
-            // Create a status message
-            const statusText = `📊 Mesh Bot Status: ${botStatus.running ? 'Running' : 'Stopped'} | Queue: ${botStatus.queue_size || 0} | Commands: ${botStatus.commands?.length || 0}`;
+            const stats = botStatus.stats || {};
+            const statusText = `📊 Mesh Bot: ${botStatus.running ? '✅ Running' : '⏹️ Stopped'} | Sent: ${stats.messages_sent || 0} | Cmds: ${stats.commands_processed || 0}`;
 
             const response = await fetch('/api/bot/send', {
                 method: 'POST',
@@ -7588,7 +7904,7 @@
     }
 
     async function clearBotQueue() {
-        if (!confirm('Are you sure you want to clear all queued bot messages?')) {
+        if (!confirm('Clear all queued bot messages?')) {
             return;
         }
 
