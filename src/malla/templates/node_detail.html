@@ -335,12 +335,18 @@
             {% if can_send_commands %}
             <div class="card mb-4" id="live-telemetry-card">
                 <div class="card-header">
-                    <div class="d-flex justify-content-between align-items-center">
+                    <div class="d-flex justify-content-between align-items-center flex-wrap gap-2">
                         <div>
                             <h5 class="mb-1"><i class="bi bi-broadcast"></i> Live Telemetry</h5>
-                            <small class="text-muted">Real-time battery and device stats (polls every 5 seconds)</small>
+                            <small class="text-muted" id="live-telemetry-interval-info">Adaptive polling (5-30s based on response time)</small>
                         </div>
-                        <div class="d-flex align-items-center gap-2">
+                        <div class="d-flex align-items-center gap-2 flex-wrap">
+                            <!-- Duration selector -->
+                            <div class="btn-group btn-group-sm" role="group" id="live-duration-selector">
+                                <button type="button" class="btn btn-outline-secondary active" data-duration="60">1m</button>
+                                <button type="button" class="btn btn-outline-secondary" data-duration="300">5m</button>
+                                <button type="button" class="btn btn-outline-secondary" data-duration="600">10m</button>
+                            </div>
                             <span id="live-telemetry-timer" class="badge bg-secondary d-none">60s</span>
                             <button id="live-telemetry-btn" class="btn btn-sm btn-outline-primary" onclick="toggleLiveTelemetry()">
                                 <i class="bi bi-play-fill"></i> Start Live
@@ -349,6 +355,7 @@
                     </div>
                 </div>
                 <div class="card-body" id="live-telemetry-content">
+                    <!-- Current values row -->
                     <div class="row g-3">
                         <div class="col-md-3 col-6">
                             <div class="text-center p-3 bg-light rounded">
@@ -395,9 +402,45 @@
                             </div>
                         </div>
                     </div>
+
+                    <!-- Live Charts (hidden until polling starts) -->
+                    <div id="live-charts-container" class="mt-4" style="display: none;">
+                        <h6 class="mb-3"><i class="bi bi-graph-up"></i> Live Trends</h6>
+                        <div class="row g-3">
+                            <div class="col-md-6">
+                                <div class="card">
+                                    <div class="card-body p-2">
+                                        <div id="live-chart-battery" style="height: 150px;"></div>
+                                    </div>
+                                </div>
+                            </div>
+                            <div class="col-md-6">
+                                <div class="card">
+                                    <div class="card-body p-2">
+                                        <div id="live-chart-voltage" style="height: 150px;"></div>
+                                    </div>
+                                </div>
+                            </div>
+                            <div class="col-md-6">
+                                <div class="card">
+                                    <div class="card-body p-2">
+                                        <div id="live-chart-channel-util" style="height: 150px;"></div>
+                                    </div>
+                                </div>
+                            </div>
+                            <div class="col-md-6">
+                                <div class="card">
+                                    <div class="card-body p-2">
+                                        <div id="live-chart-air-util" style="height: 150px;"></div>
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+
                     <div class="mt-3">
                         <small class="text-muted" id="live-telemetry-status">
-                            <i class="bi bi-info-circle"></i> Click "Start Live" to begin polling. Auto-stops after 1 minute to reduce network load.
+                            <i class="bi bi-info-circle"></i> Select duration and click "Start Live" to begin polling.
                         </small>
                     </div>
                 </div>
@@ -2030,15 +2073,45 @@ function updateLiveTelemetryTemperature() {
 }
 
 // ==================== LIVE TELEMETRY POLLING ====================
-let liveTelemetryInterval = null;
 let liveTelemetryTimeout = null;
 let liveTelemetryStartTime = null;
 let liveTelemetryCountdownInterval = null;
-const LIVE_TELEMETRY_POLL_INTERVAL = 5000; // 5 seconds
-const LIVE_TELEMETRY_MAX_DURATION = 60000; // 1 minute
+let liveTelemetryPollTimeout = null;
+let liveTelemetryIsPolling = false;
+
+// Adaptive polling configuration
+let liveTelemetryPollInterval = 5000; // Start at 5 seconds
+const LIVE_TELEMETRY_MIN_INTERVAL = 5000; // 5 seconds minimum
+const LIVE_TELEMETRY_MAX_INTERVAL = 30000; // 30 seconds maximum
+let liveTelemetrySelectedDuration = 60000; // Default 1 minute
+let liveTelemetryLastResponseTime = 0;
+let liveTelemetryConsecutiveSlowResponses = 0;
+let liveTelemetryConsecutiveFastResponses = 0;
+
+// Live chart data storage
+let liveChartData = {
+    timestamps: [],
+    battery: [],
+    voltage: [],
+    channelUtil: [],
+    airUtil: []
+};
+
+// Initialize duration selector
+document.addEventListener('DOMContentLoaded', function() {
+    const durationBtns = document.querySelectorAll('#live-duration-selector button');
+    durationBtns.forEach(btn => {
+        btn.addEventListener('click', function() {
+            if (liveTelemetryIsPolling) return; // Don't change during polling
+            durationBtns.forEach(b => b.classList.remove('active'));
+            this.classList.add('active');
+            liveTelemetrySelectedDuration = parseInt(this.dataset.duration) * 1000;
+        });
+    });
+});
 
 function toggleLiveTelemetry() {
-    if (liveTelemetryInterval) {
+    if (liveTelemetryIsPolling) {
         stopLiveTelemetry();
     } else {
         startLiveTelemetry();
@@ -2049,41 +2122,66 @@ function startLiveTelemetry() {
     const btn = document.getElementById('live-telemetry-btn');
     const timer = document.getElementById('live-telemetry-timer');
     const status = document.getElementById('live-telemetry-status');
+    const chartsContainer = document.getElementById('live-charts-container');
+    const durationSelector = document.getElementById('live-duration-selector');
 
-    // Update button state
+    // Reset adaptive polling
+    liveTelemetryPollInterval = LIVE_TELEMETRY_MIN_INTERVAL;
+    liveTelemetryConsecutiveSlowResponses = 0;
+    liveTelemetryConsecutiveFastResponses = 0;
+
+    // Reset chart data
+    liveChartData = {
+        timestamps: [],
+        battery: [],
+        voltage: [],
+        channelUtil: [],
+        airUtil: []
+    };
+
+    // Update UI state
     btn.innerHTML = '<i class="bi bi-stop-fill"></i> Stop';
     btn.classList.remove('btn-outline-primary');
     btn.classList.add('btn-danger');
     timer.classList.remove('d-none');
+    chartsContainer.style.display = 'block';
+    durationSelector.querySelectorAll('button').forEach(b => b.disabled = true);
 
     liveTelemetryStartTime = Date.now();
+    liveTelemetryIsPolling = true;
     status.innerHTML = '<i class="bi bi-broadcast text-success"></i> Polling for live telemetry data...';
+
+    // Initialize empty charts
+    initializeLiveCharts();
 
     // Start polling immediately
     pollLiveTelemetry();
 
-    // Set up interval for subsequent polls
-    liveTelemetryInterval = setInterval(pollLiveTelemetry, LIVE_TELEMETRY_POLL_INTERVAL);
-
     // Set up countdown display
     liveTelemetryCountdownInterval = setInterval(updateLiveTelemetryCountdown, 1000);
 
-    // Auto-stop after 1 minute
+    // Auto-stop after selected duration
     liveTelemetryTimeout = setTimeout(() => {
         stopLiveTelemetry();
-        status.innerHTML = '<i class="bi bi-info-circle"></i> Polling stopped after 1 minute. Click "Start Live" to resume.';
-    }, LIVE_TELEMETRY_MAX_DURATION);
+        const durationText = liveTelemetrySelectedDuration >= 60000
+            ? Math.round(liveTelemetrySelectedDuration / 60000) + ' minute(s)'
+            : Math.round(liveTelemetrySelectedDuration / 1000) + ' seconds';
+        status.innerHTML = `<i class="bi bi-info-circle"></i> Polling stopped after ${durationText}. Click "Start Live" to resume.`;
+    }, liveTelemetrySelectedDuration);
 }
 
 function stopLiveTelemetry() {
     const btn = document.getElementById('live-telemetry-btn');
     const timer = document.getElementById('live-telemetry-timer');
     const status = document.getElementById('live-telemetry-status');
+    const durationSelector = document.getElementById('live-duration-selector');
 
-    // Clear intervals and timeout
-    if (liveTelemetryInterval) {
-        clearInterval(liveTelemetryInterval);
-        liveTelemetryInterval = null;
+    liveTelemetryIsPolling = false;
+
+    // Clear timeouts
+    if (liveTelemetryPollTimeout) {
+        clearTimeout(liveTelemetryPollTimeout);
+        liveTelemetryPollTimeout = null;
     }
     if (liveTelemetryTimeout) {
         clearTimeout(liveTelemetryTimeout);
@@ -2099,15 +2197,21 @@ function stopLiveTelemetry() {
     btn.classList.remove('btn-danger');
     btn.classList.add('btn-outline-primary');
     timer.classList.add('d-none');
+    durationSelector.querySelectorAll('button').forEach(b => b.disabled = false);
 
     status.innerHTML = '<i class="bi bi-info-circle"></i> Polling stopped. Click "Start Live" to resume.';
 }
 
 function updateLiveTelemetryCountdown() {
     const timer = document.getElementById('live-telemetry-timer');
+    const intervalInfo = document.getElementById('live-telemetry-interval-info');
     const elapsed = Date.now() - liveTelemetryStartTime;
-    const remaining = Math.max(0, Math.ceil((LIVE_TELEMETRY_MAX_DURATION - elapsed) / 1000));
+    const remaining = Math.max(0, Math.ceil((liveTelemetrySelectedDuration - elapsed) / 1000));
     timer.textContent = remaining + 's';
+
+    // Update interval info
+    const currentInterval = Math.round(liveTelemetryPollInterval / 1000);
+    intervalInfo.textContent = `Polling every ${currentInterval}s (adaptive)`;
 
     // Change color as time runs out
     if (remaining <= 10) {
@@ -2116,42 +2220,205 @@ function updateLiveTelemetryCountdown() {
     } else if (remaining <= 30) {
         timer.classList.remove('bg-secondary', 'bg-danger');
         timer.classList.add('bg-warning');
+    } else {
+        timer.classList.remove('bg-danger', 'bg-warning');
+        timer.classList.add('bg-secondary');
     }
 }
 
+function initializeLiveCharts() {
+    const isDarkMode = document.documentElement.getAttribute('data-bs-theme') === 'dark';
+    const textColor = isDarkMode ? '#adb5bd' : '#6c757d';
+    const gridColor = isDarkMode ? 'rgba(255,255,255,0.1)' : 'rgba(0,0,0,0.1)';
+
+    const commonLayout = {
+        margin: { t: 30, r: 10, b: 30, l: 40 },
+        paper_bgcolor: 'transparent',
+        plot_bgcolor: 'transparent',
+        font: { color: textColor, size: 10 },
+        xaxis: {
+            showgrid: true,
+            gridcolor: gridColor,
+            tickformat: '%H:%M:%S'
+        },
+        yaxis: {
+            showgrid: true,
+            gridcolor: gridColor
+        },
+        showlegend: false
+    };
+
+    const commonConfig = {
+        displayModeBar: false,
+        responsive: true
+    };
+
+    // Battery chart
+    Plotly.newPlot('live-chart-battery', [{
+        x: [],
+        y: [],
+        type: 'scatter',
+        mode: 'lines+markers',
+        line: { color: '#198754', width: 2 },
+        marker: { size: 4 },
+        name: 'Battery'
+    }], { ...commonLayout, title: { text: 'Battery %', font: { size: 12 } }, yaxis: { ...commonLayout.yaxis, range: [0, 100] } }, commonConfig);
+
+    // Voltage chart
+    Plotly.newPlot('live-chart-voltage', [{
+        x: [],
+        y: [],
+        type: 'scatter',
+        mode: 'lines+markers',
+        line: { color: '#0d6efd', width: 2 },
+        marker: { size: 4 },
+        name: 'Voltage'
+    }], { ...commonLayout, title: { text: 'Voltage (V)', font: { size: 12 } } }, commonConfig);
+
+    // Channel utilization chart
+    Plotly.newPlot('live-chart-channel-util', [{
+        x: [],
+        y: [],
+        type: 'scatter',
+        mode: 'lines+markers',
+        line: { color: '#fd7e14', width: 2 },
+        marker: { size: 4 },
+        name: 'Channel Util'
+    }], { ...commonLayout, title: { text: 'Channel Util %', font: { size: 12 } }, yaxis: { ...commonLayout.yaxis, range: [0, 100] } }, commonConfig);
+
+    // Air util chart
+    Plotly.newPlot('live-chart-air-util', [{
+        x: [],
+        y: [],
+        type: 'scatter',
+        mode: 'lines+markers',
+        line: { color: '#6f42c1', width: 2 },
+        marker: { size: 4 },
+        name: 'Air Util TX'
+    }], { ...commonLayout, title: { text: 'Air Util TX %', font: { size: 12 } }, yaxis: { ...commonLayout.yaxis, range: [0, 100] } }, commonConfig);
+}
+
+function updateLiveCharts(dm) {
+    const now = new Date();
+    const getBatteryLevel = () => dm.battery_level ?? dm.batteryLevel;
+    const getVoltage = () => dm.voltage;
+    const getChannelUtil = () => dm.channel_utilization ?? dm.channelUtilization;
+    const getAirUtilTx = () => dm.air_util_tx ?? dm.airUtilTx;
+
+    // Add new data points
+    liveChartData.timestamps.push(now);
+    liveChartData.battery.push(getBatteryLevel());
+    liveChartData.voltage.push(getVoltage());
+    liveChartData.channelUtil.push(getChannelUtil());
+    liveChartData.airUtil.push(getAirUtilTx());
+
+    // Keep only last 60 data points to avoid memory issues
+    const maxPoints = 60;
+    if (liveChartData.timestamps.length > maxPoints) {
+        liveChartData.timestamps = liveChartData.timestamps.slice(-maxPoints);
+        liveChartData.battery = liveChartData.battery.slice(-maxPoints);
+        liveChartData.voltage = liveChartData.voltage.slice(-maxPoints);
+        liveChartData.channelUtil = liveChartData.channelUtil.slice(-maxPoints);
+        liveChartData.airUtil = liveChartData.airUtil.slice(-maxPoints);
+    }
+
+    // Update charts with animation
+    const updateData = { x: [liveChartData.timestamps], y: [liveChartData.battery] };
+    Plotly.update('live-chart-battery', updateData, {}, [0]);
+
+    Plotly.update('live-chart-voltage', { x: [liveChartData.timestamps], y: [liveChartData.voltage] }, {}, [0]);
+    Plotly.update('live-chart-channel-util', { x: [liveChartData.timestamps], y: [liveChartData.channelUtil] }, {}, [0]);
+    Plotly.update('live-chart-air-util', { x: [liveChartData.timestamps], y: [liveChartData.airUtil] }, {}, [0]);
+}
+
+function adjustPollingInterval(responseTime, success) {
+    // Adaptive polling: increase interval if responses are slow, decrease if fast
+    const SLOW_THRESHOLD = 5000; // 5 seconds
+    const FAST_THRESHOLD = 2000; // 2 seconds
+
+    if (!success || responseTime > SLOW_THRESHOLD) {
+        liveTelemetryConsecutiveSlowResponses++;
+        liveTelemetryConsecutiveFastResponses = 0;
+
+        // Increase interval after 2 consecutive slow responses
+        if (liveTelemetryConsecutiveSlowResponses >= 2) {
+            liveTelemetryPollInterval = Math.min(
+                liveTelemetryPollInterval + 5000,
+                LIVE_TELEMETRY_MAX_INTERVAL
+            );
+            liveTelemetryConsecutiveSlowResponses = 0;
+        }
+    } else if (responseTime < FAST_THRESHOLD) {
+        liveTelemetryConsecutiveFastResponses++;
+        liveTelemetryConsecutiveSlowResponses = 0;
+
+        // Decrease interval after 3 consecutive fast responses
+        if (liveTelemetryConsecutiveFastResponses >= 3) {
+            liveTelemetryPollInterval = Math.max(
+                liveTelemetryPollInterval - 2000,
+                LIVE_TELEMETRY_MIN_INTERVAL
+            );
+            liveTelemetryConsecutiveFastResponses = 0;
+        }
+    }
+}
+
+function scheduleNextPoll() {
+    if (!liveTelemetryIsPolling) return;
+
+    liveTelemetryPollTimeout = setTimeout(() => {
+        if (liveTelemetryIsPolling) {
+            pollLiveTelemetry();
+        }
+    }, liveTelemetryPollInterval);
+}
+
 async function pollLiveTelemetry() {
+    if (!liveTelemetryIsPolling) return;
+
     const scriptTag = document.querySelector('script[data-node-id]');
     const nodeId = scriptTag.getAttribute('data-node-id');
+    const pollStartTime = Date.now();
 
     try {
-        // Use the live telemetry endpoint which requests data directly from the node
+        // Calculate timeout based on current poll interval (leave 2s buffer)
+        const requestTimeout = Math.min(Math.max(liveTelemetryPollInterval - 2000, 5), 25);
+
         const response = await fetch(`/api/admin/node/${nodeId}/telemetry/live`, {
             method: 'POST',
             headers: {'Content-Type': 'application/json'},
             body: JSON.stringify({
                 telemetry_type: 'device_metrics',
-                timeout: 8  // Leave 2s buffer for 5s poll interval
+                timeout: requestTimeout
             })
         });
+
+        const responseTime = Date.now() - pollStartTime;
         const data = await response.json();
 
         // Update status indicator
         const statusIndicator = document.getElementById('live-telemetry-status');
         if (statusIndicator) {
             if (data.success) {
-                statusIndicator.innerHTML = '<span class="badge bg-success">Live</span>';
+                const intervalSec = Math.round(liveTelemetryPollInterval / 1000);
+                statusIndicator.innerHTML = `<span class="badge bg-success">Live</span> <small class="text-muted ms-2">Response: ${Math.round(responseTime/1000)}s | Next poll: ${intervalSec}s</small>`;
+                adjustPollingInterval(responseTime, true);
             } else if (response.status === 408) {
-                statusIndicator.innerHTML = '<span class="badge bg-warning">No Response</span>';
+                statusIndicator.innerHTML = '<span class="badge bg-warning">No Response</span> <small class="text-muted ms-2">Node may be slow to respond, increasing interval...</small>';
+                adjustPollingInterval(responseTime, false);
             } else {
                 statusIndicator.innerHTML = '<span class="badge bg-secondary">Cached</span>';
-                // Fall back to cached data if live fails
-                return pollCachedTelemetry();
+                pollCachedTelemetry();
+                scheduleNextPoll();
+                return;
             }
         }
 
         if (!data.success || !data.telemetry) {
             console.log('Live telemetry unavailable, falling back to cached');
-            return pollCachedTelemetry();
+            pollCachedTelemetry();
+            scheduleNextPoll();
+            return;
         }
 
         const telemetry = data.telemetry;
@@ -2160,11 +2427,16 @@ async function pollLiveTelemetry() {
         const env = telemetry.environment_metrics || telemetry.environmentMetrics || {};
 
         updateTelemetryDisplay(dm, env);
+        updateLiveCharts(dm);
+
+        // Schedule next poll
+        scheduleNextPoll();
 
     } catch (error) {
         console.error('Live telemetry fetch failed:', error);
-        // Fall back to cached telemetry
-        return pollCachedTelemetry();
+        adjustPollingInterval(Date.now() - pollStartTime, false);
+        pollCachedTelemetry();
+        scheduleNextPoll();
     }
 }
 
