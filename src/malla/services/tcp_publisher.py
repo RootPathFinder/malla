@@ -1391,9 +1391,13 @@ class TCPPublisher:
                             # Convert protobuf to dict if needed
                             if hasattr(telemetry_data, "DESCRIPTOR"):
                                 # It's a protobuf message, convert to dict
+                                # Use preserving_proto_field_name to keep snake_case
                                 from google.protobuf.json_format import MessageToDict
 
-                                telemetry_dict = MessageToDict(telemetry_data)
+                                telemetry_dict = MessageToDict(
+                                    telemetry_data,
+                                    preserving_proto_field_name=True,
+                                )
                             elif isinstance(telemetry_data, dict):
                                 telemetry_dict = telemetry_data
                             else:

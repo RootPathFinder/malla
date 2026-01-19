@@ -2155,8 +2155,9 @@ async function pollLiveTelemetry() {
         }
 
         const telemetry = data.telemetry;
-        const dm = telemetry.device_metrics || {};
-        const env = telemetry.environment_metrics || {};
+        // Handle both snake_case and camelCase keys from API
+        const dm = telemetry.device_metrics || telemetry.deviceMetrics || {};
+        const env = telemetry.environment_metrics || telemetry.environmentMetrics || {};
 
         updateTelemetryDisplay(dm, env);
 
@@ -2193,11 +2194,20 @@ async function pollCachedTelemetry() {
 }
 
 function updateTelemetryDisplay(dm, env) {
+    // Helper to get value from either snake_case or camelCase keys
+    const getBatteryLevel = () => dm.battery_level ?? dm.batteryLevel;
+    const getVoltage = () => dm.voltage;
+    const getChannelUtil = () => dm.channel_utilization ?? dm.channelUtilization;
+    const getAirUtilTx = () => dm.air_util_tx ?? dm.airUtilTx;
+    const getUptimeSeconds = () => dm.uptime_seconds ?? dm.uptimeSeconds;
+    const getTemperature = () => env.temperature;
+
     // Update battery
     const batteryEl = document.getElementById('live-battery');
-    if (dm.battery_level !== undefined) {
-        batteryEl.textContent = dm.battery_level + '%';
-        batteryEl.className = 'h4 mb-0 ' + (dm.battery_level < 20 ? 'text-danger' : dm.battery_level < 50 ? 'text-warning' : 'text-success');
+    const batteryLevel = getBatteryLevel();
+    if (batteryLevel !== undefined) {
+        batteryEl.textContent = batteryLevel + '%';
+        batteryEl.className = 'h4 mb-0 ' + (batteryLevel < 20 ? 'text-danger' : batteryLevel < 50 ? 'text-warning' : 'text-success');
     } else {
         batteryEl.textContent = '--';
         batteryEl.className = 'h4 mb-0';
@@ -2205,9 +2215,10 @@ function updateTelemetryDisplay(dm, env) {
 
     // Update voltage
     const voltageEl = document.getElementById('live-voltage');
-    if (dm.voltage !== undefined) {
-        voltageEl.textContent = dm.voltage.toFixed(2) + 'V';
-        voltageEl.className = 'h4 mb-0 ' + (dm.voltage < 3.3 ? 'text-danger' : dm.voltage < 3.6 ? 'text-warning' : 'text-success');
+    const voltage = getVoltage();
+    if (voltage !== undefined) {
+        voltageEl.textContent = voltage.toFixed(2) + 'V';
+        voltageEl.className = 'h4 mb-0 ' + (voltage < 3.3 ? 'text-danger' : voltage < 3.6 ? 'text-warning' : 'text-success');
     } else {
         voltageEl.textContent = '--';
         voltageEl.className = 'h4 mb-0';
@@ -2215,9 +2226,10 @@ function updateTelemetryDisplay(dm, env) {
 
     // Update channel utilization
     const chUtilEl = document.getElementById('live-channel-util');
-    if (dm.channel_utilization !== undefined) {
-        chUtilEl.textContent = dm.channel_utilization.toFixed(1) + '%';
-        chUtilEl.className = 'h4 mb-0 ' + (dm.channel_utilization > 80 ? 'text-danger' : dm.channel_utilization > 50 ? 'text-warning' : '');
+    const channelUtil = getChannelUtil();
+    if (channelUtil !== undefined) {
+        chUtilEl.textContent = channelUtil.toFixed(1) + '%';
+        chUtilEl.className = 'h4 mb-0 ' + (channelUtil > 80 ? 'text-danger' : channelUtil > 50 ? 'text-warning' : '');
     } else {
         chUtilEl.textContent = '--';
         chUtilEl.className = 'h4 mb-0';
@@ -2225,9 +2237,10 @@ function updateTelemetryDisplay(dm, env) {
 
     // Update air util TX
     const airUtilEl = document.getElementById('live-air-util');
-    if (dm.air_util_tx !== undefined) {
-        airUtilEl.textContent = dm.air_util_tx.toFixed(1) + '%';
-        airUtilEl.className = 'h4 mb-0 ' + (dm.air_util_tx > 25 ? 'text-danger' : dm.air_util_tx > 10 ? 'text-warning' : '');
+    const airUtilTx = getAirUtilTx();
+    if (airUtilTx !== undefined) {
+        airUtilEl.textContent = airUtilTx.toFixed(1) + '%';
+        airUtilEl.className = 'h4 mb-0 ' + (airUtilTx > 25 ? 'text-danger' : airUtilTx > 10 ? 'text-warning' : '');
     } else {
         airUtilEl.textContent = '--';
         airUtilEl.className = 'h4 mb-0';
@@ -2235,20 +2248,22 @@ function updateTelemetryDisplay(dm, env) {
 
     // Update uptime
     const uptimeEl = document.getElementById('live-uptime');
-    if (dm.uptime_seconds !== undefined) {
-        uptimeEl.textContent = formatUptime(dm.uptime_seconds);
+    const uptimeSeconds = getUptimeSeconds();
+    if (uptimeSeconds !== undefined) {
+        uptimeEl.textContent = formatUptime(uptimeSeconds);
     } else {
         uptimeEl.textContent = '--';
     }
 
     // Update temperature
     const tempEl = document.getElementById('live-temperature');
-    if (env.temperature !== undefined) {
+    const temperature = getTemperature();
+    if (temperature !== undefined) {
         const tempUnit = localStorage.getItem('temperatureUnit') || 'celsius';
         if (tempUnit === 'fahrenheit') {
-            tempEl.textContent = ((env.temperature * 9/5) + 32).toFixed(1) + '°F';
+            tempEl.textContent = ((temperature * 9/5) + 32).toFixed(1) + '°F';
         } else {
-            tempEl.textContent = env.temperature.toFixed(1) + '°C';
+            tempEl.textContent = temperature.toFixed(1) + '°C';
         }
     } else {
         tempEl.textContent = '--';
