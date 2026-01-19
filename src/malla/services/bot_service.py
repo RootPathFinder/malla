@@ -136,6 +136,9 @@ class BotService:
         self._last_traceroute_time = 0.0
         # Queued traceroute requests: (sender_id, sender_name, channel_index, request_time)
         self._queued_traceroutes: list[tuple[int, str | None, int, float]] = []
+        # Track last cooldown reminder time to avoid spamming
+        self._last_cooldown_reminder_time = 0.0
+        self._cooldown_reminder_interval = 30.0  # Only remind once per 30 seconds
 
         # Statistics
         self._stats = {
@@ -784,6 +787,9 @@ class BotService:
                 # Process any queued traceroute requests
                 self._process_queued_traceroutes()
 
+                # Check for timed-out traceroutes and notify users
+                self._check_traceroute_timeouts()
+
                 # Wait for admin jobs if configured
                 if self._wait_for_jobs and self._has_active_jobs():
                     logger.debug("Waiting for active admin jobs to complete...")
@@ -1059,7 +1065,15 @@ class BotService:
                 if len(sender_name) > 15:
                     sender_name = sender_name[:12] + "..."
                 logger.info(f"Traceroute queued for {sender_name}, wait {wait_time}s")
-                return f"⏳ TR to {sender_name} queued ({wait_time}s)"
+
+                # Only send reminder once per cooldown_reminder_interval
+                time_since_reminder = current_time - self._last_cooldown_reminder_time
+                if time_since_reminder >= self._cooldown_reminder_interval:
+                    self._last_cooldown_reminder_time = current_time
+                    return f"⏳ TR to {sender_name} queued ({wait_time}s)"
+                else:
+                    # Silently queue without sending a message
+                    return ""
 
             # Execute the traceroute immediately
             logger.info(f"Executing traceroute to !{ctx.sender_id:08x}")
@@ -1203,6 +1217,52 @@ class BotService:
                 )
         except Exception as e:
             logger.error(f"Error processing queued traceroute: {e}")
+
+    def _check_traceroute_timeouts(self) -> None:
+        """Check for timed-out traceroutes and notify users."""
+        if not self._pending_traceroutes:
+            return
+
+        current_time = time.time()
+        timed_out = []
+
+        # Find timed-out traceroutes
+        for dest_id, (
+            requester_id,
+            requester_name,
+            channel_index,
+            start_time,
+        ) in self._pending_traceroutes.items():
+            if current_time - start_time > self._traceroute_timeout:
+                timed_out.append((dest_id, requester_id, requester_name, channel_index))
+
+        # Process timed-out traceroutes
+        for dest_id, requester_id, requester_name, channel_index in timed_out:
+            del self._pending_traceroutes[dest_id]
+
+            display_name = requester_name or f"!{requester_id:08x}"
+            if len(display_name) > 15:
+                display_name = display_name[:12] + "..."
+
+            # Notify user of timeout
+            self.queue_message(
+                text=f"⏱️ TR to {display_name} timed out",
+                destination=0xFFFFFFFF,
+                channel_index=channel_index,
+                priority=BotMessagePriority.LOW,
+            )
+
+            channel_name = self._get_channel_name(channel_index)
+            self._log_activity(
+                "traceroute_timeout",
+                {
+                    "target": f"!{dest_id:08x}",
+                    "target_name": requester_name,
+                    "channel": channel_name or f"ch{channel_index}",
+                    "status": "timed out",
+                },
+            )
+            logger.info(f"Traceroute to !{dest_id:08x} timed out after 60s")
 
     def _cmd_help(self, ctx: CommandContext) -> str:
         """Handle !help command."""
