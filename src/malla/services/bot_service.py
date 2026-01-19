@@ -1912,47 +1912,80 @@ class BotService:
     def _cmd_weather(self, ctx: CommandContext) -> str:
         """Handle !weather command - environment sensor data."""
         try:
+            from meshtastic.protobuf import telemetry_pb2
+
             from ..database.connection import get_db_connection
 
             conn = get_db_connection()
             cursor = conn.cursor()
-            one_hour_ago = time.time() - 3600
+            six_hours_ago = time.time() - 21600  # 6 hours for better coverage
 
-            # Check for environment telemetry (temperature, humidity, pressure)
+            # Get recent TELEMETRY_APP packets and parse for environment data
             cursor.execute(
-                """SELECT n.short_name, e.temperature, e.relative_humidity,
-                   e.barometric_pressure, e.timestamp
-                   FROM environment_data e
-                   JOIN node_info n ON e.node_id = n.node_id
-                   WHERE e.timestamp > ?
-                   ORDER BY e.timestamp DESC LIMIT 3""",
-                (one_hour_ago,),
+                """SELECT ph.from_node_id, ph.raw_payload, ph.timestamp, n.short_name
+                   FROM packet_history ph
+                   LEFT JOIN node_info n ON ph.from_node_id = n.node_id
+                   WHERE ph.portnum = 67 AND ph.raw_payload IS NOT NULL
+                   AND ph.timestamp > ?
+                   ORDER BY ph.timestamp DESC LIMIT 50""",
+                (six_hours_ago,),
             )
             rows = cursor.fetchall()
             conn.close()
 
-            if not rows:
+            # Parse and find environment readings
+            env_readings: list[dict] = []
+            seen_nodes: set[int] = set()
+
+            for row in rows:
+                node_id = row["from_node_id"]
+                if node_id in seen_nodes:
+                    continue  # Only show most recent per node
+
+                try:
+                    tel = telemetry_pb2.Telemetry()
+                    tel.ParseFromString(row["raw_payload"])
+                    if tel.HasField("environment_metrics"):
+                        env = tel.environment_metrics
+                        # Only include if has meaningful data
+                        if env.temperature != 0 or env.relative_humidity != 0:
+                            seen_nodes.add(node_id)
+                            env_readings.append(
+                                {
+                                    "name": row["short_name"] or f"!{node_id:08x}",
+                                    "temp": env.temperature,
+                                    "humidity": env.relative_humidity,
+                                    "pressure": env.barometric_pressure,
+                                }
+                            )
+                            if len(env_readings) >= 3:
+                                break
+                except Exception:
+                    continue
+
+            if not env_readings:
                 return "🌡️ No weather sensors active"
 
             lines = ["🌡️ Environment:"]
-            for row in rows:
-                name = row["short_name"] or "?"
+            for r in env_readings:
+                name = r["name"]
+                if len(name) > 8:
+                    name = name[:8]
                 parts = []
-                if row["temperature"] is not None:
-                    parts.append(f"{row['temperature']:.1f}°C")
-                if row["relative_humidity"] is not None:
-                    parts.append(f"{row['relative_humidity']:.0f}%RH")
-                if row["barometric_pressure"] is not None:
-                    parts.append(f"{row['barometric_pressure']:.0f}hPa")
+                if r["temp"] != 0:
+                    parts.append(f"{r['temp']:.1f}°C")
+                if r["humidity"] != 0:
+                    parts.append(f"{r['humidity']:.0f}%RH")
+                if r["pressure"] != 0:
+                    parts.append(f"{r['pressure']:.0f}hPa")
                 if parts:
                     lines.append(f"{name}: {' '.join(parts)}")
 
             return "\n".join(lines) if len(lines) > 1 else "🌡️ No readings"
 
         except Exception as e:
-            # Table might not exist
-            logger.debug(f"Weather data unavailable: {e}")
-            return "🌡️ No weather data available"
+            logger.error(f"Weather data error: {e}", exc_info=True)
+            return "🌡️ Weather data unavailable"
 
     def _cmd_lastseen(self, ctx: CommandContext) -> str:
         """Handle !lastseen <node> command - when was node last active."""
