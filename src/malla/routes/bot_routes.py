@@ -39,9 +39,9 @@ def api_bot_status():
                 "commands": [
                     {
                         "name": name,
-                        "description": getattr(handler, "_description", ""),
+                        "description": bot._command_descriptions.get(name, ""),
                     }
-                    for name, handler in bot._commands.items()
+                    for name in bot._commands.keys()
                 ],
             }
         )
@@ -194,12 +194,12 @@ def api_bot_commands():
         bot = get_bot_service()
 
         commands = []
-        for name, handler in sorted(bot._commands.items()):
+        for name in sorted(bot._commands.keys()):
             commands.append(
                 {
                     "name": name,
                     "full_command": f"{bot._command_prefix}{name}",
-                    "description": getattr(handler, "_description", ""),
+                    "description": bot._command_descriptions.get(name, ""),
                 }
             )
 

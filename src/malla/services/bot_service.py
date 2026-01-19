@@ -114,6 +114,7 @@ class BotService:
 
         # Command handlers
         self._commands: dict[str, CommandHandler] = {}
+        self._command_descriptions: dict[str, str] = {}  # Store descriptions separately
         self._command_prefix = "!"
 
         # Configuration
@@ -228,15 +229,16 @@ class BotService:
             handler: Function that takes CommandContext and returns response text
             description: Help text for the command
         """
-        self._commands[name.lower()] = handler
-        # Store description for help command
-        if not hasattr(handler, "_description"):
-            handler._description = description  # type: ignore
+        cmd_name = name.lower()
+        self._commands[cmd_name] = handler
+        self._command_descriptions[cmd_name] = description
         logger.debug(f"Registered command: {self._command_prefix}{name}")
 
     def unregister_command(self, name: str) -> None:
         """Unregister a command handler."""
-        self._commands.pop(name.lower(), None)
+        cmd_name = name.lower()
+        self._commands.pop(cmd_name, None)
+        self._command_descriptions.pop(cmd_name, None)
 
     def queue_message(
         self,
@@ -573,8 +575,8 @@ class BotService:
     def _cmd_help(self, ctx: CommandContext) -> str:
         """Handle !help command."""
         lines = ["📖 Available Commands:"]
-        for name, handler in sorted(self._commands.items()):
-            desc = getattr(handler, "_description", "")
+        for name in sorted(self._commands.keys()):
+            desc = self._command_descriptions.get(name, "")
             lines.append(f"  {self._command_prefix}{name} - {desc}")
         return "\n".join(lines)
 
