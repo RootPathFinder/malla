@@ -864,9 +864,10 @@ class BotService:
 
             # Get node count using get_nodes
             result = NodeRepository.get_nodes(limit=10000)
-            nodes = result.get("data", [])
+            # Repository returns 'nodes' and 'total_count' keys
+            nodes = result.get("nodes", [])
             online_count = sum(1 for n in nodes if n.get("is_online", False))
-            total_count = len(nodes)
+            total_count = result.get("total_count", len(nodes))
 
             # Get recent packet count
             recent_packets = PacketRepository.get_packet_count_since(
@@ -1082,20 +1083,12 @@ class BotService:
     def _cmd_nodes(self, ctx: CommandContext) -> str:
         """Handle !nodes command."""
         try:
-            from ..database.connection import get_db_connection
             from ..database.repositories import NodeRepository
 
-            # Debug: Check database path and node count directly
-            conn = get_db_connection()
-            cursor = conn.cursor()
-            cursor.execute("SELECT COUNT(*) as cnt FROM node_info")
-            direct_count = cursor.fetchone()["cnt"]
-            logger.info(f"Direct node_info count: {direct_count}")
-
             result = NodeRepository.get_nodes(limit=10000)
-            nodes = result.get("data", [])
-            total = result.get("total", 0)
-            logger.info(f"Nodes query returned: total={total}, data_len={len(nodes)}")
+            # Repository returns 'nodes' and 'total_count' keys
+            nodes = result.get("nodes", [])
+            total_count = result.get("total_count", len(nodes))
             online = sum(1 for n in nodes if n.get("is_online", False))
             with_position = sum(
                 1
@@ -1103,7 +1096,7 @@ class BotService:
                 if n.get("latitude") is not None and n.get("longitude") is not None
             )
 
-            return f"📡 {len(nodes)} nodes, {online} online, {with_position} w/pos"
+            return f"📡 {total_count} nodes, {online} online, {with_position} w/pos"
         except Exception as e:
             logger.error(f"Error in nodes command: {e}", exc_info=True)
             return "Node info unavailable"
