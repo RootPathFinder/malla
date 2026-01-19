@@ -631,11 +631,15 @@ class BotService:
             # The routeDiscovery in decoded may be a protobuf object, not a dict
             route_discovery = decoded.get("routeDiscovery")
 
-            # Log the packet structure for debugging
-            logger.debug(f"Traceroute packet decoded keys: {decoded.keys()}")
-            logger.debug(
-                f"routeDiscovery type: {type(route_discovery)}, value: {route_discovery}"
+            # Log the packet structure for debugging (INFO level to ensure visibility)
+            logger.info(f"[TR DEBUG] Full decoded dict: {decoded}")
+            logger.info(f"[TR DEBUG] decoded keys: {list(decoded.keys())}")
+            logger.info(
+                f"[TR DEBUG] routeDiscovery type: {type(route_discovery)}, "
+                f"value: {route_discovery}"
             )
+            if route_discovery is not None:
+                logger.info(f"[TR DEBUG] routeDiscovery dir: {dir(route_discovery)}")
 
             route: list[int] = []
             route_back: list[int] = []
@@ -646,6 +650,7 @@ class BotService:
                 # Check if it's a protobuf object (has 'route' as attribute)
                 if hasattr(route_discovery, "route"):
                     # It's a protobuf object
+                    logger.info("[TR DEBUG] Detected protobuf object")
                     route = list(route_discovery.route)
                     route_back = list(route_discovery.route_back)
                     # SNR values are scaled by 4 in protobuf
@@ -653,13 +658,16 @@ class BotService:
                     snr_back = [float(s) / 4.0 for s in route_discovery.snr_back]
                 elif isinstance(route_discovery, dict):
                     # It's a dict (already parsed)
+                    logger.info(f"[TR DEBUG] Detected dict: {route_discovery}")
                     route = route_discovery.get("route", [])
                     route_back = route_discovery.get("routeBack", [])
                     snr_towards = route_discovery.get("snrTowards", [])
                     snr_back = route_discovery.get("snrBack", [])
+                else:
+                    logger.info(f"[TR DEBUG] Unknown type: {type(route_discovery)}")
 
-            logger.debug(
-                f"Parsed traceroute: route={route}, route_back={route_back}, "
+            logger.info(
+                f"[TR DEBUG] Parsed result: route={route}, route_back={route_back}, "
                 f"snr_towards={snr_towards}, snr_back={snr_back}"
             )
 
