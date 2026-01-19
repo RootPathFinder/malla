@@ -8,6 +8,7 @@ from flask import Blueprint, render_template
 
 # Import from the new modular architecture
 from ..database.repositories import NodeRepository
+from ..services.admin_service import get_admin_service
 
 logger = logging.getLogger(__name__)
 node_bp = Blueprint("node", __name__)
@@ -45,6 +46,19 @@ def node_detail(node_id):
         node_details = NodeRepository.get_node_details(node_id_int)
         if not node_details:
             return "Node not found", 404
+
+        # Check if admin features are available for live telemetry
+        try:
+            admin_service = get_admin_service()
+            admin_status = admin_service.get_connection_status()
+            # Live telemetry requires TCP or Serial connection (not MQTT)
+            can_send_commands = admin_status.get(
+                "connected", False
+            ) and admin_status.get("connection_type") in ["tcp", "serial"]
+        except Exception:
+            can_send_commands = False
+
+        node_details["can_send_commands"] = can_send_commands
 
         logger.info("Node detail page rendered successfully")
         return render_template("node_detail.html", **node_details)

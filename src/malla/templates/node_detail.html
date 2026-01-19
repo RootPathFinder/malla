@@ -331,7 +331,8 @@
                 </div>
             </div>
 
-            <!-- Live Telemetry Polling -->
+            <!-- Live Telemetry Polling - Only shown when connected to a device -->
+            {% if can_send_commands %}
             <div class="card mb-4" id="live-telemetry-card">
                 <div class="card-header">
                     <div class="d-flex justify-content-between align-items-center">
@@ -401,6 +402,7 @@
                     </div>
                 </div>
             </div>
+            {% endif %}
 
             <!-- 7-Day Availability Visualization -->
             <div class="card mb-4">
