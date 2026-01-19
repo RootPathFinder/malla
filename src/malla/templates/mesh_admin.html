@@ -275,6 +275,25 @@
         color: var(--bs-info);
         margin-right: 0.25rem;
     }
+    /* Backup tree styles */
+    .backup-tree .backup-node-header:hover {
+        background-color: var(--bs-secondary-bg) !important;
+    }
+    .backup-tree .backup-chevron {
+        transition: transform 0.15s ease;
+        font-size: 0.8rem;
+    }
+    .backup-tree .backup-item {
+        border-radius: 0;
+        padding: 0.5rem 0.75rem;
+    }
+    .backup-tree .backup-item:hover:not(.active) {
+        background-color: var(--bs-tertiary-bg);
+    }
+    .backup-tree .backup-node-children {
+        border-left: 2px solid var(--bs-border-color);
+        margin-left: 10px;
+    }
 </style>
 {% endblock %}
 
@@ -1032,21 +1051,19 @@
                         <div class="col-md-5">
                             <div class="d-flex justify-content-between align-items-center mb-3">
                                 <h6 class="mb-0"><i class="bi bi-cloud-download"></i> Saved Backups</h6>
-                                <button class="btn btn-primary btn-sm" onclick="showCreateBackupModal()">
-                                    <i class="bi bi-plus-lg"></i> Create Backup
-                                </button>
+                                <div class="btn-group btn-group-sm">
+                                    <button class="btn btn-outline-secondary" onclick="toggleAllBackupNodes(true)" title="Expand All">
+                                        <i class="bi bi-arrows-expand"></i>
+                                    </button>
+                                    <button class="btn btn-outline-secondary" onclick="toggleAllBackupNodes(false)" title="Collapse All">
+                                        <i class="bi bi-arrows-collapse"></i>
+                                    </button>
+                                    <button class="btn btn-primary" onclick="showCreateBackupModal()">
+                                        <i class="bi bi-plus-lg"></i> Create
+                                    </button>
+                                </div>
                             </div>
-                            <div class="mb-2">
-                                <select class="form-select form-select-sm" id="backupNodeFilter" onchange="loadBackups()">
-                                    <option value="">All Nodes</option>
-                                    {% for node in administrable_nodes %}
-                                    <option value="{{ node.node_id }}">
-                                        {{ node.long_name or node.short_name or node.hex_id }}
-                                    </option>
-                                    {% endfor %}
-                                </select>
-                            </div>
-                            <div id="backupsList" class="list-group" style="max-height: 500px; overflow-y: auto;">
+                            <div id="backupsList" class="backup-tree" style="max-height: 500px; overflow-y: auto;">
                                 <div class="text-center py-3 text-muted">
                                     <i class="bi bi-arrow-clockwise spin"></i> Loading backups...
                                 </div>
@@ -5548,44 +5565,102 @@
 
     async function loadBackups() {
         const backupsList = document.getElementById('backupsList');
-        const nodeFilter = document.getElementById('backupNodeFilter').value;
 
         backupsList.innerHTML = '<div class="text-center py-3 text-muted"><i class="bi bi-arrow-clockwise spin"></i> Loading backups...</div>';
 
         try {
-            let url = '/api/admin/backups';
-            if (nodeFilter) {
-                url += `?node_id=${nodeFilter}`;
-            }
-
-            const response = await fetch(url);
+            const response = await fetch('/api/admin/backups');
             const data = await response.json();
 
             if (data.backups && data.backups.length > 0) {
-                let html = '';
+                // Group backups by node hex ID for consistent grouping
+                const nodeGroups = {};
                 for (const backup of data.backups) {
-                    const created = formatAdminDateTime(new Date(backup.created_at * 1000));
-                    const nodeName = backup.node_long_name || backup.node_short_name || backup.node_hex_id || `!${backup.node_id.toString(16).padStart(8, '0')}`;
-                    const summary = backup.config_summary;
-                    const configCount = (summary?.core_configs || 0) + (summary?.module_configs || 0) + (summary?.channels || 0);
+                    const nodeHex = backup.node_hex_id || `!${backup.node_id.toString(16).padStart(8, '0')}`;
+                    if (!nodeGroups[nodeHex]) {
+                        nodeGroups[nodeHex] = {
+                            nodeId: backup.node_id,
+                            nodeHex: nodeHex,
+                            nodeName: backup.node_long_name || backup.node_short_name || nodeHex,
+                            backups: []
+                        };
+                    }
+                    // Update node name in case it changed (use most recent backup's name)
+                    if (backup.node_long_name || backup.node_short_name) {
+                        nodeGroups[nodeHex].nodeName = backup.node_long_name || backup.node_short_name;
+                    }
+                    nodeGroups[nodeHex].backups.push(backup);
+                }
+
+                // Sort nodes by name, then sort backups within each node by date (newest first)
+                const sortedNodes = Object.values(nodeGroups).sort((a, b) =>
+                    a.nodeName.localeCompare(b.nodeName)
+                );
+
+                let html = '';
+                for (const nodeGroup of sortedNodes) {
+                    const backupCount = nodeGroup.backups.length;
+                    const nodeId = `backup-node-${nodeGroup.nodeId}`;
+
+                    // Sort backups by date (newest first)
+                    nodeGroup.backups.sort((a, b) => b.created_at - a.created_at);
 
                     html += `
-                        <a href="#" class="list-group-item list-group-item-action ${backup.id === currentBackupId ? 'active' : ''}"
-                           onclick="selectBackup(${backup.id}); return false;">
-                            <div class="d-flex justify-content-between align-items-center">
-                                <strong>${escapeHtml(backup.backup_name)}</strong>
-                                <span class="badge bg-secondary">${configCount} configs</span>
+                        <div class="backup-node-group mb-2">
+                            <div class="backup-node-header d-flex align-items-center p-2 rounded bg-light"
+                                 onclick="toggleBackupNode('${nodeId}')"
+                                 style="cursor: pointer; border: 1px solid #dee2e6;">
+                                <i class="bi bi-chevron-right backup-chevron me-2" id="${nodeId}-chevron"></i>
+                                <i class="bi bi-router text-primary me-2"></i>
+                                <span class="fw-semibold flex-grow-1">${escapeHtml(nodeGroup.nodeName)}</span>
+                                <code class="text-muted small me-2">${nodeGroup.nodeHex}</code>
+                                <span class="badge bg-primary">${backupCount}</span>
                             </div>
-                            <small class="text-muted d-block">
-                                <i class="bi bi-router"></i> ${escapeHtml(nodeName)}
-                            </small>
-                            <small class="text-muted">
-                                <i class="bi bi-clock"></i> ${created}
-                            </small>
-                        </a>
+                            <div class="backup-node-children ps-3" id="${nodeId}" style="display: none;">
+                    `;
+
+                    for (const backup of nodeGroup.backups) {
+                        const created = formatAdminDateTime(new Date(backup.created_at * 1000));
+                        const summary = backup.config_summary;
+                        const configCount = (summary?.core_configs || 0) + (summary?.module_configs || 0) + (summary?.channels || 0);
+
+                        html += `
+                            <a href="#" class="list-group-item list-group-item-action backup-item ${backup.id === currentBackupId ? 'active' : ''}"
+                               onclick="selectBackup(${backup.id}); return false;"
+                               style="border-left: 2px solid #dee2e6; margin-left: 8px;">
+                                <div class="d-flex justify-content-between align-items-center">
+                                    <span><i class="bi bi-archive me-1"></i> ${escapeHtml(backup.backup_name)}</span>
+                                    <span class="badge bg-secondary">${configCount}</span>
+                                </div>
+                                <small class="text-muted">
+                                    <i class="bi bi-clock"></i> ${created}
+                                </small>
+                            </a>
+                        `;
+                    }
+
+                    html += `
+                            </div>
+                        </div>
                     `;
                 }
                 backupsList.innerHTML = html;
+
+                // Auto-expand the node containing the currently selected backup
+                if (currentBackupId) {
+                    const activeItem = backupsList.querySelector('.backup-item.active');
+                    if (activeItem) {
+                        const parentNode = activeItem.closest('.backup-node-children');
+                        if (parentNode) {
+                            parentNode.style.display = 'block';
+                            const chevron = document.getElementById(parentNode.id + '-chevron');
+                            if (chevron) {
+                                chevron.classList.remove('bi-chevron-right');
+                                chevron.classList.add('bi-chevron-down');
+                            }
+                        }
+                    }
+                }
             } else {
                 backupsList.innerHTML = `
                     <div class="text-center py-4 text-muted">
@@ -5597,6 +5672,33 @@
         } catch (error) {
             backupsList.innerHTML = `<div class="alert alert-danger m-2">Error: ${error.message}</div>`;
         }
+    }
+
+    function toggleBackupNode(nodeId) {
+        const childrenDiv = document.getElementById(nodeId);
+        const chevron = document.getElementById(nodeId + '-chevron');
+
+        if (childrenDiv.style.display === 'none') {
+            childrenDiv.style.display = 'block';
+            chevron.classList.remove('bi-chevron-right');
+            chevron.classList.add('bi-chevron-down');
+        } else {
+            childrenDiv.style.display = 'none';
+            chevron.classList.remove('bi-chevron-down');
+            chevron.classList.add('bi-chevron-right');
+        }
+    }
+
+    function toggleAllBackupNodes(expand) {
+        const nodeGroups = document.querySelectorAll('.backup-node-children');
+        nodeGroups.forEach(group => {
+            group.style.display = expand ? 'block' : 'none';
+            const chevron = document.getElementById(group.id + '-chevron');
+            if (chevron) {
+                chevron.classList.remove(expand ? 'bi-chevron-right' : 'bi-chevron-down');
+                chevron.classList.add(expand ? 'bi-chevron-down' : 'bi-chevron-right');
+            }
+        });
     }
 
     async function selectBackup(backupId) {
