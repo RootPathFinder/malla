@@ -516,7 +516,11 @@ class BotService:
             # Execute handler
             handler = self._commands[command]
             try:
+                logger.info(f"Executing handler for command: {command}")
                 response = handler(context)
+                logger.info(
+                    f"Command {command} returned: {response[:50] if response else 'None/empty'}..."
+                )
                 if response:
                     self._stats["commands_processed"] += 1
                     # Queue the response
@@ -540,6 +544,10 @@ class BotService:
                             "response_preview": response[:100],
                             "priority": priority.name,
                         },
+                    )
+                else:
+                    logger.info(
+                        f"Command {command} returned empty/None response, no message queued"
                     )
             except Exception as e:
                 self._stats["errors"] += 1
@@ -859,6 +867,7 @@ class BotService:
 
             publisher = get_tcp_publisher()
             if not publisher.is_connected or publisher._interface is None:
+                logger.warning("Traceroute failed: TCP publisher not connected")
                 return "Not connected"
 
             current_time = time.time()
@@ -876,6 +885,9 @@ class BotService:
                 wait_time = int(
                     self._traceroute_window_seconds - (current_time - oldest)
                 )
+                logger.info(
+                    f"Traceroute rate limit (window) for !{ctx.sender_id:08x}, wait {wait_time}s"
+                )
                 return f"⏳ TR limit reached. Try in {wait_time}s"
 
             # Check if we need to wait for the 30-second interval
@@ -889,15 +901,17 @@ class BotService:
                 sender_name = ctx.sender_name or f"!{ctx.sender_id:08x}"
                 if len(sender_name) > 15:
                     sender_name = sender_name[:12] + "..."
+                logger.info(f"Traceroute queued for {sender_name}, wait {wait_time}s")
                 return f"⏳ TR to {sender_name} queued ({wait_time}s)"
 
             # Execute the traceroute immediately
+            logger.info(f"Executing traceroute to !{ctx.sender_id:08x}")
             return self._execute_traceroute(
                 ctx.sender_id, ctx.sender_name, ctx.channel_index, publisher
             )
 
         except Exception as e:
-            logger.error(f"Error in traceroute command: {e}")
+            logger.error(f"Error in traceroute command: {e}", exc_info=True)
             return "Traceroute failed"
 
     def _queue_traceroute(
