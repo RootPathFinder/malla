@@ -94,7 +94,11 @@ class TemperatureToggle {
         const button = document.getElementById('temperature-toggle');
         if (!button) return;
 
-        button.addEventListener('click', () => this.toggle());
+        // Avoid adding duplicate event listeners
+        if (!button.hasAttribute('data-temp-toggle-initialized')) {
+            button.addEventListener('click', () => this.toggle());
+            button.setAttribute('data-temp-toggle-initialized', 'true');
+        }
         this.updateToggleButton();
     }
 
@@ -146,8 +150,11 @@ class TemperatureToggle {
     static formatTemperature(celsius, decimals = 1) {
         if (celsius === null || celsius === undefined) return 'N/A';
 
-        const tempToggle = new TemperatureToggle();
-        const unit = tempToggle.getUnit();
+        // Use singleton instance or create if needed
+        if (!temperatureToggleInstance) {
+            temperatureToggleInstance = new TemperatureToggle();
+        }
+        const unit = temperatureToggleInstance.getUnit();
 
         let temp = celsius;
         if (unit === 'F') {
@@ -166,8 +173,11 @@ class TemperatureToggle {
     static getTemperatureInPreferredUnit(celsius, decimals = 1) {
         if (celsius === null || celsius === undefined) return null;
 
-        const tempToggle = new TemperatureToggle();
-        const unit = tempToggle.getUnit();
+        // Use singleton instance or create if needed
+        if (!temperatureToggleInstance) {
+            temperatureToggleInstance = new TemperatureToggle();
+        }
+        const unit = temperatureToggleInstance.getUnit();
 
         let temp = celsius;
         if (unit === 'F') {
