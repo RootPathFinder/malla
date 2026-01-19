@@ -1439,8 +1439,8 @@ class AdminService:
                 error=f"Failed to send admin message via {conn_type.value}",
             )
 
-        # Wait for response/acknowledgment
-        response = publisher.get_response(packet_id, timeout=30.0)
+        # Wait for response/acknowledgment with shorter timeout for write operations
+        response = publisher.get_response(packet_id, timeout=10.0)
 
         if response:
             # Check if this was a NAK (negative acknowledgement)
@@ -1477,17 +1477,24 @@ class AdminService:
                 },
             )
         else:
-            # No response means we don't know if it was received
+            # No response - packet was sent but ACK not received
+            # Treat as success since packet was sent; node may have applied config
+            # but ACK was lost or delayed (common in mesh networks)
             AdminRepository.update_admin_log_status(
                 log_id=log_id,
-                status="failed",
-                error_message="No acknowledgement received - config may not have been applied",
+                status="success",
+                response_data=json.dumps(
+                    {"message": "Config sent - no ACK (likely applied)"}
+                ),
             )
             return AdminCommandResult(
-                success=False,
+                success=True,
                 packet_id=packet_id,
                 log_id=log_id,
-                error="No acknowledgement received - config may not have been applied",
+                response={
+                    "message": "Config sent - no ACK received (likely applied)",
+                    "acknowledged": False,
+                },
             )
 
     def set_module_config(
@@ -1565,8 +1572,8 @@ class AdminService:
                 error=f"Failed to send admin message via {conn_type.value}",
             )
 
-        # Wait for response/acknowledgment
-        response = publisher.get_response(packet_id, timeout=30.0)
+        # Wait for response/acknowledgment with shorter timeout for write operations
+        response = publisher.get_response(packet_id, timeout=10.0)
 
         if response:
             # Check if this was a NAK (negative acknowledgement)
@@ -1605,17 +1612,23 @@ class AdminService:
                 },
             )
         else:
-            # No response means we don't know if it was received
+            # No response - packet was sent but ACK not received
+            # Treat as success since packet was sent; node may have applied config
             AdminRepository.update_admin_log_status(
                 log_id=log_id,
-                status="failed",
-                error_message="No acknowledgement received - module config may not have been applied",
+                status="success",
+                response_data=json.dumps(
+                    {"message": "Module config sent - no ACK (likely applied)"}
+                ),
             )
             return AdminCommandResult(
-                success=False,
+                success=True,
                 packet_id=packet_id,
                 log_id=log_id,
-                error="No acknowledgement received - module config may not have been applied",
+                response={
+                    "message": "Module config sent - no ACK received (likely applied)",
+                    "acknowledged": False,
+                },
             )
 
     def set_channel(
@@ -1691,8 +1704,8 @@ class AdminService:
                 error=f"Failed to send admin message via {conn_type.value}",
             )
 
-        # Wait for response/acknowledgment
-        response = publisher.get_response(packet_id, timeout=30.0)
+        # Wait for response/acknowledgment with shorter timeout for write operations
+        response = publisher.get_response(packet_id, timeout=10.0)
 
         if response:
             # Check if this was a NAK (negative acknowledgement)
@@ -1729,17 +1742,23 @@ class AdminService:
                 },
             )
         else:
-            # No response means we don't know if it was received
+            # No response - packet was sent but ACK not received
+            # Treat as success since packet was sent; node may have applied config
             AdminRepository.update_admin_log_status(
                 log_id=log_id,
-                status="failed",
-                error_message="No acknowledgement received - channel config may not have been applied",
+                status="success",
+                response_data=json.dumps(
+                    {"message": "Channel config sent - no ACK (likely applied)"}
+                ),
             )
             return AdminCommandResult(
-                success=False,
+                success=True,
                 packet_id=packet_id,
                 log_id=log_id,
-                error="No acknowledgement received - channel config may not have been applied",
+                response={
+                    "message": "Channel config sent - no ACK received (likely applied)",
+                    "acknowledged": False,
+                },
             )
 
     def get_config_schema(self, config_type: str) -> list[dict[str, Any]]:
