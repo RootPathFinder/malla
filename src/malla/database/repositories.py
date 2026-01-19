@@ -909,6 +909,31 @@ class PacketRepository:
             logger.error(f"Error getting gateway comparison data: {e}")
             raise
 
+    @staticmethod
+    def get_packet_count_since(timestamp: float) -> int:
+        """
+        Get count of packets received since a given timestamp.
+
+        Args:
+            timestamp: Unix timestamp to count from
+
+        Returns:
+            Number of packets received since the timestamp
+        """
+        try:
+            conn = get_db_connection()
+            cursor = conn.cursor()
+            cursor.execute(
+                "SELECT COUNT(*) FROM packet_history WHERE timestamp >= ?",
+                (timestamp,),
+            )
+            result = cursor.fetchone()
+            conn.close()
+            return result[0] if result else 0
+        except Exception as e:
+            logger.error(f"Error getting packet count since {timestamp}: {e}")
+            return 0
+
 
 class NodeRepository:
     """Repository for node operations."""

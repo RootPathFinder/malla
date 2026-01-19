@@ -6,6 +6,7 @@ from .admin_routes import admin_bp
 from .alert_routes import alert_bp
 from .api_routes import api_bp
 from .battery_routes import battery_bp
+from .bot_routes import bot_bp
 from .gateway_routes import gateway_bp
 from .job_routes import job_bp
 
@@ -30,3 +31,4 @@ def register_routes(app):
     app.register_blueprint(alert_bp)
     app.register_blueprint(admin_bp)
     app.register_blueprint(job_bp)
+    app.register_blueprint(bot_bp)
