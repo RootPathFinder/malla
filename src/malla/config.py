@@ -68,6 +68,10 @@ class AppConfig:
     admin_tcp_host: str = "192.168.1.1"  # IP address of the node to connect to
     admin_tcp_port: int = 4403  # Default Meshtastic TCP port
 
+    # Auto-connect settings
+    admin_auto_connect: bool = False  # Auto-connect to TCP on startup
+    bot_auto_start: bool = False  # Auto-start bot on startup
+
     # Internal attribute to remember the source file used
     _config_path: Path | None = field(default=None, repr=False, compare=False)
 
