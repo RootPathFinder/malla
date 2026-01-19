@@ -628,18 +628,18 @@ class BotService:
             )
 
             # Parse the traceroute data from the packet
-            # The routeDiscovery in decoded may be a protobuf object, not a dict
-            route_discovery = decoded.get("routeDiscovery")
+            # The data can be under 'traceroute' or 'routeDiscovery' key depending on version
+            route_discovery = decoded.get("traceroute") or decoded.get("routeDiscovery")
 
             # Log the packet structure for debugging (INFO level to ensure visibility)
-            logger.info(f"[TR DEBUG] Full decoded dict: {decoded}")
-            logger.info(f"[TR DEBUG] decoded keys: {list(decoded.keys())}")
-            logger.info(
+            logger.debug(f"[TR DEBUG] Full decoded dict: {decoded}")
+            logger.debug(f"[TR DEBUG] decoded keys: {list(decoded.keys())}")
+            logger.debug(
                 f"[TR DEBUG] routeDiscovery type: {type(route_discovery)}, "
                 f"value: {route_discovery}"
             )
             if route_discovery is not None:
-                logger.info(f"[TR DEBUG] routeDiscovery dir: {dir(route_discovery)}")
+                logger.debug(f"[TR DEBUG] routeDiscovery dir: {dir(route_discovery)}")
 
             route: list[int] = []
             route_back: list[int] = []
@@ -650,7 +650,7 @@ class BotService:
                 # Check if it's a protobuf object (has 'route' as attribute)
                 if hasattr(route_discovery, "route"):
                     # It's a protobuf object
-                    logger.info("[TR DEBUG] Detected protobuf object")
+                    logger.debug("[TR DEBUG] Detected protobuf object")
                     route = list(route_discovery.route)
                     route_back = list(route_discovery.route_back)
                     # SNR values are scaled by 4 in protobuf
@@ -658,15 +658,19 @@ class BotService:
                     snr_back = [float(s) / 4.0 for s in route_discovery.snr_back]
                 elif isinstance(route_discovery, dict):
                     # It's a dict (already parsed)
-                    logger.info(f"[TR DEBUG] Detected dict: {route_discovery}")
+                    logger.debug(f"[TR DEBUG] Detected dict: {route_discovery}")
                     route = route_discovery.get("route", [])
                     route_back = route_discovery.get("routeBack", [])
-                    snr_towards = route_discovery.get("snrTowards", [])
-                    snr_back = route_discovery.get("snrBack", [])
+                    # SNR values may be scaled by 4 in the dict too
+                    raw_snr_towards = route_discovery.get("snrTowards", [])
+                    raw_snr_back = route_discovery.get("snrBack", [])
+                    # Scale down by 4 (protobuf encoding)
+                    snr_towards = [float(s) / 4.0 for s in raw_snr_towards]
+                    snr_back = [float(s) / 4.0 for s in raw_snr_back]
                 else:
-                    logger.info(f"[TR DEBUG] Unknown type: {type(route_discovery)}")
+                    logger.debug(f"[TR DEBUG] Unknown type: {type(route_discovery)}")
 
-            logger.info(
+            logger.debug(
                 f"[TR DEBUG] Parsed result: route={route}, route_back={route_back}, "
                 f"snr_towards={snr_towards}, snr_back={snr_back}"
             )
@@ -709,33 +713,57 @@ class BotService:
         snr_back: list[float],
     ) -> str:
         """Format traceroute results for sending back to channel."""
-        # Build compact traceroute output that fits in ~230 bytes
+        # Build traceroute output showing each hop
+        # Format: → A(6.5)→B(5.2)→C | ← C(4.8)→B(5.0)→A
         lines = []
 
         # Forward path
         if route:
-            hops = len(route)
-            # Just show hop count and first/last node for brevity
-            if snr_towards:
-                avg_snr = sum(snr_towards) / len(snr_towards)
-                lines.append(f"→ {hops} hops, avg {avg_snr:.1f}dB")
-            else:
-                lines.append(f"→ {hops} hops")
+            # Show each hop with SNR
+            hops_str = self._format_hop_chain(route, snr_towards, "→")
+            lines.append(f"→ {hops_str}")
         else:
-            lines.append("→ direct")
+            # Direct connection (no intermediate hops)
+            if snr_towards:
+                lines.append(f"→ direct ({snr_towards[0]:.1f}dB)")
+            else:
+                lines.append("→ direct")
 
         # Return path
         if route_back:
-            hops = len(route_back)
-            if snr_back:
-                avg_snr = sum(snr_back) / len(snr_back)
-                lines.append(f"← {hops} hops, avg {avg_snr:.1f}dB")
-            else:
-                lines.append(f"← {hops} hops")
+            hops_str = self._format_hop_chain(route_back, snr_back, "→")
+            lines.append(f"← {hops_str}")
         else:
-            lines.append("← direct/none")
+            # Direct return or no return path
+            if snr_back:
+                lines.append(f"← direct ({snr_back[0]:.1f}dB)")
+            else:
+                lines.append("← direct/none")
 
         return "🔍 TR: " + " | ".join(lines)
+
+    def _format_hop_chain(
+        self, nodes: list[int], snrs: list[float], separator: str = "→"
+    ) -> str:
+        """Format a chain of hops with SNR values.
+
+        Args:
+            nodes: List of node IDs in the path
+            snrs: List of SNR values for each hop
+            separator: Character to use between hops
+
+        Returns:
+            Formatted string like "A(6.5)→B(5.2)→C"
+        """
+        parts = []
+        for i, node_id in enumerate(nodes):
+            # Use short node ID (last 4 hex chars)
+            short_id = f"{node_id:08x}"[-4:]
+            if i < len(snrs):
+                parts.append(f"{short_id}({snrs[i]:.1f})")
+            else:
+                parts.append(short_id)
+        return separator.join(parts)
 
     def _worker_loop(self) -> None:
         """Worker loop that sends queued messages."""
