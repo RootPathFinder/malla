@@ -675,9 +675,12 @@ class BotService:
                 f"snr_towards={snr_towards}, snr_back={snr_back}"
             )
 
-            # Format the response
+            # Get local node ID (source of traceroute)
+            local_node_id = self._get_local_node_id() or 0
+
+            # Format the response (from_id is the destination we traced to)
             response = self._format_traceroute_result(
-                route, route_back, snr_towards, snr_back
+                route, route_back, snr_towards, snr_back, local_node_id, from_id
             )
 
             # Queue the response
@@ -711,34 +714,40 @@ class BotService:
         route_back: list[int],
         snr_towards: list[float],
         snr_back: list[float],
+        source_id: int = 0,
+        dest_id: int = 0,
     ) -> str:
         """Format traceroute results for sending back to channel."""
         # Build traceroute output showing each hop
-        # Format: → A(6.5)→B(5.2)→C | ← C(4.8)→B(5.0)→A
+        # Format: → src→A(6.5)→B(5.2)→dst | ← dst→B(4.8)→A(5.0)→src
         lines = []
+
+        # Short IDs for source and destination
+        src_short = f"{source_id:08x}"[-4:] if source_id else "?"
+        dst_short = f"{dest_id:08x}"[-4:] if dest_id else "?"
 
         # Forward path
         if route:
-            # Show each hop with SNR
+            # Show each hop with SNR: src→hop1(snr)→hop2(snr)→dst
             hops_str = self._format_hop_chain(route, snr_towards, "→")
-            lines.append(f"→ {hops_str}")
+            lines.append(f"→ {src_short}→{hops_str}→{dst_short}")
         else:
             # Direct connection (no intermediate hops)
             if snr_towards:
-                lines.append(f"→ direct ({snr_towards[0]:.1f}dB)")
+                lines.append(f"→ {src_short}→{dst_short} ({snr_towards[0]:.1f}dB)")
             else:
-                lines.append("→ direct")
+                lines.append(f"→ {src_short}→{dst_short}")
 
         # Return path
         if route_back:
             hops_str = self._format_hop_chain(route_back, snr_back, "→")
-            lines.append(f"← {hops_str}")
+            lines.append(f"← {dst_short}→{hops_str}→{src_short}")
         else:
             # Direct return or no return path
             if snr_back:
-                lines.append(f"← direct ({snr_back[0]:.1f}dB)")
+                lines.append(f"← {dst_short}→{src_short} ({snr_back[0]:.1f}dB)")
             else:
-                lines.append("← direct/none")
+                lines.append("← none")
 
         return "🔍 TR: " + " | ".join(lines)
 
