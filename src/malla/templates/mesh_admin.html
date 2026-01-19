@@ -962,6 +962,35 @@
                                         <div id="deploymentResults" class="mt-3" style="display: none;"></div>
                                     </div>
                                 </div>
+
+                                <!-- Compliance Check Section -->
+                                <div class="card bg-light mt-3">
+                                    <div class="card-header d-flex justify-content-between align-items-center">
+                                        <span><i class="bi bi-clipboard-check"></i> Compliance Check</span>
+                                        <span id="complianceSummaryBadge" class="badge bg-secondary" style="display: none;"></span>
+                                    </div>
+                                    <div class="card-body">
+                                        <p class="text-muted small mb-3">
+                                            Check if your administrable nodes match this template's configuration.
+                                            Useful for auditing security keys, LoRa settings, or any other config.
+                                        </p>
+                                        <button class="btn btn-info btn-sm" onclick="runComplianceCheck()" id="runComplianceBtn">
+                                            <i class="bi bi-search"></i> Run Compliance Check
+                                        </button>
+                                        <button class="btn btn-outline-secondary btn-sm" onclick="loadComplianceResults()" id="loadComplianceBtn">
+                                            <i class="bi bi-arrow-repeat"></i> Load Last Results
+                                        </button>
+                                        <div id="complianceResults" class="mt-3" style="display: none;">
+                                            <div id="complianceProgress" class="mb-2" style="display: none;">
+                                                <div class="progress" style="height: 6px;">
+                                                    <div class="progress-bar progress-bar-striped progress-bar-animated" style="width: 100%"></div>
+                                                </div>
+                                                <small class="text-muted">Checking nodes...</small>
+                                            </div>
+                                            <div id="complianceResultsContent"></div>
+                                        </div>
+                                    </div>
+                                </div>
                             </div>
 
                             <div id="templatePlaceholder">
@@ -4548,6 +4577,13 @@
             // Reload templates list to update active state
             loadTemplates();
 
+            // Load compliance summary if available
+            loadComplianceSummary();
+
+            // Reset compliance results display
+            document.getElementById('complianceResults').style.display = 'none';
+            document.getElementById('complianceResultsContent').innerHTML = '';
+
         } catch (error) {
             showAlert('danger', `Error loading template: ${error.message}`);
         }
@@ -5020,6 +5056,234 @@
             }
         } catch (error) {
             tbody.innerHTML = `<tr><td colspan="4" class="text-danger">Error: ${error.message}</td></tr>`;
+        }
+    }
+
+    // ============================================================================
+    // Compliance Check Functions
+    // ============================================================================
+
+    async function runComplianceCheck() {
+        if (!currentTemplateId) {
+            showAlert('warning', 'Please select a template first');
+            return;
+        }
+
+        const runBtn = document.getElementById('runComplianceBtn');
+        const resultsDiv = document.getElementById('complianceResults');
+        const progressDiv = document.getElementById('complianceProgress');
+        const contentDiv = document.getElementById('complianceResultsContent');
+
+        runBtn.disabled = true;
+        runBtn.innerHTML = '<span class="spinner-border spinner-border-sm"></span> Checking...';
+        resultsDiv.style.display = 'block';
+        progressDiv.style.display = 'block';
+        contentDiv.innerHTML = '';
+
+        try {
+            const response = await fetch(`/api/admin/templates/${currentTemplateId}/compliance-check`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ timeout: 15 }),
+            });
+
+            const data = await response.json();
+            progressDiv.style.display = 'none';
+
+            if (data.error) {
+                contentDiv.innerHTML = `<div class="alert alert-danger py-2"><i class="bi bi-x-circle"></i> ${escapeHtml(data.error)}</div>`;
+                return;
+            }
+
+            displayComplianceResults(data);
+
+        } catch (error) {
+            progressDiv.style.display = 'none';
+            contentDiv.innerHTML = `<div class="alert alert-danger py-2">Error: ${escapeHtml(error.message)}</div>`;
+        } finally {
+            runBtn.disabled = false;
+            runBtn.innerHTML = '<i class="bi bi-search"></i> Run Compliance Check';
+        }
+    }
+
+    async function loadComplianceResults() {
+        if (!currentTemplateId) {
+            showAlert('warning', 'Please select a template first');
+            return;
+        }
+
+        const loadBtn = document.getElementById('loadComplianceBtn');
+        const resultsDiv = document.getElementById('complianceResults');
+        const contentDiv = document.getElementById('complianceResultsContent');
+
+        loadBtn.disabled = true;
+        loadBtn.innerHTML = '<span class="spinner-border spinner-border-sm"></span>';
+        resultsDiv.style.display = 'block';
+        contentDiv.innerHTML = '<div class="text-center text-muted"><span class="spinner-border spinner-border-sm"></span> Loading...</div>';
+
+        try {
+            const response = await fetch(`/api/admin/templates/${currentTemplateId}/compliance`);
+            const data = await response.json();
+
+            if (data.error) {
+                contentDiv.innerHTML = `<div class="alert alert-danger py-2"><i class="bi bi-x-circle"></i> ${escapeHtml(data.error)}</div>`;
+                return;
+            }
+
+            if (!data.results || data.results.length === 0) {
+                contentDiv.innerHTML = '<div class="text-muted text-center py-2">No compliance checks run yet for this template</div>';
+                updateComplianceSummaryBadge(null);
+                return;
+            }
+
+            displayComplianceResults(data);
+
+        } catch (error) {
+            contentDiv.innerHTML = `<div class="alert alert-danger py-2">Error: ${escapeHtml(error.message)}</div>`;
+        } finally {
+            loadBtn.disabled = false;
+            loadBtn.innerHTML = '<i class="bi bi-arrow-repeat"></i> Load Last Results';
+        }
+    }
+
+    function displayComplianceResults(data) {
+        const contentDiv = document.getElementById('complianceResultsContent');
+        const summary = data.summary || {
+            compliant_count: data.compliant_count || 0,
+            non_compliant_count: data.non_compliant_count || 0,
+            error_count: data.error_count || 0,
+            total_checked: data.nodes_checked || 0,
+        };
+
+        // Update summary badge
+        updateComplianceSummaryBadge(summary);
+
+        let html = '';
+
+        // Summary row
+        html += `
+            <div class="d-flex gap-3 mb-3">
+                <div class="text-center">
+                    <div class="h4 mb-0 text-success">${summary.compliant_count || 0}</div>
+                    <small class="text-muted">Compliant</small>
+                </div>
+                <div class="text-center">
+                    <div class="h4 mb-0 text-danger">${summary.non_compliant_count || 0}</div>
+                    <small class="text-muted">Non-Compliant</small>
+                </div>
+                <div class="text-center">
+                    <div class="h4 mb-0 text-warning">${summary.error_count || 0}</div>
+                    <small class="text-muted">Errors</small>
+                </div>
+            </div>
+        `;
+
+        // Results table
+        if (data.results && data.results.length > 0) {
+            html += `
+                <div class="table-responsive" style="max-height: 200px; overflow-y: auto;">
+                    <table class="table table-sm table-hover mb-0">
+                        <thead class="table-light sticky-top">
+                            <tr>
+                                <th>Node</th>
+                                <th>Status</th>
+                                <th>Details</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+            `;
+
+            for (const result of data.results) {
+                const nodeName = result.node_name || result.short_name || result.node_hex || `!${result.node_id.toString(16).padStart(8, '0')}`;
+                const nodeHex = result.node_hex || `!${result.node_id.toString(16).padStart(8, '0')}`;
+
+                let statusBadge, detailsHtml;
+
+                if (result.error || result.error_message) {
+                    statusBadge = '<span class="badge bg-warning"><i class="bi bi-exclamation-triangle"></i> Error</span>';
+                    detailsHtml = `<span class="text-muted small">${escapeHtml(result.error || result.error_message)}</span>`;
+                } else if (result.is_compliant) {
+                    statusBadge = '<span class="badge bg-success"><i class="bi bi-check-circle"></i> Compliant</span>';
+                    detailsHtml = '<span class="text-success small">All settings match</span>';
+                } else {
+                    statusBadge = '<span class="badge bg-danger"><i class="bi bi-x-circle"></i> Non-Compliant</span>';
+                    const diffs = result.differences || result.diff_data || [];
+                    if (diffs.length > 0) {
+                        const diffList = diffs.slice(0, 3).map(d => `<code>${escapeHtml(d.field)}</code>`).join(', ');
+                        const moreCount = diffs.length > 3 ? ` +${diffs.length - 3} more` : '';
+                        detailsHtml = `<span class="small">${diffList}${moreCount}</span>`;
+                    } else {
+                        detailsHtml = '<span class="text-muted small">Differences found</span>';
+                    }
+                }
+
+                html += `
+                    <tr>
+                        <td>
+                            <a href="/node/${result.node_id}" class="text-decoration-none">${escapeHtml(nodeName)}</a>
+                            <br><code class="text-muted small">${nodeHex}</code>
+                        </td>
+                        <td>${statusBadge}</td>
+                        <td>${detailsHtml}</td>
+                    </tr>
+                `;
+            }
+
+            html += '</tbody></table></div>';
+
+            // Last checked time
+            if (summary.last_checked) {
+                html += `<div class="text-muted small mt-2">Last checked: ${formatAdminDateTime(new Date(summary.last_checked * 1000))}</div>`;
+            }
+        }
+
+        contentDiv.innerHTML = html;
+    }
+
+    function updateComplianceSummaryBadge(summary) {
+        const badge = document.getElementById('complianceSummaryBadge');
+        if (!badge) return;
+
+        if (!summary || summary.total_checked === 0) {
+            badge.style.display = 'none';
+            return;
+        }
+
+        const total = (summary.compliant_count || 0) + (summary.non_compliant_count || 0);
+        const compliant = summary.compliant_count || 0;
+
+        if (compliant === total && total > 0) {
+            badge.className = 'badge bg-success';
+            badge.textContent = `${compliant}/${total} compliant`;
+        } else if (compliant === 0) {
+            badge.className = 'badge bg-danger';
+            badge.textContent = `0/${total} compliant`;
+        } else {
+            badge.className = 'badge bg-warning text-dark';
+            badge.textContent = `${compliant}/${total} compliant`;
+        }
+        badge.style.display = 'inline';
+    }
+
+    async function loadComplianceSummary() {
+        if (!currentTemplateId) {
+            updateComplianceSummaryBadge(null);
+            return;
+        }
+
+        try {
+            const response = await fetch(`/api/admin/templates/${currentTemplateId}/compliance`);
+            const data = await response.json();
+
+            if (data.error || !data.summary) {
+                updateComplianceSummaryBadge(null);
+                return;
+            }
+
+            updateComplianceSummaryBadge(data.summary);
+
+        } catch (error) {
+            updateComplianceSummaryBadge(null);
         }
     }
 

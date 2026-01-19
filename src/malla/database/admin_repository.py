@@ -134,6 +134,28 @@ def init_admin_tables() -> None:
         "CREATE INDEX IF NOT EXISTS idx_backups_name ON node_backups(backup_name)"
     )
 
+    # Table for compliance check results
+    cursor.execute("""
+        CREATE TABLE IF NOT EXISTS compliance_checks (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            template_id INTEGER NOT NULL,
+            node_id INTEGER NOT NULL,
+            checked_at REAL NOT NULL,
+            is_compliant INTEGER NOT NULL DEFAULT 0,
+            diff_data TEXT,
+            error_message TEXT,
+            FOREIGN KEY (template_id) REFERENCES config_templates(id)
+        )
+    """)
+
+    # Index for compliance queries
+    cursor.execute(
+        "CREATE INDEX IF NOT EXISTS idx_compliance_template ON compliance_checks(template_id, checked_at DESC)"
+    )
+    cursor.execute(
+        "CREATE INDEX IF NOT EXISTS idx_compliance_node ON compliance_checks(node_id, checked_at DESC)"
+    )
+
     conn.commit()
     conn.close()
     logger.info("Admin tables initialized")
@@ -1000,3 +1022,181 @@ class AdminRepository:
         conn.close()
 
         return updated
+
+    # =========================
+    # Compliance Check Methods
+    # =========================
+
+    @staticmethod
+    def save_compliance_check(
+        template_id: int,
+        node_id: int,
+        is_compliant: bool,
+        diff_data: str | None = None,
+        error_message: str | None = None,
+    ) -> int:
+        """
+        Save a compliance check result.
+
+        Args:
+            template_id: The template used for the check
+            node_id: The node that was checked
+            is_compliant: Whether the node matches the template
+            diff_data: JSON string of the differences found
+            error_message: Error message if the check failed
+
+        Returns:
+            The ID of the created record
+        """
+        conn = get_db_connection()
+        cursor = conn.cursor()
+
+        cursor.execute(
+            """
+            INSERT INTO compliance_checks
+            (template_id, node_id, checked_at, is_compliant, diff_data, error_message)
+            VALUES (?, ?, ?, ?, ?, ?)
+            """,
+            (
+                template_id,
+                node_id,
+                time.time(),
+                1 if is_compliant else 0,
+                diff_data,
+                error_message,
+            ),
+        )
+
+        check_id = cursor.lastrowid
+        conn.commit()
+        conn.close()
+
+        return check_id if check_id else 0
+
+    @staticmethod
+    def get_latest_compliance_results(
+        template_id: int,
+    ) -> list[dict[str, Any]]:
+        """
+        Get the latest compliance check results for a template.
+
+        Returns only the most recent check for each node.
+
+        Args:
+            template_id: The template ID
+
+        Returns:
+            List of compliance results with node info
+        """
+        conn = get_db_connection()
+        cursor = conn.cursor()
+
+        # Get latest check for each node using window function or subquery
+        cursor.execute(
+            """
+            SELECT
+                cc.id,
+                cc.template_id,
+                cc.node_id,
+                cc.checked_at,
+                cc.is_compliant,
+                cc.diff_data,
+                cc.error_message,
+                ni.long_name as node_name,
+                ni.short_name,
+                ni.hex_id as node_hex,
+                ni.hw_model
+            FROM compliance_checks cc
+            LEFT JOIN node_info ni ON cc.node_id = ni.node_id
+            WHERE cc.template_id = ?
+            AND cc.id = (
+                SELECT MAX(cc2.id)
+                FROM compliance_checks cc2
+                WHERE cc2.template_id = cc.template_id
+                AND cc2.node_id = cc.node_id
+            )
+            ORDER BY cc.is_compliant ASC, ni.long_name ASC
+            """,
+            (template_id,),
+        )
+
+        rows = cursor.fetchall()
+        conn.close()
+
+        return [dict(row) for row in rows]
+
+    @staticmethod
+    def get_compliance_summary(template_id: int) -> dict[str, Any]:
+        """
+        Get a summary of compliance for a template.
+
+        Args:
+            template_id: The template ID
+
+        Returns:
+            Summary with counts of compliant/non-compliant nodes
+        """
+        conn = get_db_connection()
+        cursor = conn.cursor()
+
+        # Get latest check for each node and count compliance
+        cursor.execute(
+            """
+            SELECT
+                SUM(CASE WHEN latest.is_compliant = 1 THEN 1 ELSE 0 END) as compliant_count,
+                SUM(CASE WHEN latest.is_compliant = 0 THEN 1 ELSE 0 END) as non_compliant_count,
+                SUM(CASE WHEN latest.error_message IS NOT NULL THEN 1 ELSE 0 END) as error_count,
+                COUNT(*) as total_checked,
+                MAX(latest.checked_at) as last_checked
+            FROM (
+                SELECT cc.*
+                FROM compliance_checks cc
+                WHERE cc.template_id = ?
+                AND cc.id = (
+                    SELECT MAX(cc2.id)
+                    FROM compliance_checks cc2
+                    WHERE cc2.template_id = cc.template_id
+                    AND cc2.node_id = cc.node_id
+                )
+            ) as latest
+            """,
+            (template_id,),
+        )
+
+        row = cursor.fetchone()
+        conn.close()
+
+        if row:
+            return dict(row)
+        return {
+            "compliant_count": 0,
+            "non_compliant_count": 0,
+            "error_count": 0,
+            "total_checked": 0,
+            "last_checked": None,
+        }
+
+    @staticmethod
+    def clear_compliance_history(template_id: int) -> int:
+        """
+        Clear all compliance check history for a template.
+
+        Args:
+            template_id: The template ID
+
+        Returns:
+            Number of records deleted
+        """
+        conn = get_db_connection()
+        cursor = conn.cursor()
+
+        cursor.execute(
+            "DELETE FROM compliance_checks WHERE template_id = ?",
+            (template_id,),
+        )
+
+        deleted = cursor.rowcount
+        conn.commit()
+        conn.close()
+
+        return deleted

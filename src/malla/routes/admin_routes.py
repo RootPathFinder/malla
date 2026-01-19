@@ -7,6 +7,7 @@ Provides REST API endpoints and page routes for the Mesh Admin functionality.
 import json
 import logging
 import time
+from typing import Any
 
 from flask import (
     Blueprint,
@@ -2963,6 +2964,311 @@ def api_validate_template(template_id):
     except Exception as e:
         logger.error(f"Error validating template: {e}")
         return jsonify({"error": str(e)}), 500
+
+
+# ============================================================================
+# API Routes - Compliance Checking
+# ============================================================================
+
+
+@admin_bp.route("/api/admin/templates/<int:template_id>/compliance")
+def api_get_compliance_results(template_id):
+    """
+    Get compliance check results for a template.
+
+    Returns the latest compliance status for each node that has been checked,
+    along with a summary of compliant vs non-compliant nodes.
+    """
+    try:
+        template = AdminRepository.get_template(template_id)
+        if not template:
+            return jsonify({"error": "Template not found"}), 404
+
+        results = AdminRepository.get_latest_compliance_results(template_id)
+        summary = AdminRepository.get_compliance_summary(template_id)
+
+        # Parse diff_data JSON for each result
+        import json as json_module
+
+        for result in results:
+            if result.get("diff_data"):
+                try:
+                    result["diff_data"] = json_module.loads(result["diff_data"])
+                except (json_module.JSONDecodeError, TypeError):
+                    pass
+
+        return jsonify(
+            {
+                "template_id": template_id,
+                "template_name": template["name"],
+                "template_type": template["template_type"],
+                "summary": summary,
+                "results": results,
+            }
+        )
+
+    except Exception as e:
+        logger.error(f"Error getting compliance results: {e}")
+        return jsonify({"error": str(e)}), 500
+
+
+@admin_bp.route(
+    "/api/admin/templates/<int:template_id>/compliance-check", methods=["POST"]
+)
+def api_run_compliance_check(template_id):
+    """
+    Run a compliance check against all administrable nodes.
+
+    This fetches the current configuration from each node and compares it
+    against the template to identify differences.
+
+    Request body (optional):
+        node_ids: List of specific node IDs to check (defaults to all administrable)
+        timeout: Timeout per node in seconds (default: 15)
+    """
+    try:
+        template = AdminRepository.get_template(template_id)
+        if not template:
+            return jsonify({"error": "Template not found"}), 404
+
+        import json as json_module
+
+        template_config = template["config_data"]
+        if isinstance(template_config, str):
+            template_config = json_module.loads(template_config)
+
+        template_type = template["template_type"]
+
+        data = request.get_json() or {}
+        specific_node_ids = data.get("node_ids")
+        timeout = min(data.get("timeout", 15), 30)
+
+        # Get nodes to check
+        admin_service = get_admin_service()
+        if specific_node_ids:
+            nodes = [
+                {"node_id": nid}
+                for nid in specific_node_ids
+                if AdminRepository.is_node_administrable(nid)
+            ]
+        else:
+            nodes = admin_service.get_administrable_nodes()
+
+        if not nodes:
+            return jsonify({"error": "No administrable nodes to check"}), 400
+
+        # Check connection
+        connection_type = admin_service.connection_type.value
+        if connection_type not in ("tcp", "serial"):
+            return jsonify(
+                {
+                    "error": "Compliance check requires TCP or Serial connection. "
+                    "MQTT cannot retrieve node configurations."
+                }
+            ), 400
+
+        tcp_publisher = get_tcp_publisher()
+        if not tcp_publisher.is_connected:
+            return jsonify(
+                {
+                    "error": "TCP not connected. Connect via Admin page first.",
+                }
+            ), 400
+
+        # Map template types to config fetch methods
+        config_type_map = {
+            "device": "device",
+            "lora": "lora",
+            "position": "position",
+            "power": "power",
+            "network": "network",
+            "display": "display",
+            "bluetooth": "bluetooth",
+            "security": "security",
+            "channel": "channel",
+            "channels": "channel",
+        }
+
+        fetch_type = config_type_map.get(template_type)
+        if not fetch_type:
+            return jsonify(
+                {"error": f"Unsupported template type for compliance: {template_type}"}
+            ), 400
+
+        results = []
+        compliant_count = 0
+        non_compliant_count = 0
+        error_count = 0
+
+        # Map template types to ConfigType enum
+        config_type_enum_map = {
+            "device": ConfigType.DEVICE,
+            "lora": ConfigType.LORA,
+            "position": ConfigType.POSITION,
+            "power": ConfigType.POWER,
+            "network": ConfigType.NETWORK,
+            "display": ConfigType.DISPLAY,
+            "bluetooth": ConfigType.BLUETOOTH,
+            "security": ConfigType.SECURITY,
+        }
+
+        for node in nodes:
+            node_id = node["node_id"]
+            node_hex = f"!{node_id:08x}"
+
+            try:
+                # Fetch current config from node
+                if fetch_type == "channel":
+                    # For channels, use get_channel method
+                    result = admin_service.get_channel(
+                        node_id, 0, max_retries=1, timeout=timeout
+                    )
+                else:
+                    config_type_enum = config_type_enum_map.get(fetch_type)
+                    if not config_type_enum:
+                        continue
+                    result = admin_service.get_config(
+                        node_id, config_type_enum, max_retries=1, timeout=timeout
+                    )
+
+                if not result.success or result.response is None:
+                    # Timeout or error
+                    error_msg = result.error or "Failed to retrieve configuration"
+                    AdminRepository.save_compliance_check(
+                        template_id=template_id,
+                        node_id=node_id,
+                        is_compliant=False,
+                        error_message=error_msg,
+                    )
+                    error_count += 1
+                    results.append(
+                        {
+                            "node_id": node_id,
+                            "node_hex": node_hex,
+                            "node_name": node.get("long_name")
+                            or node.get("short_name"),
+                            "is_compliant": False,
+                            "error": error_msg,
+                        }
+                    )
+                    continue
+
+                node_config = result.response
+
+                # Compare configurations
+                differences = compare_configs(template_config, node_config)
+
+                is_compliant = len(differences) == 0
+
+                AdminRepository.save_compliance_check(
+                    template_id=template_id,
+                    node_id=node_id,
+                    is_compliant=is_compliant,
+                    diff_data=json_module.dumps(differences) if differences else None,
+                )
+
+                if is_compliant:
+                    compliant_count += 1
+                else:
+                    non_compliant_count += 1
+
+                results.append(
+                    {
+                        "node_id": node_id,
+                        "node_hex": node_hex,
+                        "node_name": node.get("long_name") or node.get("short_name"),
+                        "is_compliant": is_compliant,
+                        "differences": differences if not is_compliant else None,
+                    }
+                )
+
+            except Exception as e:
+                logger.error(f"Error checking compliance for {node_hex}: {e}")
+                AdminRepository.save_compliance_check(
+                    template_id=template_id,
+                    node_id=node_id,
+                    is_compliant=False,
+                    error_message=str(e),
+                )
+                error_count += 1
+                results.append(
+                    {
+                        "node_id": node_id,
+                        "node_hex": node_hex,
+                        "node_name": node.get("long_name") or node.get("short_name"),
+                        "is_compliant": False,
+                        "error": str(e),
+                    }
+                )
+
+        return jsonify(
+            {
+                "template_id": template_id,
+                "template_name": template["name"],
+                "nodes_checked": len(results),
+                "compliant_count": compliant_count,
+                "non_compliant_count": non_compliant_count,
+                "error_count": error_count,
+                "results": results,
+            }
+        )
+
+    except Exception as e:
+        logger.error(f"Error running compliance check: {e}")
+        return jsonify({"error": str(e)}), 500
+
+
+def compare_configs(template_config: dict, node_config: dict) -> list[dict]:
+    """
+    Compare template configuration against node configuration.
+
+    Returns a list of differences found.
+    """
+    differences = []
+
+    def compare_values(key: str, expected: Any, actual: Any, path: str = ""):
+        full_key = f"{path}.{key}" if path else key
+
+        if isinstance(expected, dict) and isinstance(actual, dict):
+            # Recursively compare nested dicts
+            for sub_key in expected:
+                if sub_key in actual:
+                    compare_values(
+                        sub_key, expected[sub_key], actual[sub_key], full_key
+                    )
+                else:
+                    differences.append(
+                        {
+                            "field": f"{full_key}.{sub_key}",
+                            "expected": expected[sub_key],
+                            "actual": None,
+                            "type": "missing",
+                        }
+                    )
+        elif expected != actual:
+            differences.append(
+                {
+                    "field": full_key,
+                    "expected": expected,
+                    "actual": actual,
+                    "type": "mismatch",
+                }
+            )
+
+    for key in template_config:
+        if key in node_config:
+            compare_values(key, template_config[key], node_config[key])
+        else:
+            differences.append(
+                {
+                    "field": key,
+                    "expected": template_config[key],
+                    "actual": None,
+                    "type": "missing",
+                }
+            )
+
+    return differences
 
 
 @admin_bp.route("/api/admin/templates/<int:template_id>/deploy", methods=["POST"])
