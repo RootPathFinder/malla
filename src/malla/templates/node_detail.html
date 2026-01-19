@@ -331,6 +331,77 @@
                 </div>
             </div>
 
+            <!-- Live Telemetry Polling -->
+            <div class="card mb-4" id="live-telemetry-card">
+                <div class="card-header">
+                    <div class="d-flex justify-content-between align-items-center">
+                        <div>
+                            <h5 class="mb-1"><i class="bi bi-broadcast"></i> Live Telemetry</h5>
+                            <small class="text-muted">Real-time battery and device stats (polls every 5 seconds)</small>
+                        </div>
+                        <div class="d-flex align-items-center gap-2">
+                            <span id="live-telemetry-timer" class="badge bg-secondary d-none">60s</span>
+                            <button id="live-telemetry-btn" class="btn btn-sm btn-outline-primary" onclick="toggleLiveTelemetry()">
+                                <i class="bi bi-play-fill"></i> Start Live
+                            </button>
+                        </div>
+                    </div>
+                </div>
+                <div class="card-body" id="live-telemetry-content">
+                    <div class="row g-3">
+                        <div class="col-md-3 col-6">
+                            <div class="text-center p-3 bg-light rounded">
+                                <div class="h4 mb-0" id="live-battery">--</div>
+                                <small class="text-muted">Battery</small>
+                            </div>
+                        </div>
+                        <div class="col-md-3 col-6">
+                            <div class="text-center p-3 bg-light rounded">
+                                <div class="h4 mb-0" id="live-voltage">--</div>
+                                <small class="text-muted">Voltage</small>
+                            </div>
+                        </div>
+                        <div class="col-md-3 col-6">
+                            <div class="text-center p-3 bg-light rounded">
+                                <div class="h4 mb-0" id="live-channel-util">--</div>
+                                <small class="text-muted">Channel Util</small>
+                            </div>
+                        </div>
+                        <div class="col-md-3 col-6">
+                            <div class="text-center p-3 bg-light rounded">
+                                <div class="h4 mb-0" id="live-air-util">--</div>
+                                <small class="text-muted">Air Util TX</small>
+                            </div>
+                        </div>
+                    </div>
+                    <div class="row g-3 mt-1">
+                        <div class="col-md-4 col-6">
+                            <div class="text-center p-2 bg-light rounded">
+                                <div class="h5 mb-0" id="live-uptime">--</div>
+                                <small class="text-muted">Uptime</small>
+                            </div>
+                        </div>
+                        <div class="col-md-4 col-6">
+                            <div class="text-center p-2 bg-light rounded">
+                                <div class="h5 mb-0" id="live-temperature">--</div>
+                                <small class="text-muted">Temperature</small>
+                            </div>
+                        </div>
+                        <div class="col-md-4 col-12">
+                            <div class="text-center p-2 bg-light rounded">
+                                <div class="h5 mb-0" id="live-last-update">--</div>
+                                <small class="text-muted">Last Update</small>
+                            </div>
+                        </div>
+                    </div>
+                    <div class="mt-3">
+                        <small class="text-muted" id="live-telemetry-status">
+                            <i class="bi bi-info-circle"></i> Click "Start Live" to begin polling. Auto-stops after 1 minute to reduce network load.
+                        </small>
+                    </div>
+                </div>
+            </div>
+
             <!-- 7-Day Availability Visualization -->
             <div class="card mb-4">
                 <div class="card-header py-2">
@@ -1926,5 +1997,195 @@ function formatUptime(seconds) {
 document.addEventListener('temperatureUnitChanged', function() {
     loadTelemetryData();
 });
+
+// ==================== LIVE TELEMETRY POLLING ====================
+let liveTelemetryInterval = null;
+let liveTelemetryTimeout = null;
+let liveTelemetryStartTime = null;
+let liveTelemetryCountdownInterval = null;
+const LIVE_TELEMETRY_POLL_INTERVAL = 5000; // 5 seconds
+const LIVE_TELEMETRY_MAX_DURATION = 60000; // 1 minute
+
+function toggleLiveTelemetry() {
+    if (liveTelemetryInterval) {
+        stopLiveTelemetry();
+    } else {
+        startLiveTelemetry();
+    }
+}
+
+function startLiveTelemetry() {
+    const btn = document.getElementById('live-telemetry-btn');
+    const timer = document.getElementById('live-telemetry-timer');
+    const status = document.getElementById('live-telemetry-status');
+
+    // Update button state
+    btn.innerHTML = '<i class="bi bi-stop-fill"></i> Stop';
+    btn.classList.remove('btn-outline-primary');
+    btn.classList.add('btn-danger');
+    timer.classList.remove('d-none');
+
+    liveTelemetryStartTime = Date.now();
+    status.innerHTML = '<i class="bi bi-broadcast text-success"></i> Polling for live telemetry data...';
+
+    // Start polling immediately
+    pollLiveTelemetry();
+
+    // Set up interval for subsequent polls
+    liveTelemetryInterval = setInterval(pollLiveTelemetry, LIVE_TELEMETRY_POLL_INTERVAL);
+
+    // Set up countdown display
+    liveTelemetryCountdownInterval = setInterval(updateLiveTelemetryCountdown, 1000);
+
+    // Auto-stop after 1 minute
+    liveTelemetryTimeout = setTimeout(() => {
+        stopLiveTelemetry();
+        status.innerHTML = '<i class="bi bi-info-circle"></i> Polling stopped after 1 minute. Click "Start Live" to resume.';
+    }, LIVE_TELEMETRY_MAX_DURATION);
+}
+
+function stopLiveTelemetry() {
+    const btn = document.getElementById('live-telemetry-btn');
+    const timer = document.getElementById('live-telemetry-timer');
+    const status = document.getElementById('live-telemetry-status');
+
+    // Clear intervals and timeout
+    if (liveTelemetryInterval) {
+        clearInterval(liveTelemetryInterval);
+        liveTelemetryInterval = null;
+    }
+    if (liveTelemetryTimeout) {
+        clearTimeout(liveTelemetryTimeout);
+        liveTelemetryTimeout = null;
+    }
+    if (liveTelemetryCountdownInterval) {
+        clearInterval(liveTelemetryCountdownInterval);
+        liveTelemetryCountdownInterval = null;
+    }
+
+    // Update button state
+    btn.innerHTML = '<i class="bi bi-play-fill"></i> Start Live';
+    btn.classList.remove('btn-danger');
+    btn.classList.add('btn-outline-primary');
+    timer.classList.add('d-none');
+
+    status.innerHTML = '<i class="bi bi-info-circle"></i> Polling stopped. Click "Start Live" to resume.';
+}
+
+function updateLiveTelemetryCountdown() {
+    const timer = document.getElementById('live-telemetry-timer');
+    const elapsed = Date.now() - liveTelemetryStartTime;
+    const remaining = Math.max(0, Math.ceil((LIVE_TELEMETRY_MAX_DURATION - elapsed) / 1000));
+    timer.textContent = remaining + 's';
+
+    // Change color as time runs out
+    if (remaining <= 10) {
+        timer.classList.remove('bg-secondary', 'bg-warning');
+        timer.classList.add('bg-danger');
+    } else if (remaining <= 30) {
+        timer.classList.remove('bg-secondary', 'bg-danger');
+        timer.classList.add('bg-warning');
+    }
+}
+
+async function pollLiveTelemetry() {
+    const scriptTag = document.querySelector('script[data-node-id]');
+    const nodeId = scriptTag.getAttribute('data-node-id');
+
+    try {
+        const response = await fetch(`/api/node/${nodeId}/telemetry`);
+        const data = await response.json();
+
+        if (data.error) {
+            console.error('Telemetry error:', data.error);
+            return;
+        }
+
+        const telemetry = data.telemetry;
+        if (!telemetry) return;
+
+        const dm = telemetry.device_metrics || {};
+        const env = telemetry.environment_metrics || {};
+
+        // Update battery
+        const batteryEl = document.getElementById('live-battery');
+        if (dm.battery_level !== undefined) {
+            batteryEl.textContent = dm.battery_level + '%';
+            batteryEl.className = 'h4 mb-0 ' + (dm.battery_level < 20 ? 'text-danger' : dm.battery_level < 50 ? 'text-warning' : 'text-success');
+        } else {
+            batteryEl.textContent = '--';
+            batteryEl.className = 'h4 mb-0';
+        }
+
+        // Update voltage
+        const voltageEl = document.getElementById('live-voltage');
+        if (dm.voltage !== undefined) {
+            voltageEl.textContent = dm.voltage.toFixed(2) + 'V';
+            voltageEl.className = 'h4 mb-0 ' + (dm.voltage < 3.3 ? 'text-danger' : dm.voltage < 3.6 ? 'text-warning' : 'text-success');
+        } else {
+            voltageEl.textContent = '--';
+            voltageEl.className = 'h4 mb-0';
+        }
+
+        // Update channel utilization
+        const chUtilEl = document.getElementById('live-channel-util');
+        if (dm.channel_utilization !== undefined) {
+            chUtilEl.textContent = dm.channel_utilization.toFixed(1) + '%';
+            chUtilEl.className = 'h4 mb-0 ' + (dm.channel_utilization > 80 ? 'text-danger' : dm.channel_utilization > 50 ? 'text-warning' : '');
+        } else {
+            chUtilEl.textContent = '--';
+            chUtilEl.className = 'h4 mb-0';
+        }
+
+        // Update air util TX
+        const airUtilEl = document.getElementById('live-air-util');
+        if (dm.air_util_tx !== undefined) {
+            airUtilEl.textContent = dm.air_util_tx.toFixed(1) + '%';
+            airUtilEl.className = 'h4 mb-0 ' + (dm.air_util_tx > 25 ? 'text-danger' : dm.air_util_tx > 10 ? 'text-warning' : '');
+        } else {
+            airUtilEl.textContent = '--';
+            airUtilEl.className = 'h4 mb-0';
+        }
+
+        // Update uptime
+        const uptimeEl = document.getElementById('live-uptime');
+        if (dm.uptime_seconds !== undefined) {
+            uptimeEl.textContent = formatUptime(dm.uptime_seconds);
+        } else {
+            uptimeEl.textContent = '--';
+        }
+
+        // Update temperature
+        const tempEl = document.getElementById('live-temperature');
+        if (env.temperature !== undefined) {
+            const tempUnit = localStorage.getItem('temperatureUnit') || 'celsius';
+            if (tempUnit === 'fahrenheit') {
+                tempEl.textContent = ((env.temperature * 9/5) + 32).toFixed(1) + '°F';
+            } else {
+                tempEl.textContent = env.temperature.toFixed(1) + '°C';
+            }
+        } else {
+            tempEl.textContent = '--';
+        }
+
+        // Update last update time
+        const lastUpdateEl = document.getElementById('live-last-update');
+        const now = new Date();
+        lastUpdateEl.textContent = now.toLocaleTimeString();
+
+        // Flash effect to show update
+        const card = document.getElementById('live-telemetry-content');
+        card.style.transition = 'background-color 0.3s';
+        card.style.backgroundColor = 'rgba(25, 135, 84, 0.1)';
+        setTimeout(() => {
+            card.style.backgroundColor = '';
+        }, 300);
+
+    } catch (error) {
+        console.error('Error polling telemetry:', error);
+        const status = document.getElementById('live-telemetry-status');
+        status.innerHTML = '<i class="bi bi-exclamation-triangle text-warning"></i> Error fetching telemetry. Retrying...';
+    }
+}
 </script>
 {% endblock %}
