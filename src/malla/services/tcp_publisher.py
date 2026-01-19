@@ -889,9 +889,34 @@ class TCPPublisher:
                                     field.append(item)
                         logger.info(f"Security {key}: added {len(field)} items")
                     else:
-                        # Regular field
-                        logger.info(f"Security {key}: setting to {value}")
-                        setattr(config.security, key, value)
+                        # Regular field - may need bytes conversion for key fields
+                        if key in ("public_key", "private_key") and isinstance(
+                            value, str
+                        ):
+                            # Convert hex string to bytes
+                            try:
+                                import base64
+
+                                decoded = base64.b64decode(value)
+                                logger.info(
+                                    f"Security {key}: decoded base64 to {len(decoded)} bytes"
+                                )
+                                setattr(config.security, key, decoded)
+                            except Exception:
+                                try:
+                                    decoded = bytes.fromhex(value)
+                                    logger.info(
+                                        f"Security {key}: decoded hex to {len(decoded)} bytes"
+                                    )
+                                    setattr(config.security, key, decoded)
+                                except Exception:
+                                    logger.warning(
+                                        f"Security {key}: using raw string encoding"
+                                    )
+                                    setattr(config.security, key, value.encode())
+                        else:
+                            logger.info(f"Security {key}: setting to {value}")
+                            setattr(config.security, key, value)
                 else:
                     logger.warning(f"Security config: unknown field '{key}' - skipping")
             admin_msg.set_config.CopyFrom(config)
