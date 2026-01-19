@@ -1388,7 +1388,18 @@ class TCPPublisher:
                         # Check if this is from our target node
                         target_hex = f"!{target_node_id:08x}"
                         if from_id == target_hex or str(from_id) == str(target_node_id):
-                            response_data["telemetry"] = telemetry_data
+                            # Convert protobuf to dict if needed
+                            if hasattr(telemetry_data, "DESCRIPTOR"):
+                                # It's a protobuf message, convert to dict
+                                from google.protobuf.json_format import MessageToDict
+
+                                telemetry_dict = MessageToDict(telemetry_data)
+                            elif isinstance(telemetry_data, dict):
+                                telemetry_dict = telemetry_data
+                            else:
+                                telemetry_dict = {}
+
+                            response_data["telemetry"] = telemetry_dict
                             response_data["from_id"] = from_id
                             response_data["timestamp"] = time.time()
                             response_received.set()
