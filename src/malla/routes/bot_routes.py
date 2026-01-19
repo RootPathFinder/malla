@@ -202,6 +202,7 @@ def api_bot_commands():
                     "name": name,
                     "full_command": f"{bot._command_prefix}{name}",
                     "description": bot._command_descriptions.get(name, ""),
+                    "enabled": name not in bot._disabled_commands,
                 }
             )
 

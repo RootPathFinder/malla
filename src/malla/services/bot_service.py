@@ -176,6 +176,20 @@ class BotService:
         self.register_command("nodes", self._cmd_nodes, "Count of known nodes")
         self.register_command("uptime", self._cmd_uptime, "Bot uptime")
         self.register_command("mystats", self._cmd_mystats, "Your node statistics")
+        # Additional useful commands
+        self.register_command("whoami", self._cmd_whoami, "Full node details")
+        self.register_command("heard", self._cmd_heard, "Who heard you")
+        self.register_command("neighbors", self._cmd_neighbors, "Nearby nodes")
+        self.register_command("find", self._cmd_find, "Find node by name")
+        self.register_command("busy", self._cmd_busy, "Channel utilization")
+        self.register_command("lowbat", self._cmd_lowbat, "Low battery nodes")
+        self.register_command("offline", self._cmd_offline, "Recently offline")
+        self.register_command("quality", self._cmd_quality, "Your link quality")
+        self.register_command("distance", self._cmd_distance, "Distance to node")
+        self.register_command("time", self._cmd_time, "Server time")
+        self.register_command("weather", self._cmd_weather, "Environment sensors")
+        self.register_command("lastseen", self._cmd_lastseen, "Node last activity")
+        self.register_command("top", self._cmd_top, "Most active nodes")
 
     @property
     def is_enabled(self) -> bool:
@@ -1456,6 +1470,574 @@ class BotService:
             return f"⏱️ Bot uptime: {minutes}m {seconds}s"
         else:
             return f"⏱️ Bot uptime: {seconds}s"
+
+    def _cmd_whoami(self, ctx: CommandContext) -> str:
+        """Handle !whoami command - detailed node info."""
+        try:
+            from ..database.connection import get_db_connection
+
+            conn = get_db_connection()
+            cursor = conn.cursor()
+            node_id = ctx.sender_id
+
+            # Get node info
+            cursor.execute(
+                """SELECT long_name, short_name, hw_model, role, primary_channel,
+                   first_seen, last_updated, latitude, longitude
+                   FROM node_info WHERE node_id = ?""",
+                (node_id,),
+            )
+            node = cursor.fetchone()
+
+            if not node:
+                conn.close()
+                return f"📋 !{node_id:08x} - No data"
+
+            # Get latest telemetry
+            cursor.execute(
+                """SELECT battery_level, voltage, uptime_seconds
+                   FROM telemetry_data WHERE node_id = ?
+                   ORDER BY timestamp DESC LIMIT 1""",
+                (node_id,),
+            )
+            telem = cursor.fetchone()
+            conn.close()
+
+            lines = [f"📋 {node['long_name'] or node['short_name'] or '?'}"]
+            lines.append(f"ID: !{node_id:08x}")
+            if node["hw_model"]:
+                lines.append(f"HW: {node['hw_model']}")
+            if node["role"]:
+                lines.append(f"Role: {node['role']}")
+            if node["latitude"] and node["longitude"]:
+                lines.append(f"Pos: {node['latitude']:.4f},{node['longitude']:.4f}")
+            if telem and telem["uptime_seconds"]:
+                hours = telem["uptime_seconds"] // 3600
+                lines.append(f"Node up: {hours}h")
+
+            return "\n".join(lines)
+        except Exception as e:
+            logger.error(f"Error in whoami: {e}", exc_info=True)
+            return "Info unavailable"
+
+    def _cmd_heard(self, ctx: CommandContext) -> str:
+        """Handle !heard command - show who heard the requester."""
+        try:
+            from ..database.connection import get_db_connection
+
+            conn = get_db_connection()
+            cursor = conn.cursor()
+            node_id = ctx.sender_id
+            one_day_ago = time.time() - 86400
+
+            # Find gateways that received packets from this node
+            cursor.execute(
+                """SELECT gateway_id, COUNT(*) as cnt, AVG(snr) as avg_snr,
+                   MAX(timestamp) as last_ts
+                   FROM packet_history
+                   WHERE from_node_id = ? AND timestamp > ? AND gateway_id IS NOT NULL
+                   GROUP BY gateway_id
+                   ORDER BY cnt DESC LIMIT 5""",
+                (node_id, one_day_ago),
+            )
+            rows = cursor.fetchall()
+            conn.close()
+
+            if not rows:
+                return "👂 No gateways heard you in 24h"
+
+            lines = ["👂 Heard by (24h):"]
+            for row in rows:
+                gw = row["gateway_id"] or "?"
+                if len(gw) > 10:
+                    gw = gw[-8:]
+                snr = f"{row['avg_snr']:.1f}dB" if row["avg_snr"] else "?"
+                lines.append(f"{gw}: {row['cnt']}pkts {snr}")
+
+            return "\n".join(lines)
+        except Exception as e:
+            logger.error(f"Error in heard: {e}", exc_info=True)
+            return "Heard data unavailable"
+
+    def _cmd_neighbors(self, ctx: CommandContext) -> str:
+        """Handle !neighbors command - nearby nodes by direct link."""
+        try:
+            from ..database.connection import get_db_connection
+
+            conn = get_db_connection()
+            cursor = conn.cursor()
+            node_id = ctx.sender_id
+            one_day_ago = time.time() - 86400
+
+            # Find nodes that relayed packets with good SNR (direct neighbors)
+            cursor.execute(
+                """SELECT DISTINCT relay_node, AVG(snr) as avg_snr, COUNT(*) as cnt
+                   FROM packet_history
+                   WHERE from_node_id = ? AND timestamp > ?
+                   AND relay_node IS NOT NULL AND relay_node != 0
+                   GROUP BY relay_node
+                   ORDER BY avg_snr DESC LIMIT 5""",
+                (node_id, one_day_ago),
+            )
+            rows = cursor.fetchall()
+            conn.close()
+
+            if not rows:
+                return "📡 No relay neighbors found"
+
+            lines = ["📡 Neighbors (24h):"]
+            for row in rows:
+                snr = f"{row['avg_snr']:.1f}dB" if row["avg_snr"] else "?"
+                lines.append(f"!{row['relay_node']:08x}: {snr}")
+
+            return "\n".join(lines)
+        except Exception as e:
+            logger.error(f"Error in neighbors: {e}", exc_info=True)
+            return "Neighbor data unavailable"
+
+    def _cmd_find(self, ctx: CommandContext) -> str:
+        """Handle !find <name> command - find node by name."""
+        try:
+            if not ctx.args:
+                return "Usage: !find <name>"
+
+            search = " ".join(ctx.args).lower()
+            from ..database.connection import get_db_connection
+
+            conn = get_db_connection()
+            cursor = conn.cursor()
+
+            cursor.execute(
+                """SELECT node_id, long_name, short_name, last_updated
+                   FROM node_info
+                   WHERE (LOWER(long_name) LIKE ? OR LOWER(short_name) LIKE ?)
+                   AND COALESCE(archived, 0) = 0
+                   ORDER BY last_updated DESC LIMIT 3""",
+                (f"%{search}%", f"%{search}%"),
+            )
+            rows = cursor.fetchall()
+            conn.close()
+
+            if not rows:
+                return f"🔍 No nodes match '{search}'"
+
+            lines = [f"🔍 Found {len(rows)}:"]
+            for row in rows:
+                name = row["short_name"] or row["long_name"] or "?"
+                age = time.time() - row["last_updated"]
+                if age < 3600:
+                    age_str = f"{int(age / 60)}m"
+                elif age < 86400:
+                    age_str = f"{int(age / 3600)}h"
+                else:
+                    age_str = f"{int(age / 86400)}d"
+                lines.append(f"{name} !{row['node_id']:08x} ({age_str})")
+
+            return "\n".join(lines)
+        except Exception as e:
+            logger.error(f"Error in find: {e}", exc_info=True)
+            return "Find failed"
+
+    def _cmd_busy(self, ctx: CommandContext) -> str:
+        """Handle !busy command - channel utilization."""
+        try:
+            from ..database.connection import get_db_connection
+
+            conn = get_db_connection()
+            cursor = conn.cursor()
+            one_hour_ago = time.time() - 3600
+
+            # Get average channel utilization from recent telemetry
+            cursor.execute(
+                """SELECT AVG(channel_utilization) as avg_util,
+                   AVG(air_util_tx) as avg_tx,
+                   COUNT(DISTINCT node_id) as node_cnt
+                   FROM telemetry_data
+                   WHERE timestamp > ? AND channel_utilization IS NOT NULL""",
+                (one_hour_ago,),
+            )
+            row = cursor.fetchone()
+
+            # Get packet rate
+            cursor.execute(
+                "SELECT COUNT(*) as cnt FROM packet_history WHERE timestamp > ?",
+                (one_hour_ago,),
+            )
+            pkt_row = cursor.fetchone()
+            conn.close()
+
+            if not row or row["avg_util"] is None:
+                return f"📊 {pkt_row['cnt']} pkts/h | No util data"
+
+            return (
+                f"📊 Channel: {row['avg_util']:.1f}% util\n"
+                f"TX: {row['avg_tx']:.1f}% | {pkt_row['cnt']} pkts/h\n"
+                f"From {row['node_cnt']} nodes"
+            )
+        except Exception as e:
+            logger.error(f"Error in busy: {e}", exc_info=True)
+            return "Busy data unavailable"
+
+    def _cmd_lowbat(self, ctx: CommandContext) -> str:
+        """Handle !lowbat command - nodes with low battery."""
+        try:
+            from ..database.connection import get_db_connection
+
+            conn = get_db_connection()
+            cursor = conn.cursor()
+            one_day_ago = time.time() - 86400
+
+            # Get nodes with battery < 20%
+            cursor.execute(
+                """SELECT t.node_id, n.short_name, n.long_name,
+                   t.battery_level, t.voltage
+                   FROM telemetry_data t
+                   JOIN node_info n ON t.node_id = n.node_id
+                   WHERE t.timestamp > ?
+                   AND t.battery_level IS NOT NULL AND t.battery_level < 20
+                   AND t.battery_level > 0
+                   GROUP BY t.node_id
+                   HAVING t.timestamp = MAX(t.timestamp)
+                   ORDER BY t.battery_level ASC LIMIT 5""",
+                (one_day_ago,),
+            )
+            rows = cursor.fetchall()
+            conn.close()
+
+            if not rows:
+                return "🔋 No low battery nodes"
+
+            lines = ["🔋 Low battery:"]
+            for row in rows:
+                name = row["short_name"] or row["long_name"] or f"!{row['node_id']:08x}"
+                if len(name) > 10:
+                    name = name[:10]
+                v = f"{row['voltage']:.1f}V" if row["voltage"] else ""
+                lines.append(f"{name}: {row['battery_level']}% {v}")
+
+            return "\n".join(lines)
+        except Exception as e:
+            logger.error(f"Error in lowbat: {e}", exc_info=True)
+            return "Battery data unavailable"
+
+    def _cmd_offline(self, ctx: CommandContext) -> str:
+        """Handle !offline command - recently offline nodes."""
+        try:
+            from ..database.connection import get_db_connection
+
+            conn = get_db_connection()
+            cursor = conn.cursor()
+            one_hour_ago = time.time() - 3600
+            one_day_ago = time.time() - 86400
+
+            # Nodes seen in last 24h but not in last hour
+            cursor.execute(
+                """SELECT n.node_id, n.short_name, n.long_name,
+                   MAX(p.timestamp) as last_seen
+                   FROM node_info n
+                   JOIN packet_history p ON n.node_id = p.from_node_id
+                   WHERE p.timestamp > ? AND p.timestamp < ?
+                   AND COALESCE(n.archived, 0) = 0
+                   GROUP BY n.node_id
+                   ORDER BY last_seen DESC LIMIT 5""",
+                (one_day_ago, one_hour_ago),
+            )
+            rows = cursor.fetchall()
+            conn.close()
+
+            if not rows:
+                return "📴 No recently offline nodes"
+
+            lines = ["📴 Offline (1-24h):"]
+            for row in rows:
+                name = row["short_name"] or row["long_name"] or f"!{row['node_id']:08x}"
+                if len(name) > 12:
+                    name = name[:12]
+                age = time.time() - row["last_seen"]
+                hours = int(age / 3600)
+                lines.append(f"{name}: {hours}h ago")
+
+            return "\n".join(lines)
+        except Exception as e:
+            logger.error(f"Error in offline: {e}", exc_info=True)
+            return "Offline data unavailable"
+
+    def _cmd_quality(self, ctx: CommandContext) -> str:
+        """Handle !quality command - link quality for requester."""
+        try:
+            from ..database.connection import get_db_connection
+
+            conn = get_db_connection()
+            cursor = conn.cursor()
+            node_id = ctx.sender_id
+            one_day_ago = time.time() - 86400
+
+            # Get SNR stats for this node's packets
+            cursor.execute(
+                """SELECT AVG(snr) as avg_snr, MIN(snr) as min_snr,
+                   MAX(snr) as max_snr, COUNT(*) as pkt_cnt,
+                   AVG(hop_start - hop_limit) as avg_hops
+                   FROM packet_history
+                   WHERE from_node_id = ? AND timestamp > ?
+                   AND snr IS NOT NULL""",
+                (node_id, one_day_ago),
+            )
+            row = cursor.fetchone()
+            conn.close()
+
+            if not row or row["pkt_cnt"] == 0:
+                return "📶 No quality data in 24h"
+
+            lines = ["📶 Your link quality (24h):"]
+            lines.append(
+                f"SNR: {row['avg_snr']:.1f}dB avg "
+                f"({row['min_snr']:.0f}/{row['max_snr']:.0f})"
+            )
+            if row["avg_hops"] and row["avg_hops"] > 0:
+                lines.append(f"Avg hops: {row['avg_hops']:.1f}")
+            lines.append(f"Packets: {row['pkt_cnt']}")
+
+            return "\n".join(lines)
+        except Exception as e:
+            logger.error(f"Error in quality: {e}", exc_info=True)
+            return "Quality data unavailable"
+
+    def _cmd_distance(self, ctx: CommandContext) -> str:
+        """Handle !distance <node> command - distance to another node."""
+        try:
+            if not ctx.args:
+                return "Usage: !distance <node>"
+
+            import math
+
+            from ..database.connection import get_db_connection
+
+            target = ctx.args[0].lower().replace("!", "")
+            conn = get_db_connection()
+            cursor = conn.cursor()
+
+            # Get requester position
+            cursor.execute(
+                "SELECT latitude, longitude FROM node_info WHERE node_id = ?",
+                (ctx.sender_id,),
+            )
+            src = cursor.fetchone()
+
+            if not src or not src["latitude"]:
+                conn.close()
+                return "📍 Your position unknown"
+
+            # Find target node
+            if target.isalnum() and len(target) == 8:
+                # Hex node ID
+                try:
+                    target_id = int(target, 16)
+                    cursor.execute(
+                        "SELECT node_id, latitude, longitude, short_name FROM node_info WHERE node_id = ?",
+                        (target_id,),
+                    )
+                except ValueError:
+                    cursor.execute(
+                        """SELECT node_id, latitude, longitude, short_name FROM node_info
+                           WHERE LOWER(short_name) LIKE ? OR LOWER(long_name) LIKE ?
+                           LIMIT 1""",
+                        (f"%{target}%", f"%{target}%"),
+                    )
+            else:
+                cursor.execute(
+                    """SELECT node_id, latitude, longitude, short_name FROM node_info
+                       WHERE LOWER(short_name) LIKE ? OR LOWER(long_name) LIKE ?
+                       LIMIT 1""",
+                    (f"%{target}%", f"%{target}%"),
+                )
+
+            dst = cursor.fetchone()
+            conn.close()
+
+            if not dst:
+                return f"📍 Node '{target}' not found"
+            if not dst["latitude"]:
+                return f"📍 {dst['short_name'] or target} has no position"
+
+            # Haversine formula
+            lat1, lon1 = math.radians(src["latitude"]), math.radians(src["longitude"])
+            lat2, lon2 = math.radians(dst["latitude"]), math.radians(dst["longitude"])
+            dlat, dlon = lat2 - lat1, lon2 - lon1
+            a = (
+                math.sin(dlat / 2) ** 2
+                + math.cos(lat1) * math.cos(lat2) * math.sin(dlon / 2) ** 2
+            )
+            c = 2 * math.asin(math.sqrt(a))
+            km = 6371 * c
+
+            name = dst["short_name"] or f"!{dst['node_id']:08x}"
+            if km < 1:
+                return f"📍 {name}: {km * 1000:.0f}m"
+            else:
+                return f"📍 {name}: {km:.1f}km"
+
+        except Exception as e:
+            logger.error(f"Error in distance: {e}", exc_info=True)
+            return "Distance calc failed"
+
+    def _cmd_time(self, ctx: CommandContext) -> str:
+        """Handle !time command - server time."""
+        from datetime import datetime
+
+        now = datetime.now()
+        utc = datetime.utcnow()
+        return f"🕐 {now.strftime('%Y-%m-%d %H:%M:%S')} (UTC: {utc.strftime('%H:%M')})"
+
+    def _cmd_weather(self, ctx: CommandContext) -> str:
+        """Handle !weather command - environment sensor data."""
+        try:
+            from ..database.connection import get_db_connection
+
+            conn = get_db_connection()
+            cursor = conn.cursor()
+            one_hour_ago = time.time() - 3600
+
+            # Check for environment telemetry (temperature, humidity, pressure)
+            cursor.execute(
+                """SELECT n.short_name, e.temperature, e.relative_humidity,
+                   e.barometric_pressure, e.timestamp
+                   FROM environment_data e
+                   JOIN node_info n ON e.node_id = n.node_id
+                   WHERE e.timestamp > ?
+                   ORDER BY e.timestamp DESC LIMIT 3""",
+                (one_hour_ago,),
+            )
+            rows = cursor.fetchall()
+            conn.close()
+
+            if not rows:
+                return "🌡️ No weather sensors active"
+
+            lines = ["🌡️ Environment:"]
+            for row in rows:
+                name = row["short_name"] or "?"
+                parts = []
+                if row["temperature"] is not None:
+                    parts.append(f"{row['temperature']:.1f}°C")
+                if row["relative_humidity"] is not None:
+                    parts.append(f"{row['relative_humidity']:.0f}%RH")
+                if row["barometric_pressure"] is not None:
+                    parts.append(f"{row['barometric_pressure']:.0f}hPa")
+                if parts:
+                    lines.append(f"{name}: {' '.join(parts)}")
+
+            return "\n".join(lines) if len(lines) > 1 else "🌡️ No readings"
+
+        except Exception as e:
+            # Table might not exist
+            logger.debug(f"Weather data unavailable: {e}")
+            return "🌡️ No weather data available"
+
+    def _cmd_lastseen(self, ctx: CommandContext) -> str:
+        """Handle !lastseen <node> command - when was node last active."""
+        try:
+            if not ctx.args:
+                return "Usage: !lastseen <node>"
+
+            from ..database.connection import get_db_connection
+
+            target = " ".join(ctx.args).lower().replace("!", "")
+            conn = get_db_connection()
+            cursor = conn.cursor()
+
+            # Find node
+            if len(target) == 8 and all(c in "0123456789abcdef" for c in target):
+                try:
+                    target_id = int(target, 16)
+                    cursor.execute(
+                        """SELECT n.node_id, n.short_name, n.long_name,
+                           MAX(p.timestamp) as last_seen
+                           FROM node_info n
+                           LEFT JOIN packet_history p ON n.node_id = p.from_node_id
+                           WHERE n.node_id = ?
+                           GROUP BY n.node_id""",
+                        (target_id,),
+                    )
+                except ValueError:
+                    pass
+            else:
+                cursor.execute(
+                    """SELECT n.node_id, n.short_name, n.long_name,
+                       MAX(p.timestamp) as last_seen
+                       FROM node_info n
+                       LEFT JOIN packet_history p ON n.node_id = p.from_node_id
+                       WHERE LOWER(n.short_name) LIKE ? OR LOWER(n.long_name) LIKE ?
+                       GROUP BY n.node_id LIMIT 1""",
+                    (f"%{target}%", f"%{target}%"),
+                )
+
+            row = cursor.fetchone()
+            conn.close()
+
+            if not row:
+                return f"👁️ '{target}' not found"
+
+            name = row["short_name"] or row["long_name"] or f"!{row['node_id']:08x}"
+            if not row["last_seen"]:
+                return f"👁️ {name}: never seen"
+
+            age = time.time() - row["last_seen"]
+            if age < 60:
+                age_str = f"{int(age)}s ago"
+            elif age < 3600:
+                age_str = f"{int(age / 60)}m ago"
+            elif age < 86400:
+                age_str = f"{int(age / 3600)}h ago"
+            else:
+                age_str = f"{int(age / 86400)}d ago"
+
+            return f"👁️ {name}: {age_str}"
+
+        except Exception as e:
+            logger.error(f"Error in lastseen: {e}", exc_info=True)
+            return "Lastseen failed"
+
+    def _cmd_top(self, ctx: CommandContext) -> str:
+        """Handle !top command - most active nodes this week."""
+        try:
+            from ..database.connection import get_db_connection
+
+            conn = get_db_connection()
+            cursor = conn.cursor()
+            one_week_ago = time.time() - (7 * 86400)
+
+            cursor.execute(
+                """SELECT p.from_node_id, n.short_name, n.long_name,
+                   COUNT(*) as pkt_cnt
+                   FROM packet_history p
+                   JOIN node_info n ON p.from_node_id = n.node_id
+                   WHERE p.timestamp > ?
+                   GROUP BY p.from_node_id
+                   ORDER BY pkt_cnt DESC LIMIT 5""",
+                (one_week_ago,),
+            )
+            rows = cursor.fetchall()
+            conn.close()
+
+            if not rows:
+                return "🏆 No activity this week"
+
+            lines = ["🏆 Top nodes (7d):"]
+            for i, row in enumerate(rows, 1):
+                name = (
+                    row["short_name"]
+                    or row["long_name"]
+                    or f"!{row['from_node_id']:08x}"
+                )
+                if len(name) > 12:
+                    name = name[:12]
+                lines.append(f"{i}. {name}: {row['pkt_cnt']} pkts")
+
+            return "\n".join(lines)
+
+        except Exception as e:
+            logger.error(f"Error in top: {e}", exc_info=True)
+            return "Top data unavailable"
 
 
 # Singleton accessor
