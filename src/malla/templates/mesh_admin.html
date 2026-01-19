@@ -539,6 +539,24 @@
                 <!-- Administrable Nodes Tab -->
                 <div class="tab-pane fade show active" id="nodes-pane" role="tabpanel">
                     {% if administrable_nodes %}
+                        <!-- Refresh All Controls -->
+                        <div class="d-flex justify-content-between align-items-center mb-3">
+                            <div>
+                                <span class="text-muted small" id="refreshAllStatus"></span>
+                            </div>
+                            <div class="d-flex align-items-center gap-2">
+                                <button class="btn btn-outline-primary btn-sm" id="refreshAllNodesBtn" onclick="refreshAllAdminNodes()">
+                                    <i class="bi bi-arrow-repeat"></i> Refresh All Nodes
+                                </button>
+                                <button class="btn btn-outline-danger btn-sm d-none" id="cancelRefreshAllBtn" onclick="cancelRefreshAllNodes()">
+                                    <i class="bi bi-x-circle"></i> Cancel
+                                </button>
+                            </div>
+                        </div>
+                        <!-- Progress bar for refresh all -->
+                        <div class="progress mb-3 d-none" id="refreshAllProgress" style="height: 6px;">
+                            <div class="progress-bar progress-bar-striped progress-bar-animated" role="progressbar" style="width: 0%"></div>
+                        </div>
                         <div class="table-responsive">
                             <table class="table table-hover">
                                 <thead>
@@ -3605,18 +3623,162 @@
         }
     }
 
-    // Refresh all administrable nodes
-    async function refreshAllNodes() {
-        const tbody = document.getElementById('administrableNodesBody');
-        if (!tbody) return;
+    // State for refresh all operation
+    let refreshAllInProgress = false;
+    let refreshAllCancelled = false;
 
-        const rows = tbody.querySelectorAll('tr[id^="admin-node-row-"]');
-        for (const row of rows) {
-            const nodeId = row.id.replace('admin-node-row-', '');
-            await refreshNodeAdminInfo(parseInt(nodeId));
-            // Small delay between requests to avoid overwhelming the mesh
-            await new Promise(resolve => setTimeout(resolve, 1000));
+    // Refresh all administrable nodes with adaptive timing based on hop count
+    async function refreshAllAdminNodes() {
+        if (refreshAllInProgress) return;
+
+        refreshAllInProgress = true;
+        refreshAllCancelled = false;
+
+        const refreshBtn = document.getElementById('refreshAllNodesBtn');
+        const cancelBtn = document.getElementById('cancelRefreshAllBtn');
+        const progressDiv = document.getElementById('refreshAllProgress');
+        const progressBar = progressDiv?.querySelector('.progress-bar');
+        const statusSpan = document.getElementById('refreshAllStatus');
+
+        // Show controls
+        if (refreshBtn) {
+            refreshBtn.disabled = true;
+            refreshBtn.innerHTML = '<span class="spinner-border spinner-border-sm"></span> Fetching hop data...';
         }
+        if (cancelBtn) cancelBtn.classList.remove('d-none');
+        if (progressDiv) progressDiv.classList.remove('d-none');
+        if (statusSpan) statusSpan.textContent = 'Estimating hop distances...';
+
+        try {
+            // Fetch hop estimates from API
+            const hopResponse = await fetch('/api/admin/nodes/hop-estimates');
+            const hopData = await hopResponse.json();
+
+            if (!hopResponse.ok || hopData.error) {
+                throw new Error(hopData.error || 'Failed to get hop estimates');
+            }
+
+            const hopEstimates = hopData.hop_estimates || {};
+
+            // Get all node rows
+            const tbody = document.getElementById('administrableNodesBody');
+            if (!tbody) return;
+
+            const rows = Array.from(tbody.querySelectorAll('tr[id^="admin-node-row-"]'));
+            if (rows.length === 0) {
+                showAlert('info', 'No administrable nodes to refresh');
+                return;
+            }
+
+            // Sort nodes by hop count (nearest first, then unknown)
+            const nodesWithHops = rows.map(row => {
+                const nodeId = row.id.replace('admin-node-row-', '');
+                const estimate = hopEstimates[nodeId];
+                return {
+                    nodeId: parseInt(nodeId),
+                    row: row,
+                    estimatedHops: estimate?.estimated_hops ?? null,
+                    delayMs: estimate?.recommended_delay_ms ?? 7000  // Default 7s if unknown
+                };
+            }).sort((a, b) => {
+                // Sort by hops: known hops ascending, unknown last
+                if (a.estimatedHops === null && b.estimatedHops === null) return 0;
+                if (a.estimatedHops === null) return 1;
+                if (b.estimatedHops === null) return -1;
+                return a.estimatedHops - b.estimatedHops;
+            });
+
+            const totalNodes = nodesWithHops.length;
+            let completed = 0;
+            let successCount = 0;
+            let failCount = 0;
+
+            if (refreshBtn) {
+                refreshBtn.innerHTML = '<span class="spinner-border spinner-border-sm"></span> Refreshing...';
+            }
+
+            for (const node of nodesWithHops) {
+                if (refreshAllCancelled) {
+                    if (statusSpan) statusSpan.textContent = `Cancelled. ${successCount} successful, ${failCount} failed.`;
+                    break;
+                }
+
+                const hopText = node.estimatedHops !== null ? `${node.estimatedHops} hops` : 'unknown hops';
+                if (statusSpan) {
+                    statusSpan.textContent = `Refreshing ${completed + 1}/${totalNodes}: !${node.nodeId.toString(16).padStart(8, '0')} (${hopText})...`;
+                }
+
+                try {
+                    await refreshNodeAdminInfo(node.nodeId);
+                    successCount++;
+                } catch (err) {
+                    console.error(`Failed to refresh node ${node.nodeId}:`, err);
+                    failCount++;
+                }
+
+                completed++;
+
+                // Update progress bar
+                if (progressBar) {
+                    const percent = Math.round((completed / totalNodes) * 100);
+                    progressBar.style.width = `${percent}%`;
+                    progressBar.setAttribute('aria-valuenow', percent);
+                }
+
+                // Wait adaptive time before next request (skip delay after last node)
+                if (completed < totalNodes && !refreshAllCancelled) {
+                    const delaySeconds = Math.ceil(node.delayMs / 1000);
+                    if (statusSpan) {
+                        statusSpan.textContent = `Waiting ${delaySeconds}s for ${hopText} response time... (${completed}/${totalNodes} done)`;
+                    }
+                    await new Promise(resolve => setTimeout(resolve, node.delayMs));
+                }
+            }
+
+            if (!refreshAllCancelled) {
+                if (statusSpan) {
+                    statusSpan.textContent = `Refresh complete: ${successCount} online, ${failCount} failed out of ${totalNodes} nodes`;
+                }
+                showAlert('success', `Refreshed ${successCount} of ${totalNodes} nodes successfully`);
+            }
+
+        } catch (error) {
+            console.error('Refresh all error:', error);
+            showAlert('danger', `Error: ${error.message}`);
+            if (statusSpan) statusSpan.textContent = `Error: ${error.message}`;
+        } finally {
+            refreshAllInProgress = false;
+
+            // Restore UI
+            if (refreshBtn) {
+                refreshBtn.disabled = false;
+                refreshBtn.innerHTML = '<i class="bi bi-arrow-repeat"></i> Refresh All Nodes';
+            }
+            if (cancelBtn) cancelBtn.classList.add('d-none');
+
+            // Hide progress after a delay
+            setTimeout(() => {
+                if (progressDiv && !refreshAllInProgress) {
+                    progressDiv.classList.add('d-none');
+                    if (progressBar) progressBar.style.width = '0%';
+                }
+            }, 3000);
+        }
+    }
+
+    // Cancel the refresh all operation
+    function cancelRefreshAllNodes() {
+        refreshAllCancelled = true;
+        const cancelBtn = document.getElementById('cancelRefreshAllBtn');
+        if (cancelBtn) {
+            cancelBtn.disabled = true;
+            cancelBtn.innerHTML = '<i class="bi bi-hourglass"></i> Cancelling...';
+        }
+    }
+
+    // Legacy function name for compatibility
+    async function refreshAllNodes() {
+        await refreshAllAdminNodes();
     }
 
     // Confirm reboot from nodes table

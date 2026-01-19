@@ -3582,3 +3582,58 @@ def api_get_deployments():
     except Exception as e:
         logger.error(f"Error getting deployments: {e}")
         return jsonify({"error": str(e)}), 500
+
+
+# ============================================================================
+# API Routes - Bulk Operations
+# ============================================================================
+
+
+@admin_bp.route("/api/admin/nodes/hop-estimates")
+def api_nodes_hop_estimates():
+    """
+    Get estimated hop counts for all administrable nodes.
+
+    This uses traceroute data to estimate how many hops away each node is
+    from the gateway. Nodes farther away should be given more time for
+    responses when doing bulk operations.
+
+    Returns:
+        Dict with node_id -> hop_count mappings and default delay recommendations
+    """
+    try:
+        from ..services.job_service import JobService
+
+        admin_service = get_admin_service()
+        nodes = admin_service.get_administrable_nodes()
+        job_service = JobService()
+
+        hop_estimates = {}
+        for node in nodes:
+            node_id = node["node_id"]
+            # Use the existing hop estimation logic from job service
+            estimated_hops = job_service._estimate_hop_count(node_id)
+            hop_estimates[str(node_id)] = {
+                "node_id": node_id,
+                "hex_id": f"!{node_id:08x}",
+                "estimated_hops": estimated_hops,
+                # Recommended delay in ms: base 5s + 2s per hop
+                "recommended_delay_ms": 5000 + (estimated_hops or 1) * 2000,
+            }
+
+        return jsonify(
+            {
+                "hop_estimates": hop_estimates,
+                "node_count": len(nodes),
+                "gateway_id": admin_service.gateway_node_id,
+                "gateway_hex": (
+                    f"!{admin_service.gateway_node_id:08x}"
+                    if admin_service.gateway_node_id
+                    else None
+                ),
+            }
+        )
+
+    except Exception as e:
+        logger.error(f"Error getting hop estimates: {e}")
+        return jsonify({"error": str(e)}), 500
