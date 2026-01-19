@@ -336,6 +336,8 @@ class BotService:
                 entries = [e for e in self._activity_log if e["timestamp"] > since]
             else:
                 entries = list(self._activity_log)
+            # Sort by timestamp to ensure chronological order
+            entries.sort(key=lambda e: e["timestamp"])
             return entries[-limit:]
 
     def get_stats(self) -> dict[str, Any]:
