@@ -6,7 +6,6 @@ import pytest
 
 from malla.services.connection_manager import (
     ConnectionInfo,
-    ConnectionManager,
     ConnectionRole,
     ConnectionType,
     get_connection_manager,

@@ -39,9 +39,7 @@ def initialize_connections_from_config() -> ConnectionManager:
 
     # Check if we have new multi-connection configuration
     if config.connections and len(config.connections) > 0:
-        logger.info(
-            f"Initializing {len(config.connections)} connections from config"
-        )
+        logger.info(f"Initializing {len(config.connections)} connections from config")
         _initialize_multi_connections(manager, config.connections)
     else:
         # Fall back to legacy single-connection configuration
@@ -199,9 +197,7 @@ def _create_tcp_publisher(conn_id: str, conn_def: dict[str, Any]) -> TCPPublishe
     return publisher
 
 
-def _create_serial_publisher(
-    conn_id: str, conn_def: dict[str, Any]
-) -> SerialPublisher:
+def _create_serial_publisher(conn_id: str, conn_def: dict[str, Any]) -> SerialPublisher:
     """
     Create a Serial publisher from connection definition.
 

@@ -17,7 +17,9 @@ logger = logging.getLogger(__name__)
 class ConnectionRole(Enum):
     """Role designation for a connection."""
 
-    ADMIN = "admin"  # For administrative operations (backups, compliance, restores, config)
+    ADMIN = (
+        "admin"  # For administrative operations (backups, compliance, restores, config)
+    )
     CLIENT = "client"  # For basic mesh activities (chat, traceroute, monitoring, bot)
 
 
@@ -36,7 +38,9 @@ class ConnectionInfo:
     connection_id: str
     connection_type: ConnectionType
     role: ConnectionRole
-    publisher: Any  # The actual publisher instance (TCPPublisher, SerialPublisher, etc.)
+    publisher: (
+        Any  # The actual publisher instance (TCPPublisher, SerialPublisher, etc.)
+    )
     description: str = ""
     auto_connect: bool = True
 
@@ -125,7 +129,9 @@ class ConnectionManager:
         """
         with self._connections_lock:
             if connection_id in self._connections:
-                logger.warning(f"Connection '{connection_id}' already exists, replacing")
+                logger.warning(
+                    f"Connection '{connection_id}' already exists, replacing"
+                )
 
             conn_info = ConnectionInfo(
                 connection_id=connection_id,
@@ -165,9 +171,7 @@ class ConnectionManager:
                     conn_info.publisher.disconnect()
                     logger.info(f"Disconnected connection '{connection_id}'")
                 except Exception as e:
-                    logger.warning(
-                        f"Error disconnecting '{connection_id}': {e}"
-                    )
+                    logger.warning(f"Error disconnecting '{connection_id}': {e}")
 
             del self._connections[connection_id]
             logger.info(f"Removed connection '{connection_id}'")
@@ -202,9 +206,7 @@ class ConnectionManager:
                     return conn
             return None
 
-    def get_all_connections_by_role(
-        self, role: ConnectionRole
-    ) -> list[ConnectionInfo]:
+    def get_all_connections_by_role(self, role: ConnectionRole) -> list[ConnectionInfo]:
         """
         Get all connections with the specified role.
 
@@ -291,9 +293,7 @@ class ConnectionManager:
             )
             return client_connections[0].publisher
 
-    def set_connection_role(
-        self, connection_id: str, role: ConnectionRole
-    ) -> bool:
+    def set_connection_role(self, connection_id: str, role: ConnectionRole) -> bool:
         """
         Change the role of an existing connection.
 
@@ -352,22 +352,17 @@ class ConnectionManager:
                         results[conn.connection_id] = success
                         if success:
                             logger.info(
-                                f"Connected '{conn.connection_id}' "
-                                f"({conn.role.value})"
+                                f"Connected '{conn.connection_id}' ({conn.role.value})"
                             )
                         else:
-                            logger.warning(
-                                f"Failed to connect '{conn.connection_id}'"
-                            )
+                            logger.warning(f"Failed to connect '{conn.connection_id}'")
                     else:
                         logger.warning(
                             f"Connection '{conn.connection_id}' has no connect method"
                         )
                         results[conn.connection_id] = False
                 except Exception as e:
-                    logger.error(
-                        f"Error connecting '{conn.connection_id}': {e}"
-                    )
+                    logger.error(f"Error connecting '{conn.connection_id}': {e}")
                     results[conn.connection_id] = False
 
         return results
@@ -403,9 +398,7 @@ class ConnectionManager:
                         )
                         results[conn.connection_id] = False
                 except Exception as e:
-                    logger.error(
-                        f"Error disconnecting '{conn.connection_id}': {e}"
-                    )
+                    logger.error(f"Error disconnecting '{conn.connection_id}': {e}")
                     results[conn.connection_id] = False
 
         return results

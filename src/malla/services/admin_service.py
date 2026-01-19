@@ -20,7 +20,7 @@ from meshtastic.protobuf import config_pb2, mesh_pb2, module_config_pb2
 from ..config import get_config
 from ..database.admin_repository import AdminRepository
 from .config_metadata import get_all_config_schemas, get_config_schema
-from .connection_manager import ConnectionRole, get_connection_manager
+from .connection_manager import get_connection_manager
 from .mqtt_publisher import get_mqtt_publisher
 from .serial_publisher import get_serial_publisher
 from .tcp_publisher import get_tcp_publisher

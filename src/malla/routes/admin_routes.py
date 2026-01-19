@@ -4149,9 +4149,7 @@ def api_set_connection_role(connection_id: str):
         try:
             role = ConnectionRole(role_str)
         except ValueError:
-            return jsonify(
-                {"error": f"Invalid role. Must be 'admin' or 'client'"}
-            ), 400
+            return jsonify({"error": "Invalid role. Must be 'admin' or 'client'"}), 400
 
         manager = get_connection_manager()
         success = manager.set_connection_role(connection_id, role)
@@ -4194,7 +4192,7 @@ def api_connect_all_connections():
                 role = ConnectionRole(role_filter.lower())
             except ValueError:
                 return jsonify(
-                    {"error": f"Invalid role. Must be 'admin' or 'client'"}
+                    {"error": "Invalid role. Must be 'admin' or 'client'"}
                 ), 400
 
         manager = get_connection_manager()
@@ -4234,7 +4232,7 @@ def api_disconnect_all_connections():
                 role = ConnectionRole(role_filter.lower())
             except ValueError:
                 return jsonify(
-                    {"error": f"Invalid role. Must be 'admin' or 'client'"}
+                    {"error": "Invalid role. Must be 'admin' or 'client'"}
                 ), 400
 
         manager = get_connection_manager()
@@ -4250,4 +4248,3 @@ def api_disconnect_all_connections():
     except Exception as e:
         logger.error(f"Error disconnecting all connections: {e}")
         return jsonify({"error": str(e)}), 500
-
