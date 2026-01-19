@@ -3,6 +3,9 @@ Admin service for remote node administration.
 
 This service provides high-level operations for administering Meshtastic nodes
 remotely via MQTT, TCP, or serial connection.
+
+Supports multi-connection scenarios where admin operations use dedicated
+admin connections while client operations use separate client connections.
 """
 
 import json
@@ -17,6 +20,7 @@ from meshtastic.protobuf import config_pb2, mesh_pb2, module_config_pb2
 from ..config import get_config
 from ..database.admin_repository import AdminRepository
 from .config_metadata import get_all_config_schemas, get_config_schema
+from .connection_manager import ConnectionRole, get_connection_manager
 from .mqtt_publisher import get_mqtt_publisher
 from .serial_publisher import get_serial_publisher
 from .tcp_publisher import get_tcp_publisher
@@ -257,6 +261,8 @@ class AdminService:
         self._config = get_config()
         self._gateway_node_id: int | None = None
         self._connection_type: AdminConnectionType | None = None
+        self._connection_manager = get_connection_manager()
+        self._use_connection_manager = len(self._config.connections) > 0
 
     @property
     def connection_type(self) -> AdminConnectionType:
@@ -300,9 +306,23 @@ class AdminService:
         """
         Get the appropriate publisher based on connection type.
 
+        In multi-connection mode, returns the admin-role publisher.
+        In legacy mode, returns the publisher based on connection_type setting.
+
         Returns:
             MQTT, TCP, or Serial publisher instance
         """
+        # Use connection manager if available (multi-connection mode)
+        if self._use_connection_manager:
+            publisher = self._connection_manager.get_admin_publisher()
+            if publisher is not None:
+                return publisher
+            logger.warning(
+                "No admin connection available in connection manager, "
+                "falling back to legacy mode"
+            )
+
+        # Fall back to legacy single-connection mode
         conn_type = self.connection_type
 
         if conn_type == AdminConnectionType.TCP:

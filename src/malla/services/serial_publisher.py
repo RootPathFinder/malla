@@ -237,26 +237,19 @@ class SerialPublisher:
     - Connection to a Meshtastic node via USB/Serial
     - Sending admin commands
     - Receiving responses
+
+    Note: Multiple instances are now supported for multi-connection scenarios.
+    Use get_serial_publisher() for the default singleton instance.
     """
 
-    _instance: "SerialPublisher | None" = None
-    _lock = threading.Lock()
+    def __init__(self, connection_id: str = "default") -> None:
+        """
+        Initialize the Serial publisher.
 
-    def __new__(cls) -> "SerialPublisher":
-        """Singleton pattern to ensure only one Serial publisher exists."""
-        if cls._instance is None:
-            with cls._lock:
-                if cls._instance is None:
-                    cls._instance = super().__new__(cls)
-                    cls._instance._initialized = False
-        return cls._instance
-
-    def __init__(self) -> None:
-        """Initialize the Serial publisher."""
-        if self._initialized:
-            return
-
-        self._initialized = True
+        Args:
+            connection_id: Unique identifier for this connection instance
+        """
+        self._connection_id = connection_id
         self._config = get_config()
         self._interface: SerialInterface | None = None
         self._connected = False
@@ -762,13 +755,19 @@ class SerialPublisher:
             return None
 
 
-# Global serial publisher instance
+# Global serial publisher instance for backward compatibility
 _serial_publisher: SerialPublisher | None = None
 
 
 def get_serial_publisher() -> SerialPublisher:
-    """Get the global serial publisher instance."""
+    """
+    Get the default global serial publisher instance.
+
+    This is maintained for backward compatibility with existing code.
+    For multi-connection scenarios, create SerialPublisher instances directly
+    and register them with the ConnectionManager.
+    """
     global _serial_publisher
     if _serial_publisher is None:
-        _serial_publisher = SerialPublisher()
+        _serial_publisher = SerialPublisher(connection_id="default_serial")
     return _serial_publisher

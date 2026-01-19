@@ -65,26 +65,19 @@ class TCPPublisher:
     - Connection to a Meshtastic node via TCP
     - Sending admin commands
     - Receiving responses
+
+    Note: Multiple instances are now supported for multi-connection scenarios.
+    Use get_tcp_publisher() for the default singleton instance.
     """
 
-    _instance: "TCPPublisher | None" = None
-    _lock = threading.Lock()
+    def __init__(self, connection_id: str = "default") -> None:
+        """
+        Initialize the TCP publisher.
 
-    def __new__(cls) -> "TCPPublisher":
-        """Singleton pattern to ensure only one TCP publisher exists."""
-        if cls._instance is None:
-            with cls._lock:
-                if cls._instance is None:
-                    cls._instance = super().__new__(cls)
-                    cls._instance._initialized = False
-        return cls._instance
-
-    def __init__(self) -> None:
-        """Initialize the TCP publisher."""
-        if self._initialized:
-            return
-
-        self._initialized = True
+        Args:
+            connection_id: Unique identifier for this connection instance
+        """
+        self._connection_id = connection_id
         self._config = get_config()
         self._interface: TCPInterface | None = None
         self._connected = False
@@ -1481,16 +1474,22 @@ class TCPPublisher:
             return None
 
 
-# Module-level singleton accessor
+# Module-level singleton accessor for backward compatibility
 _tcp_publisher: TCPPublisher | None = None
 _tcp_publisher_lock = threading.Lock()
 
 
 def get_tcp_publisher() -> TCPPublisher:
-    """Get the singleton TCPPublisher instance."""
+    """
+    Get the default singleton TCPPublisher instance.
+
+    This is maintained for backward compatibility with existing code.
+    For multi-connection scenarios, create TCPPublisher instances directly
+    and register them with the ConnectionManager.
+    """
     global _tcp_publisher
     if _tcp_publisher is None:
         with _tcp_publisher_lock:
             if _tcp_publisher is None:
-                _tcp_publisher = TCPPublisher()
+                _tcp_publisher = TCPPublisher(connection_id="default_tcp")
     return _tcp_publisher

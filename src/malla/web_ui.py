@@ -277,6 +277,12 @@ def create_app(cfg: AppConfig | None = None):  # noqa: D401
     logger.info("Initializing job service for background operations")
     init_job_service()
 
+    # Initialize connection manager for multi-connection support
+    from .services.connection_initializer import initialize_connections_from_config
+
+    logger.info("Initializing connection manager")
+    initialize_connections_from_config()
+
     # Start periodic cache cleanup for node names
     logger.info("Starting node name cache cleanup background thread")
     start_cache_cleanup()
