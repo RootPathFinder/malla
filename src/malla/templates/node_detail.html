@@ -2379,6 +2379,7 @@ async function pollLiveTelemetry() {
     const scriptTag = document.querySelector('script[data-node-id]');
     const nodeId = scriptTag.getAttribute('data-node-id');
     const pollStartTime = Date.now();
+    const statusIndicator = document.getElementById('live-telemetry-status');
 
     try {
         // Calculate timeout based on current poll interval (leave 2s buffer)
@@ -2396,46 +2397,49 @@ async function pollLiveTelemetry() {
         const responseTime = Date.now() - pollStartTime;
         const data = await response.json();
 
-        // Update status indicator
-        const statusIndicator = document.getElementById('live-telemetry-status');
-        if (statusIndicator) {
-            if (data.success) {
-                const intervalSec = Math.round(liveTelemetryPollInterval / 1000);
-                statusIndicator.innerHTML = `<span class="badge bg-success">Live</span> <small class="text-muted ms-2">Response: ${Math.round(responseTime/1000)}s | Next poll: ${intervalSec}s</small>`;
-                adjustPollingInterval(responseTime, true);
-            } else if (response.status === 408) {
-                statusIndicator.innerHTML = '<span class="badge bg-warning">No Response</span> <small class="text-muted ms-2">Node may be slow to respond, increasing interval...</small>';
-                adjustPollingInterval(responseTime, false);
-            } else {
-                statusIndicator.innerHTML = '<span class="badge bg-secondary">Cached</span>';
-                pollCachedTelemetry();
-                scheduleNextPoll();
-                return;
-            }
-        }
+        // Handle successful live response
+        if (data.success && data.telemetry) {
+            const intervalSec = Math.round(liveTelemetryPollInterval / 1000);
+            statusIndicator.innerHTML = `<span class="badge bg-success">Live</span> <small class="text-muted ms-2">Response: ${Math.round(responseTime/1000)}s | Next poll: ${intervalSec}s</small>`;
+            adjustPollingInterval(responseTime, true);
 
-        if (!data.success || !data.telemetry) {
-            console.log('Live telemetry unavailable, falling back to cached');
-            pollCachedTelemetry();
+            const telemetry = data.telemetry;
+            // Handle both snake_case and camelCase keys from API
+            const dm = telemetry.device_metrics || telemetry.deviceMetrics || {};
+            const env = telemetry.environment_metrics || telemetry.environmentMetrics || {};
+
+            updateTelemetryDisplay(dm, env);
+            updateLiveCharts(dm);
             scheduleNextPoll();
             return;
         }
 
-        const telemetry = data.telemetry;
-        // Handle both snake_case and camelCase keys from API
-        const dm = telemetry.device_metrics || telemetry.deviceMetrics || {};
-        const env = telemetry.environment_metrics || telemetry.environmentMetrics || {};
+        // Handle timeout (408) - node didn't respond in time
+        if (response.status === 408) {
+            statusIndicator.innerHTML = '<span class="badge bg-warning">No Response</span> <small class="text-muted ms-2">Node didn\'t respond, will retry...</small>';
+            adjustPollingInterval(responseTime, false);
+            scheduleNextPoll();
+            return;
+        }
 
-        updateTelemetryDisplay(dm, env);
-        updateLiveCharts(dm);
+        // Handle other errors - show error but keep trying live
+        const errorMsg = data.error || 'Unknown error';
+        if (errorMsg.includes('TCP not connected')) {
+            statusIndicator.innerHTML = '<span class="badge bg-danger">Not Connected</span> <small class="text-muted ms-2">Connect via Admin page first</small>';
+        } else if (errorMsg.includes('MQTT')) {
+            statusIndicator.innerHTML = '<span class="badge bg-danger">MQTT Mode</span> <small class="text-muted ms-2">Live telemetry requires TCP connection</small>';
+        } else {
+            statusIndicator.innerHTML = `<span class="badge bg-warning">Error</span> <small class="text-muted ms-2">${errorMsg}</small>`;
+        }
 
-        // Schedule next poll
+        // Still schedule next poll - connection might be restored
+        adjustPollingInterval(responseTime, false);
         scheduleNextPoll();
 
     } catch (error) {
         console.error('Live telemetry fetch failed:', error);
+        statusIndicator.innerHTML = '<span class="badge bg-danger">Network Error</span> <small class="text-muted ms-2">Check connection...</small>';
         adjustPollingInterval(Date.now() - pollStartTime, false);
-        pollCachedTelemetry();
         scheduleNextPoll();
     }
 }

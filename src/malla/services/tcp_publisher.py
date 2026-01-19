@@ -20,6 +20,43 @@ from ..config import get_config
 logger = logging.getLogger(__name__)
 
 
+def convert_to_dict(obj: Any) -> Any:
+    """
+    Recursively convert protobuf messages and other objects to JSON-serializable dicts.
+
+    Args:
+        obj: Any object that might be a protobuf, dict, list, or primitive
+
+    Returns:
+        JSON-serializable version of the object
+    """
+    # Handle protobuf messages
+    if hasattr(obj, "DESCRIPTOR"):
+        from google.protobuf.json_format import MessageToDict
+
+        return MessageToDict(obj, preserving_proto_field_name=True)
+
+    # Handle dicts - recursively convert values
+    if isinstance(obj, dict):
+        return {k: convert_to_dict(v) for k, v in obj.items()}
+
+    # Handle lists - recursively convert items
+    if isinstance(obj, list):
+        return [convert_to_dict(item) for item in obj]
+
+    # Handle bytes
+    if isinstance(obj, bytes):
+        try:
+            return obj.decode("utf-8")
+        except UnicodeDecodeError:
+            import base64
+
+            return base64.b64encode(obj).decode("ascii")
+
+    # Return primitives as-is
+    return obj
+
+
 class TCPPublisher:
     """
     TCP client for sending Meshtastic admin commands.
@@ -1388,20 +1425,8 @@ class TCPPublisher:
                         # Check if this is from our target node
                         target_hex = f"!{target_node_id:08x}"
                         if from_id == target_hex or str(from_id) == str(target_node_id):
-                            # Convert protobuf to dict if needed
-                            if hasattr(telemetry_data, "DESCRIPTOR"):
-                                # It's a protobuf message, convert to dict
-                                # Use preserving_proto_field_name to keep snake_case
-                                from google.protobuf.json_format import MessageToDict
-
-                                telemetry_dict = MessageToDict(
-                                    telemetry_data,
-                                    preserving_proto_field_name=True,
-                                )
-                            elif isinstance(telemetry_data, dict):
-                                telemetry_dict = telemetry_data
-                            else:
-                                telemetry_dict = {}
+                            # Convert to JSON-serializable dict
+                            telemetry_dict = convert_to_dict(telemetry_data)
 
                             response_data["telemetry"] = telemetry_dict
                             response_data["from_id"] = from_id
