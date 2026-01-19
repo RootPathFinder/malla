@@ -408,6 +408,29 @@
                         </div>
                     </div>
 
+                    <!-- Polling Metrics Bar Graph (hidden until polling starts) -->
+                    <div id="polling-metrics-container" class="mt-3" style="display: none;">
+                        <div class="d-flex justify-content-between align-items-center mb-1">
+                            <small class="text-muted"><i class="bi bi-clock-history"></i> Adaptive Polling</small>
+                            <small class="text-muted" id="polling-metrics-label">--</small>
+                        </div>
+                        <div class="position-relative" style="height: 24px; background: #e9ecef; border-radius: 4px; overflow: hidden;">
+                            <!-- Poll interval bar (gray background showing max range) -->
+                            <div id="poll-interval-bar" style="position: absolute; height: 100%; background: linear-gradient(90deg, #6c757d 0%, #adb5bd 100%); width: 0%; transition: width 0.3s ease;"></div>
+                            <!-- Response time bar (overlaid, shows actual response) -->
+                            <div id="response-time-bar" style="position: absolute; height: 100%; background: linear-gradient(90deg, #198754 0%, #20c997 100%); width: 0%; transition: width 0.3s ease;"></div>
+                            <!-- Labels inside the bar -->
+                            <div style="position: absolute; width: 100%; height: 100%; display: flex; align-items: center; justify-content: space-between; padding: 0 8px; font-size: 11px; font-weight: 500;">
+                                <span id="response-label" style="color: white; text-shadow: 0 0 2px rgba(0,0,0,0.5);">--</span>
+                                <span id="interval-label" style="color: #333;">--</span>
+                            </div>
+                        </div>
+                        <div class="d-flex justify-content-between mt-1">
+                            <small class="text-muted">0s</small>
+                            <small class="text-muted">30s (max)</small>
+                        </div>
+                    </div>
+
                     <!-- Live Charts (hidden until polling starts) -->
                     <div id="live-charts-container" class="mt-4" style="display: none;">
                         <h6 class="mb-3"><i class="bi bi-graph-up"></i> Live Trends</h6>
@@ -2128,6 +2151,7 @@ function startLiveTelemetry() {
     const timer = document.getElementById('live-telemetry-timer');
     const status = document.getElementById('live-telemetry-status');
     const chartsContainer = document.getElementById('live-charts-container');
+    const pollingMetrics = document.getElementById('polling-metrics-container');
     const durationSelector = document.getElementById('live-duration-selector');
 
     // Reset adaptive polling
@@ -2150,6 +2174,7 @@ function startLiveTelemetry() {
     btn.classList.add('btn-danger');
     timer.classList.remove('d-none');
     chartsContainer.style.display = 'block';
+    pollingMetrics.style.display = 'block';
     durationSelector.querySelectorAll('button').forEach(b => b.disabled = true);
 
     liveTelemetryStartTime = Date.now();
@@ -2180,6 +2205,7 @@ function stopLiveTelemetry() {
     const timer = document.getElementById('live-telemetry-timer');
     const status = document.getElementById('live-telemetry-status');
     const durationSelector = document.getElementById('live-duration-selector');
+    const pollingMetrics = document.getElementById('polling-metrics-container');
 
     liveTelemetryIsPolling = false;
 
@@ -2203,6 +2229,7 @@ function stopLiveTelemetry() {
     btn.classList.add('btn-outline-primary');
     timer.classList.add('d-none');
     durationSelector.querySelectorAll('button').forEach(b => b.disabled = false);
+    pollingMetrics.style.display = 'none';
 
     status.innerHTML = '<i class="bi bi-info-circle"></i> Polling stopped. Click "Start Live" to resume.';
 }
@@ -2368,6 +2395,48 @@ function adjustPollingInterval(responseTime, success) {
     }
 }
 
+function updatePollingMetrics(pollInterval, responseTime, success) {
+    // Update the visual bar graph showing poll interval vs response time
+    const container = document.getElementById('polling-metrics-container');
+    const pollIntervalBar = document.getElementById('poll-interval-bar');
+    const responseTimeBar = document.getElementById('response-time-bar');
+    const responseLabel = document.getElementById('response-label');
+    const intervalLabel = document.getElementById('interval-label');
+    const metricsLabel = document.getElementById('polling-metrics-label');
+
+    if (!container || container.style.display === 'none') return;
+
+    const maxInterval = LIVE_TELEMETRY_MAX_INTERVAL; // 30000ms
+    const pollIntervalSec = pollInterval / 1000;
+    const responseTimeSec = responseTime / 1000;
+
+    // Calculate percentages (capped at 100%)
+    const intervalPercent = Math.min((pollInterval / maxInterval) * 100, 100);
+    const responsePercent = Math.min((responseTime / maxInterval) * 100, 100);
+
+    // Update bar widths
+    pollIntervalBar.style.width = intervalPercent + '%';
+    responseTimeBar.style.width = responsePercent + '%';
+
+    // Update bar colors based on success/performance
+    if (!success) {
+        responseTimeBar.style.background = 'linear-gradient(90deg, #dc3545 0%, #e35d6a 100%)'; // Red for failure
+    } else if (responseTime > 5000) {
+        responseTimeBar.style.background = 'linear-gradient(90deg, #ffc107 0%, #ffda6a 100%)'; // Yellow for slow
+    } else {
+        responseTimeBar.style.background = 'linear-gradient(90deg, #198754 0%, #20c997 100%)'; // Green for good
+    }
+
+    // Update labels
+    responseLabel.textContent = success ? `${responseTimeSec.toFixed(1)}s` : 'Failed';
+    intervalLabel.textContent = `${pollIntervalSec.toFixed(0)}s interval`;
+
+    // Update summary label
+    const efficiency = success ? Math.round((1 - responseTime / pollInterval) * 100) : 0;
+    const efficiencyText = efficiency > 0 ? `${efficiency}% headroom` : 'At capacity';
+    metricsLabel.textContent = success ? efficiencyText : 'No response';
+}
+
 function scheduleNextPoll() {
     if (!liveTelemetryIsPolling) return;
 
@@ -2390,28 +2459,53 @@ async function pollLiveTelemetry() {
         // Calculate timeout based on current poll interval (leave 2s buffer)
         const requestTimeout = Math.min(Math.max(liveTelemetryPollInterval - 2000, 5), 25);
 
-        const response = await fetch(`/api/admin/node/${nodeId}/telemetry/live`, {
-            method: 'POST',
-            headers: {'Content-Type': 'application/json'},
-            body: JSON.stringify({
-                telemetry_type: 'device_metrics',
-                timeout: requestTimeout
+        // Request both device_metrics and environment_metrics in parallel
+        const [deviceResponse, envResponse] = await Promise.all([
+            fetch(`/api/admin/node/${nodeId}/telemetry/live`, {
+                method: 'POST',
+                headers: {'Content-Type': 'application/json'},
+                body: JSON.stringify({
+                    telemetry_type: 'device_metrics',
+                    timeout: requestTimeout
+                })
+            }),
+            fetch(`/api/admin/node/${nodeId}/telemetry/live`, {
+                method: 'POST',
+                headers: {'Content-Type': 'application/json'},
+                body: JSON.stringify({
+                    telemetry_type: 'environment_metrics',
+                    timeout: requestTimeout
+                })
             })
-        });
+        ]);
 
         const responseTime = Date.now() - pollStartTime;
-        const data = await response.json();
+        const deviceData = await deviceResponse.json();
+        const envData = await envResponse.json();
 
-        // Handle successful live response
-        if (data.success && data.telemetry) {
+        // Update polling metrics visualization
+        updatePollingMetrics(liveTelemetryPollInterval, responseTime, deviceData.success || envData.success);
+
+        // Merge telemetry from both responses
+        let dm = {};
+        let env = {};
+
+        if (deviceData.success && deviceData.telemetry) {
+            const telemetry = deviceData.telemetry;
+            dm = telemetry.device_metrics || telemetry.deviceMetrics || telemetry || {};
+        }
+
+        if (envData.success && envData.telemetry) {
+            const telemetry = envData.telemetry;
+            env = telemetry.environment_metrics || telemetry.environmentMetrics || telemetry || {};
+        }
+
+        // Handle successful live response (at least one succeeded)
+        if (deviceData.success || envData.success) {
             const intervalSec = Math.round(liveTelemetryPollInterval / 1000);
-            statusIndicator.innerHTML = `<span class="badge bg-success">Live</span> <small class="text-muted ms-2">Response: ${Math.round(responseTime/1000)}s | Next poll: ${intervalSec}s</small>`;
+            const responseSec = Math.round(responseTime/1000);
+            statusIndicator.innerHTML = `<span class="badge bg-success">Live</span> <small class="text-muted ms-2">Response: ${responseSec}s | Next poll: ${intervalSec}s</small>`;
             adjustPollingInterval(responseTime, true);
-
-            const telemetry = data.telemetry;
-            // Handle both snake_case and camelCase keys from API
-            const dm = telemetry.device_metrics || telemetry.deviceMetrics || {};
-            const env = telemetry.environment_metrics || telemetry.environmentMetrics || {};
 
             updateTelemetryDisplay(dm, env);
             updateLiveCharts(dm);
@@ -2420,7 +2514,7 @@ async function pollLiveTelemetry() {
         }
 
         // Handle timeout (408) - node didn't respond in time
-        if (response.status === 408) {
+        if (deviceResponse.status === 408 && envResponse.status === 408) {
             statusIndicator.innerHTML = '<span class="badge bg-warning">No Response</span> <small class="text-muted ms-2">Node didn\'t respond (may be sleeping, distant, or not configured to reply). Retrying...</small>';
             adjustPollingInterval(responseTime, false);
             scheduleNextPoll();
@@ -2428,7 +2522,7 @@ async function pollLiveTelemetry() {
         }
 
         // Handle other errors - show error but keep trying live
-        const errorMsg = data.error || 'Unknown error';
+        const errorMsg = deviceData.error || envData.error || 'Unknown error';
         if (errorMsg.includes('TCP not connected')) {
             statusIndicator.innerHTML = '<span class="badge bg-danger">Not Connected</span> <small class="text-muted ms-2">Connect via Admin page first</small>';
         } else if (errorMsg.includes('MQTT')) {
