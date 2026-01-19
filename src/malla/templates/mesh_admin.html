@@ -1001,10 +1001,11 @@
                                         </button>
                                         <div id="complianceResults" class="mt-3" style="display: none;">
                                             <div id="complianceProgress" class="mb-2" style="display: none;">
-                                                <div class="progress" style="height: 6px;">
-                                                    <div class="progress-bar progress-bar-striped progress-bar-animated" style="width: 100%"></div>
+                                                <div class="progress" style="height: 8px;">
+                                                    <div class="progress-bar progress-bar-striped progress-bar-animated bg-info"
+                                                         id="complianceProgressBar" style="width: 0%"></div>
                                                 </div>
-                                                <small class="text-muted">Checking nodes...</small>
+                                                <small class="text-muted" id="complianceProgressText">Initializing...</small>
                                             </div>
                                             <div id="complianceResultsContent"></div>
                                         </div>
@@ -5082,11 +5083,18 @@
 
     // Store template config for diff display
     let currentComplianceTemplateConfig = null;
+    let complianceEventSource = null;
 
     async function runComplianceCheck() {
         if (!currentTemplateId) {
             showAlert('warning', 'Please select a template first');
             return;
+        }
+
+        // Close any existing event source
+        if (complianceEventSource) {
+            complianceEventSource.close();
+            complianceEventSource = null;
         }
 
         const runBtn = document.getElementById('runComplianceBtn');
@@ -5098,29 +5106,66 @@
         runBtn.innerHTML = '<span class="spinner-border spinner-border-sm"></span> Checking...';
         resultsDiv.style.display = 'block';
         progressDiv.style.display = 'block';
-        progressDiv.querySelector('small').textContent = 'Checking nodes (with retries, please wait)...';
-        contentDiv.innerHTML = '';
+
+        // Initialize progress display
+        document.getElementById('complianceProgressBar').style.width = '0%';
+        document.getElementById('complianceProgressText').textContent = 'Initializing...';
+
+        // Clear previous results and prepare real-time display
+        contentDiv.innerHTML = `
+            <div class="d-flex gap-3 mb-3" id="complianceSummaryRow">
+                <div class="text-center">
+                    <div class="h4 mb-0 text-success" id="complianceCompliantCount">0</div>
+                    <small class="text-muted">Compliant</small>
+                </div>
+                <div class="text-center">
+                    <div class="h4 mb-0 text-danger" id="complianceNonCompliantCount">0</div>
+                    <small class="text-muted">Non-Compliant</small>
+                </div>
+                <div class="text-center">
+                    <div class="h4 mb-0 text-warning" id="complianceErrorCount">0</div>
+                    <small class="text-muted">Errors</small>
+                </div>
+            </div>
+            <div class="compliance-results-list" id="complianceResultsList" style="max-height: 350px; overflow-y: auto;"></div>
+        `;
 
         try {
-            // Increased timeout and retries for patience
+            // Use fetch with POST to start the SSE stream
             const response = await fetch(`/api/admin/templates/${currentTemplateId}/compliance-check`, {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({ timeout: 30, max_retries: 3 }),
             });
 
-            const data = await response.json();
-            progressDiv.style.display = 'none';
-
-            if (data.error) {
-                contentDiv.innerHTML = `<div class="alert alert-danger py-2"><i class="bi bi-x-circle"></i> ${escapeHtml(data.error)}</div>`;
-                return;
+            if (!response.ok) {
+                const errorData = await response.json();
+                throw new Error(errorData.error || 'Failed to start compliance check');
             }
 
-            // Store template config for diff display
-            currentComplianceTemplateConfig = data.template_config;
+            const reader = response.body.getReader();
+            const decoder = new TextDecoder();
+            let buffer = '';
 
-            displayComplianceResults(data);
+            while (true) {
+                const { done, value } = await reader.read();
+                if (done) break;
+
+                buffer += decoder.decode(value, { stream: true });
+                const lines = buffer.split('\n');
+                buffer = lines.pop() || '';
+
+                for (const line of lines) {
+                    if (line.startsWith('data: ')) {
+                        try {
+                            const eventData = JSON.parse(line.slice(6));
+                            handleComplianceEvent(eventData);
+                        } catch (e) {
+                            console.error('Error parsing SSE data:', e);
+                        }
+                    }
+                }
+            }
 
         } catch (error) {
             progressDiv.style.display = 'none';
@@ -5129,6 +5174,161 @@
             runBtn.disabled = false;
             runBtn.innerHTML = '<i class="bi bi-search"></i> Run Compliance Check';
         }
+    }
+
+    function handleComplianceEvent(event) {
+        const progressDiv = document.getElementById('complianceProgress');
+        const progressBar = document.getElementById('complianceProgressBar');
+        const progressText = document.getElementById('complianceProgressText');
+        const resultsList = document.getElementById('complianceResultsList');
+
+        switch (event.type) {
+            case 'start':
+                currentComplianceTemplateConfig = event.template_config;
+                progressText.textContent = `Checking ${event.total_nodes} node${event.total_nodes !== 1 ? 's' : ''}...`;
+                break;
+
+            case 'checking':
+                const percent = Math.round((event.current - 1) / event.total * 100);
+                progressBar.style.width = `${percent}%`;
+                progressText.innerHTML = `<i class="bi bi-arrow-repeat spin"></i> Checking <strong>${escapeHtml(event.node_name)}</strong> (${event.current}/${event.total})...`;
+                break;
+
+            case 'result':
+                // Update counts
+                document.getElementById('complianceCompliantCount').textContent = event.compliant_count;
+                document.getElementById('complianceNonCompliantCount').textContent = event.non_compliant_count;
+                document.getElementById('complianceErrorCount').textContent = event.error_count;
+
+                // Update progress
+                const resultPercent = Math.round(event.current / event.total * 100);
+                progressBar.style.width = `${resultPercent}%`;
+                progressText.textContent = `Checked ${event.current}/${event.total} nodes`;
+
+                // Add result card
+                appendComplianceResult(event.result);
+
+                // Update summary badge
+                updateComplianceSummaryBadge({
+                    compliant_count: event.compliant_count,
+                    non_compliant_count: event.non_compliant_count,
+                    error_count: event.error_count,
+                    total_checked: event.current,
+                });
+                break;
+
+            case 'complete':
+                progressDiv.style.display = 'none';
+                currentComplianceTemplateConfig = event.template_config;
+
+                // Add completion timestamp
+                const timestamp = new Date().toLocaleString();
+                const timestampDiv = document.createElement('div');
+                timestampDiv.className = 'text-muted small mt-2';
+                timestampDiv.textContent = `Last checked: ${timestamp}`;
+                resultsList.parentNode.appendChild(timestampDiv);
+                break;
+        }
+    }
+
+    function appendComplianceResult(result) {
+        const resultsList = document.getElementById('complianceResultsList');
+        const nodeName = result.node_name || result.node_hex;
+        const nodeHex = result.node_hex;
+        const resultId = `compliance-result-${result.node_id}`;
+        const diffs = result.differences || [];
+
+        let cardHtml = '';
+
+        if (result.error) {
+            // Error case
+            cardHtml = `
+                <div class="card mb-2 border-warning">
+                    <div class="card-body py-2 px-3">
+                        <div class="d-flex justify-content-between align-items-center">
+                            <div>
+                                <span class="fw-semibold">${escapeHtml(nodeName)}</span>
+                                <code class="text-muted small ms-2">${nodeHex}</code>
+                            </div>
+                            <span class="badge bg-warning"><i class="bi bi-exclamation-triangle"></i> Error</span>
+                        </div>
+                        <small class="text-muted">${escapeHtml(result.error)}</small>
+                    </div>
+                </div>
+            `;
+        } else if (result.is_compliant) {
+            // Compliant case
+            cardHtml = `
+                <div class="card mb-2 border-success">
+                    <div class="card-body py-2 px-3">
+                        <div class="d-flex justify-content-between align-items-center">
+                            <div>
+                                <span class="fw-semibold">${escapeHtml(nodeName)}</span>
+                                <code class="text-muted small ms-2">${nodeHex}</code>
+                            </div>
+                            <span class="badge bg-success"><i class="bi bi-check-circle"></i> Compliant</span>
+                        </div>
+                    </div>
+                </div>
+            `;
+        } else {
+            // Non-compliant with expandable diff view
+            let diffRows = '';
+            for (const diff of diffs) {
+                const expectedVal = diff.expected !== null && diff.expected !== undefined
+                    ? (typeof diff.expected === 'object' ? JSON.stringify(diff.expected) : String(diff.expected))
+                    : '<em class="text-muted">not set</em>';
+                const actualVal = diff.actual !== null && diff.actual !== undefined
+                    ? (typeof diff.actual === 'object' ? JSON.stringify(diff.actual) : String(diff.actual))
+                    : '<em class="text-muted">not set</em>';
+
+                diffRows += `
+                    <tr>
+                        <td><code>${escapeHtml(diff.field)}</code></td>
+                        <td class="bg-success bg-opacity-10"><code>${diff.expected !== null ? escapeHtml(expectedVal) : expectedVal}</code></td>
+                        <td class="bg-danger bg-opacity-10"><code>${diff.actual !== null ? escapeHtml(actualVal) : actualVal}</code></td>
+                    </tr>
+                `;
+            }
+
+            cardHtml = `
+                <div class="card mb-2 border-danger">
+                    <div class="card-header py-2 px-3 bg-danger bg-opacity-10"
+                         style="cursor: pointer;"
+                         onclick="toggleComplianceDiff('${resultId}')">
+                        <div class="d-flex justify-content-between align-items-center">
+                            <div>
+                                <i class="bi bi-chevron-right me-1" id="${resultId}-chevron"></i>
+                                <span class="fw-semibold">${escapeHtml(nodeName)}</span>
+                                <code class="text-muted small ms-2">${nodeHex}</code>
+                            </div>
+                            <span class="badge bg-danger">
+                                <i class="bi bi-x-circle"></i> ${diffs.length} difference${diffs.length !== 1 ? 's' : ''}
+                            </span>
+                        </div>
+                    </div>
+                    <div class="collapse" id="${resultId}">
+                        <div class="card-body py-2 px-3">
+                            <table class="table table-sm table-bordered mb-0" style="font-size: 0.8rem;">
+                                <thead class="table-light">
+                                    <tr>
+                                        <th style="width: 30%;">Field</th>
+                                        <th style="width: 35%;" class="text-success">Expected (Template)</th>
+                                        <th style="width: 35%;" class="text-danger">Actual (Node)</th>
+                                    </tr>
+                                </thead>
+                                <tbody>${diffRows}</tbody>
+                            </table>
+                        </div>
+                    </div>
+                </div>
+            `;
+        }
+
+        resultsList.insertAdjacentHTML('beforeend', cardHtml);
+
+        // Auto-scroll to show new result
+        resultsList.scrollTop = resultsList.scrollHeight;
     }
 
     async function loadComplianceResults() {

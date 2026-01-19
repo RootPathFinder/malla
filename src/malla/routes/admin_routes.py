@@ -3049,111 +3049,140 @@ def api_get_compliance_results(template_id):
 )
 def api_run_compliance_check(template_id):
     """
-    Run a compliance check against all administrable nodes.
+    Run a compliance check against all administrable nodes (streaming SSE).
 
     This fetches the current configuration from each node and compares it
-    against the template to identify differences.
+    against the template to identify differences. Results are streamed
+    in real-time as each node is checked.
 
     Request body (optional):
         node_ids: List of specific node IDs to check (defaults to all administrable)
-        timeout: Timeout per node in seconds (default: 15)
+        timeout: Timeout per node in seconds (default: 30)
+        max_retries: Max retries per node (default: 3)
     """
-    try:
-        template = AdminRepository.get_template(template_id)
-        if not template:
-            return jsonify({"error": "Template not found"}), 404
+    import json as json_module
 
-        import json as json_module
+    template = AdminRepository.get_template(template_id)
+    if not template:
+        return jsonify({"error": "Template not found"}), 404
 
-        template_config = template["config_data"]
-        if isinstance(template_config, str):
-            template_config = json_module.loads(template_config)
+    template_config = template["config_data"]
+    if isinstance(template_config, str):
+        template_config = json_module.loads(template_config)
 
-        template_type = template["template_type"]
+    template_type = template["template_type"]
 
-        data = request.get_json() or {}
-        specific_node_ids = data.get("node_ids")
-        timeout = min(data.get("timeout", 30), 60)  # Default 30s, max 60s
-        max_retries = min(data.get("max_retries", 3), 5)  # Default 3 retries
-        retry_delay = data.get("retry_delay", 2.0)  # 2 seconds between retries
+    data = request.get_json() or {}
+    specific_node_ids = data.get("node_ids")
+    timeout = min(data.get("timeout", 30), 60)  # Default 30s, max 60s
+    max_retries = min(data.get("max_retries", 3), 5)  # Default 3 retries
+    retry_delay = data.get("retry_delay", 2.0)  # 2 seconds between retries
 
-        # Get nodes to check
-        admin_service = get_admin_service()
-        if specific_node_ids:
-            nodes = [
-                {"node_id": nid}
-                for nid in specific_node_ids
-                if AdminRepository.is_node_administrable(nid)
-            ]
-        else:
-            nodes = admin_service.get_administrable_nodes()
+    # Get nodes to check
+    admin_service = get_admin_service()
+    if specific_node_ids:
+        nodes = [
+            {"node_id": nid}
+            for nid in specific_node_ids
+            if AdminRepository.is_node_administrable(nid)
+        ]
+    else:
+        nodes = admin_service.get_administrable_nodes()
 
-        if not nodes:
-            return jsonify({"error": "No administrable nodes to check"}), 400
+    if not nodes:
+        return jsonify({"error": "No administrable nodes to check"}), 400
 
-        # Check connection
-        connection_type = admin_service.connection_type.value
-        if connection_type not in ("tcp", "serial"):
-            return jsonify(
-                {
-                    "error": "Compliance check requires TCP or Serial connection. "
-                    "MQTT cannot retrieve node configurations."
-                }
-            ), 400
+    # Check connection
+    connection_type = admin_service.connection_type.value
+    if connection_type not in ("tcp", "serial"):
+        return jsonify(
+            {
+                "error": "Compliance check requires TCP or Serial connection. "
+                "MQTT cannot retrieve node configurations."
+            }
+        ), 400
 
-        tcp_publisher = get_tcp_publisher()
-        if not tcp_publisher.is_connected:
-            return jsonify(
-                {
-                    "error": "TCP not connected. Connect via Admin page first.",
-                }
-            ), 400
+    tcp_publisher = get_tcp_publisher()
+    if not tcp_publisher.is_connected:
+        return jsonify(
+            {
+                "error": "TCP not connected. Connect via Admin page first.",
+            }
+        ), 400
 
-        # Map template types to config fetch methods
-        config_type_map = {
-            "device": "device",
-            "lora": "lora",
-            "position": "position",
-            "power": "power",
-            "network": "network",
-            "display": "display",
-            "bluetooth": "bluetooth",
-            "security": "security",
-            "channel": "channel",
-            "channels": "channel",
-        }
+    # Map template types to config fetch methods
+    config_type_map = {
+        "device": "device",
+        "lora": "lora",
+        "position": "position",
+        "power": "power",
+        "network": "network",
+        "display": "display",
+        "bluetooth": "bluetooth",
+        "security": "security",
+        "channel": "channel",
+        "channels": "channel",
+    }
 
-        fetch_type = config_type_map.get(template_type)
-        if not fetch_type:
-            return jsonify(
-                {"error": f"Unsupported template type for compliance: {template_type}"}
-            ), 400
+    fetch_type = config_type_map.get(template_type)
+    if not fetch_type:
+        return jsonify(
+            {"error": f"Unsupported template type for compliance: {template_type}"}
+        ), 400
 
-        results = []
+    # Map template types to ConfigType enum
+    config_type_enum_map = {
+        "device": ConfigType.DEVICE,
+        "lora": ConfigType.LORA,
+        "position": ConfigType.POSITION,
+        "power": ConfigType.POWER,
+        "network": ConfigType.NETWORK,
+        "display": ConfigType.DISPLAY,
+        "bluetooth": ConfigType.BLUETOOTH,
+        "security": ConfigType.SECURITY,
+    }
+
+    def send_event(data: dict) -> str:
+        return f"data: {json_module.dumps(data)}\n\n"
+
+    def generate():
         compliant_count = 0
         non_compliant_count = 0
         error_count = 0
+        results = []
+        total_nodes = len(nodes)
 
-        # Map template types to ConfigType enum
-        config_type_enum_map = {
-            "device": ConfigType.DEVICE,
-            "lora": ConfigType.LORA,
-            "position": ConfigType.POSITION,
-            "power": ConfigType.POWER,
-            "network": ConfigType.NETWORK,
-            "display": ConfigType.DISPLAY,
-            "bluetooth": ConfigType.BLUETOOTH,
-            "security": ConfigType.SECURITY,
-        }
+        # Send initial status
+        yield send_event(
+            {
+                "type": "start",
+                "total_nodes": total_nodes,
+                "template_name": template["name"],
+                "template_type": template_type,
+                "template_config": template_config,
+            }
+        )
 
-        for node in nodes:
+        for idx, node in enumerate(nodes):
             node_id = node["node_id"]
             node_hex = f"!{node_id:08x}"
+            node_name = node.get("long_name") or node.get("short_name") or node_hex
+
+            # Send progress update - checking this node
+            yield send_event(
+                {
+                    "type": "checking",
+                    "node_id": node_id,
+                    "node_hex": node_hex,
+                    "node_name": node_name,
+                    "current": idx + 1,
+                    "total": total_nodes,
+                }
+            )
 
             try:
                 # Fetch current config from node with patience (retries)
                 if fetch_type == "channel":
-                    # For channels, use get_channel method
                     result = admin_service.get_channel(
                         node_id,
                         0,
@@ -3174,7 +3203,6 @@ def api_run_compliance_check(template_id):
                     )
 
                 if not result.success or result.response is None:
-                    # Timeout or error
                     error_msg = result.error or "Failed to retrieve configuration"
                     AdminRepository.save_compliance_check(
                         template_id=template_id,
@@ -3183,23 +3211,30 @@ def api_run_compliance_check(template_id):
                         error_message=error_msg,
                     )
                     error_count += 1
-                    results.append(
+                    node_result = {
+                        "node_id": node_id,
+                        "node_hex": node_hex,
+                        "node_name": node_name,
+                        "is_compliant": False,
+                        "error": error_msg,
+                    }
+                    results.append(node_result)
+
+                    yield send_event(
                         {
-                            "node_id": node_id,
-                            "node_hex": node_hex,
-                            "node_name": node.get("long_name")
-                            or node.get("short_name"),
-                            "is_compliant": False,
-                            "error": error_msg,
+                            "type": "result",
+                            "result": node_result,
+                            "compliant_count": compliant_count,
+                            "non_compliant_count": non_compliant_count,
+                            "error_count": error_count,
+                            "current": idx + 1,
+                            "total": total_nodes,
                         }
                     )
                     continue
 
                 node_config = result.response
-
-                # Compare configurations
                 differences = compare_configs(template_config, node_config)
-
                 is_compliant = len(differences) == 0
 
                 AdminRepository.save_compliance_check(
@@ -3214,13 +3249,24 @@ def api_run_compliance_check(template_id):
                 else:
                     non_compliant_count += 1
 
-                results.append(
+                node_result = {
+                    "node_id": node_id,
+                    "node_hex": node_hex,
+                    "node_name": node_name,
+                    "is_compliant": is_compliant,
+                    "differences": differences if not is_compliant else None,
+                }
+                results.append(node_result)
+
+                yield send_event(
                     {
-                        "node_id": node_id,
-                        "node_hex": node_hex,
-                        "node_name": node.get("long_name") or node.get("short_name"),
-                        "is_compliant": is_compliant,
-                        "differences": differences if not is_compliant else None,
+                        "type": "result",
+                        "result": node_result,
+                        "compliant_count": compliant_count,
+                        "non_compliant_count": non_compliant_count,
+                        "error_count": error_count,
+                        "current": idx + 1,
+                        "total": total_nodes,
                     }
                 )
 
@@ -3233,22 +3279,35 @@ def api_run_compliance_check(template_id):
                     error_message=str(e),
                 )
                 error_count += 1
-                results.append(
+                node_result = {
+                    "node_id": node_id,
+                    "node_hex": node_hex,
+                    "node_name": node_name,
+                    "is_compliant": False,
+                    "error": str(e),
+                }
+                results.append(node_result)
+
+                yield send_event(
                     {
-                        "node_id": node_id,
-                        "node_hex": node_hex,
-                        "node_name": node.get("long_name") or node.get("short_name"),
-                        "is_compliant": False,
-                        "error": str(e),
+                        "type": "result",
+                        "result": node_result,
+                        "compliant_count": compliant_count,
+                        "non_compliant_count": non_compliant_count,
+                        "error_count": error_count,
+                        "current": idx + 1,
+                        "total": total_nodes,
                     }
                 )
 
-        return jsonify(
+        # Send completion event
+        yield send_event(
             {
+                "type": "complete",
                 "template_id": template_id,
                 "template_name": template["name"],
-                "template_type": template["template_type"],
-                "template_config": template_config,  # Include for diff display
+                "template_type": template_type,
+                "template_config": template_config,
                 "nodes_checked": len(results),
                 "compliant_count": compliant_count,
                 "non_compliant_count": non_compliant_count,
@@ -3257,9 +3316,15 @@ def api_run_compliance_check(template_id):
             }
         )
 
-    except Exception as e:
-        logger.error(f"Error running compliance check: {e}")
-        return jsonify({"error": str(e)}), 500
+    return Response(
+        stream_with_context(generate()),
+        mimetype="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache",
+            "Connection": "keep-alive",
+            "X-Accel-Buffering": "no",
+        },
+    )
 
 
 def compare_configs(template_config: dict, node_config: dict) -> list[dict]:
