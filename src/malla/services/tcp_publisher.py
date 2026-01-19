@@ -287,13 +287,56 @@ class TCPPublisher:
                 if self._missed_heartbeats >= self._max_missed_heartbeats:
                     logger.error(
                         f"TCP connection appears dead after {self._missed_heartbeats} "
-                        "missed heartbeats, marking as disconnected"
+                        "missed heartbeats, attempting auto-reconnect..."
                     )
                     self._connected = False
-                    # Don't try to close the interface here, it may hang
-                    # Just mark as disconnected so next operation triggers reconnect
+
+                    # Attempt automatic reconnection in a separate thread
+                    # to avoid blocking the keepalive loop
+                    self._attempt_auto_reconnect()
 
         logger.debug("Keepalive loop exited")
+
+    def _attempt_auto_reconnect(self) -> None:
+        """
+        Attempt automatic reconnection after connection loss.
+
+        This runs in the keepalive thread and uses timeout-protected operations.
+        """
+        max_attempts = 3
+        retry_delay = 5.0
+
+        for attempt in range(1, max_attempts + 1):
+            if self._keepalive_stop_event.is_set():
+                logger.info("Auto-reconnect cancelled - stop event set")
+                return
+
+            logger.info(f"Auto-reconnect attempt {attempt}/{max_attempts}...")
+
+            # Force cleanup of dead connection (with timeout)
+            self._disconnect_with_timeout(timeout=5.0)
+
+            time.sleep(1.0)  # Brief pause before reconnecting
+
+            try:
+                if self.connect():
+                    logger.info("Auto-reconnect successful!")
+                    self._missed_heartbeats = 0
+                    return
+            except Exception as e:
+                logger.warning(f"Auto-reconnect attempt {attempt} failed: {e}")
+
+            if attempt < max_attempts:
+                logger.info(f"Waiting {retry_delay}s before next reconnect attempt...")
+                # Use the stop event for interruptible sleep
+                if self._keepalive_stop_event.wait(timeout=retry_delay):
+                    logger.info("Auto-reconnect cancelled during wait")
+                    return
+
+        logger.error(
+            f"Auto-reconnect failed after {max_attempts} attempts. "
+            "Manual reconnection required."
+        )
 
     def reconnect(self) -> bool:
         """
