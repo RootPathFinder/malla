@@ -7155,6 +7155,122 @@
         }
     }
 
+    // Format compliance fix job result for better display
+    function formatComplianceFixResult(data) {
+        const fixedCount = data.fixed_count || 0;
+        const failedCount = data.failed_count || 0;
+        const totalNodes = data.total_nodes || 0;
+        const nowCompliant = data.now_compliant || 0;
+        const stillNonCompliant = data.still_non_compliant || 0;
+        const verificationResults = data.verification_results || [];
+
+        // Summary section
+        let html = `
+            <div class="mb-4">
+                <h6 class="text-muted mb-2">Fix Summary</h6>
+                <div class="d-flex gap-4 mb-3">
+                    <div class="text-center">
+                        <div class="h4 mb-0 text-primary">${fixedCount}/${totalNodes}</div>
+                        <small class="text-muted">Config Sent</small>
+                    </div>
+                    <div class="text-center">
+                        <div class="h4 mb-0 text-success">${nowCompliant}</div>
+                        <small class="text-muted">Now Compliant</small>
+                    </div>
+                    <div class="text-center">
+                        <div class="h4 mb-0 ${stillNonCompliant > 0 ? 'text-warning' : 'text-muted'}">${stillNonCompliant}</div>
+                        <small class="text-muted">Still Non-Compliant</small>
+                    </div>
+                    ${failedCount > 0 ? `
+                    <div class="text-center">
+                        <div class="h4 mb-0 text-danger">${failedCount}</div>
+                        <small class="text-muted">Send Failed</small>
+                    </div>
+                    ` : ''}
+                </div>
+        `;
+
+        // Verification details for non-compliant nodes
+        const nonCompliantVerifications = verificationResults.filter(v => !v.is_compliant && v.differences);
+        if (nonCompliantVerifications.length > 0) {
+            html += `
+                <h6 class="text-muted mb-2"><i class="bi bi-exclamation-triangle text-warning"></i> Fields Not Applied</h6>
+                <p class="small text-muted mb-2">
+                    The following settings were sent but did not take effect. This can happen if:
+                </p>
+                <ul class="small text-muted mb-3">
+                    <li>The field requires physical button press to confirm (e.g., Bluetooth PIN)</li>
+                    <li>The node's firmware doesn't support this setting</li>
+                    <li>The setting is protected or read-only on the node</li>
+                </ul>
+                <div style="max-height: 300px; overflow-y: auto;">
+            `;
+
+            for (const v of nonCompliantVerifications) {
+                const nodeName = v.node_hex;
+                html += `
+                    <div class="card mb-2 border-warning">
+                        <div class="card-header py-2 px-3 bg-warning bg-opacity-10">
+                            <strong>${escapeHtml(nodeName)}</strong>
+                            <span class="badge bg-warning text-dark ms-2">${v.differences.length} field(s) unchanged</span>
+                        </div>
+                        <div class="card-body py-2 px-3">
+                            <table class="table table-sm table-bordered mb-0" style="font-size: 0.8rem;">
+                                <thead class="table-light">
+                                    <tr>
+                                        <th style="width: 35%;">Field</th>
+                                        <th style="width: 32%;" class="text-success">Expected</th>
+                                        <th style="width: 33%;" class="text-danger">Actual (on node)</th>
+                                    </tr>
+                                </thead>
+                                <tbody>
+                `;
+
+                for (const diff of v.differences) {
+                    const expected = diff.expected !== null && diff.expected !== undefined
+                        ? (typeof diff.expected === 'object' ? JSON.stringify(diff.expected) : String(diff.expected))
+                        : '<em class="text-muted">not set</em>';
+                    const actual = diff.actual !== null && diff.actual !== undefined
+                        ? (typeof diff.actual === 'object' ? JSON.stringify(diff.actual) : String(diff.actual))
+                        : '<em class="text-muted">not set</em>';
+
+                    html += `
+                        <tr>
+                            <td><code>${escapeHtml(diff.field)}</code></td>
+                            <td class="bg-success bg-opacity-10"><code>${diff.expected !== null ? escapeHtml(expected) : expected}</code></td>
+                            <td class="bg-danger bg-opacity-10"><code>${diff.actual !== null ? escapeHtml(actual) : actual}</code></td>
+                        </tr>
+                    `;
+                }
+
+                html += `
+                                </tbody>
+                            </table>
+                        </div>
+                    </div>
+                `;
+            }
+
+            html += '</div>';
+        }
+
+        // Show successfully fixed nodes
+        const compliantNodes = verificationResults.filter(v => v.is_compliant);
+        if (compliantNodes.length > 0) {
+            html += `
+                <h6 class="text-muted mb-2 mt-3"><i class="bi bi-check-circle text-success"></i> Successfully Fixed</h6>
+                <div class="d-flex flex-wrap gap-2">
+            `;
+            for (const v of compliantNodes) {
+                html += `<span class="badge bg-success">${escapeHtml(v.node_hex)}</span>`;
+            }
+            html += '</div>';
+        }
+
+        html += '</div>';
+        return html;
+    }
+
     let currentJobDetailsId = null;
     let jobDetailsPollingInterval = null;
 
@@ -7329,12 +7445,17 @@
 
         let resultSection = '';
         if (job.status === 'completed' && job.result_data) {
-            resultSection = `
-                <div class="mb-4">
-                    <h6 class="text-muted mb-2">Result</h6>
-                    <pre class="bg-light p-3 rounded" style="max-height: 200px; overflow-y: auto;"><code>${escapeHtml(JSON.stringify(job.result_data, null, 2))}</code></pre>
-                </div>
-            `;
+            // Check for compliance_fix job type for custom rendering
+            if (job.job_type === 'compliance_fix' && job.result_data.data) {
+                resultSection = formatComplianceFixResult(job.result_data.data);
+            } else {
+                resultSection = `
+                    <div class="mb-4">
+                        <h6 class="text-muted mb-2">Result</h6>
+                        <pre class="bg-light p-3 rounded" style="max-height: 200px; overflow-y: auto;"><code>${escapeHtml(JSON.stringify(job.result_data, null, 2))}</code></pre>
+                    </div>
+                `;
+            }
         }
 
         let errorSection = '';
