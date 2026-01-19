@@ -860,14 +860,37 @@ class BotService:
     def _cmd_status(self, ctx: CommandContext) -> str:
         """Handle !status command."""
         try:
-            from ..database.repositories import NodeRepository, PacketRepository
+            from ..database.connection import get_db_connection
+            from ..database.repositories import PacketRepository
 
-            # Get node count using get_nodes
-            result = NodeRepository.get_nodes(limit=10000)
-            # Repository returns 'nodes' and 'total_count' keys
-            nodes = result.get("nodes", [])
-            online_count = sum(1 for n in nodes if n.get("is_online", False))
-            total_count = result.get("total_count", len(nodes))
+            # Get node counts for last 30 days using direct query (efficient)
+            conn = get_db_connection()
+            cursor = conn.cursor()
+            thirty_days_ago = time.time() - (30 * 24 * 3600)
+
+            # Count nodes seen in last 30 days (based on packet activity)
+            cursor.execute(
+                """
+                SELECT COUNT(DISTINCT from_node_id) as active_nodes
+                FROM packet_history
+                WHERE timestamp > ?
+                """,
+                (thirty_days_ago,),
+            )
+            total_count = cursor.fetchone()["active_nodes"]
+
+            # Count nodes seen in last 15 minutes (online)
+            fifteen_min_ago = time.time() - 900
+            cursor.execute(
+                """
+                SELECT COUNT(DISTINCT from_node_id) as online_nodes
+                FROM packet_history
+                WHERE timestamp > ?
+                """,
+                (fifteen_min_ago,),
+            )
+            online_count = cursor.fetchone()["online_nodes"]
+            conn.close()
 
             # Get recent packet count
             recent_packets = PacketRepository.get_packet_count_since(
@@ -885,7 +908,7 @@ class BotService:
             return (
                 f"📊 Mesh Status\n"
                 f"GW: {gateway_name}\n"
-                f"Nodes: {online_count}/{total_count}\n"
+                f"Nodes: {online_count}/{total_count} (30d)\n"
                 f"Pkts/1h: {recent_packets}"
             )
         except Exception as e:
