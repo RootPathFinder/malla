@@ -3433,6 +3433,12 @@ def api_run_compliance_fix(template_id):
 
     # Queue the job
     try:
+        logger.info(
+            f"Queueing compliance fix job: template_id={template_id}, "
+            f"template_type={template_type}, node_count={len(valid_node_ids)}"
+        )
+        logger.info(f"Template config_data being queued: {template_config}")
+
         job_service = get_job_service()
         job_id = job_service.queue_job(
             job_type=JobType.COMPLIANCE_FIX,

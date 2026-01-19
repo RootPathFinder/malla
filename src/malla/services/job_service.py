@@ -1339,6 +1339,13 @@ class JobService:
         verify_after = job_data.get("verify_after", True)
         reboot_after = job_data.get("reboot_after", False)
 
+        logger.info(
+            f"Compliance fix job starting: template_id={template_id}, "
+            f"template_type={template_type}, node_count={len(node_ids)}, "
+            f"reboot_after={reboot_after}"
+        )
+        logger.info(f"Compliance fix config_data: {config_data}")
+
         if not template_id or not node_ids or not template_type or not config_data:
             return {
                 "success": False,
