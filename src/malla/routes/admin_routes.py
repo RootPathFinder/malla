@@ -2093,6 +2093,91 @@ def api_shutdown_node(node_id):
         return jsonify({"error": str(e)}), 500
 
 
+@admin_bp.route("/api/admin/node/<node_id>/telemetry/live", methods=["POST"])
+def api_request_live_telemetry(node_id):
+    """
+    Request live telemetry from a remote node.
+
+    This sends a telemetry request via the mesh network and waits for
+    a response. Use this for real-time polling of node status.
+
+    Request body (optional):
+        telemetry_type: Type of telemetry (device_metrics, environment_metrics)
+        timeout: Timeout in seconds (default: 10, max: 30)
+
+    Returns:
+        Telemetry data if successful, or error information
+    """
+    try:
+        node_id_int = convert_node_id(node_id)
+
+        data = request.get_json() or {}
+        telemetry_type = data.get("telemetry_type", "device_metrics")
+        timeout = min(data.get("timeout", 10), 30)  # Max 30 seconds
+
+        admin_service = get_admin_service()
+        connection_type = admin_service.connection_type.value
+
+        if connection_type == "tcp":
+            tcp_publisher = get_tcp_publisher()
+            if not tcp_publisher.is_connected:
+                return jsonify(
+                    {
+                        "success": False,
+                        "error": "TCP not connected. Connect via Admin page first.",
+                    }
+                ), 400
+
+            result = tcp_publisher.send_telemetry_request(
+                target_node_id=node_id_int,
+                telemetry_type=telemetry_type,
+                timeout=timeout,
+            )
+
+            if result:
+                return jsonify(
+                    {
+                        "success": True,
+                        "node_id": node_id_int,
+                        "hex_id": f"!{node_id_int:08x}",
+                        "telemetry": result.get("telemetry", {}),
+                        "timestamp": result.get("timestamp"),
+                        "live": True,
+                    }
+                )
+            else:
+                return jsonify(
+                    {
+                        "success": False,
+                        "error": f"No response from node within {timeout}s",
+                        "node_id": node_id_int,
+                        "hex_id": f"!{node_id_int:08x}",
+                    }
+                ), 408  # Request Timeout
+
+        elif connection_type == "mqtt":
+            # MQTT is fire-and-forget, we can't wait for response here
+            return jsonify(
+                {
+                    "success": False,
+                    "error": "Live telemetry requires TCP connection. "
+                    "MQTT cannot wait for responses.",
+                }
+            ), 400
+
+        else:
+            return jsonify(
+                {
+                    "success": False,
+                    "error": f"Unsupported connection type: {connection_type}",
+                }
+            ), 400
+
+    except Exception as e:
+        logger.error(f"Error requesting live telemetry: {e}")
+        return jsonify({"error": str(e)}), 500
+
+
 # ============================================================================
 # API Routes - Audit Log
 # ============================================================================

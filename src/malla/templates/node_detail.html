@@ -2093,6 +2093,54 @@ async function pollLiveTelemetry() {
     const nodeId = scriptTag.getAttribute('data-node-id');
 
     try {
+        // Use the live telemetry endpoint which requests data directly from the node
+        const response = await fetch(`/api/admin/node/${nodeId}/telemetry/live`, {
+            method: 'POST',
+            headers: {'Content-Type': 'application/json'},
+            body: JSON.stringify({
+                telemetry_type: 'device_metrics',
+                timeout: 8  // Leave 2s buffer for 5s poll interval
+            })
+        });
+        const data = await response.json();
+
+        // Update status indicator
+        const statusIndicator = document.getElementById('live-telemetry-status');
+        if (statusIndicator) {
+            if (data.success) {
+                statusIndicator.innerHTML = '<span class="badge bg-success">Live</span>';
+            } else if (response.status === 408) {
+                statusIndicator.innerHTML = '<span class="badge bg-warning">No Response</span>';
+            } else {
+                statusIndicator.innerHTML = '<span class="badge bg-secondary">Cached</span>';
+                // Fall back to cached data if live fails
+                return pollCachedTelemetry();
+            }
+        }
+
+        if (!data.success || !data.telemetry) {
+            console.log('Live telemetry unavailable, falling back to cached');
+            return pollCachedTelemetry();
+        }
+
+        const telemetry = data.telemetry;
+        const dm = telemetry.device_metrics || {};
+        const env = telemetry.environment_metrics || {};
+
+        updateTelemetryDisplay(dm, env);
+
+    } catch (error) {
+        console.error('Live telemetry fetch failed:', error);
+        // Fall back to cached telemetry
+        return pollCachedTelemetry();
+    }
+}
+
+async function pollCachedTelemetry() {
+    const scriptTag = document.querySelector('script[data-node-id]');
+    const nodeId = scriptTag.getAttribute('data-node-id');
+
+    try {
         const response = await fetch(`/api/node/${nodeId}/telemetry`);
         const data = await response.json();
 
@@ -2107,85 +2155,86 @@ async function pollLiveTelemetry() {
         const dm = telemetry.device_metrics || {};
         const env = telemetry.environment_metrics || {};
 
-        // Update battery
-        const batteryEl = document.getElementById('live-battery');
-        if (dm.battery_level !== undefined) {
-            batteryEl.textContent = dm.battery_level + '%';
-            batteryEl.className = 'h4 mb-0 ' + (dm.battery_level < 20 ? 'text-danger' : dm.battery_level < 50 ? 'text-warning' : 'text-success');
-        } else {
-            batteryEl.textContent = '--';
-            batteryEl.className = 'h4 mb-0';
-        }
-
-        // Update voltage
-        const voltageEl = document.getElementById('live-voltage');
-        if (dm.voltage !== undefined) {
-            voltageEl.textContent = dm.voltage.toFixed(2) + 'V';
-            voltageEl.className = 'h4 mb-0 ' + (dm.voltage < 3.3 ? 'text-danger' : dm.voltage < 3.6 ? 'text-warning' : 'text-success');
-        } else {
-            voltageEl.textContent = '--';
-            voltageEl.className = 'h4 mb-0';
-        }
-
-        // Update channel utilization
-        const chUtilEl = document.getElementById('live-channel-util');
-        if (dm.channel_utilization !== undefined) {
-            chUtilEl.textContent = dm.channel_utilization.toFixed(1) + '%';
-            chUtilEl.className = 'h4 mb-0 ' + (dm.channel_utilization > 80 ? 'text-danger' : dm.channel_utilization > 50 ? 'text-warning' : '');
-        } else {
-            chUtilEl.textContent = '--';
-            chUtilEl.className = 'h4 mb-0';
-        }
-
-        // Update air util TX
-        const airUtilEl = document.getElementById('live-air-util');
-        if (dm.air_util_tx !== undefined) {
-            airUtilEl.textContent = dm.air_util_tx.toFixed(1) + '%';
-            airUtilEl.className = 'h4 mb-0 ' + (dm.air_util_tx > 25 ? 'text-danger' : dm.air_util_tx > 10 ? 'text-warning' : '');
-        } else {
-            airUtilEl.textContent = '--';
-            airUtilEl.className = 'h4 mb-0';
-        }
-
-        // Update uptime
-        const uptimeEl = document.getElementById('live-uptime');
-        if (dm.uptime_seconds !== undefined) {
-            uptimeEl.textContent = formatUptime(dm.uptime_seconds);
-        } else {
-            uptimeEl.textContent = '--';
-        }
-
-        // Update temperature
-        const tempEl = document.getElementById('live-temperature');
-        if (env.temperature !== undefined) {
-            const tempUnit = localStorage.getItem('temperatureUnit') || 'celsius';
-            if (tempUnit === 'fahrenheit') {
-                tempEl.textContent = ((env.temperature * 9/5) + 32).toFixed(1) + '°F';
-            } else {
-                tempEl.textContent = env.temperature.toFixed(1) + '°C';
-            }
-        } else {
-            tempEl.textContent = '--';
-        }
-
-        // Update last update time
-        const lastUpdateEl = document.getElementById('live-last-update');
-        const now = new Date();
-        lastUpdateEl.textContent = now.toLocaleTimeString();
-
-        // Flash effect to show update
-        const card = document.getElementById('live-telemetry-content');
-        card.style.transition = 'background-color 0.3s';
-        card.style.backgroundColor = 'rgba(25, 135, 84, 0.1)';
-        setTimeout(() => {
-            card.style.backgroundColor = '';
-        }, 300);
-
+        updateTelemetryDisplay(dm, env);
     } catch (error) {
-        console.error('Error polling telemetry:', error);
-        const status = document.getElementById('live-telemetry-status');
-        status.innerHTML = '<i class="bi bi-exclamation-triangle text-warning"></i> Error fetching telemetry. Retrying...';
+        console.error('Cached telemetry fetch failed:', error);
     }
+}
+
+function updateTelemetryDisplay(dm, env) {
+    // Update battery
+    const batteryEl = document.getElementById('live-battery');
+    if (dm.battery_level !== undefined) {
+        batteryEl.textContent = dm.battery_level + '%';
+        batteryEl.className = 'h4 mb-0 ' + (dm.battery_level < 20 ? 'text-danger' : dm.battery_level < 50 ? 'text-warning' : 'text-success');
+    } else {
+        batteryEl.textContent = '--';
+        batteryEl.className = 'h4 mb-0';
+    }
+
+    // Update voltage
+    const voltageEl = document.getElementById('live-voltage');
+    if (dm.voltage !== undefined) {
+        voltageEl.textContent = dm.voltage.toFixed(2) + 'V';
+        voltageEl.className = 'h4 mb-0 ' + (dm.voltage < 3.3 ? 'text-danger' : dm.voltage < 3.6 ? 'text-warning' : 'text-success');
+    } else {
+        voltageEl.textContent = '--';
+        voltageEl.className = 'h4 mb-0';
+    }
+
+    // Update channel utilization
+    const chUtilEl = document.getElementById('live-channel-util');
+    if (dm.channel_utilization !== undefined) {
+        chUtilEl.textContent = dm.channel_utilization.toFixed(1) + '%';
+        chUtilEl.className = 'h4 mb-0 ' + (dm.channel_utilization > 80 ? 'text-danger' : dm.channel_utilization > 50 ? 'text-warning' : '');
+    } else {
+        chUtilEl.textContent = '--';
+        chUtilEl.className = 'h4 mb-0';
+    }
+
+    // Update air util TX
+    const airUtilEl = document.getElementById('live-air-util');
+    if (dm.air_util_tx !== undefined) {
+        airUtilEl.textContent = dm.air_util_tx.toFixed(1) + '%';
+        airUtilEl.className = 'h4 mb-0 ' + (dm.air_util_tx > 25 ? 'text-danger' : dm.air_util_tx > 10 ? 'text-warning' : '');
+    } else {
+        airUtilEl.textContent = '--';
+        airUtilEl.className = 'h4 mb-0';
+    }
+
+    // Update uptime
+    const uptimeEl = document.getElementById('live-uptime');
+    if (dm.uptime_seconds !== undefined) {
+        uptimeEl.textContent = formatUptime(dm.uptime_seconds);
+    } else {
+        uptimeEl.textContent = '--';
+    }
+
+    // Update temperature
+    const tempEl = document.getElementById('live-temperature');
+    if (env.temperature !== undefined) {
+        const tempUnit = localStorage.getItem('temperatureUnit') || 'celsius';
+        if (tempUnit === 'fahrenheit') {
+            tempEl.textContent = ((env.temperature * 9/5) + 32).toFixed(1) + '°F';
+        } else {
+            tempEl.textContent = env.temperature.toFixed(1) + '°C';
+        }
+    } else {
+        tempEl.textContent = '--';
+    }
+
+    // Update last update time
+    const lastUpdateEl = document.getElementById('live-last-update');
+    const now = new Date();
+    lastUpdateEl.textContent = now.toLocaleTimeString();
+
+    // Flash effect to show update
+    const card = document.getElementById('live-telemetry-content');
+    card.style.transition = 'background-color 0.3s';
+    card.style.backgroundColor = 'rgba(25, 135, 84, 0.1)';
+    setTimeout(() => {
+        card.style.backgroundColor = '';
+    }, 300);
 }
 </script>
 {% endblock %}

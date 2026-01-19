@@ -565,6 +565,108 @@ class MQTTPublisher:
             want_response=False,
         )
 
+    def send_telemetry_request(
+        self,
+        target_node_id: int,
+        from_node_id: int,
+        telemetry_type: str = "device_metrics",
+    ) -> int | None:
+        """
+        Send a telemetry request to a node via MQTT.
+
+        Note: MQTT-based telemetry requests are fire-and-forget.
+        The response will come back through the normal MQTT subscription.
+
+        Args:
+            target_node_id: The target node ID
+            from_node_id: The sender node ID
+            telemetry_type: Type of telemetry to request
+
+        Returns:
+            Packet ID if sent successfully
+        """
+        from meshtastic import telemetry_pb2
+
+        if not self.connect():
+            logger.error("Cannot send telemetry request: not connected to MQTT")
+            return None
+
+        try:
+            # Create telemetry request
+            telemetry = telemetry_pb2.Telemetry()
+
+            if telemetry_type == "environment_metrics":
+                telemetry.environment_metrics.CopyFrom(
+                    telemetry_pb2.EnvironmentMetrics()
+                )
+            elif telemetry_type == "power_metrics":
+                telemetry.power_metrics.CopyFrom(telemetry_pb2.PowerMetrics())
+            else:
+                telemetry.device_metrics.CopyFrom(telemetry_pb2.DeviceMetrics())
+
+            # Generate a unique packet ID
+            packet_id = random.getrandbits(32)
+
+            # Create the Data payload
+            data = mesh_pb2.Data()
+            data.portnum = portnums_pb2.PortNum.TELEMETRY_APP
+            data.payload = telemetry.SerializeToString()
+            data.want_response = True
+
+            # Create the MeshPacket
+            mesh_packet = mesh_pb2.MeshPacket()
+            setattr(mesh_packet, "from", from_node_id)
+            mesh_packet.to = target_node_id
+            mesh_packet.id = packet_id
+            mesh_packet.channel = 0  # Primary channel
+            mesh_packet.want_ack = True
+            mesh_packet.hop_limit = 3
+
+            # Get encryption key
+            keys = self._config.get_decryption_keys()
+            if keys:
+                key = self._derive_key("", keys[0])  # Use primary channel key
+                encrypted = self._encrypt_payload(
+                    data.SerializeToString(),
+                    packet_id,
+                    from_node_id,
+                    key,
+                )
+                mesh_packet.encrypted = encrypted
+            else:
+                # No encryption
+                mesh_packet.decoded.CopyFrom(data)
+                logger.warning("Sending telemetry request without encryption!")
+
+            # Create the ServiceEnvelope
+            envelope = mqtt_pb2.ServiceEnvelope()
+            envelope.packet.CopyFrom(mesh_packet)
+            envelope.channel_id = "LongFast"  # Default channel name
+            envelope.gateway_id = f"!{from_node_id:08x}"
+
+            # Publish to MQTT
+            topic = f"{self._config.mqtt_topic_prefix}/2/e/LongFast/!{from_node_id:08x}"
+
+            if self._client is None:
+                logger.error("MQTT client is None, cannot publish")
+                return None
+
+            result = self._client.publish(topic, envelope.SerializeToString())
+
+            if result.rc == mqtt.MQTT_ERR_SUCCESS:
+                logger.info(
+                    f"Sent telemetry request to !{target_node_id:08x}, "
+                    f"packet_id={packet_id}"
+                )
+                return packet_id
+            else:
+                logger.error(f"Failed to publish telemetry request: {result.rc}")
+                return None
+
+        except Exception as e:
+            logger.error(f"Failed to send telemetry request: {e}")
+            return None
+
 
 # Global instance getter
 def get_mqtt_publisher() -> MQTTPublisher:

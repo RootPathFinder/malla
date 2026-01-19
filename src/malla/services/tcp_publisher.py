@@ -1326,6 +1326,120 @@ class TCPPublisher:
             logger.error(f"Failed to send shutdown command: {e}")
             return None
 
+    def send_telemetry_request(
+        self,
+        target_node_id: int,
+        telemetry_type: str = "device_metrics",
+        timeout: float = 10.0,
+    ) -> dict[str, Any] | None:
+        """
+        Request telemetry from a target node and wait for response.
+
+        This sends a telemetry request to the target node and waits for
+        the response containing current device metrics.
+
+        Args:
+            target_node_id: The destination node ID
+            telemetry_type: Type of telemetry to request
+                           (device_metrics, environment_metrics, etc.)
+            timeout: Timeout in seconds to wait for response
+
+        Returns:
+            Dictionary with telemetry data if successful, None otherwise
+        """
+        from meshtastic import telemetry_pb2
+
+        if not self.ensure_healthy_connection():
+            logger.error("Cannot send telemetry request: connection unhealthy")
+            return None
+
+        if self._interface is None:
+            return None
+
+        try:
+            # Create telemetry request
+            telemetry = telemetry_pb2.Telemetry()
+
+            # Set the appropriate metrics type to request
+            if telemetry_type == "environment_metrics":
+                telemetry.environment_metrics.CopyFrom(
+                    telemetry_pb2.EnvironmentMetrics()
+                )
+            elif telemetry_type == "power_metrics":
+                telemetry.power_metrics.CopyFrom(telemetry_pb2.PowerMetrics())
+            elif telemetry_type == "local_stats":
+                telemetry.local_stats.CopyFrom(telemetry_pb2.LocalStats())
+            else:
+                # Default to device_metrics
+                telemetry.device_metrics.CopyFrom(telemetry_pb2.DeviceMetrics())
+
+            # Track response
+            response_received = threading.Event()
+            response_data: dict[str, Any] = {}
+
+            def on_telemetry_response(packet: dict) -> None:
+                """Handle telemetry response."""
+                try:
+                    decoded = packet.get("decoded", {})
+                    if decoded.get("portnum") == "TELEMETRY_APP":
+                        telemetry_data = decoded.get("telemetry", {})
+                        from_id = packet.get("fromId", "")
+
+                        # Check if this is from our target node
+                        target_hex = f"!{target_node_id:08x}"
+                        if from_id == target_hex or str(from_id) == str(target_node_id):
+                            response_data["telemetry"] = telemetry_data
+                            response_data["from_id"] = from_id
+                            response_data["timestamp"] = time.time()
+                            response_received.set()
+                            logger.info(f"Received telemetry response from {from_id}")
+                except Exception as e:
+                    logger.error(f"Error processing telemetry response: {e}")
+
+            # Subscribe to packet reception
+            pub.subscribe(on_telemetry_response, "meshtastic.receive")
+
+            try:
+                # Send telemetry request with wantResponse=True
+                logger.info(
+                    f"Sending telemetry request to !{target_node_id:08x} "
+                    f"(type={telemetry_type})"
+                )
+
+                self._interface.sendData(
+                    data=telemetry,
+                    destinationId=target_node_id,
+                    portNum=portnums_pb2.PortNum.TELEMETRY_APP,
+                    wantAck=True,
+                    wantResponse=True,
+                )
+
+                # Update activity time
+                self._last_activity_time = time.time()
+
+                # Wait for response with timeout
+                if response_received.wait(timeout=timeout):
+                    logger.info(
+                        f"Telemetry request successful for !{target_node_id:08x}"
+                    )
+                    return response_data
+                else:
+                    logger.warning(
+                        f"Telemetry request timeout for !{target_node_id:08x}"
+                    )
+                    return None
+
+            finally:
+                # Unsubscribe from events
+                try:
+                    pub.unsubscribe(on_telemetry_response, "meshtastic.receive")
+                except Exception:
+                    pass
+
+        except Exception as e:
+            logger.error(f"Failed to send telemetry request: {e}")
+            return None
+
 
 # Module-level singleton accessor
 _tcp_publisher: TCPPublisher | None = None
