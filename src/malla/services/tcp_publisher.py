@@ -1377,7 +1377,7 @@ class TCPPublisher:
             response_received = threading.Event()
             response_data: dict[str, Any] = {}
 
-            def on_telemetry_response(packet: dict) -> None:
+            def on_telemetry_response(packet: dict, interface: Any = None) -> None:
                 """Handle telemetry response."""
                 try:
                     decoded = packet.get("decoded", {})
