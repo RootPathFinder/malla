@@ -59,14 +59,33 @@ class AppConfig:
     # OpenTelemetry settings
     otlp_endpoint: str | None = None
 
-    # Remote admin settings
+    # Remote admin settings (LEGACY - for backward compatibility)
+    # For multi-connection support, use 'connections' list instead
     admin_enabled: bool = True
     admin_gateway_node_id: int | None = None
     admin_connection_type: str = "mqtt"  # "mqtt", "tcp", or "serial"
 
-    # TCP admin connection settings (when admin_connection_type = "tcp")
+    # TCP admin connection settings (LEGACY - when admin_connection_type = "tcp")
     admin_tcp_host: str = "192.168.1.1"  # IP address of the node to connect to
     admin_tcp_port: int = 4403  # Default Meshtastic TCP port
+
+    # Multi-connection support (NEW)
+    # List of connection definitions for multi-connection scenarios
+    # Each connection has: id, type (tcp/serial), role (admin/client), and params
+    # Example:
+    # connections:
+    #   - id: "admin_tcp"
+    #     type: "tcp"
+    #     role: "admin"
+    #     host: "192.168.1.1"
+    #     port: 4403
+    #     auto_connect: true
+    #   - id: "client_serial"
+    #     type: "serial"
+    #     role: "client"
+    #     port: "/dev/ttyUSB0"
+    #     auto_connect: true
+    connections: list[dict[str, Any]] = field(default_factory=list)
 
     # Internal attribute to remember the source file used
     _config_path: Path | None = field(default=None, repr=False, compare=False)

@@ -4314,3 +4314,264 @@ def api_nodes_hop_estimates():
     except Exception as e:
         logger.error(f"Error getting hop estimates: {e}")
         return jsonify({"error": str(e)}), 500
+
+
+# ============================================================================
+# API Routes - Multi-Connection Management
+# ============================================================================
+
+
+@admin_bp.route("/api/admin/connections")
+def api_list_connections():
+    """
+    List all registered connections and their status.
+
+    Returns:
+        JSON with list of connections and their details
+    """
+    try:
+        from ..services.connection_manager import get_connection_manager
+
+        manager = get_connection_manager()
+        status = manager.get_status()
+
+        return jsonify(status)
+
+    except Exception as e:
+        logger.error(f"Error listing connections: {e}")
+        return jsonify({"error": str(e)}), 500
+
+
+@admin_bp.route("/api/admin/connections/<connection_id>")
+def api_get_connection(connection_id: str):
+    """
+    Get details about a specific connection.
+
+    Args:
+        connection_id: ID of the connection to retrieve
+
+    Returns:
+        JSON with connection details
+    """
+    try:
+        from ..services.connection_manager import get_connection_manager
+
+        manager = get_connection_manager()
+        conn = manager.get_connection(connection_id)
+
+        if conn is None:
+            return jsonify({"error": f"Connection '{connection_id}' not found"}), 404
+
+        return jsonify(conn.get_connection_params())
+
+    except Exception as e:
+        logger.error(f"Error getting connection: {e}")
+        return jsonify({"error": str(e)}), 500
+
+
+@admin_bp.route("/api/admin/connections/<connection_id>/connect", methods=["POST"])
+def api_connect_connection(connection_id: str):
+    """
+    Connect a specific connection.
+
+    Args:
+        connection_id: ID of the connection to connect
+
+    Returns:
+        JSON with success status
+    """
+    try:
+        from ..services.connection_manager import get_connection_manager
+
+        manager = get_connection_manager()
+        conn = manager.get_connection(connection_id)
+
+        if conn is None:
+            return jsonify({"error": f"Connection '{connection_id}' not found"}), 404
+
+        # Connect the publisher
+        if hasattr(conn.publisher, "connect"):
+            success = conn.publisher.connect()
+            return jsonify(
+                {
+                    "success": success,
+                    "connection_id": connection_id,
+                    "connected": conn.is_connected,
+                }
+            )
+        else:
+            return jsonify(
+                {"error": "Connection does not support connect operation"}
+            ), 400
+
+    except Exception as e:
+        logger.error(f"Error connecting connection: {e}")
+        return jsonify({"error": str(e)}), 500
+
+
+@admin_bp.route("/api/admin/connections/<connection_id>/disconnect", methods=["POST"])
+def api_disconnect_connection(connection_id: str):
+    """
+    Disconnect a specific connection.
+
+    Args:
+        connection_id: ID of the connection to disconnect
+
+    Returns:
+        JSON with success status
+    """
+    try:
+        from ..services.connection_manager import get_connection_manager
+
+        manager = get_connection_manager()
+        conn = manager.get_connection(connection_id)
+
+        if conn is None:
+            return jsonify({"error": f"Connection '{connection_id}' not found"}), 404
+
+        # Disconnect the publisher
+        if hasattr(conn.publisher, "disconnect"):
+            conn.publisher.disconnect()
+            return jsonify(
+                {
+                    "success": True,
+                    "connection_id": connection_id,
+                    "connected": conn.is_connected,
+                }
+            )
+        else:
+            return jsonify(
+                {"error": "Connection does not support disconnect operation"}
+            ), 400
+
+    except Exception as e:
+        logger.error(f"Error disconnecting connection: {e}")
+        return jsonify({"error": str(e)}), 500
+
+
+@admin_bp.route("/api/admin/connections/<connection_id>/role", methods=["PUT"])
+def api_set_connection_role(connection_id: str):
+    """
+    Change the role of a connection (admin or client).
+
+    Args:
+        connection_id: ID of the connection to update
+
+    Request body:
+        {
+            "role": "admin" or "client"
+        }
+
+    Returns:
+        JSON with success status
+    """
+    try:
+        from ..services.connection_manager import ConnectionRole, get_connection_manager
+
+        data = request.get_json()
+        if not data or "role" not in data:
+            return jsonify({"error": "role is required"}), 400
+
+        role_str = data["role"].lower()
+        try:
+            role = ConnectionRole(role_str)
+        except ValueError:
+            return jsonify({"error": "Invalid role. Must be 'admin' or 'client'"}), 400
+
+        manager = get_connection_manager()
+        success = manager.set_connection_role(connection_id, role)
+
+        if success:
+            return jsonify(
+                {
+                    "success": True,
+                    "connection_id": connection_id,
+                    "role": role.value,
+                }
+            )
+        else:
+            return jsonify({"error": f"Connection '{connection_id}' not found"}), 404
+
+    except Exception as e:
+        logger.error(f"Error setting connection role: {e}")
+        return jsonify({"error": str(e)}), 500
+
+
+@admin_bp.route("/api/admin/connections/connect-all", methods=["POST"])
+def api_connect_all_connections():
+    """
+    Connect all registered connections.
+
+    Query parameters:
+        role: Optional filter by role ("admin" or "client")
+
+    Returns:
+        JSON with results for each connection
+    """
+    try:
+        from ..services.connection_manager import ConnectionRole, get_connection_manager
+
+        role_filter = request.args.get("role")
+        role = None
+
+        if role_filter:
+            try:
+                role = ConnectionRole(role_filter.lower())
+            except ValueError:
+                return jsonify(
+                    {"error": "Invalid role. Must be 'admin' or 'client'"}
+                ), 400
+
+        manager = get_connection_manager()
+        results = manager.connect_all(role=role)
+
+        return jsonify(
+            {
+                "success": True,
+                "results": results,
+            }
+        )
+
+    except Exception as e:
+        logger.error(f"Error connecting all connections: {e}")
+        return jsonify({"error": str(e)}), 500
+
+
+@admin_bp.route("/api/admin/connections/disconnect-all", methods=["POST"])
+def api_disconnect_all_connections():
+    """
+    Disconnect all connections.
+
+    Query parameters:
+        role: Optional filter by role ("admin" or "client")
+
+    Returns:
+        JSON with results for each connection
+    """
+    try:
+        from ..services.connection_manager import ConnectionRole, get_connection_manager
+
+        role_filter = request.args.get("role")
+        role = None
+
+        if role_filter:
+            try:
+                role = ConnectionRole(role_filter.lower())
+            except ValueError:
+                return jsonify(
+                    {"error": "Invalid role. Must be 'admin' or 'client'"}
+                ), 400
+
+        manager = get_connection_manager()
+        results = manager.disconnect_all(role=role)
+
+        return jsonify(
+            {
+                "success": True,
+                "results": results,
+            }
+        )
+
+    except Exception as e:
+        logger.error(f"Error disconnecting all connections: {e}")
+        return jsonify({"error": str(e)}), 500

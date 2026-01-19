@@ -85,6 +85,33 @@ debug: false
 # admin_tcp_port: 4403
 
 # ---------------------------------------------------------------------------
+# Multi-Connection Support (NEW)
+# ---------------------------------------------------------------------------
+# Define multiple simultaneous connections with role designation.
+# Each connection has a role: "admin" for administrative operations
+# (backups, compliance, config changes) or "client" for basic mesh
+# activities (chat, traceroute, monitoring, bot operations).
+#
+# Example: TCP for admin, Serial for client
+# connections:
+#   - id: "admin_tcp"
+#     type: "tcp"
+#     role: "admin"
+#     description: "TCP connection for admin operations"
+#     host: "192.168.1.1"
+#     port: 4403
+#     auto_connect: true
+#   - id: "client_serial"
+#     type: "serial"
+#     role: "client"
+#     description: "USB connection for client/bot operations"
+#     port: "/dev/ttyUSB0"
+#     auto_connect: true
+#
+# Leave empty to use legacy single-connection mode
+# connections: []
+
+# ---------------------------------------------------------------------------
 # OpenTelemetry settings
 # Endpoint for sending traces (e.g. "http://localhost:4317")
 # otlp_endpoint: ""
