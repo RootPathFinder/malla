@@ -687,17 +687,19 @@ class BotService:
                 time.time() - 3600  # Last hour
             )
 
-            # Get gateway info
+            # Get gateway info (truncate to fit payload)
             from .tcp_publisher import get_tcp_publisher
 
             publisher = get_tcp_publisher()
             gateway_name = publisher.get_local_node_name() or "Unknown"
+            if len(gateway_name) > 20:
+                gateway_name = gateway_name[:17] + "..."
 
             return (
                 f"📊 Mesh Status\n"
-                f"Gateway: {gateway_name}\n"
-                f"Nodes: {online_count}/{total_count} online\n"
-                f"Packets (1h): {recent_packets}"
+                f"GW: {gateway_name}\n"
+                f"Nodes: {online_count}/{total_count}\n"
+                f"Pkts/1h: {recent_packets}"
             )
         except Exception as e:
             logger.error(f"Error in status command: {e}")
@@ -710,7 +712,7 @@ class BotService:
 
             publisher = get_tcp_publisher()
             if not publisher.is_connected or publisher._interface is None:
-                return "Traceroute unavailable - not connected"
+                return "Not connected"
 
             # Send traceroute to the requesting node
             publisher._interface.sendTraceRoute(
@@ -719,7 +721,10 @@ class BotService:
             )
 
             sender_name = ctx.sender_name or f"!{ctx.sender_id:08x}"
-            return f"🔍 Traceroute initiated to {sender_name}"
+            # Truncate name to fit payload
+            if len(sender_name) > 20:
+                sender_name = sender_name[:17] + "..."
+            return f"🔍 Traceroute to {sender_name}"
         except Exception as e:
             logger.error(f"Error in traceroute command: {e}")
             return "Traceroute failed"
@@ -728,7 +733,9 @@ class BotService:
         """Handle !help command."""
         # Keep help message short to fit in Meshtastic payload (~230 bytes)
         enabled_cmds = [
-            name for name in sorted(self._commands.keys()) if name not in self._disabled_commands
+            name
+            for name in sorted(self._commands.keys())
+            if name not in self._disabled_commands
         ]
         cmd_list = " ".join(f"!{name}" for name in enabled_cmds)
         return f"Cmds: {cmd_list}"
@@ -747,11 +754,7 @@ class BotService:
                 if n.get("latitude") is not None and n.get("longitude") is not None
             )
 
-            return (
-                f"📡 Nodes: {len(nodes)} total\n"
-                f"Online: {online}\n"
-                f"With position: {with_position}"
-            )
+            return f"📡 {len(nodes)} nodes, {online} online, {with_position} w/pos"
         except Exception as e:
             logger.error(f"Error in nodes command: {e}")
             return "Node info unavailable"
