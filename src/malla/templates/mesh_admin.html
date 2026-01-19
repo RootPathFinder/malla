@@ -7649,19 +7649,23 @@
                     icon = 'bi-arrow-down-circle';
                     iconClass = 'event-command';
                     title = `!${entry.data.command}`;
-                    detail = `from ${entry.data.sender_name || entry.data.sender_id}`;
+                    const dmTag = entry.data.is_dm ? ' [DM]' : '';
+                    const channelInfo = entry.data.channel ? ` on ${entry.data.channel}` : '';
+                    detail = `from ${entry.data.sender_name || entry.data.sender_id}${dmTag}${channelInfo}`;
                     break;
                 case 'response_queued':
                     icon = 'bi-arrow-up-circle';
                     iconClass = 'event-response';
                     title = 'Response queued';
-                    detail = entry.data.response_preview || '';
+                    const destInfo = entry.data.destination ? ` → ${entry.data.destination}` : '';
+                    detail = (entry.data.response_preview || '') + destInfo;
                     break;
                 case 'message_sent':
                     icon = 'bi-check-circle';
                     iconClass = 'event-response';
                     title = 'Sent';
-                    detail = entry.data.text_preview || '';
+                    const sentDestInfo = entry.data.destination ? ` → ${entry.data.destination}` : '';
+                    detail = (entry.data.text_preview || '') + sentDestInfo;
                     break;
                 case 'message_failed':
                     icon = 'bi-x-circle';
