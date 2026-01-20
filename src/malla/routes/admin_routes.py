@@ -7,7 +7,6 @@ Provides REST API endpoints and page routes for the Mesh Admin functionality.
 import json
 import logging
 import time
-from typing import Any
 
 from flask import (
     Blueprint,
@@ -23,6 +22,7 @@ from ..database.admin_repository import AdminRepository
 from ..services.admin_service import ConfigType, get_admin_service
 from ..services.serial_publisher import discover_serial_ports, get_serial_publisher
 from ..services.tcp_publisher import get_tcp_publisher
+from ..utils.config_compare import deep_compare_config
 from ..utils.node_utils import convert_node_id
 
 logger = logging.getLogger(__name__)
@@ -1470,10 +1470,36 @@ def api_restore_backup_stream():
         )
 
         try:
+            # Begin edit settings transaction (follows Meshtastic web protocol)
+            # This ensures atomic config updates - changes held in memory until commit
+            yield send_event(
+                {
+                    "status": "Starting config edit transaction...",
+                    "progress": 2,
+                    "phase": "transaction",
+                }
+            )
+            begin_result = admin_service.begin_edit_settings(
+                target_node_id=target_node_id
+            )
+            if not begin_result.success:
+                logger.warning(
+                    f"begin_edit_settings failed: {begin_result.error} - "
+                    "continuing without transaction (may be unsupported)"
+                )
+            else:
+                yield send_event(
+                    {
+                        "status": "✓ Config edit transaction started",
+                        "progress": 2,
+                        "phase": "transaction",
+                    }
+                )
+
             # Restore core configs first
             for item_type, item_name, item_enum in items_to_restore:
                 current_item += 1
-                progress = int((current_item / total_items) * 95) + 2
+                progress = int((current_item / total_items) * 90) + 5
 
                 if item_type == "core":
                     yield send_event(
@@ -1660,6 +1686,41 @@ def api_restore_backup_stream():
 
                 # Small delay between configs to avoid overwhelming the node
                 time.sleep(0.5)
+
+            # Commit edit settings transaction (follows Meshtastic web protocol)
+            # This saves all pending changes to flash
+            if successful_restores:
+                yield send_event(
+                    {
+                        "status": "Committing config changes...",
+                        "progress": 96,
+                        "phase": "transaction",
+                    }
+                )
+                commit_result = admin_service.commit_edit_settings(
+                    target_node_id=target_node_id
+                )
+                if not commit_result.success:
+                    logger.warning(
+                        f"commit_edit_settings failed: {commit_result.error} - "
+                        "changes may not persist after reboot"
+                    )
+                    yield send_event(
+                        {
+                            "status": f"⚠ Commit warning: {commit_result.error}",
+                            "progress": 97,
+                            "phase": "transaction",
+                            "warning": True,
+                        }
+                    )
+                else:
+                    yield send_event(
+                        {
+                            "status": "✓ Config changes committed to flash",
+                            "progress": 97,
+                            "phase": "transaction",
+                        }
+                    )
 
             # Reboot if requested and restore was successful
             if reboot_after and successful_restores:
@@ -3251,7 +3312,7 @@ def api_run_compliance_check(template_id):
                     f"node_config keys={list(node_config.keys()) if isinstance(node_config, dict) else 'N/A'}, "
                     f"template_config keys={list(template_config.keys())}"
                 )
-                differences = compare_configs(
+                differences = deep_compare_config(
                     template_config, node_config, config_type=fetch_type
                 )
                 is_compliant = len(differences) == 0
@@ -3467,179 +3528,6 @@ def api_run_compliance_fix(template_id):
     except Exception as e:
         logger.error(f"Error queuing compliance fix job: {e}")
         return jsonify({"error": str(e)}), 500
-
-
-def compare_configs(
-    template_config: dict, node_config: dict, config_type: str | None = None
-) -> list[dict]:
-    """
-    Compare template configuration against node configuration.
-
-    The template may store config at root level (e.g., {"admin_key": [...]})
-    while node config may have it wrapped in type key (e.g., {"security": {"admin_key": [...]}}).
-
-    Args:
-        template_config: The expected configuration from template
-        node_config: The actual configuration from node
-        config_type: Optional config type (device, security, lora, etc.) to help unwrap node config
-
-    Returns a list of differences found.
-    """
-    differences = []
-
-    # Handle None or empty node_config
-    if not node_config:
-        logger.warning(
-            f"compare_configs: node_config is empty/None. "
-            f"config_type={config_type}, template_config keys={list(template_config.keys())}"
-        )
-        # Return all template fields as missing
-        for key, value in template_config.items():
-            differences.append(
-                {
-                    "field": key,
-                    "expected": value,
-                    "actual": None,
-                    "type": "missing",
-                }
-            )
-        return differences
-
-    # Try to unwrap template_config if it's wrapped in a type key
-    actual_template_config = template_config
-    if len(template_config) == 1:
-        template_wrapper_key = list(template_config.keys())[0]
-        if template_wrapper_key in (
-            "device",
-            "lora",
-            "position",
-            "power",
-            "network",
-            "display",
-            "bluetooth",
-            "security",
-        ):
-            actual_template_config = template_config[template_wrapper_key]
-            logger.debug(
-                f"compare_configs: unwrapped template via wrapper_key={template_wrapper_key}"
-            )
-
-    # Try to unwrap node_config if it's wrapped in a type key
-    # Node configs come back as {"device": {...}} or {"security": {...}} etc.
-    actual_node_config = node_config
-
-    # Log what we received for debugging
-    logger.debug(
-        f"compare_configs: node_config keys={list(node_config.keys())}, "
-        f"config_type={config_type}"
-    )
-
-    # Check if node_config has a single key matching a config type
-    if len(node_config) == 1:
-        wrapper_key = list(node_config.keys())[0]
-        if wrapper_key in (
-            "device",
-            "lora",
-            "position",
-            "power",
-            "network",
-            "display",
-            "bluetooth",
-            "security",
-        ):
-            actual_node_config = node_config[wrapper_key]
-            logger.debug(
-                f"compare_configs: unwrapped node via wrapper_key={wrapper_key}, "
-                f"actual_node_config keys={list(actual_node_config.keys()) if isinstance(actual_node_config, dict) else 'not a dict'}"
-            )
-    elif config_type and config_type in node_config:
-        # If config_type is provided and exists in node_config, use that
-        actual_node_config = node_config[config_type]
-        logger.debug(
-            f"compare_configs: unwrapped node via config_type={config_type}, "
-            f"actual_node_config keys={list(actual_node_config.keys()) if isinstance(actual_node_config, dict) else 'not a dict'}"
-        )
-
-    def compare_values(key: str, expected: Any, actual: Any, path: str = ""):
-        full_key = f"{path}.{key}" if path else key
-
-        if isinstance(expected, dict) and isinstance(actual, dict):
-            # Recursively compare nested dicts
-            for sub_key in expected:
-                if sub_key in actual:
-                    compare_values(
-                        sub_key, expected[sub_key], actual[sub_key], full_key
-                    )
-                else:
-                    differences.append(
-                        {
-                            "field": f"{full_key}.{sub_key}",
-                            "expected": expected[sub_key],
-                            "actual": None,
-                            "type": "missing",
-                        }
-                    )
-        elif isinstance(expected, list) and isinstance(actual, list):
-            # Compare lists - check if they have the same elements (order-independent for keys)
-            # For admin_key and similar, convert to sets for comparison
-            # Filter out empty strings/None values before comparison
-            expected_filtered = [e for e in expected if e]  # Remove empty/None
-            actual_filtered = [a for a in actual if a]  # Remove empty/None
-
-            expected_set = (
-                set(expected_filtered)
-                if all(isinstance(e, str) for e in expected_filtered)
-                else None
-            )
-            actual_set = (
-                set(actual_filtered)
-                if all(isinstance(a, str) for a in actual_filtered)
-                else None
-            )
-
-            if expected_set is not None and actual_set is not None:
-                if expected_set != actual_set:
-                    differences.append(
-                        {
-                            "field": full_key,
-                            "expected": expected_filtered,
-                            "actual": actual_filtered,
-                            "type": "mismatch",
-                        }
-                    )
-            elif expected_filtered != actual_filtered:
-                differences.append(
-                    {
-                        "field": full_key,
-                        "expected": expected_filtered,
-                        "actual": actual_filtered,
-                        "type": "mismatch",
-                    }
-                )
-        elif expected != actual:
-            differences.append(
-                {
-                    "field": full_key,
-                    "expected": expected,
-                    "actual": actual,
-                    "type": "mismatch",
-                }
-            )
-
-    for key in actual_template_config:
-        if key in actual_node_config:
-            compare_values(key, actual_template_config[key], actual_node_config[key])
-        else:
-            differences.append(
-                {
-                    "field": key,
-                    "expected": actual_template_config[key],
-                    "actual": None,
-                    "type": "missing",
-                }
-            )
-
-    return differences
 
 
 @admin_bp.route("/api/admin/templates/<int:template_id>/deploy", methods=["POST"])

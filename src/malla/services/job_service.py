@@ -1381,7 +1381,7 @@ class JobService:
         # Helper function to verify if a node is compliant
         def verify_node_compliant(node_id: int, node_hex: str) -> tuple[bool, list]:
             """Verify if a node is now compliant with the template."""
-            from ..routes.admin_routes import compare_configs
+            from ..utils.config_compare import deep_compare_config
 
             try:
                 fetch_result = admin_service.get_config(
@@ -1392,7 +1392,7 @@ class JobService:
                     timeout=15,
                 )
                 if fetch_result.success and fetch_result.response:
-                    differences = compare_configs(
+                    differences = deep_compare_config(
                         config_data,
                         fetch_result.response,
                         config_type=template_type,
@@ -1431,6 +1431,17 @@ class JobService:
                 )
 
                 try:
+                    # Begin edit settings transaction (follows Meshtastic web protocol)
+                    # This ensures atomic config updates - changes held in memory until commit
+                    begin_result = admin_service.begin_edit_settings(
+                        target_node_id=node_id
+                    )
+                    if not begin_result.success:
+                        logger.warning(
+                            f"begin_edit_settings failed for {node_hex}: {begin_result.error} - "
+                            "continuing without transaction"
+                        )
+
                     result = admin_service.set_config(
                         target_node_id=node_id,
                         config_type=config_enum,
@@ -1447,6 +1458,17 @@ class JobService:
                             delay = 2**attempt  # 1s, 2s, 4s
                             time.sleep(delay)
                         continue
+
+                    # Commit edit settings transaction (follows Meshtastic web protocol)
+                    # This saves changes to flash
+                    commit_result = admin_service.commit_edit_settings(
+                        target_node_id=node_id
+                    )
+                    if not commit_result.success:
+                        logger.warning(
+                            f"commit_edit_settings failed for {node_hex}: {commit_result.error} - "
+                            "changes may not persist after reboot"
+                        )
 
                     # set_config succeeded, now wait and verify
                     # Wait for config to be applied (mesh network latency)
@@ -1541,9 +1563,9 @@ class JobService:
 
                     if fetch_result.success and fetch_result.response:
                         # Compare with template
-                        from ..routes.admin_routes import compare_configs
+                        from ..utils.config_compare import deep_compare_config
 
-                        differences = compare_configs(
+                        differences = deep_compare_config(
                             config_data,
                             fetch_result.response,
                             config_type=template_type,

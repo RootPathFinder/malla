@@ -911,6 +911,66 @@ class TCPPublisher:
             want_response=True,
         )
 
+    def send_begin_edit_settings(
+        self,
+        target_node_id: int,
+    ) -> int | None:
+        """
+        Begin a settings edit transaction on a target node.
+
+        This should be called before making multiple config changes.
+        The node will hold changes in memory until commit_edit_settings is called.
+
+        This follows the Meshtastic protocol for atomic config updates.
+        See: https://github.com/meshtastic/web packages/core/src/meshDevice.ts
+
+        Args:
+            target_node_id: The target node ID
+
+        Returns:
+            Packet ID if sent successfully
+        """
+        admin_msg = admin_pb2.AdminMessage()
+        admin_msg.begin_edit_settings = True
+
+        logger.info(f"Sending begin_edit_settings to !{target_node_id:08x}")
+
+        return self.send_admin_message(
+            target_node_id=target_node_id,
+            admin_message=admin_msg,
+            want_response=True,
+        )
+
+    def send_commit_edit_settings(
+        self,
+        target_node_id: int,
+    ) -> int | None:
+        """
+        Commit a settings edit transaction on a target node.
+
+        This should be called after making config changes to apply them.
+        The node will save all pending changes to flash and apply them.
+
+        This follows the Meshtastic protocol for atomic config updates.
+        See: https://github.com/meshtastic/web packages/core/src/meshDevice.ts
+
+        Args:
+            target_node_id: The target node ID
+
+        Returns:
+            Packet ID if sent successfully
+        """
+        admin_msg = admin_pb2.AdminMessage()
+        admin_msg.commit_edit_settings = True
+
+        logger.info(f"Sending commit_edit_settings to !{target_node_id:08x}")
+
+        return self.send_admin_message(
+            target_node_id=target_node_id,
+            admin_message=admin_msg,
+            want_response=True,
+        )
+
     def send_set_config(
         self,
         target_node_id: int,
@@ -1215,11 +1275,16 @@ class TCPPublisher:
         Args:
             target_node_id: The target node ID
             channel_index: The channel index (0-7)
-            channel_data: Dictionary of channel settings
+            channel_data: Dictionary of channel settings. PSK can be:
+                - bytes: raw PSK bytes
+                - str (hex): hex-encoded PSK (e.g., "deadbeef...")
+                - str (base64): base64-encoded PSK (standard Meshtastic format)
 
         Returns:
             Packet ID if sent successfully
         """
+        import base64
+
         from meshtastic import channel_pb2
 
         admin_msg = admin_pb2.AdminMessage()
@@ -1237,15 +1302,43 @@ class TCPPublisher:
 
         if "psk" in channel_data:
             psk = channel_data["psk"]
-            if isinstance(psk, str):
-                channel.settings.psk = bytes.fromhex(psk)
-            elif isinstance(psk, bytes):
+            if isinstance(psk, bytes):
                 channel.settings.psk = psk
+            elif isinstance(psk, str):
+                # Try base64 first (Meshtastic web client format), then hex
+                try:
+                    # Base64 strings typically have specific characteristics:
+                    # - Only contain A-Za-z0-9+/= characters
+                    # - May have padding with =
+                    # - Are often NOT valid hex (odd length or invalid chars)
+                    decoded = base64.b64decode(psk)
+                    channel.settings.psk = decoded
+                    logger.debug(f"Channel PSK decoded as base64: {len(decoded)} bytes")
+                except Exception:
+                    # Try hex encoding
+                    try:
+                        decoded = bytes.fromhex(psk)
+                        channel.settings.psk = decoded
+                        logger.debug(
+                            f"Channel PSK decoded as hex: {len(decoded)} bytes"
+                        )
+                    except Exception:
+                        # Use as raw bytes if all else fails
+                        channel.settings.psk = psk.encode("utf-8")
+                        logger.warning(
+                            f"Channel PSK could not be decoded, using raw: {psk[:10]}..."
+                        )
 
         if "position_precision" in channel_data:
             channel.settings.module_settings.position_precision = channel_data[
                 "position_precision"
             ]
+
+        # Handle uplink/downlink enabled flags
+        if "uplink_enabled" in channel_data:
+            channel.settings.uplink_enabled = channel_data["uplink_enabled"]
+        if "downlink_enabled" in channel_data:
+            channel.settings.downlink_enabled = channel_data["downlink_enabled"]
 
         admin_msg.set_channel.CopyFrom(channel)
 

@@ -185,6 +185,16 @@ class AdminPublisher(Protocol):
         channel_data: dict,
     ) -> int | None: ...
 
+    def send_begin_edit_settings(
+        self,
+        target_node_id: int,
+    ) -> int | None: ...
+
+    def send_commit_edit_settings(
+        self,
+        target_node_id: int,
+    ) -> int | None: ...
+
 
 class ConfigType(Enum):
     """Configuration types that can be requested.
@@ -1364,6 +1374,177 @@ class AdminService:
             },
         )
 
+    def begin_edit_settings(
+        self,
+        target_node_id: int,
+    ) -> AdminCommandResult:
+        """
+        Begin a settings edit transaction on a remote node.
+
+        This should be called before making multiple config changes to enable
+        atomic updates. The node will hold changes in memory until
+        commit_edit_settings is called.
+
+        This follows the Meshtastic protocol for atomic config updates.
+        See: https://github.com/meshtastic/web packages/core/src/meshDevice.ts
+
+        Args:
+            target_node_id: The target node ID
+
+        Returns:
+            AdminCommandResult with success/failure info
+        """
+        gateway_id = self.gateway_node_id
+        if not gateway_id:
+            return AdminCommandResult(
+                success=False,
+                error="No gateway node configured",
+            )
+
+        conn_type = self.connection_type
+        if conn_type != AdminConnectionType.TCP:
+            return AdminCommandResult(
+                success=False,
+                error="begin_edit_settings is only supported via TCP connection",
+            )
+
+        # Log the command
+        log_id = AdminRepository.log_admin_command(
+            target_node_id=target_node_id,
+            command_type="begin_edit_settings",
+            command_data=json.dumps({"connection_type": conn_type.value}),
+        )
+
+        publisher = self._get_publisher()
+        packet_id = publisher.send_begin_edit_settings(target_node_id=target_node_id)
+
+        if packet_id is None:
+            AdminRepository.update_admin_log_status(
+                log_id=log_id,
+                status="failed",
+                error_message=f"Failed to send message via {conn_type.value}",
+            )
+            return AdminCommandResult(
+                success=False,
+                log_id=log_id,
+                error=f"Failed to send admin message via {conn_type.value}",
+            )
+
+        # Wait for ACK
+        response = publisher.get_response(packet_id, timeout=10.0)
+        if response and response.get("is_nak"):
+            error_msg = (
+                f"Node rejected begin_edit_settings: {response.get('error_reason', '')}"
+            )
+            AdminRepository.update_admin_log_status(
+                log_id=log_id,
+                status="failed",
+                error_message=error_msg,
+            )
+            return AdminCommandResult(
+                success=False,
+                packet_id=packet_id,
+                log_id=log_id,
+                error=error_msg,
+            )
+
+        AdminRepository.update_admin_log_status(
+            log_id=log_id,
+            status="success",
+            response_data=json.dumps({"message": "Edit session started"}),
+        )
+
+        return AdminCommandResult(
+            success=True,
+            packet_id=packet_id,
+            log_id=log_id,
+            response={"message": "Edit session started"},
+        )
+
+    def commit_edit_settings(
+        self,
+        target_node_id: int,
+    ) -> AdminCommandResult:
+        """
+        Commit a settings edit transaction on a remote node.
+
+        This should be called after making config changes to apply them.
+        The node will save all pending changes to flash and apply them.
+
+        This follows the Meshtastic protocol for atomic config updates.
+        See: https://github.com/meshtastic/web packages/core/src/meshDevice.ts
+
+        Args:
+            target_node_id: The target node ID
+
+        Returns:
+            AdminCommandResult with success/failure info
+        """
+        gateway_id = self.gateway_node_id
+        if not gateway_id:
+            return AdminCommandResult(
+                success=False,
+                error="No gateway node configured",
+            )
+
+        conn_type = self.connection_type
+        if conn_type != AdminConnectionType.TCP:
+            return AdminCommandResult(
+                success=False,
+                error="commit_edit_settings is only supported via TCP connection",
+            )
+
+        # Log the command
+        log_id = AdminRepository.log_admin_command(
+            target_node_id=target_node_id,
+            command_type="commit_edit_settings",
+            command_data=json.dumps({"connection_type": conn_type.value}),
+        )
+
+        publisher = self._get_publisher()
+        packet_id = publisher.send_commit_edit_settings(target_node_id=target_node_id)
+
+        if packet_id is None:
+            AdminRepository.update_admin_log_status(
+                log_id=log_id,
+                status="failed",
+                error_message=f"Failed to send message via {conn_type.value}",
+            )
+            return AdminCommandResult(
+                success=False,
+                log_id=log_id,
+                error=f"Failed to send admin message via {conn_type.value}",
+            )
+
+        # Wait for ACK
+        response = publisher.get_response(packet_id, timeout=10.0)
+        if response and response.get("is_nak"):
+            error_msg = f"Node rejected commit_edit_settings: {response.get('error_reason', '')}"
+            AdminRepository.update_admin_log_status(
+                log_id=log_id,
+                status="failed",
+                error_message=error_msg,
+            )
+            return AdminCommandResult(
+                success=False,
+                packet_id=packet_id,
+                log_id=log_id,
+                error=error_msg,
+            )
+
+        AdminRepository.update_admin_log_status(
+            log_id=log_id,
+            status="success",
+            response_data=json.dumps({"message": "Edit session committed"}),
+        )
+
+        return AdminCommandResult(
+            success=True,
+            packet_id=packet_id,
+            log_id=log_id,
+            response={"message": "Edit session committed - config changes saved"},
+        )
+
     def set_config(
         self,
         target_node_id: int,
@@ -1377,6 +1558,7 @@ class AdminService:
             target_node_id: The target node ID
             config_type: The type of configuration to set
             config_data: Dictionary of config values to set
+
 
         Returns:
             AdminCommandResult with success/failure info

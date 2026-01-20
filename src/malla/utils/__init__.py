@@ -2,6 +2,11 @@
 Utility functions for Meshtastic Mesh Health Web UI
 """
 
+from .config_compare import (
+    configs_are_equal,
+    deep_compare_config,
+    get_config_diff_summary,
+)
 from .formatting import (
     create_highlighted_route_display,
     format_complete_traceroute_path,
@@ -31,4 +36,7 @@ __all__ = [
     "convert_bytes_to_base64",
     "calculate_distance",
     "calculate_bearing",
+    "deep_compare_config",
+    "configs_are_equal",
+    "get_config_diff_summary",
 ]
