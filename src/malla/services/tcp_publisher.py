@@ -574,7 +574,12 @@ class TCPPublisher:
                 f"to={to_id}, channel={channel}"
             )
 
-            # Check for admin responses
+            # Check for encrypted packets that couldn't be decoded
+            if not decoded or (not portnum and packet.get("encrypted")):
+                logger.warning(
+                    f"Received encrypted packet that couldn't be decoded: "
+                    f"from={from_id}, to={to_id}, channel={channel}"
+                )
 
             # Handle routing packets (ACK/NAK responses)
             if portnum == "ROUTING_APP":
