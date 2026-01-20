@@ -912,15 +912,35 @@ class BotService:
             logger.debug(f"Could not check active jobs: {e}")
             return False
 
-    def _send_message(self, msg: BotMessage) -> bool:
-        """Send a message via the TCP interface."""
-        try:
+    def _get_publisher(self) -> Any | None:
+        """Get the appropriate publisher based on config (TCP or serial).
+
+        Returns:
+            Publisher instance or None if not available
+        """
+        config = get_config()
+        conn_type = config.admin_connection_type.lower()
+
+        if conn_type == "serial":
+            from .serial_publisher import get_serial_publisher
+
+            return get_serial_publisher()
+        else:
+            # Default to TCP for "tcp" or "mqtt" (bot uses direct connection)
             from .tcp_publisher import get_tcp_publisher
 
-            publisher = get_tcp_publisher()
+            return get_tcp_publisher()
+
+    def _send_message(self, msg: BotMessage) -> bool:
+        """Send a message via the configured interface (TCP or serial)."""
+        try:
+            publisher = self._get_publisher()
+            if publisher is None:
+                logger.warning("Cannot send bot message: No publisher available")
+                return False
 
             if not publisher.is_connected:
-                logger.warning("Cannot send bot message: TCP not connected")
+                logger.warning("Cannot send bot message: Not connected")
                 return False
 
             interface = publisher._interface
@@ -945,10 +965,12 @@ class BotService:
     def _get_channel_name(self, channel_index: int) -> str | None:
         """Get the channel name for a channel index."""
         try:
-            from .tcp_publisher import get_tcp_publisher
-
-            publisher = get_tcp_publisher()
-            if not publisher.is_connected or publisher._interface is None:
+            publisher = self._get_publisher()
+            if (
+                publisher is None
+                or not publisher.is_connected
+                or publisher._interface is None
+            ):
                 return None
 
             channels = publisher._interface.localNode.channels
@@ -975,10 +997,12 @@ class BotService:
     def _get_local_node_id(self) -> int | None:
         """Get the local node ID (the bot's own node)."""
         try:
-            from .tcp_publisher import get_tcp_publisher
-
-            publisher = get_tcp_publisher()
-            if not publisher.is_connected or publisher._interface is None:
+            publisher = self._get_publisher()
+            if (
+                publisher is None
+                or not publisher.is_connected
+                or publisher._interface is None
+            ):
                 return None
 
             local_node = publisher._interface.localNode

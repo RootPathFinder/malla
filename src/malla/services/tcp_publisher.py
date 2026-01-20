@@ -1114,27 +1114,43 @@ class TCPPublisher:
                                     )
                                     continue
                                 if isinstance(item, str):
-                                    # Convert base64 or hex string to bytes
-                                    try:
-                                        import base64
-
-                                        decoded = base64.b64decode(item)
-                                        logger.info(
-                                            f"Security {key}: decoded base64 to {len(decoded)} bytes"
-                                        )
-                                        field.append(decoded)
-                                    except Exception:
+                                    # Convert hex or base64 string to bytes
+                                    # Try hex FIRST - admin keys are typically 64 hex chars (32 bytes)
+                                    # base64 decode can succeed on hex strings but produces garbage
+                                    decoded = None
+                                    if len(item) == 64 and all(
+                                        c in "0123456789abcdefABCDEF" for c in item
+                                    ):
+                                        # Looks like 32-byte hex key
                                         try:
                                             decoded = bytes.fromhex(item)
                                             logger.info(
                                                 f"Security {key}: decoded hex to {len(decoded)} bytes"
                                             )
-                                            field.append(decoded)
                                         except Exception:
-                                            logger.warning(
-                                                f"Security {key}: using raw string encoding"
+                                            pass
+                                    if decoded is None:
+                                        # Try base64
+                                        try:
+                                            import base64
+
+                                            decoded = base64.b64decode(item)
+                                            logger.info(
+                                                f"Security {key}: decoded base64 to {len(decoded)} bytes"
                                             )
-                                            field.append(item.encode())
+                                        except Exception:
+                                            # Try hex (for non-64 char hex strings)
+                                            try:
+                                                decoded = bytes.fromhex(item)
+                                                logger.info(
+                                                    f"Security {key}: decoded hex to {len(decoded)} bytes"
+                                                )
+                                            except Exception:
+                                                logger.warning(
+                                                    f"Security {key}: using raw string encoding"
+                                                )
+                                                decoded = item.encode()
+                                    field.append(decoded)
                                 elif isinstance(item, bytes):
                                     logger.info(
                                         f"Security {key}: adding {len(item)} raw bytes"
@@ -1151,27 +1167,39 @@ class TCPPublisher:
                         if key in ("public_key", "private_key") and isinstance(
                             value, str
                         ):
-                            # Convert hex string to bytes
-                            try:
-                                import base64
-
-                                decoded = base64.b64decode(value)
-                                logger.info(
-                                    f"Security {key}: decoded base64 to {len(decoded)} bytes"
-                                )
-                                setattr(config.security, key, decoded)
-                            except Exception:
+                            # Convert hex or base64 string to bytes
+                            # Try hex FIRST for 64-char strings (32 bytes)
+                            decoded = None
+                            if len(value) == 64 and all(
+                                c in "0123456789abcdefABCDEF" for c in value
+                            ):
                                 try:
                                     decoded = bytes.fromhex(value)
                                     logger.info(
                                         f"Security {key}: decoded hex to {len(decoded)} bytes"
                                     )
-                                    setattr(config.security, key, decoded)
                                 except Exception:
-                                    logger.warning(
-                                        f"Security {key}: using raw string encoding"
+                                    pass
+                            if decoded is None:
+                                try:
+                                    import base64
+
+                                    decoded = base64.b64decode(value)
+                                    logger.info(
+                                        f"Security {key}: decoded base64 to {len(decoded)} bytes"
                                     )
-                                    setattr(config.security, key, value.encode())
+                                except Exception:
+                                    try:
+                                        decoded = bytes.fromhex(value)
+                                        logger.info(
+                                            f"Security {key}: decoded hex to {len(decoded)} bytes"
+                                        )
+                                    except Exception:
+                                        logger.warning(
+                                            f"Security {key}: using raw string encoding"
+                                        )
+                                        decoded = value.encode()
+                            setattr(config.security, key, decoded)
                         else:
                             logger.info(f"Security {key}: setting to {value}")
                             setattr(config.security, key, value)
