@@ -562,11 +562,19 @@ class TCPPublisher:
     def _on_receive(self, packet: dict[str, Any], interface: Any = None) -> None:
         """Handle received packets from pubsub."""
         try:
-            logger.debug(f"Received packet: {packet.get('decoded', {}).get('portnum')}")
-
-            # Check for admin responses
             decoded = packet.get("decoded", {})
             portnum = decoded.get("portnum")
+            from_id = packet.get("from") or packet.get("fromId")
+            to_id = packet.get("to") or packet.get("toId")
+            channel = packet.get("channel", 0)
+
+            # Log all received packets for debugging
+            logger.debug(
+                f"TCP received packet: portnum={portnum}, from={from_id}, "
+                f"to={to_id}, channel={channel}"
+            )
+
+            # Check for admin responses
 
             # Handle routing packets (ACK/NAK responses)
             if portnum == "ROUTING_APP":

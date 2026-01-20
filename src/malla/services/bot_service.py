@@ -421,6 +421,21 @@ class BotService:
             decoded = packet.get("decoded", {})
             portnum = decoded.get("portnum")
 
+            # Log all text messages for debugging DM issues
+            if portnum == "TEXT_MESSAGE_APP":
+                from_id = packet.get("from") or packet.get("fromId")
+                to_id = packet.get("to") or packet.get("toId")
+                channel = packet.get("channel", 0)
+                text = decoded.get("text", decoded.get("payload", ""))
+                if isinstance(text, bytes):
+                    text = text.decode("utf-8", errors="replace")
+                # Truncate for logging
+                text_preview = text[:50] + "..." if len(str(text)) > 50 else text
+                logger.info(
+                    f"Bot received TEXT_MESSAGE_APP: from={from_id}, to={to_id}, "
+                    f"channel={channel}, text={text_preview!r}"
+                )
+
             # Check if this is a traceroute response we're waiting for
             if portnum == "TRACEROUTE_APP":
                 self._handle_traceroute_packet(packet)
