@@ -1040,14 +1040,46 @@ class TCPPublisher:
             )
             for key, value in config_data.items():
                 if hasattr(config.bluetooth, key):
-                    logger.info(f"Bluetooth {key}: setting to {value}")
-                    setattr(config.bluetooth, key, value)
+                    # Ensure mode is an integer (enum field)
+                    if key == "mode" and not isinstance(value, int):
+                        try:
+                            value = int(value)
+                            logger.info(f"Bluetooth {key}: converted to int {value}")
+                        except (ValueError, TypeError) as e:
+                            logger.error(
+                                f"Bluetooth {key}: cannot convert {value!r} to int - {e}"
+                            )
+                            continue
+                    # Ensure fixed_pin is an integer
+                    if key == "fixed_pin" and not isinstance(value, int):
+                        try:
+                            value = int(value)
+                            logger.info(f"Bluetooth {key}: converted to int {value}")
+                        except (ValueError, TypeError) as e:
+                            logger.error(
+                                f"Bluetooth {key}: cannot convert {value!r} to int - {e}"
+                            )
+                            continue
+
+                    logger.info(
+                        f"Bluetooth {key}: setting to {value} (type: {type(value).__name__})"
+                    )
+                    try:
+                        setattr(config.bluetooth, key, value)
+                        actual = getattr(config.bluetooth, key)
+                        logger.info(f"Bluetooth {key}: verified as {actual}")
+                    except Exception as e:
+                        logger.error(f"Bluetooth {key}: FAILED to set - {e}")
                 else:
                     logger.warning(
                         f"Bluetooth config: unknown field '{key}' - skipping"
                     )
             admin_msg.set_config.CopyFrom(config)
-            logger.info(f"Bluetooth config prepared: {config.bluetooth}")
+            # Log each field explicitly to avoid multi-line log issues
+            logger.info(
+                f"Bluetooth config prepared: enabled={config.bluetooth.enabled}, "
+                f"mode={config.bluetooth.mode}, fixed_pin={config.bluetooth.fixed_pin}"
+            )
 
         elif config_type == "security":
             logger.info(
