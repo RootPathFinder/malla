@@ -1205,8 +1205,17 @@ class TCPPublisher:
                             setattr(config.security, key, value)
                 else:
                     logger.warning(f"Security config: unknown field '{key}' - skipping")
+            # Log the actual count of admin_key entries before sending
+            if hasattr(config.security, "admin_key"):
+                logger.info(
+                    f"Security config admin_key count: {len(config.security.admin_key)}"
+                )
+                for i, k in enumerate(config.security.admin_key):
+                    logger.info(f"  admin_key[{i}]: {k.hex()}")
             admin_msg.set_config.CopyFrom(config)
-            logger.info(f"Security config prepared: {config.security}")
+            logger.info(
+                f"Security config prepared, admin_msg admin_key count: {len(admin_msg.set_config.security.admin_key)}"
+            )
 
         else:
             logger.error(f"Unknown config type: {config_type}")
