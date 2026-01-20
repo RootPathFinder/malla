@@ -17,6 +17,8 @@ from ..database.job_repository import (
     JobStatus,
     JobType,
 )
+from .change_registry import ChangeRegistry
+from .change_registry import ChangeType as ChangeRegistryType
 
 logger = logging.getLogger(__name__)
 
@@ -964,7 +966,13 @@ class JobService:
 
         current_item = 0
         successful_restores: list[str] = []
+        skipped_unchanged: list[str] = []
         errors: list[str] = []
+
+        # Create a change registry to track changes and enable skip-if-unchanged
+        change_registry = ChangeRegistry()
+        transaction = change_registry.begin_transaction(target_node_id)
+        tx_id = transaction.transaction_id
 
         progress.update(
             1,
@@ -973,6 +981,17 @@ class JobService:
             0,
             total_items,
         )
+
+        # Begin edit settings transaction (Meshtastic web protocol)
+        # This ensures atomic config updates - changes held in memory until commit
+        begin_result = admin_service.begin_edit_settings(target_node_id=target_node_id)
+        if not begin_result.success:
+            logger.warning(
+                f"begin_edit_settings failed for restore: {begin_result.error} - "
+                "continuing without transaction"
+            )
+        else:
+            transaction.begin_sent = True
 
         # Restore items
         for item_type, item_name, item_enum in items_to_restore:
@@ -985,7 +1004,7 @@ class JobService:
             if item_type == "core":
                 progress.update(
                     prog_pct,
-                    f"Restoring {item_name.upper()} config...",
+                    f"Checking {item_name.upper()} config...",
                     "core",
                     current_item,
                     total_items,
@@ -995,6 +1014,48 @@ class JobService:
                 if item_name in config_data:
                     config_data = config_data[item_name]
 
+                # Fetch current config for skip-if-unchanged detection
+                current_config = None
+                try:
+                    fetch_result = admin_service.get_config(
+                        target_node_id, item_enum, timeout=10
+                    )
+                    if fetch_result.success and fetch_result.response:
+                        current_config = fetch_result.response
+                except Exception as e:
+                    logger.warning(f"Could not fetch current {item_name} config: {e}")
+
+                # Register change - will be skipped if unchanged
+                pending = change_registry.register_change(
+                    tx_id,
+                    ChangeRegistryType.CONFIG,
+                    target_node_id,
+                    item_name,
+                    current_config,
+                    config_data,
+                    skip_if_unchanged=True,
+                )
+
+                if pending and pending.status.value == "skipped":
+                    skipped_unchanged.append(f"core:{item_name}")
+                    progress.update(
+                        prog_pct,
+                        f"≡ {item_name.upper()} config unchanged - skipped",
+                        "core",
+                        current_item,
+                        total_items,
+                    )
+                    continue
+
+                # Config differs - apply it
+                progress.update(
+                    prog_pct,
+                    f"Restoring {item_name.upper()} config...",
+                    "core",
+                    current_item,
+                    total_items,
+                )
+
                 result = admin_service.set_config(
                     target_node_id=target_node_id,
                     config_type=item_enum,
@@ -1002,6 +1063,7 @@ class JobService:
                 )
 
                 if result.success:
+                    change_registry.mark_change_applied(tx_id, item_name)
                     successful_restores.append(f"core:{item_name}")
                     progress.update(
                         prog_pct,
@@ -1011,6 +1073,9 @@ class JobService:
                         total_items,
                     )
                 else:
+                    change_registry.mark_change_failed(
+                        tx_id, item_name, result.error or "Unknown error"
+                    )
                     error_msg = result.error or "Unknown error"
                     is_timeout = "timeout" in error_msg.lower()
                     display_msg = f"✗ {item_name.upper()} config failed: {error_msg}"
@@ -1031,7 +1096,7 @@ class JobService:
             elif item_type == "module":
                 progress.update(
                     prog_pct,
-                    f"Restoring {item_name.upper()} module...",
+                    f"Checking {item_name.upper()} module...",
                     "module",
                     current_item,
                     total_items,
@@ -1041,6 +1106,48 @@ class JobService:
                 if item_name in module_data:
                     module_data = module_data[item_name]
 
+                # Fetch current module config for skip-if-unchanged detection
+                current_module = None
+                try:
+                    fetch_result = admin_service.get_module_config(
+                        target_node_id, item_enum, timeout=10
+                    )
+                    if fetch_result.success and fetch_result.response:
+                        current_module = fetch_result.response
+                except Exception as e:
+                    logger.warning(f"Could not fetch current {item_name} module: {e}")
+
+                # Register change - will be skipped if unchanged
+                pending = change_registry.register_change(
+                    tx_id,
+                    ChangeRegistryType.MODULE_CONFIG,
+                    target_node_id,
+                    item_name,
+                    current_module,
+                    module_data,
+                    skip_if_unchanged=True,
+                )
+
+                if pending and pending.status.value == "skipped":
+                    skipped_unchanged.append(f"module:{item_name}")
+                    progress.update(
+                        prog_pct,
+                        f"≡ {item_name.upper()} module unchanged - skipped",
+                        "module",
+                        current_item,
+                        total_items,
+                    )
+                    continue
+
+                # Module differs - apply it
+                progress.update(
+                    prog_pct,
+                    f"Restoring {item_name.upper()} module...",
+                    "module",
+                    current_item,
+                    total_items,
+                )
+
                 result = admin_service.set_module_config(
                     target_node_id=target_node_id,
                     module_config_type=item_enum,
@@ -1048,6 +1155,7 @@ class JobService:
                 )
 
                 if result.success:
+                    change_registry.mark_change_applied(tx_id, item_name)
                     successful_restores.append(f"module:{item_name}")
                     progress.update(
                         prog_pct,
@@ -1057,6 +1165,9 @@ class JobService:
                         total_items,
                     )
                 else:
+                    change_registry.mark_change_failed(
+                        tx_id, item_name, result.error or "Unknown error"
+                    )
                     error_msg = result.error or "Unknown error"
                     is_timeout = "timeout" in error_msg.lower()
                     display_msg = f"✗ {item_name.upper()} module failed: {error_msg}"
@@ -1078,7 +1189,7 @@ class JobService:
                 channel_idx = item_enum
                 progress.update(
                     prog_pct,
-                    f"Restoring Channel {channel_idx}...",
+                    f"Checking Channel {channel_idx}...",
                     "channel",
                     current_item,
                     total_items,
@@ -1088,7 +1199,7 @@ class JobService:
                 # Flatten channel data structure for set_channel
                 # Backup stores: {"index": 0, "role": 1, "settings": {"name": "...", "psk": "..."}}
                 # set_channel expects: {"role": 1, "name": "...", "psk": "..."}
-                channel_data = {}
+                channel_data: dict[str, Any] = {}
                 if "role" in raw_channel_data:
                     channel_data["role"] = raw_channel_data["role"]
                 settings = raw_channel_data.get("settings", {})
@@ -1103,6 +1214,51 @@ class JobService:
                             "position_precision"
                         ]
 
+                # Fetch current channel for skip-if-unchanged detection
+                current_channel = None
+                channel_key = f"channel_{channel_idx}"
+                try:
+                    fetch_result = admin_service.get_channel(
+                        target_node_id, channel_idx, timeout=10
+                    )
+                    if fetch_result.success and fetch_result.response:
+                        current_channel = fetch_result.response
+                except Exception as e:
+                    logger.warning(
+                        f"Could not fetch current channel {channel_idx}: {e}"
+                    )
+
+                # Register change - will be skipped if unchanged
+                pending = change_registry.register_change(
+                    tx_id,
+                    ChangeRegistryType.CHANNEL,
+                    target_node_id,
+                    channel_key,
+                    current_channel,
+                    channel_data,
+                    skip_if_unchanged=True,
+                )
+
+                if pending and pending.status.value == "skipped":
+                    skipped_unchanged.append(f"channel:{channel_idx}")
+                    progress.update(
+                        prog_pct,
+                        f"≡ Channel {channel_idx} unchanged - skipped",
+                        "channel",
+                        current_item,
+                        total_items,
+                    )
+                    continue
+
+                # Channel differs - apply it
+                progress.update(
+                    prog_pct,
+                    f"Restoring Channel {channel_idx}...",
+                    "channel",
+                    current_item,
+                    total_items,
+                )
+
                 result = admin_service.set_channel(
                     target_node_id=target_node_id,
                     channel_index=channel_idx,
@@ -1110,6 +1266,7 @@ class JobService:
                 )
 
                 if result.success:
+                    change_registry.mark_change_applied(tx_id, channel_key)
                     successful_restores.append(f"channel:{channel_idx}")
                     progress.update(
                         prog_pct,
@@ -1119,6 +1276,9 @@ class JobService:
                         total_items,
                     )
                 else:
+                    change_registry.mark_change_failed(
+                        tx_id, channel_key, result.error or "Unknown error"
+                    )
                     error_msg = result.error or "Unknown error"
                     is_timeout = "timeout" in error_msg.lower()
                     display_msg = f"✗ Channel {channel_idx} failed: {error_msg}"
@@ -1133,6 +1293,25 @@ class JobService:
                         total_items,
                         is_error=True,
                     )
+
+        # Commit edit settings (Meshtastic web protocol)
+        # Only commit if we began a transaction and made changes
+        if transaction.begin_sent and successful_restores:
+            progress.update(96, "Committing changes to flash...", "commit")
+            commit_result = admin_service.commit_edit_settings(
+                target_node_id=target_node_id
+            )
+            if commit_result.success:
+                transaction.commit_sent = True
+                logger.info("commit_edit_settings succeeded for restore")
+            else:
+                logger.warning(
+                    f"commit_edit_settings failed: {commit_result.error} - "
+                    "changes may not persist after reboot"
+                )
+
+        # Complete the change registry transaction
+        change_registry.complete_transaction(tx_id)
 
         # Reboot if requested
         reboot_sent = False
@@ -1149,16 +1328,22 @@ class JobService:
                 progress.update(99, f"Reboot command failed: {reboot_error}", "reboot")
 
         # Final result
-        if successful_restores:
+        # Success if at least one config was restored OR all were skipped (already current)
+        if successful_restores or (skipped_unchanged and not errors):
+            skip_msg = (
+                f", {len(skipped_unchanged)} unchanged" if skipped_unchanged else ""
+            )
             progress.update(100, "Restore complete!", "complete")
 
             return {
                 "success": True,
                 "data": {
-                    "message": f"Restored {len(successful_restores)} configurations",
+                    "message": f"Restored {len(successful_restores)} configurations{skip_msg}",
                     "successful_restores": successful_restores,
+                    "skipped_unchanged": skipped_unchanged,
                     "failed_restores": errors,
                     "total_restored": len(successful_restores),
+                    "total_skipped": len(skipped_unchanged),
                     "total_failed": len(errors),
                     "reboot_after": reboot_after,
                     "reboot_sent": reboot_sent,
@@ -1169,7 +1354,10 @@ class JobService:
             return {
                 "success": False,
                 "error": "Failed to restore any configurations",
-                "data": {"failed_restores": errors},
+                "data": {
+                    "failed_restores": errors,
+                    "skipped_unchanged": skipped_unchanged,
+                },
             }
 
     def _execute_bulk_command_job(
@@ -1406,12 +1594,45 @@ class JobService:
 
         progress.update(5, f"Fixing {total_nodes} non-compliant node(s)...", "fixing")
 
+        skipped_count = 0
+
         for idx, node_id in enumerate(node_ids):
             node_hex = f"!{node_id:08x}"
             node_pct = int(5 + (idx / total_nodes) * 70)
             node_success = False
             last_error = None
             attempts_made = 0
+
+            # Check if node is already compliant before applying changes
+            progress.update(
+                node_pct,
+                f"Checking compliance for {node_hex} ({idx + 1}/{total_nodes})...",
+                "checking",
+                current=idx + 1,
+                total=total_nodes,
+            )
+
+            is_already_compliant, differences = verify_node_compliant(node_id, node_hex)
+            if is_already_compliant:
+                skipped_count += 1
+                results.append(
+                    {
+                        "node_id": node_id,
+                        "node_hex": node_hex,
+                        "success": True,
+                        "skipped": True,
+                        "reason": "Already compliant",
+                        "attempts": 0,
+                    }
+                )
+                progress.update(
+                    node_pct,
+                    f"≡ {node_hex} already compliant - skipped",
+                    "skipped",
+                    current=idx + 1,
+                    total=total_nodes,
+                )
+                continue
 
             # Try up to max_retries times for each node
             for attempt in range(max_retries):
@@ -1639,16 +1860,18 @@ class JobService:
                     except Exception as e:
                         logger.warning(f"Failed to reboot {node_hex}: {e}")
 
+        skip_msg = f", {skipped_count} skipped" if skipped_count > 0 else ""
         progress.update(
             100,
-            f"✓ Fixed {fixed_count}/{total_nodes}, {now_compliant} now compliant",
+            f"✓ Fixed {fixed_count}/{total_nodes}{skip_msg}, {now_compliant} now compliant",
             "complete",
         )
 
         return {
-            "success": failed_count == 0 or fixed_count > 0,
+            "success": failed_count == 0 or fixed_count > 0 or skipped_count > 0,
             "data": {
                 "fixed_count": fixed_count,
+                "skipped_count": skipped_count,
                 "failed_count": failed_count,
                 "total_nodes": total_nodes,
                 "fix_results": results,
