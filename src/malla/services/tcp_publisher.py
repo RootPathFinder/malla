@@ -622,7 +622,9 @@ class TCPPublisher:
 
             elif portnum == "ADMIN_APP":
                 from_node = packet.get("fromId") or packet.get("from")
-                logger.info(f"Received admin response from {from_node}")
+                logger.info(
+                    f"Received admin response from {from_node} (type: {type(from_node).__name__})"
+                )
 
                 # Parse the admin message from the payload
                 admin_message = None
@@ -838,9 +840,14 @@ class TCPPublisher:
                 if target_node_id in self._session_passkeys:
                     session_passkey = self._session_passkeys[target_node_id]
                     admin_message.session_passkey = session_passkey
-                    logger.debug(
+                    logger.info(
                         f"Including session_passkey for !{target_node_id:08x} "
                         f"({len(session_passkey)} bytes)"
+                    )
+                else:
+                    logger.info(
+                        f"No session_passkey found for !{target_node_id:08x} "
+                        f"(known nodes: {[f'!{n:08x}' for n in self._session_passkeys.keys()]})"
                     )
 
             # Send the packet using sendData
