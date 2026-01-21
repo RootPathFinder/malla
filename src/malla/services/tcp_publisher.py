@@ -1258,6 +1258,71 @@ class TCPPublisher:
             logger.info(
                 f"Processing security config with keys: {list(config_data.keys())}"
             )
+
+            def _decode_key_to_bytes(item: Any, field_name: str) -> bytes | None:
+                """Decode a key value (string, bytes, etc.) to bytes.
+
+                Returns None if the value is empty or invalid.
+                """
+                if not item:
+                    return None
+                if isinstance(item, bytes):
+                    return item if item else None
+                if isinstance(item, str):
+                    item = item.strip()
+                    if not item:
+                        return None
+                    # Try hex FIRST - admin keys are typically 64 hex chars (32 bytes)
+                    if len(item) == 64 and all(
+                        c in "0123456789abcdefABCDEF" for c in item
+                    ):
+                        try:
+                            return bytes.fromhex(item)
+                        except Exception:
+                            pass
+                    # Try base64
+                    try:
+                        import base64
+
+                        return base64.b64decode(item)
+                    except Exception:
+                        pass
+                    # Try hex for other lengths
+                    try:
+                        return bytes.fromhex(item)
+                    except Exception:
+                        pass
+                    # Last resort: raw encoding
+                    logger.warning(f"Security {field_name}: using raw string encoding")
+                    return item.encode()
+                return None
+
+            def _deduplicate_keys(
+                keys: list[Any] | tuple[Any, ...], field_name: str
+            ) -> tuple[list[bytes], int]:
+                """Deduplicate a list of keys, preserving order of first occurrence.
+
+                Returns (deduplicated_keys, duplicate_count).
+                """
+                seen: set[bytes] = set()
+                unique_keys: list[bytes] = []
+                duplicates = 0
+
+                for item in keys:
+                    key_bytes = _decode_key_to_bytes(item, field_name)
+                    if key_bytes is None:
+                        continue
+                    if key_bytes in seen:
+                        duplicates += 1
+                        logger.info(
+                            f"Security {field_name}: skipping duplicate key {key_bytes.hex()[:16]}..."
+                        )
+                    else:
+                        seen.add(key_bytes)
+                        unique_keys.append(key_bytes)
+
+                return unique_keys, duplicates
+
             for key, value in config_data.items():
                 if hasattr(config.security, key):
                     # Handle repeated fields (admin_key, etc.) specially
@@ -1266,100 +1331,29 @@ class TCPPublisher:
                         # This is a repeated field - clear and extend
                         field.clear()
                         if isinstance(value, (list, tuple)):
-                            for item in value:
-                                # Skip empty strings/None values
-                                if not item:
-                                    logger.debug(
-                                        f"Security {key}: skipping empty value"
-                                    )
-                                    continue
-                                if isinstance(item, str):
-                                    # Convert hex or base64 string to bytes
-                                    # Try hex FIRST - admin keys are typically 64 hex chars (32 bytes)
-                                    # base64 decode can succeed on hex strings but produces garbage
-                                    decoded = None
-                                    if len(item) == 64 and all(
-                                        c in "0123456789abcdefABCDEF" for c in item
-                                    ):
-                                        # Looks like 32-byte hex key
-                                        try:
-                                            decoded = bytes.fromhex(item)
-                                            logger.info(
-                                                f"Security {key}: decoded hex to {len(decoded)} bytes"
-                                            )
-                                        except Exception:
-                                            pass
-                                    if decoded is None:
-                                        # Try base64
-                                        try:
-                                            import base64
-
-                                            decoded = base64.b64decode(item)
-                                            logger.info(
-                                                f"Security {key}: decoded base64 to {len(decoded)} bytes"
-                                            )
-                                        except Exception:
-                                            # Try hex (for non-64 char hex strings)
-                                            try:
-                                                decoded = bytes.fromhex(item)
-                                                logger.info(
-                                                    f"Security {key}: decoded hex to {len(decoded)} bytes"
-                                                )
-                                            except Exception:
-                                                logger.warning(
-                                                    f"Security {key}: using raw string encoding"
-                                                )
-                                                decoded = item.encode()
-                                    field.append(decoded)
-                                elif isinstance(item, bytes):
-                                    logger.info(
-                                        f"Security {key}: adding {len(item)} raw bytes"
-                                    )
-                                    field.append(item)
-                                else:
-                                    logger.info(
-                                        f"Security {key}: adding value of type {type(item)}"
-                                    )
-                                    field.append(item)
-                        logger.info(f"Security {key}: added {len(field)} items")
+                            # Deduplicate keys to prevent issues when restoring
+                            unique_keys, dup_count = _deduplicate_keys(value, key)
+                            for key_bytes in unique_keys:
+                                logger.info(
+                                    f"Security {key}: adding {len(key_bytes)} bytes"
+                                )
+                                field.append(key_bytes)
+                            if dup_count > 0:
+                                logger.warning(
+                                    f"Security {key}: removed {dup_count} duplicate key(s)"
+                                )
+                        logger.info(f"Security {key}: added {len(field)} unique items")
                     else:
                         # Regular field - may need bytes conversion for key fields
                         if key in ("public_key", "private_key") and isinstance(
                             value, str
                         ):
-                            # Convert hex or base64 string to bytes
-                            # Try hex FIRST for 64-char strings (32 bytes)
-                            decoded = None
-                            if len(value) == 64 and all(
-                                c in "0123456789abcdefABCDEF" for c in value
-                            ):
-                                try:
-                                    decoded = bytes.fromhex(value)
-                                    logger.info(
-                                        f"Security {key}: decoded hex to {len(decoded)} bytes"
-                                    )
-                                except Exception:
-                                    pass
-                            if decoded is None:
-                                try:
-                                    import base64
-
-                                    decoded = base64.b64decode(value)
-                                    logger.info(
-                                        f"Security {key}: decoded base64 to {len(decoded)} bytes"
-                                    )
-                                except Exception:
-                                    try:
-                                        decoded = bytes.fromhex(value)
-                                        logger.info(
-                                            f"Security {key}: decoded hex to {len(decoded)} bytes"
-                                        )
-                                    except Exception:
-                                        logger.warning(
-                                            f"Security {key}: using raw string encoding"
-                                        )
-                                        decoded = value.encode()
-                            setattr(config.security, key, decoded)
+                            decoded = _decode_key_to_bytes(value, key)
+                            if decoded:
+                                logger.info(
+                                    f"Security {key}: decoded to {len(decoded)} bytes"
+                                )
+                                setattr(config.security, key, decoded)
                         else:
                             logger.info(f"Security {key}: setting to {value}")
                             setattr(config.security, key, value)
