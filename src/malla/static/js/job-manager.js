@@ -55,6 +55,33 @@ class JobManager {
     }
 
     /**
+     * Queue a config deployment job
+     * @param {string} targetNodeId - Node ID to deploy config to
+     * @param {string} configType - Type of config (device, position, power, etc.)
+     * @param {Object} configData - Configuration data to deploy
+     * @returns {Promise<Object>} Job creation result
+     */
+    async queueConfigDeploy(targetNodeId, configType, configData) {
+        const response = await fetch('/api/jobs/config-deploy', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+                target_node_id: targetNodeId,
+                config_type: configType,
+                config_data: configData
+            })
+        });
+
+        const result = await response.json();
+
+        if (result.success && result.job_id) {
+            this.startPolling(result.job_id);
+        }
+
+        return result;
+    }
+
+    /**
      * Queue a restore job
      * @param {number} backupId - Backup ID to restore
      * @param {string} targetNodeId - Node ID to restore to

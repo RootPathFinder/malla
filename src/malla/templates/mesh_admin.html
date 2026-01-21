@@ -3593,7 +3593,7 @@
                                'cannedmsg', 'audio', 'remotehardware', 'neighborinfo', 'ambientlighting',
                                'detectionsensor', 'paxcounter'];
 
-    // Save config changes
+    // Save config changes as a background job
     async function saveConfig() {
         const nodeId = document.getElementById('targetNodeInput').value.trim();
         if (!nodeId || !currentConfigType || !currentConfigSchema) {
@@ -3616,29 +3616,26 @@
             }
         }
 
-        showAlert('info', 'Saving configuration...');
+        showAlert('info', 'Queuing configuration change...');
 
         try {
-            // Determine the correct endpoint based on config type
-            let url;
-            if (moduleConfigTypes.includes(currentConfigType.toLowerCase())) {
-                url = `/api/admin/node/${encodeURIComponent(nodeId)}/moduleconfig/${currentConfigType}`;
-            } else {
-                url = `/api/admin/node/${encodeURIComponent(nodeId)}/config/${currentConfigType}`;
-            }
+            // Queue as a background job so progress can be monitored
+            const result = await jobManager.queueConfigDeploy(nodeId, currentConfigType, formData);
 
-            const response = await fetch(url, {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify(formData)
-            });
-            const data = await response.json();
+            if (result.success && result.job_id) {
+                showAlert('success', `Configuration job queued! Job ID: ${result.job_id}`);
 
-            if (data.success) {
-                showAlert('success', `${currentConfigType} configuration saved successfully!`);
-                showCommandResponse(JSON.stringify({saved: formData, message: data.message}, null, 2));
+                // Switch to Jobs tab to show progress
+                const jobsTab = document.querySelector('[data-bs-target="#jobs-pane"]');
+                if (jobsTab) {
+                    jobsTab.click();
+                }
+
+                // Refresh job list and open job details
+                await refreshJobsList();
+                viewJobDetails(result.job_id);
             } else {
-                showAlert('danger', `Failed to save: ${data.error}`);
+                showAlert('danger', `Failed to queue job: ${result.error}`);
             }
         } catch (error) {
             showAlert('danger', `Error: ${error.message}`);
