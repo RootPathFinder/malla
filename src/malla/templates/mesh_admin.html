@@ -3671,6 +3671,31 @@
                                'cannedmsg', 'audio', 'remotehardware', 'neighborinfo', 'ambientlighting',
                                'detectionsensor', 'paxcounter'];
 
+    // Compare two values for equality (handles arrays, objects, etc.)
+    function configValuesEqual(original, current, fieldType) {
+        // Handle null/undefined
+        if (original === null || original === undefined) {
+            if (fieldType === 'boolean') return current === false;
+            if (fieldType === 'number' || fieldType === 'enum') return current === 0;
+            if (fieldType === 'text') return current === '' || current === null;
+            return current === null || current === undefined || current === '';
+        }
+
+        // Arrays (like admin_key)
+        if (Array.isArray(original)) {
+            if (!Array.isArray(current)) return false;
+            if (original.length !== current.length) return false;
+            // Compare each element
+            for (let i = 0; i < original.length; i++) {
+                if (original[i] !== current[i]) return false;
+            }
+            return true;
+        }
+
+        // Direct comparison for primitives
+        return original === current;
+    }
+
     // Save config changes as a background job
     async function saveConfig() {
         const nodeId = document.getElementById('targetNodeInput').value.trim();
@@ -3679,29 +3704,48 @@
             return;
         }
 
-        // Collect form values
-        const formData = {};
+        // Collect form values and compare with original
+        const changedFields = {};
+        let changeCount = 0;
+
         for (const field of currentConfigSchema) {
             const element = document.getElementById(`config_${field.name}`);
             if (!element || field.readonly) continue;
 
+            let currentValue;
             if (field.type === 'boolean') {
-                formData[field.name] = element.checked;
+                currentValue = element.checked;
             } else if (field.type === 'enum' || field.type === 'number') {
-                formData[field.name] = parseInt(element.value);
+                currentValue = parseInt(element.value);
             } else {
-                formData[field.name] = element.value;
+                currentValue = element.value;
+            }
+
+            // Get original value from the config we fetched
+            const originalValue = currentConfigData ? currentConfigData[field.name] : null;
+
+            // Only include if changed
+            if (!configValuesEqual(originalValue, currentValue, field.type)) {
+                changedFields[field.name] = currentValue;
+                changeCount++;
+                console.log(`Field '${field.name}' changed: ${JSON.stringify(originalValue)} → ${JSON.stringify(currentValue)}`);
             }
         }
 
-        showAlert('info', 'Queuing configuration change...');
+        // Check if anything changed
+        if (changeCount === 0) {
+            showAlert('info', 'No changes detected - nothing to save');
+            return;
+        }
+
+        showAlert('info', `Queuing ${changeCount} configuration change(s)...`);
 
         try {
             // Queue as a background job so progress can be monitored
-            const result = await jobManager.queueConfigDeploy(nodeId, currentConfigType, formData);
+            const result = await jobManager.queueConfigDeploy(nodeId, currentConfigType, changedFields);
 
             if (result.success && result.job_id) {
-                showAlert('success', `Configuration job queued! Job ID: ${result.job_id}`);
+                showAlert('success', `Configuration job queued! Job ID: ${result.job_id} (${changeCount} field(s) changed)`);
 
                 // Switch to Jobs tab to show progress
                 const jobsTab = document.querySelector('[data-bs-target="#jobs-pane"]');
