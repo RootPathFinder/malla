@@ -107,6 +107,73 @@ def api_admin_status():
         return jsonify({"error": str(e)}), 500
 
 
+@admin_bp.route("/api/admin/session-passkeys")
+def api_get_session_passkeys():
+    """
+    Get list of nodes with stored session passkeys.
+
+    Session passkeys are used for admin authentication with nodes.
+    This endpoint shows which nodes have valid passkeys stored.
+    """
+    try:
+        publisher = get_tcp_publisher()
+        nodes = publisher.get_session_passkey_nodes()
+        return jsonify(
+            {
+                "nodes": nodes,
+                "count": len(nodes),
+            }
+        )
+    except Exception as e:
+        logger.error(f"Error getting session passkeys: {e}")
+        return jsonify({"error": str(e)}), 500
+
+
+@admin_bp.route("/api/admin/session-passkeys/clear", methods=["POST"])
+def api_clear_session_passkeys():
+    """
+    Clear stored session passkeys.
+
+    Use this when a node's private key has changed and the old session
+    passkey is no longer valid. After clearing, the next GET config
+    request to that node will fetch a fresh session passkey.
+
+    Request body (optional):
+        {
+            "node_id": "!3ac468fa"  // Clear specific node, or omit for all
+        }
+    """
+    try:
+        publisher = get_tcp_publisher()
+        data = request.get_json() or {}
+        node_id = data.get("node_id")
+
+        cleared = publisher.clear_session_passkey(node_id)
+
+        if node_id:
+            return jsonify(
+                {
+                    "success": True,
+                    "cleared": cleared,
+                    "node_id": node_id,
+                    "message": f"Cleared session passkey for {node_id}"
+                    if cleared
+                    else f"No session passkey found for {node_id}",
+                }
+            )
+        else:
+            return jsonify(
+                {
+                    "success": True,
+                    "cleared": cleared,
+                    "message": f"Cleared all {cleared} session passkeys",
+                }
+            )
+    except Exception as e:
+        logger.error(f"Error clearing session passkeys: {e}")
+        return jsonify({"error": str(e)}), 500
+
+
 @admin_bp.route("/api/admin/gateway", methods=["POST"])
 def api_set_gateway():
     """Set the gateway node for admin operations."""

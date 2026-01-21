@@ -827,6 +827,60 @@ class TCPPublisher:
                     return node_info["user"].get("longName")
         return None
 
+    def get_session_passkey_nodes(self) -> list[str]:
+        """
+        Get a list of node IDs that have stored session passkeys.
+
+        Returns:
+            List of node IDs in hex format (e.g., ["!3ac468fa", "!4f4cf20b"])
+        """
+        with self._session_passkey_lock:
+            return [f"!{node_id:08x}" for node_id in self._session_passkeys.keys()]
+
+    def clear_session_passkey(self, node_id: int | str | None = None) -> int:
+        """
+        Clear stored session passkeys.
+
+        Use this when a node's private key has changed and the old session
+        passkey is no longer valid. After clearing, the next GET request
+        to that node will fetch a fresh session passkey.
+
+        Args:
+            node_id: The node ID to clear the passkey for.
+                     Can be an integer (e.g., 987654321) or
+                     a hex string (e.g., "!3ac468fa" or "3ac468fa").
+                     If None, clears ALL session passkeys.
+
+        Returns:
+            Number of session passkeys cleared
+        """
+        with self._session_passkey_lock:
+            if node_id is None:
+                # Clear all session passkeys
+                count = len(self._session_passkeys)
+                self._session_passkeys.clear()
+                if count > 0:
+                    logger.info(f"Cleared all {count} session passkeys")
+                return count
+
+            # Convert string node_id to int if needed
+            if isinstance(node_id, str):
+                node_id_str = node_id.lstrip("!")
+                try:
+                    node_id = int(node_id_str, 16)
+                except ValueError:
+                    logger.warning(f"Invalid node_id format: {node_id}")
+                    return 0
+
+            # Clear specific node's session passkey
+            if node_id in self._session_passkeys:
+                del self._session_passkeys[node_id]
+                logger.info(f"Cleared session passkey for node !{node_id:08x}")
+                return 1
+            else:
+                logger.debug(f"No session passkey found for node !{node_id:08x}")
+                return 0
+
     def _get_admin_channel_index(self) -> int:
         """
         Get the admin channel index from the local node.

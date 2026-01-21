@@ -766,6 +766,27 @@
                                 </div>
                             </div>
 
+                            <!-- Session Passkey Status -->
+                            <div id="sessionPasskeyStatus" class="alert alert-info py-2 px-3 mb-3 d-none">
+                                <div class="d-flex align-items-center justify-content-between">
+                                    <div>
+                                        <i class="bi bi-key-fill me-2"></i>
+                                        <span id="sessionPasskeyCount">0</span> nodes with session passkeys
+                                        <span id="sessionPasskeyNodes" class="text-muted small ms-2"></span>
+                                    </div>
+                                    <div>
+                                        <button type="button" class="btn btn-sm btn-outline-secondary me-1"
+                                                onclick="refreshSessionPasskeys()" title="Refresh">
+                                            <i class="bi bi-arrow-clockwise"></i>
+                                        </button>
+                                        <button type="button" class="btn btn-sm btn-outline-warning"
+                                                onclick="clearSessionPasskeys()" title="Clear all session passkeys (use when node keys change)">
+                                            <i class="bi bi-trash"></i> Clear
+                                        </button>
+                                    </div>
+                                </div>
+                            </div>
+
                             <div class="mb-3">
                                 <label class="form-label">Configuration Requests</label>
                                 <div class="d-flex flex-wrap gap-2" id="configRequestBtns">
@@ -2174,6 +2195,58 @@
         }
     }
 
+    // Session passkey management
+    async function refreshSessionPasskeys() {
+        try {
+            const response = await fetch('/api/admin/session-passkeys');
+            const data = await response.json();
+
+            const statusDiv = document.getElementById('sessionPasskeyStatus');
+            const countSpan = document.getElementById('sessionPasskeyCount');
+            const nodesSpan = document.getElementById('sessionPasskeyNodes');
+
+            if (data.count > 0) {
+                statusDiv.classList.remove('d-none', 'alert-warning');
+                statusDiv.classList.add('alert-info');
+                countSpan.textContent = data.count;
+                nodesSpan.textContent = `(${data.nodes.join(', ')})`;
+            } else {
+                statusDiv.classList.remove('d-none', 'alert-info');
+                statusDiv.classList.add('alert-warning');
+                countSpan.textContent = '0';
+                nodesSpan.textContent = '- fetch config from a node to get session passkey';
+            }
+        } catch (error) {
+            console.error('Error fetching session passkeys:', error);
+        }
+    }
+
+    async function clearSessionPasskeys(nodeId = null) {
+        const msg = nodeId
+            ? `Clear session passkey for ${nodeId}? You'll need to fetch config again before making changes.`
+            : 'Clear ALL session passkeys? You\'ll need to fetch config from each node again before making changes.';
+
+        if (!confirm(msg)) return;
+
+        try {
+            const response = await fetch('/api/admin/session-passkeys/clear', {
+                method: 'POST',
+                headers: {'Content-Type': 'application/json'},
+                body: JSON.stringify(nodeId ? {node_id: nodeId} : {})
+            });
+            const data = await response.json();
+
+            if (data.success) {
+                showToast(data.message, 'success');
+                refreshSessionPasskeys();
+            } else {
+                showToast(data.error || 'Failed to clear session passkeys', 'danger');
+            }
+        } catch (error) {
+            showToast('Error clearing session passkeys: ' + error.message, 'danger');
+        }
+    }
+
     // Display admin status in the banner
     function displayAdminStatus(status) {
         const banner = document.getElementById('adminStatusBanner');
@@ -3134,6 +3207,8 @@
     document.addEventListener('DOMContentLoaded', function() {
         // Initial status update
         updateConnectionStatus();
+        // Initial session passkey status
+        refreshSessionPasskeys();
         // Start periodic check
         startConnectionCheck();
 
@@ -3390,6 +3465,9 @@
 
                 const attemptsMsg = data.attempts > 1 ? ` (took ${data.attempts} attempts)` : '';
                 finalizeCommandLog(`Config received successfully${attemptsMsg}`);
+
+                // Refresh session passkey status (a new passkey may have been received)
+                refreshSessionPasskeys();
 
                 // Render the form if we have schema
                 if (data.schema && data.config) {
