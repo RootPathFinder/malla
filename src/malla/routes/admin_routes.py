@@ -2317,6 +2317,143 @@ def api_shutdown_node(node_id):
         return jsonify({"error": str(e)}), 500
 
 
+@admin_bp.route("/api/admin/node/<node_id>/remove-node", methods=["POST"])
+def api_remove_node_from_nodedb(node_id):
+    """
+    Remove a node from the target node's nodedb.
+
+    This instructs the target node to remove a specified node from its
+    local node database. Useful for cleaning up stale entries.
+
+    Request body:
+        node_to_remove: The node ID to remove (required)
+    """
+    try:
+        target_node_id = convert_node_id(node_id)
+
+        data = request.get_json()
+        if not data or "node_to_remove" not in data:
+            return jsonify({"error": "node_to_remove is required"}), 400
+
+        node_to_remove = convert_node_id(data["node_to_remove"])
+
+        admin_service = get_admin_service()
+        result = admin_service.remove_node(
+            target_node_id=target_node_id,
+            node_to_remove=node_to_remove,
+        )
+
+        if result.success:
+            message = result.response.get("message") if result.response else None
+            return jsonify(
+                {
+                    "success": True,
+                    "target_node_id": f"!{target_node_id:08x}",
+                    "node_removed": f"!{node_to_remove:08x}",
+                    "message": message,
+                    "log_id": result.log_id,
+                }
+            )
+        else:
+            return jsonify(
+                {
+                    "success": False,
+                    "error": result.error,
+                    "log_id": result.log_id,
+                }
+            ), 200
+
+    except Exception as e:
+        logger.error(f"Error removing node: {e}")
+        return jsonify({"error": str(e)}), 500
+
+
+@admin_bp.route("/api/admin/node/<node_id>/nodedb-reset", methods=["POST"])
+def api_reset_nodedb(node_id):
+    """
+    Reset the nodedb on the target node.
+
+    This clears all nodes from the target's database except itself.
+    The node will need to rediscover other nodes on the mesh.
+    """
+    try:
+        target_node_id = convert_node_id(node_id)
+
+        admin_service = get_admin_service()
+        result = admin_service.reset_nodedb(
+            target_node_id=target_node_id,
+        )
+
+        if result.success:
+            message = result.response.get("message") if result.response else None
+            return jsonify(
+                {
+                    "success": True,
+                    "target_node_id": f"!{target_node_id:08x}",
+                    "message": message,
+                    "log_id": result.log_id,
+                }
+            )
+        else:
+            return jsonify(
+                {
+                    "success": False,
+                    "error": result.error,
+                    "log_id": result.log_id,
+                }
+            ), 200
+
+    except Exception as e:
+        logger.error(f"Error resetting nodedb: {e}")
+        return jsonify({"error": str(e)}), 500
+
+
+@admin_bp.route("/api/admin/node/<node_id>/factory-reset", methods=["POST"])
+def api_factory_reset(node_id):
+    """
+    Factory reset the target node.
+
+    Request body (optional):
+        config_only: If true (default), only reset config (preserves nodedb).
+                    If false, full factory reset (everything).
+    """
+    try:
+        target_node_id = convert_node_id(node_id)
+
+        data = request.get_json() or {}
+        config_only = data.get("config_only", True)
+
+        admin_service = get_admin_service()
+        result = admin_service.factory_reset(
+            target_node_id=target_node_id,
+            config_only=config_only,
+        )
+
+        if result.success:
+            message = result.response.get("message") if result.response else None
+            return jsonify(
+                {
+                    "success": True,
+                    "target_node_id": f"!{target_node_id:08x}",
+                    "config_only": config_only,
+                    "message": message,
+                    "log_id": result.log_id,
+                }
+            )
+        else:
+            return jsonify(
+                {
+                    "success": False,
+                    "error": result.error,
+                    "log_id": result.log_id,
+                }
+            ), 200
+
+    except Exception as e:
+        logger.error(f"Error factory resetting node: {e}")
+        return jsonify({"error": str(e)}), 500
+
+
 @admin_bp.route("/api/admin/node/<node_id>/telemetry/live", methods=["POST"])
 def api_request_live_telemetry(node_id):
     """

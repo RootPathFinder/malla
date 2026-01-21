@@ -1259,6 +1259,29 @@ class TCPPublisher:
                 f"Processing security config with keys: {list(config_data.keys())}"
             )
 
+            # CRITICAL: Never send private_key or public_key in SET commands
+            # These are device-generated and sending them (even unchanged values)
+            # can corrupt the node's identity. The firmware may interpret any
+            # value as "set this key" which can wipe the node's actual keys.
+            FORBIDDEN_SECURITY_FIELDS = {"private_key", "public_key"}
+            forbidden_found = [
+                k for k in config_data.keys() if k in FORBIDDEN_SECURITY_FIELDS
+            ]
+            if forbidden_found:
+                logger.warning(
+                    f"Security config: BLOCKING forbidden fields {forbidden_found} - "
+                    "these are device-generated and must not be sent"
+                )
+                # Filter them out
+                config_data = {
+                    k: v
+                    for k, v in config_data.items()
+                    if k not in FORBIDDEN_SECURITY_FIELDS
+                }
+                logger.info(
+                    f"Security config: proceeding with safe fields: {list(config_data.keys())}"
+                )
+
             def _decode_key_to_bytes(item: Any, field_name: str) -> bytes | None:
                 """Decode a key value (string, bytes, etc.) to bytes.
 
@@ -1344,19 +1367,10 @@ class TCPPublisher:
                                 )
                         logger.info(f"Security {key}: added {len(field)} unique items")
                     else:
-                        # Regular field - may need bytes conversion for key fields
-                        if key in ("public_key", "private_key") and isinstance(
-                            value, str
-                        ):
-                            decoded = _decode_key_to_bytes(value, key)
-                            if decoded:
-                                logger.info(
-                                    f"Security {key}: decoded to {len(decoded)} bytes"
-                                )
-                                setattr(config.security, key, decoded)
-                        else:
-                            logger.info(f"Security {key}: setting to {value}")
-                            setattr(config.security, key, value)
+                        # Regular scalar field (is_managed, serial_enabled, etc.)
+                        # Note: private_key and public_key are already filtered out above
+                        logger.info(f"Security {key}: setting to {value}")
+                        setattr(config.security, key, value)
                 else:
                     logger.warning(f"Security config: unknown field '{key}' - skipping")
             # Log the actual count of admin_key entries before sending
@@ -1706,6 +1720,102 @@ class TCPPublisher:
         except Exception as e:
             logger.error(f"Failed to send shutdown command: {e}")
             return None
+
+    def send_remove_node(
+        self,
+        target_node_id: int,
+        node_to_remove: int,
+    ) -> int | None:
+        """
+        Remove a node from the target node's nodedb.
+
+        This sends an admin message to the target node instructing it to
+        remove the specified node from its local node database. This is
+        useful for cleaning up stale entries or removing nodes that are
+        no longer part of the mesh.
+
+        Args:
+            target_node_id: The node to send the command to (gateway)
+            node_to_remove: The node number to remove from the nodedb
+
+        Returns:
+            Packet ID if sent successfully
+        """
+        admin_msg = admin_pb2.AdminMessage()
+        admin_msg.remove_by_nodenum = node_to_remove
+
+        logger.info(
+            f"Sending remove_by_nodenum command to !{target_node_id:08x} "
+            f"to remove !{node_to_remove:08x}"
+        )
+
+        return self.send_admin_message(
+            target_node_id=target_node_id,
+            admin_message=admin_msg,
+            want_response=True,
+        )
+
+    def send_nodedb_reset(
+        self,
+        target_node_id: int,
+    ) -> int | None:
+        """
+        Reset the nodedb on the target node.
+
+        This clears all nodes from the target's database except itself.
+        The node will need to rediscover other nodes on the mesh.
+
+        Args:
+            target_node_id: The node to reset the nodedb on
+
+        Returns:
+            Packet ID if sent successfully
+        """
+        admin_msg = admin_pb2.AdminMessage()
+        admin_msg.nodedb_reset = 1
+
+        logger.info(f"Sending nodedb_reset command to !{target_node_id:08x}")
+
+        return self.send_admin_message(
+            target_node_id=target_node_id,
+            admin_message=admin_msg,
+            want_response=True,
+        )
+
+    def send_factory_reset(
+        self,
+        target_node_id: int,
+        config_only: bool = True,
+    ) -> int | None:
+        """
+        Factory reset the target node.
+
+        Args:
+            target_node_id: The node to reset
+            config_only: If True, only reset config (preserves nodedb).
+                        If False, full factory reset (everything).
+
+        Returns:
+            Packet ID if sent successfully
+        """
+        admin_msg = admin_pb2.AdminMessage()
+
+        if config_only:
+            admin_msg.factory_reset_config = 1
+            logger.info(
+                f"Sending factory_reset_config command to !{target_node_id:08x}"
+            )
+        else:
+            admin_msg.factory_reset_device = 1
+            logger.info(
+                f"Sending factory_reset_device command to !{target_node_id:08x}"
+            )
+
+        return self.send_admin_message(
+            target_node_id=target_node_id,
+            admin_message=admin_msg,
+            want_response=True,
+        )
 
     def send_telemetry_request(
         self,

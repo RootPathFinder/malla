@@ -1374,6 +1374,263 @@ class AdminService:
             },
         )
 
+    def remove_node(
+        self,
+        target_node_id: int,
+        node_to_remove: int,
+    ) -> AdminCommandResult:
+        """
+        Remove a node from the target node's nodedb.
+
+        This instructs the target node to remove the specified node from
+        its local node database. Useful for cleaning up stale entries.
+
+        Args:
+            target_node_id: The node to send the command to
+            node_to_remove: The node number to remove from the nodedb
+
+        Returns:
+            AdminCommandResult
+        """
+        gateway_id = self.gateway_node_id
+        if not gateway_id:
+            return AdminCommandResult(
+                success=False,
+                error="No gateway node configured",
+            )
+
+        conn_type = self.connection_type
+
+        # Log the command
+        log_id = AdminRepository.log_admin_command(
+            target_node_id=target_node_id,
+            command_type="remove_node",
+            command_data=json.dumps(
+                {
+                    "node_to_remove": f"!{node_to_remove:08x}",
+                    "connection_type": conn_type.value,
+                }
+            ),
+        )
+
+        # Send the command using appropriate publisher
+        publisher = self._get_publisher()
+
+        if conn_type == AdminConnectionType.TCP:
+            packet_id = publisher.send_remove_node(
+                target_node_id=target_node_id,
+                node_to_remove=node_to_remove,
+            )
+        else:
+            # Serial connection not yet supported for this command
+            AdminRepository.update_admin_log_status(
+                log_id=log_id,
+                status="failed",
+                error_message="remove_node not supported via serial connection yet",
+            )
+            return AdminCommandResult(
+                success=False,
+                log_id=log_id,
+                error="remove_node not supported via serial connection yet",
+            )
+
+        if packet_id is None:
+            AdminRepository.update_admin_log_status(
+                log_id=log_id,
+                status="failed",
+                error_message=f"Failed to send message via {conn_type.value}",
+            )
+            return AdminCommandResult(
+                success=False,
+                log_id=log_id,
+                error=f"Failed to send remove_node command via {conn_type.value}",
+            )
+
+        AdminRepository.update_admin_log_status(
+            log_id=log_id,
+            status="success",
+            response_data=json.dumps(
+                {"message": f"Remove node command sent for !{node_to_remove:08x}"}
+            ),
+        )
+
+        return AdminCommandResult(
+            success=True,
+            packet_id=packet_id,
+            log_id=log_id,
+            response={
+                "message": f"Node !{node_to_remove:08x} removal requested from !{target_node_id:08x}"
+            },
+        )
+
+    def reset_nodedb(
+        self,
+        target_node_id: int,
+    ) -> AdminCommandResult:
+        """
+        Reset the nodedb on the target node.
+
+        This clears all nodes from the target's database except itself.
+        The node will need to rediscover other nodes on the mesh.
+
+        Args:
+            target_node_id: The node to reset the nodedb on
+
+        Returns:
+            AdminCommandResult
+        """
+        gateway_id = self.gateway_node_id
+        if not gateway_id:
+            return AdminCommandResult(
+                success=False,
+                error="No gateway node configured",
+            )
+
+        conn_type = self.connection_type
+
+        # Log the command
+        log_id = AdminRepository.log_admin_command(
+            target_node_id=target_node_id,
+            command_type="nodedb_reset",
+            command_data=json.dumps(
+                {
+                    "connection_type": conn_type.value,
+                }
+            ),
+        )
+
+        # Send the command using appropriate publisher
+        publisher = self._get_publisher()
+
+        if conn_type == AdminConnectionType.TCP:
+            packet_id = publisher.send_nodedb_reset(
+                target_node_id=target_node_id,
+            )
+        else:
+            AdminRepository.update_admin_log_status(
+                log_id=log_id,
+                status="failed",
+                error_message="nodedb_reset not supported via serial connection yet",
+            )
+            return AdminCommandResult(
+                success=False,
+                log_id=log_id,
+                error="nodedb_reset not supported via serial connection yet",
+            )
+
+        if packet_id is None:
+            AdminRepository.update_admin_log_status(
+                log_id=log_id,
+                status="failed",
+                error_message=f"Failed to send message via {conn_type.value}",
+            )
+            return AdminCommandResult(
+                success=False,
+                log_id=log_id,
+                error=f"Failed to send nodedb_reset command via {conn_type.value}",
+            )
+
+        AdminRepository.update_admin_log_status(
+            log_id=log_id,
+            status="success",
+            response_data=json.dumps({"message": "NodeDB reset command sent"}),
+        )
+
+        return AdminCommandResult(
+            success=True,
+            packet_id=packet_id,
+            log_id=log_id,
+            response={
+                "message": f"NodeDB reset command sent to !{target_node_id:08x}. Node will rediscover mesh."
+            },
+        )
+
+    def factory_reset(
+        self,
+        target_node_id: int,
+        config_only: bool = True,
+    ) -> AdminCommandResult:
+        """
+        Factory reset the target node.
+
+        Args:
+            target_node_id: The node to reset
+            config_only: If True, only reset config (preserves nodedb).
+                        If False, full factory reset (everything).
+
+        Returns:
+            AdminCommandResult
+        """
+        gateway_id = self.gateway_node_id
+        if not gateway_id:
+            return AdminCommandResult(
+                success=False,
+                error="No gateway node configured",
+            )
+
+        conn_type = self.connection_type
+        reset_type = "factory_reset_config" if config_only else "factory_reset_device"
+
+        # Log the command
+        log_id = AdminRepository.log_admin_command(
+            target_node_id=target_node_id,
+            command_type=reset_type,
+            command_data=json.dumps(
+                {
+                    "config_only": config_only,
+                    "connection_type": conn_type.value,
+                }
+            ),
+        )
+
+        # Send the command using appropriate publisher
+        publisher = self._get_publisher()
+
+        if conn_type == AdminConnectionType.TCP:
+            packet_id = publisher.send_factory_reset(
+                target_node_id=target_node_id,
+                config_only=config_only,
+            )
+        else:
+            AdminRepository.update_admin_log_status(
+                log_id=log_id,
+                status="failed",
+                error_message="factory_reset not supported via serial connection yet",
+            )
+            return AdminCommandResult(
+                success=False,
+                log_id=log_id,
+                error="factory_reset not supported via serial connection yet",
+            )
+
+        if packet_id is None:
+            AdminRepository.update_admin_log_status(
+                log_id=log_id,
+                status="failed",
+                error_message=f"Failed to send message via {conn_type.value}",
+            )
+            return AdminCommandResult(
+                success=False,
+                log_id=log_id,
+                error=f"Failed to send {reset_type} command via {conn_type.value}",
+            )
+
+        msg = "Config reset" if config_only else "Full factory reset"
+        AdminRepository.update_admin_log_status(
+            log_id=log_id,
+            status="success",
+            response_data=json.dumps({"message": f"{msg} command sent"}),
+        )
+
+        return AdminCommandResult(
+            success=True,
+            packet_id=packet_id,
+            log_id=log_id,
+            response={
+                "message": f"{msg} command sent to !{target_node_id:08x}. Node will reboot with reset settings."
+            },
+        )
+
     def begin_edit_settings(
         self,
         target_node_id: int,

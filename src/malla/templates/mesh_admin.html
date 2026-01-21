@@ -906,7 +906,25 @@
                                     <button class="btn btn-danger command-btn" onclick="confirmShutdownTarget()">
                                         <i class="bi bi-power"></i> Shutdown
                                     </button>
+                                    <button class="btn btn-outline-warning command-btn" onclick="showNodedbResetModal()">
+                                        <i class="bi bi-database-x"></i> Reset NodeDB
+                                    </button>
+                                    <button class="btn btn-outline-danger command-btn" onclick="showFactoryResetModal()">
+                                        <i class="bi bi-exclamation-triangle"></i> Factory Reset
+                                    </button>
                                 </div>
+                            </div>
+
+                            <div class="mb-3">
+                                <label class="form-label">Node Database Management</label>
+                                <div class="input-group">
+                                    <input type="text" class="form-control" id="nodeToRemoveInput"
+                                           placeholder="Node ID to remove (e.g., !3ac468fa)">
+                                    <button class="btn btn-outline-warning" type="button" onclick="confirmRemoveNode()">
+                                        <i class="bi bi-person-x"></i> Remove Node
+                                    </button>
+                                </div>
+                                <div class="form-text">Remove a specific node from the target's nodedb</div>
                             </div>
                         </div>
 
@@ -4327,6 +4345,167 @@
                 await sendShutdown(nodeId);
             }
         );
+    }
+
+    // Confirm remove node from nodedb
+    function confirmRemoveNode() {
+        const targetNodeId = document.getElementById('targetNodeInput').value.trim();
+        const nodeToRemove = document.getElementById('nodeToRemoveInput').value.trim();
+
+        if (!targetNodeId) {
+            alert('Please enter a target node ID first');
+            return;
+        }
+        if (!nodeToRemove) {
+            alert('Please enter the node ID to remove');
+            return;
+        }
+
+        showConfirmModal(
+            'Confirm Remove Node',
+            `Remove node <strong>${nodeToRemove}</strong> from <strong>${targetNodeId}</strong>'s node database?<br><br>
+            <span class="text-muted">The node will be forgotten by the target. It can be rediscovered later.</span>`,
+            async () => {
+                await sendRemoveNode(targetNodeId, nodeToRemove);
+            }
+        );
+    }
+
+    // Send remove node command
+    async function sendRemoveNode(targetNodeId, nodeToRemove) {
+        initCommandLog();
+        addCommandLog(`Sending remove_node command to ${targetNodeId}...`);
+        addCommandLog(`Node to remove: ${nodeToRemove}`);
+
+        try {
+            const response = await fetch(`/api/admin/node/${encodeURIComponent(targetNodeId)}/remove-node`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ node_to_remove: nodeToRemove })
+            });
+
+            const data = await response.json();
+
+            if (data.success) {
+                finalizeCommandLog(`✓ ${data.message}`);
+                showAlert('success', data.message);
+                document.getElementById('nodeToRemoveInput').value = '';
+            } else {
+                finalizeCommandLog(`✗ Failed: ${data.error}`, false);
+                showAlert('danger', data.error);
+            }
+        } catch (error) {
+            finalizeCommandLog(`✗ Error: ${error.message}`, false);
+            showAlert('danger', `Error: ${error.message}`);
+        }
+    }
+
+    // Show nodedb reset modal
+    function showNodedbResetModal() {
+        const nodeId = document.getElementById('targetNodeInput').value.trim();
+        if (!nodeId) {
+            alert('Please enter a target node ID');
+            return;
+        }
+
+        showConfirmModal(
+            'Confirm NodeDB Reset',
+            `<strong class="text-warning">Warning!</strong> Reset the node database on <strong>${nodeId}</strong>?<br><br>
+            <span class="text-muted">This will clear all known nodes from the device. It will need to rediscover the mesh.</span>`,
+            async () => {
+                await sendNodedbReset(nodeId);
+            }
+        );
+    }
+
+    // Send nodedb reset command
+    async function sendNodedbReset(nodeId) {
+        initCommandLog();
+        addCommandLog(`Sending nodedb_reset command to ${nodeId}...`);
+
+        try {
+            const response = await fetch(`/api/admin/node/${encodeURIComponent(nodeId)}/nodedb-reset`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' }
+            });
+
+            const data = await response.json();
+
+            if (data.success) {
+                finalizeCommandLog(`✓ ${data.message}`);
+                showAlert('success', data.message);
+            } else {
+                finalizeCommandLog(`✗ Failed: ${data.error}`, false);
+                showAlert('danger', data.error);
+            }
+        } catch (error) {
+            finalizeCommandLog(`✗ Error: ${error.message}`, false);
+            showAlert('danger', `Error: ${error.message}`);
+        }
+    }
+
+    // Show factory reset modal
+    function showFactoryResetModal() {
+        const nodeId = document.getElementById('targetNodeInput').value.trim();
+        if (!nodeId) {
+            alert('Please enter a target node ID');
+            return;
+        }
+
+        // Use a custom modal with radio buttons for reset type
+        const modalHtml = `
+            <strong class="text-danger">Warning!</strong> Factory reset node <strong>${nodeId}</strong>?<br><br>
+            <div class="form-check mb-2">
+                <input class="form-check-input" type="radio" name="resetType" id="resetConfigOnly" value="config" checked>
+                <label class="form-check-label" for="resetConfigOnly">
+                    <strong>Config Only</strong> - Reset settings, preserve node database
+                </label>
+            </div>
+            <div class="form-check mb-3">
+                <input class="form-check-input" type="radio" name="resetType" id="resetFull" value="full">
+                <label class="form-check-label" for="resetFull">
+                    <strong>Full Reset</strong> - Reset everything including node database
+                </label>
+            </div>
+            <span class="text-muted">The node will reboot with default settings.</span>
+        `;
+
+        showConfirmModal(
+            'Confirm Factory Reset',
+            modalHtml,
+            async () => {
+                const configOnly = document.getElementById('resetConfigOnly').checked;
+                await sendFactoryReset(nodeId, configOnly);
+            }
+        );
+    }
+
+    // Send factory reset command
+    async function sendFactoryReset(nodeId, configOnly) {
+        const resetType = configOnly ? 'config reset' : 'full factory reset';
+        initCommandLog();
+        addCommandLog(`Sending ${resetType} command to ${nodeId}...`);
+
+        try {
+            const response = await fetch(`/api/admin/node/${encodeURIComponent(nodeId)}/factory-reset`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ config_only: configOnly })
+            });
+
+            const data = await response.json();
+
+            if (data.success) {
+                finalizeCommandLog(`✓ ${data.message}`);
+                showAlert('success', data.message);
+            } else {
+                finalizeCommandLog(`✗ Failed: ${data.error}`, false);
+                showAlert('danger', data.error);
+            }
+        } catch (error) {
+            finalizeCommandLog(`✗ Error: ${error.message}`, false);
+            showAlert('danger', `Error: ${error.message}`);
+        }
     }
 
     // Quick check if node is responding (lighter than full test)
