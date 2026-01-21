@@ -628,50 +628,101 @@ class TCPPublisher:
 
                 # Parse the admin message from the payload
                 admin_message = None
+                session_passkey = None
                 payload = decoded.get("payload")
+
                 if payload:
                     try:
-                        admin_message = admin_pb2.AdminMessage()
                         if isinstance(payload, bytes):
+                            # Raw bytes - parse as protobuf
+                            admin_message = admin_pb2.AdminMessage()
                             admin_message.ParseFromString(payload)
+                            logger.debug(
+                                f"Parsed admin message from bytes: {admin_message}"
+                            )
+                            # Get session_passkey from protobuf
+                            if hasattr(admin_message, "session_passkey"):
+                                session_passkey = admin_message.session_passkey
                         else:
-                            # payload might already be decoded by meshtastic lib
+                            # payload might already be decoded by meshtastic lib as dict
                             admin_message = decoded.get("admin")
-                        logger.debug(f"Parsed admin message: {admin_message}")
-
-                        # Extract and store session_passkey from the response
-                        # Session passkeys are required for admin authentication
-                        # on subsequent requests (like Android app does)
-                        if admin_message and hasattr(admin_message, "session_passkey"):
-                            session_passkey = admin_message.session_passkey
-                            if session_passkey and len(session_passkey) > 0:
-                                # Convert from_node to int if it's a hex string
-                                node_id: int | None = None
-                                if isinstance(from_node, int):
-                                    node_id = from_node
-                                elif isinstance(from_node, str):
-                                    if from_node.startswith("!"):
-                                        node_id = int(from_node[1:], 16)
-                                    else:
-                                        try:
-                                            node_id = int(from_node, 16)
-                                        except ValueError:
-                                            node_id = int(from_node)
-
-                                if node_id is not None:
-                                    with self._session_passkey_lock:
-                                        self._session_passkeys[node_id] = (
-                                            session_passkey
-                                        )
-                                    logger.info(
-                                        f"Stored session_passkey for node !{node_id:08x} "
-                                        f"({len(session_passkey)} bytes)"
-                                    )
-
+                            logger.debug(
+                                f"Got pre-decoded admin message: {type(admin_message)}"
+                            )
                     except Exception as e:
-                        logger.warning(f"Failed to parse admin message: {e}")
-                        # Try to get pre-parsed admin message
+                        logger.warning(f"Failed to parse admin message payload: {e}")
                         admin_message = decoded.get("admin")
+
+                # Also check for session_passkey in the decoded dict directly
+                # The meshtastic library might put it there
+                if session_passkey is None:
+                    # Check in admin dict if it's a dict
+                    if (
+                        isinstance(admin_message, dict)
+                        and "session_passkey" in admin_message
+                    ):
+                        session_passkey = admin_message["session_passkey"]
+                        logger.debug(
+                            f"Got session_passkey from admin dict: {type(session_passkey)}"
+                        )
+                    # Also check in decoded directly
+                    elif "session_passkey" in decoded:
+                        session_passkey = decoded["session_passkey"]
+                        logger.debug(
+                            f"Got session_passkey from decoded: {type(session_passkey)}"
+                        )
+                    # Check in admin sub-dict of decoded
+                    elif (
+                        isinstance(decoded.get("admin"), dict)
+                        and "session_passkey" in decoded["admin"]
+                    ):
+                        session_passkey = decoded["admin"]["session_passkey"]
+                        logger.debug(
+                            f"Got session_passkey from decoded.admin: {type(session_passkey)}"
+                        )
+
+                # Store session_passkey if we found one
+                if session_passkey:
+                    # Handle if session_passkey is a string (base64 or hex)
+                    if isinstance(session_passkey, str):
+                        passkey_str = session_passkey
+                        try:
+                            import base64
+
+                            session_passkey = base64.b64decode(passkey_str)
+                            logger.debug(
+                                f"Decoded session_passkey from base64: {len(session_passkey)} bytes"
+                            )
+                        except Exception:
+                            try:
+                                session_passkey = bytes.fromhex(passkey_str)
+                                logger.debug(
+                                    f"Decoded session_passkey from hex: {len(session_passkey)} bytes"
+                                )
+                            except Exception:
+                                session_passkey = passkey_str.encode()
+
+                    if isinstance(session_passkey, bytes) and len(session_passkey) > 0:
+                        # Convert from_node to int if it's a hex string
+                        node_id: int | None = None
+                        if isinstance(from_node, int):
+                            node_id = from_node
+                        elif isinstance(from_node, str):
+                            if from_node.startswith("!"):
+                                node_id = int(from_node[1:], 16)
+                            else:
+                                try:
+                                    node_id = int(from_node, 16)
+                                except ValueError:
+                                    node_id = int(from_node)
+
+                        if node_id is not None:
+                            with self._session_passkey_lock:
+                                self._session_passkeys[node_id] = session_passkey
+                            logger.info(
+                                f"Stored session_passkey for node !{node_id:08x} "
+                                f"({len(session_passkey)} bytes)"
+                            )
 
                 response_data = {
                     "packet": packet,
