@@ -3587,6 +3587,12 @@
         buttons[1].classList.toggle('active', !formActive);
     }
 
+    // Core config types vs module config types
+    const coreConfigTypes = ['device', 'position', 'power', 'network', 'display', 'lora', 'bluetooth', 'security'];
+    const moduleConfigTypes = ['mqtt', 'serial', 'extnotif', 'storeforward', 'rangetest', 'telemetry',
+                               'cannedmsg', 'audio', 'remotehardware', 'neighborinfo', 'ambientlighting',
+                               'detectionsensor', 'paxcounter'];
+
     // Save config changes
     async function saveConfig() {
         const nodeId = document.getElementById('targetNodeInput').value.trim();
@@ -3613,7 +3619,15 @@
         showAlert('info', 'Saving configuration...');
 
         try {
-            const response = await fetch(`/api/admin/node/${encodeURIComponent(nodeId)}/config/${currentConfigType}`, {
+            // Determine the correct endpoint based on config type
+            let url;
+            if (moduleConfigTypes.includes(currentConfigType.toLowerCase())) {
+                url = `/api/admin/node/${encodeURIComponent(nodeId)}/moduleconfig/${currentConfigType}`;
+            } else {
+                url = `/api/admin/node/${encodeURIComponent(nodeId)}/config/${currentConfigType}`;
+            }
+
+            const response = await fetch(url, {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify(formData)

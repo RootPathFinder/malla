@@ -675,6 +675,77 @@ def api_get_node_module_config(node_id, module_type):
         return jsonify({"error": str(e)}), 500
 
 
+@admin_bp.route(
+    "/api/admin/node/<node_id>/moduleconfig/<module_type>", methods=["POST"]
+)
+def api_set_node_module_config(node_id, module_type):
+    """Set module configuration on a remote node."""
+    from ..services.admin_service import ModuleConfigType
+
+    try:
+        node_id_int = convert_node_id(node_id)
+
+        # Map module type string to enum
+        module_type_map = {
+            "mqtt": ModuleConfigType.MQTT,
+            "serial": ModuleConfigType.SERIAL,
+            "extnotif": ModuleConfigType.EXTNOTIF,
+            "storeforward": ModuleConfigType.STOREFORWARD,
+            "rangetest": ModuleConfigType.RANGETEST,
+            "telemetry": ModuleConfigType.TELEMETRY,
+            "cannedmsg": ModuleConfigType.CANNEDMSG,
+            "audio": ModuleConfigType.AUDIO,
+            "remotehardware": ModuleConfigType.REMOTEHARDWARE,
+            "neighborinfo": ModuleConfigType.NEIGHBORINFO,
+            "ambientlighting": ModuleConfigType.AMBIENTLIGHTING,
+            "detectionsensor": ModuleConfigType.DETECTIONSENSOR,
+            "paxcounter": ModuleConfigType.PAXCOUNTER,
+        }
+
+        if module_type.lower() not in module_type_map:
+            return jsonify(
+                {
+                    "error": f"Invalid module type. Valid types: {list(module_type_map.keys())}",
+                }
+            ), 400
+
+        data = request.get_json()
+        if not data:
+            return jsonify({"error": "No module configuration data provided"}), 400
+
+        admin_service = get_admin_service()
+        result = admin_service.set_module_config(
+            target_node_id=node_id_int,
+            module_config_type=module_type_map[module_type.lower()],
+            module_data=data,
+        )
+
+        if result.success:
+            return jsonify(
+                {
+                    "success": True,
+                    "node_id": node_id_int,
+                    "module_type": module_type,
+                    "message": result.response.get("message")
+                    if result.response
+                    else None,
+                    "log_id": result.log_id,
+                }
+            )
+        else:
+            return jsonify(
+                {
+                    "success": False,
+                    "error": result.error,
+                    "log_id": result.log_id,
+                }
+            ), 200
+
+    except Exception as e:
+        logger.error(f"Error setting node module config: {e}")
+        return jsonify({"error": str(e)}), 500
+
+
 # =========================
 # Node Backup Endpoints
 # =========================
@@ -1899,6 +1970,7 @@ def api_set_node_config(node_id, config_type):
             "display": ConfigType.DISPLAY,
             "lora": ConfigType.LORA,
             "bluetooth": ConfigType.BLUETOOTH,
+            "security": ConfigType.SECURITY,
         }
 
         if config_type.lower() not in config_type_map:
