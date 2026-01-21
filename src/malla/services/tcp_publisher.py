@@ -99,6 +99,13 @@ class TCPPublisher:
         self._last_admin_response: dict[str, Any] | None = None
         self._admin_response_event = threading.Event()
 
+        # Session passkey storage per target node
+        # Key: node_id (int), Value: session_passkey (bytes)
+        # Session passkeys are returned by nodes in admin responses and must
+        # be included in subsequent admin messages for authentication
+        self._session_passkeys: dict[int, bytes] = {}
+        self._session_passkey_lock = threading.Lock()
+
         # Connection health tracking
         self._last_activity_time: float = 0
         self._last_health_check_time: float = 0
@@ -629,6 +636,36 @@ class TCPPublisher:
                             # payload might already be decoded by meshtastic lib
                             admin_message = decoded.get("admin")
                         logger.debug(f"Parsed admin message: {admin_message}")
+
+                        # Extract and store session_passkey from the response
+                        # Session passkeys are required for admin authentication
+                        # on subsequent requests (like Android app does)
+                        if admin_message and hasattr(admin_message, "session_passkey"):
+                            session_passkey = admin_message.session_passkey
+                            if session_passkey and len(session_passkey) > 0:
+                                # Convert from_node to int if it's a hex string
+                                node_id: int | None = None
+                                if isinstance(from_node, int):
+                                    node_id = from_node
+                                elif isinstance(from_node, str):
+                                    if from_node.startswith("!"):
+                                        node_id = int(from_node[1:], 16)
+                                    else:
+                                        try:
+                                            node_id = int(from_node, 16)
+                                        except ValueError:
+                                            node_id = int(from_node)
+
+                                if node_id is not None:
+                                    with self._session_passkey_lock:
+                                        self._session_passkeys[node_id] = (
+                                            session_passkey
+                                        )
+                                    logger.info(
+                                        f"Stored session_passkey for node !{node_id:08x} "
+                                        f"({len(session_passkey)} bytes)"
+                                    )
+
                     except Exception as e:
                         logger.warning(f"Failed to parse admin message: {e}")
                         # Try to get pre-parsed admin message
@@ -794,6 +831,17 @@ class TCPPublisher:
 
             # Generate a random packet ID for tracking
             packet_id = random.getrandbits(32)
+
+            # Set session_passkey on the admin message if we have one for this target
+            # Session passkeys are required for admin authentication (like Android app)
+            with self._session_passkey_lock:
+                if target_node_id in self._session_passkeys:
+                    session_passkey = self._session_passkeys[target_node_id]
+                    admin_message.session_passkey = session_passkey
+                    logger.debug(
+                        f"Including session_passkey for !{target_node_id:08x} "
+                        f"({len(session_passkey)} bytes)"
+                    )
 
             # Send the packet using sendData
             # Note: sendData returns a MeshPacket, we use our own packet_id for tracking
