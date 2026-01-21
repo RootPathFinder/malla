@@ -1357,6 +1357,14 @@ class TCPPublisher:
                             # Deduplicate keys to prevent issues when restoring
                             unique_keys, dup_count = _deduplicate_keys(value, key)
                             for key_bytes in unique_keys:
+                                # Validate admin_key length - must be exactly 32 bytes
+                                if key == "admin_key" and len(key_bytes) != 32:
+                                    logger.warning(
+                                        f"Security admin_key: SKIPPING invalid key - "
+                                        f"expected 32 bytes, got {len(key_bytes)} bytes "
+                                        f"(hex: {key_bytes.hex()[:32]}...)"
+                                    )
+                                    continue
                                 logger.info(
                                     f"Security {key}: adding {len(key_bytes)} bytes"
                                 )
@@ -1373,16 +1381,47 @@ class TCPPublisher:
                         setattr(config.security, key, value)
                 else:
                     logger.warning(f"Security config: unknown field '{key}' - skipping")
-            # Log the actual count of admin_key entries before sending
-            if hasattr(config.security, "admin_key"):
-                logger.info(
-                    f"Security config admin_key count: {len(config.security.admin_key)}"
-                )
+
+            # CRITICAL SAFETY CHECK: If admin_key was requested but we have NO valid keys,
+            # ABORT the entire operation to avoid wiping existing admin keys on the device
+            if "admin_key" in config_data:
+                admin_key_count = len(config.security.admin_key)
+                if admin_key_count == 0:
+                    logger.error(
+                        "Security config: ABORTING - admin_key was requested but "
+                        "no valid 32-byte keys were found. This would wipe existing admin keys!"
+                    )
+                    return None
+                logger.info(f"Security config admin_key count: {admin_key_count}")
                 for i, k in enumerate(config.security.admin_key):
                     logger.info(f"  admin_key[{i}]: {k.hex()}")
+
             admin_msg.set_config.CopyFrom(config)
+
+            # Log the exact fields being sent in the security config
+            security_fields_sent = [
+                f.name for f, _ in admin_msg.set_config.security.ListFields()
+            ]
+
+            # CRITICAL SAFETY CHECK: If no security fields are being sent, ABORT
+            # An empty security config could have unintended side effects
+            if not security_fields_sent:
+                logger.error(
+                    "Security config: ABORTING - no fields to send! "
+                    f"Original config_data keys were: {list(config_data.keys())}"
+                )
+                return None
+
             logger.info(
-                f"Security config prepared, admin_msg admin_key count: {len(admin_msg.set_config.security.admin_key)}"
+                f"Security config prepared - fields being sent: {security_fields_sent}"
+            )
+            logger.info(
+                f"Security config admin_key count: {len(admin_msg.set_config.security.admin_key)}"
+            )
+            # Log serialized bytes for debugging protocol issues
+            serialized = admin_msg.SerializeToString()
+            logger.debug(
+                f"Security config serialized ({len(serialized)} bytes): {serialized.hex()}"
             )
 
         else:
