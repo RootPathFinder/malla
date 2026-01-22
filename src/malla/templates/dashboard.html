@@ -2,6 +2,11 @@
 
 {% block title %}Mesh Network Dashboard - {{ APP_NAME }}{% endblock %}
 
+{% block head_libs %}
+<!-- Chart.js for dashboard metrics -->
+<script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js" integrity="sha384-e6nUZLBkQ86NJ6TVVKAeSaK8jWa3NhkYWZFomE39AvDbQWeie9PlQqM3pmYW5d1g" crossorigin="anonymous"></script>
+{% endblock head_libs %}
+
 {% block content %}
 <div class="container-fluid">
     {# Display error message if data failed to load #}
@@ -984,10 +989,32 @@ async function loadDashboardNetworkHealth() {
     }
 }
 
+// Visibility-aware polling - pause when tab is hidden to save resources
+let healthPollInterval = null;
+function startHealthPolling() {
+    if (!healthPollInterval) {
+        healthPollInterval = setInterval(loadDashboardNetworkHealth, 60000);
+    }
+}
+function stopHealthPolling() {
+    if (healthPollInterval) {
+        clearInterval(healthPollInterval);
+        healthPollInterval = null;
+    }
+}
+
+document.addEventListener('visibilitychange', () => {
+    if (document.hidden) {
+        stopHealthPolling();
+    } else {
+        loadDashboardNetworkHealth(); // Refresh immediately when tab becomes visible
+        startHealthPolling();
+    }
+});
+
 // Initialize health data loading
 loadDashboardNetworkHealth();
-// Refresh health data every 60 seconds
-setInterval(loadDashboardNetworkHealth, 60000);
+startHealthPolling();
 </script>
 
 <!-- Chart.js for analytics charts -->

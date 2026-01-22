@@ -465,13 +465,36 @@
     let calendarData = null;
     let refreshInterval = null;
 
+    function startPolling() {
+        if (!refreshInterval) {
+            refreshInterval = setInterval(loadAllData, 60000);
+        }
+    }
+
+    function stopPolling() {
+        if (refreshInterval) {
+            clearInterval(refreshInterval);
+            refreshInterval = null;
+        }
+    }
+
     document.addEventListener('DOMContentLoaded', function() {
         loadAllData();
 
         document.getElementById('refreshBtn').addEventListener('click', loadAllData);
 
         // Auto-refresh every 60 seconds
-        refreshInterval = setInterval(loadAllData, 60000);
+        startPolling();
+
+        // Visibility-aware polling - pause when tab is hidden to save resources
+        document.addEventListener('visibilitychange', () => {
+            if (document.hidden) {
+                stopPolling();
+            } else {
+                loadAllData(); // Refresh immediately when tab becomes visible
+                startPolling();
+            }
+        });
     });
 
     async function loadAllData() {

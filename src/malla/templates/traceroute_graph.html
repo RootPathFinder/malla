@@ -505,6 +505,19 @@ function initializeInterface() {
     // Set up auto-refresh controls
     setupAutoRefresh();
 
+    // Visibility-aware polling - pause when tab is hidden to save resources
+    document.addEventListener('visibilitychange', () => {
+        if (document.hidden) {
+            stopActivityPolling();
+            stopAutoRefresh();
+        } else {
+            startActivityPolling();
+            if (autoRefreshEnabled) {
+                startAutoRefresh();
+            }
+        }
+    });
+
     // Handle auto-refresh toggle
     $('#toggleSidebar').on('click', function() {
         const sidebar = document.getElementById('sidebar');

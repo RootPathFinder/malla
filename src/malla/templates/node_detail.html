@@ -3,6 +3,13 @@
 
 {% block title %}{{ node.node_name }} - Node Details{% endblock %}
 
+{% block head_libs %}
+<!-- Plotly.js for telemetry charts -->
+<script src="https://cdn.plot.ly/plotly-2.30.0.min.js" integrity="sha384-H7GB7Kme/VbPI/0S4LNq7OixFNVRgRGE8kyqTntBuiXle1KBm8KWLQh/Ah6bXCYW" crossorigin="anonymous"></script>
+<!-- Chart.js for additional visualizations -->
+<script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js" integrity="sha384-e6nUZLBkQ86NJ6TVVKAeSaK8jWa3NhkYWZFomE39AvDbQWeie9PlQqM3pmYW5d1g" crossorigin="anonymous"></script>
+{% endblock head_libs %}
+
 {% block extra_css %}
 <!-- Leaflet CSS -->
 <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />

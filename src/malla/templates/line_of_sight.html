@@ -3,6 +3,11 @@
 
 {% block title %}Line of Sight Analysis - Malla{% endblock %}
 
+{% block head_libs %}
+<!-- Chart.js for LOS visualizations -->
+<script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js" integrity="sha384-e6nUZLBkQ86NJ6TVVKAeSaK8jWa3NhkYWZFomE39AvDbQWeie9PlQqM3pmYW5d1g" crossorigin="anonymous"></script>
+{% endblock head_libs %}
+
 {% block extra_css %}
 <!-- Leaflet CSS -->
 <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"
@@ -988,7 +993,7 @@ function updateElevationChart(fromName, toName, geoPoints, fromAltitude, toAltit
     });
 
     const ctx = document.getElementById('elevationChart').getContext('2d');
-    
+
     // Determine aspect ratio based on screen width
     const isMobile = window.innerWidth <= 768;
     const aspectRatio = isMobile ? 1.2 : 2;

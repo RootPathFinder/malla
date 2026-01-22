@@ -9560,5 +9560,37 @@
             showAlert('danger', `Error: ${error.message}`);
         }
     }
+
+    // ============================================================================
+    // VISIBILITY-AWARE POLLING - Pause all polling when tab is hidden
+    // ============================================================================
+
+    document.addEventListener('visibilitychange', () => {
+        if (document.hidden) {
+            // Pause all polling when tab is hidden
+            stopServerLogsPolling();
+            if (botStatusInterval) {
+                clearInterval(botStatusInterval);
+                botStatusInterval = null;
+            }
+            if (botActivityInterval) {
+                clearInterval(botActivityInterval);
+                botActivityInterval = null;
+            }
+        } else {
+            // Resume polling when tab becomes visible (if on appropriate tabs)
+            const activeTab = document.querySelector('#adminTabs .nav-link.active');
+            if (activeTab?.id === 'server-logs-tab') {
+                refreshServerLogs();
+                startServerLogsPolling();
+            }
+            if (activeTab?.id === 'bot-tab') {
+                refreshBotStatus();
+                refreshBotActivity();
+                botStatusInterval = setInterval(refreshBotStatus, 3000);
+                botActivityInterval = setInterval(refreshBotActivity, 2000);
+            }
+        }
+    });
 </script>
 {% endblock %}

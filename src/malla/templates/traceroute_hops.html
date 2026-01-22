@@ -3,6 +3,11 @@
 
 {% block title %}Traceroute RF Hop Analysis - Malla{% endblock %}
 
+{% block head_libs %}
+<!-- Chart.js for hop analysis charts -->
+<script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js" integrity="sha384-e6nUZLBkQ86NJ6TVVKAeSaK8jWa3NhkYWZFomE39AvDbQWeie9PlQqM3pmYW5d1g" crossorigin="anonymous"></script>
+{% endblock head_libs %}
+
 {% block extra_css %}
 <link rel="stylesheet" href="{{ url_for('static', filename='css/node-picker.css') }}">
 <style>
