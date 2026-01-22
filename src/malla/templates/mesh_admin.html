@@ -2139,6 +2139,7 @@
     let currentConfigType = null;
     let currentConfigData = null;
     let currentConfigSchema = null;
+    let isModuleConfig = false;  // Track if current config is module config
     let searchTimeout = null;
     let cachedNodes = null;
     let adminStatusTimeout = null;
@@ -3478,6 +3479,7 @@
 
             if (data.success) {
                 currentConfigType = configType;
+                isModuleConfig = false;  // This is a regular config
                 currentConfigData = data.config;
                 currentConfigSchema = data.schema;
 
@@ -3553,6 +3555,7 @@
 
             if (data.success) {
                 currentConfigType = moduleType;
+                isModuleConfig = true;  // This is a module config
                 currentConfigData = data.config;
                 currentConfigSchema = data.schema;
 
@@ -3944,7 +3947,11 @@
             showAlert('info', 'Saving configuration...');
 
             try {
-                const response = await fetch(`/api/admin/node/${encodeURIComponent(nodeId)}/config/${currentConfigType}`, {
+                // Use correct endpoint based on whether this is a module config or regular config
+                const endpoint = isModuleConfig
+                    ? `/api/admin/node/${encodeURIComponent(nodeId)}/moduleconfig/${currentConfigType}`
+                    : `/api/admin/node/${encodeURIComponent(nodeId)}/config/${currentConfigType}`;
+                const response = await fetch(endpoint, {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
                     body: JSON.stringify(formData)
@@ -3952,7 +3959,8 @@
                 const data = await response.json();
 
                 if (data.success) {
-                    showAlert('success', `${currentConfigType} configuration saved successfully!`);
+                    const configLabel = isModuleConfig ? 'module' : '';
+                    showAlert('success', `${currentConfigType} ${configLabel} configuration saved successfully!`);
                     showCommandResponse(JSON.stringify({saved: formData, message: data.message}, null, 2));
                 } else {
                     showAlert('danger', `Failed to save: ${data.error}`);
