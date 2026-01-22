@@ -7486,6 +7486,7 @@
                         <tr>
                             <th>Status</th>
                             <th>Job</th>
+                            <th>Target Node</th>
                             <th>Progress</th>
                             <th>Created</th>
                             <th>Actions</th>
@@ -7503,6 +7504,22 @@
         const statusBadge = getJobStatusBadge(job.status, job.cancel_requested, job.pause_requested);
         const created = job.created_at ? formatTimestamp(job.created_at) : 'Unknown';
         const progress = job.progress || 0;
+        const jobTypeInfo = getJobTypeDisplayInfo(job.job_type);
+
+        // Format target node display
+        let targetNodeDisplay = '<span class="text-muted">-</span>';
+        if (job.target_node_id) {
+            const nodeHex = job.target_node_hex || `!${(job.target_node_id >>> 0).toString(16).padStart(8, '0')}`;
+            if (job.target_node_name) {
+                targetNodeDisplay = `
+                    <code class="small">${nodeHex}</code>
+                    <br>
+                    <small class="text-muted">${escapeHtml(job.target_node_name)}</small>
+                `;
+            } else {
+                targetNodeDisplay = `<code class="small">${nodeHex}</code>`;
+            }
+        }
 
         let progressBar = '';
         if (job.status === 'running') {
@@ -7605,10 +7622,16 @@
             <tr id="job-row-${job.id}" class="job-row" style="cursor: pointer;" onclick="viewJobDetails(${job.id})">
                 <td>${statusBadge}</td>
                 <td>
-                    <strong>${escapeHtml(job.job_name)}</strong>
-                    <br>
-                    <small class="text-muted">${escapeHtml(job.job_type)}</small>
+                    <div class="d-flex align-items-center gap-2">
+                        <i class="bi bi-${jobTypeInfo.icon} text-${jobTypeInfo.color}"></i>
+                        <div>
+                            <strong>${escapeHtml(job.job_name)}</strong>
+                            <br>
+                            <small class="text-muted">${jobTypeInfo.name}</small>
+                        </div>
+                    </div>
                 </td>
+                <td>${targetNodeDisplay}</td>
                 <td>${progressBar}</td>
                 <td><small>${created}</small></td>
                 <td onclick="event.stopPropagation()">${actions}</td>
@@ -7641,6 +7664,136 @@
             'cancelled': '<span class="badge bg-secondary"><i class="bi bi-slash-circle"></i> Cancelled</span>'
         };
         return badges[status] || `<span class="badge bg-secondary">${escapeHtml(status)}</span>`;
+    }
+
+    // Get display info for job types
+    function getJobTypeDisplayInfo(jobType) {
+        const types = {
+            'backup': {
+                name: 'Backup Node',
+                icon: 'download',
+                color: 'primary',
+                description: 'Creates a backup of node configuration and settings'
+            },
+            'restore': {
+                name: 'Restore Node',
+                icon: 'upload',
+                color: 'warning',
+                description: 'Restores node configuration from a backup'
+            },
+            'bulk_command': {
+                name: 'Bulk Command',
+                icon: 'collection',
+                color: 'info',
+                description: 'Sends commands to multiple nodes'
+            },
+            'config_deploy': {
+                name: 'Deploy Config',
+                icon: 'gear',
+                color: 'success',
+                description: 'Deploys configuration changes to a node'
+            },
+            'compliance_fix': {
+                name: 'Compliance Fix',
+                icon: 'shield-check',
+                color: 'purple',
+                description: 'Applies template settings to bring nodes into compliance'
+            }
+        };
+        return types[jobType] || {
+            name: jobType || 'Unknown',
+            icon: 'question-circle',
+            color: 'secondary',
+            description: 'Background job'
+        };
+    }
+
+    // Format duration in human-readable form
+    function formatDuration(seconds) {
+        if (!seconds && seconds !== 0) return '-';
+        seconds = Math.round(seconds);
+        if (seconds < 60) {
+            return `${seconds}s`;
+        } else if (seconds < 3600) {
+            const mins = Math.floor(seconds / 60);
+            const secs = seconds % 60;
+            return secs > 0 ? `${mins}m ${secs}s` : `${mins}m`;
+        } else {
+            const hours = Math.floor(seconds / 3600);
+            const mins = Math.floor((seconds % 3600) / 60);
+            return mins > 0 ? `${hours}h ${mins}m` : `${hours}h`;
+        }
+    }
+
+    // Format job data summary based on job type
+    function formatJobDataSummary(jobType, jobData) {
+        if (!jobData) return '';
+
+        let items = [];
+
+        switch (jobType) {
+            case 'config_deploy':
+                if (jobData.config_type) {
+                    items.push(`<strong>Config Type:</strong> ${escapeHtml(jobData.config_type)}`);
+                }
+                if (jobData.config_changes) {
+                    const changes = typeof jobData.config_changes === 'object'
+                        ? Object.entries(jobData.config_changes).map(([k, v]) => `${k}: ${JSON.stringify(v)}`).join(', ')
+                        : jobData.config_changes;
+                    items.push(`<strong>Changes:</strong> <code class="small">${escapeHtml(changes.substring(0, 200))}${changes.length > 200 ? '...' : ''}</code>`);
+                }
+                break;
+
+            case 'backup':
+                if (jobData.backup_type) {
+                    items.push(`<strong>Backup Type:</strong> ${escapeHtml(jobData.backup_type)}`);
+                }
+                if (jobData.include_channels !== undefined) {
+                    items.push(`<strong>Include Channels:</strong> ${jobData.include_channels ? 'Yes' : 'No'}`);
+                }
+                break;
+
+            case 'restore':
+                if (jobData.backup_id) {
+                    items.push(`<strong>Backup ID:</strong> ${escapeHtml(jobData.backup_id)}`);
+                }
+                if (jobData.restore_type) {
+                    items.push(`<strong>Restore Type:</strong> ${escapeHtml(jobData.restore_type)}`);
+                }
+                break;
+
+            case 'bulk_command':
+                if (jobData.command_type) {
+                    items.push(`<strong>Command:</strong> ${escapeHtml(jobData.command_type)}`);
+                }
+                if (jobData.node_count) {
+                    items.push(`<strong>Target Nodes:</strong> ${jobData.node_count} nodes`);
+                }
+                if (Array.isArray(jobData.node_ids)) {
+                    items.push(`<strong>Target Nodes:</strong> ${jobData.node_ids.length} nodes`);
+                }
+                break;
+
+            case 'compliance_fix':
+                if (jobData.template_type) {
+                    items.push(`<strong>Template:</strong> ${escapeHtml(jobData.template_type)}`);
+                }
+                if (jobData.node_count) {
+                    items.push(`<strong>Nodes to Fix:</strong> ${jobData.node_count}`);
+                }
+                break;
+        }
+
+        // Fallback: show raw data if no specific formatting
+        if (items.length === 0 && Object.keys(jobData).length > 0) {
+            const summary = JSON.stringify(jobData, null, 2);
+            if (summary.length > 500) {
+                return `<pre class="mb-0 small" style="max-height: 150px; overflow-y: auto;"><code>${escapeHtml(summary.substring(0, 500))}...</code></pre>`;
+            }
+            return `<pre class="mb-0 small" style="max-height: 150px; overflow-y: auto;"><code>${escapeHtml(summary)}</code></pre>`;
+        }
+
+        return items.map(item => `<div class="mb-1">${item}</div>`).join('');
     }
 
     async function cancelJob(jobId) {
@@ -7967,6 +8120,32 @@
         const started = job.started_at ? formatTimestamp(job.started_at) : '-';
         const completed = job.completed_at ? formatTimestamp(job.completed_at) : '-';
 
+        // Get friendly job type info
+        const jobTypeInfo = getJobTypeDisplayInfo(job.job_type);
+
+        // Format target node display
+        let targetNodeDisplay = '-';
+        if (job.target_node_id) {
+            const nodeHex = job.target_node_hex || `!${(job.target_node_id >>> 0).toString(16).padStart(8, '0')}`;
+            targetNodeDisplay = `<code>${nodeHex}</code>`;
+            if (job.target_node_name) {
+                targetNodeDisplay += ` <span class="text-muted">(${escapeHtml(job.target_node_name)})</span>`;
+            }
+        }
+
+        // Calculate duration
+        let durationDisplay = '-';
+        if (job.duration_seconds) {
+            durationDisplay = formatDuration(job.duration_seconds);
+        } else if (job.elapsed_seconds) {
+            durationDisplay = formatDuration(job.elapsed_seconds) + ' (running)';
+        } else if (job.started_at && job.completed_at) {
+            durationDisplay = formatDuration(job.completed_at - job.started_at);
+        } else if (job.started_at) {
+            const elapsed = Math.floor(Date.now() / 1000 - job.started_at);
+            durationDisplay = formatDuration(elapsed) + ' (running)';
+        }
+
         let progressSection = '';
         if (job.status === 'running') {
             const progress = job.progress || 0;
@@ -8032,7 +8211,7 @@
         if (job.status === 'failed' && job.error_message) {
             errorSection = `
                 <div class="mb-4">
-                    <h6 class="text-muted mb-2">Error</h6>
+                    <h6 class="text-muted mb-2"><i class="bi bi-exclamation-triangle text-danger me-1"></i> Error</h6>
                     <div class="alert alert-danger">
                         <i class="bi bi-exclamation-triangle me-2"></i>
                         ${escapeHtml(job.error_message)}
@@ -8041,26 +8220,54 @@
             `;
         }
 
+        // Job data section - show input parameters
+        let jobDataSection = '';
+        if (job.job_data && Object.keys(job.job_data).length > 0) {
+            const jobDataSummary = formatJobDataSummary(job.job_type, job.job_data);
+            if (jobDataSummary) {
+                jobDataSection = `
+                    <div class="mb-4">
+                        <h6 class="text-muted mb-2"><i class="bi bi-info-circle me-1"></i> Job Parameters</h6>
+                        <div class="bg-light p-3 rounded">
+                            ${jobDataSummary}
+                        </div>
+                    </div>
+                `;
+            }
+        }
+
         bodyEl.innerHTML = `
+            <!-- Job Header with Icon -->
+            <div class="d-flex align-items-center gap-3 mb-3 pb-3 border-bottom">
+                <div class="rounded-circle bg-${jobTypeInfo.color} bg-opacity-10 p-3">
+                    <i class="bi bi-${jobTypeInfo.icon} text-${jobTypeInfo.color} fs-4"></i>
+                </div>
+                <div>
+                    <h5 class="mb-1">${jobTypeInfo.name}</h5>
+                    <div class="text-muted small">${jobTypeInfo.description}</div>
+                </div>
+                <div class="ms-auto">${statusBadge}</div>
+            </div>
+
             <div class="row mb-3">
                 <div class="col-md-6">
-                    <table class="table table-sm table-borderless">
+                    <table class="table table-sm table-borderless mb-0">
                         <tr>
-                            <td class="text-muted" style="width: 100px;">Status:</td>
-                            <td>${statusBadge}</td>
-                        </tr>
-                        <tr>
-                            <td class="text-muted">Type:</td>
-                            <td><code>${escapeHtml(job.job_type)}</code></td>
+                            <td class="text-muted" style="width: 100px;">Target Node:</td>
+                            <td>${targetNodeDisplay}</td>
                         </tr>
                         <tr>
                             <td class="text-muted">Job ID:</td>
-                            <td><code>${job.id}</code></td>
+                            <td><code class="small">${job.id}</code></td>
+                        </tr>
+                        <tr>
+                            <td class="text-muted">Duration:</td>
+                            <td>${durationDisplay}</td>
                         </tr>
                     </table>
                 </div>
                 <div class="col-md-6">
-                    <table class="table table-sm table-borderless">
+                    <table class="table table-sm table-borderless mb-0">
                         <tr>
                             <td class="text-muted" style="width: 100px;">Created:</td>
                             <td>${created}</td>
@@ -8077,6 +8284,7 @@
                 </div>
             </div>
             ${progressSection}
+            ${jobDataSection}
             ${resultSection}
             ${errorSection}
         `;

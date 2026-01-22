@@ -9,12 +9,75 @@ import logging
 from flask import Blueprint, jsonify, request
 
 from ..database.job_repository import JobRepository, JobStatus, JobType
+from ..database.repositories import get_db_connection
 from ..services.job_service import get_job_service
 from ..utils.node_utils import convert_node_id
 
 logger = logging.getLogger(__name__)
 
 job_bp = Blueprint("jobs", __name__)
+
+
+def _get_node_names_for_ids(node_ids: set) -> dict:
+    """Look up node names for a set of node IDs."""
+    if not node_ids:
+        return {}
+
+    node_names = {}
+    try:
+        conn = get_db_connection()
+        cursor = conn.cursor()
+        cursor.execute("SELECT node_id, long_name, short_name FROM node_info")
+        for row in cursor.fetchall():
+            if row["node_id"] in node_ids:
+                node_names[row["node_id"]] = {
+                    "long_name": row["long_name"],
+                    "short_name": row["short_name"],
+                }
+        conn.close()
+    except Exception:
+        pass  # Ignore lookup errors
+    return node_names
+
+
+def _enrich_job_with_node_name(job: dict) -> dict:
+    """Add target_node_name and target_node_hex to a job dict."""
+    if job and job.get("target_node_id"):
+        node_id = job["target_node_id"]
+        # Add hex representation
+        job["target_node_hex"] = f"!{(node_id & 0xFFFFFFFF):08x}"
+        # Look up node name
+        node_names = _get_node_names_for_ids({node_id})
+        if node_id in node_names:
+            node_info = node_names[node_id]
+            job["target_node_name"] = (
+                node_info.get("long_name") or node_info.get("short_name") or None
+            )
+    return job
+
+
+def _enrich_jobs_with_node_names(jobs: list) -> list:
+    """Add target_node_name and target_node_hex to a list of job dicts."""
+    # Collect unique node IDs
+    node_ids = {j["target_node_id"] for j in jobs if j.get("target_node_id")}
+    if not node_ids:
+        return jobs
+
+    # Batch lookup node names
+    node_names = _get_node_names_for_ids(node_ids)
+
+    # Enrich jobs
+    for job in jobs:
+        if job.get("target_node_id"):
+            node_id = job["target_node_id"]
+            job["target_node_hex"] = f"!{(node_id & 0xFFFFFFFF):08x}"
+            if node_id in node_names:
+                node_info = node_names[node_id]
+                job["target_node_name"] = (
+                    node_info.get("long_name") or node_info.get("short_name") or None
+                )
+
+    return jobs
 
 
 # ============================================================================
@@ -54,6 +117,9 @@ def api_get_jobs():
             include_completed=include_completed,
         )
 
+        # Enrich with node names
+        jobs = _enrich_jobs_with_node_names(jobs)
+
         return jsonify({"jobs": jobs, "count": len(jobs)})
 
     except ValueError as e:
@@ -78,6 +144,9 @@ def api_get_active_jobs():
         job_service = get_job_service()
         jobs = job_service.get_active_jobs(target_node_id=node_id)
 
+        # Enrich with node names
+        jobs = _enrich_jobs_with_node_names(jobs)
+
         return jsonify({"jobs": jobs, "count": len(jobs)})
 
     except Exception as e:
@@ -98,6 +167,17 @@ def api_get_job(job_id: int):
         # Add queue position if queued
         if job["status"] == JobStatus.QUEUED.value:
             job["queue_position"] = JobRepository.get_queue_position(job_id)
+
+        # Enrich with node name
+        job = _enrich_job_with_node_name(job)
+
+        # Calculate duration if job has timing info
+        if job.get("started_at") and job.get("completed_at"):
+            job["duration_seconds"] = job["completed_at"] - job["started_at"]
+        elif job.get("started_at"):
+            import time
+
+            job["elapsed_seconds"] = time.time() - job["started_at"]
 
         return jsonify(job)
 
