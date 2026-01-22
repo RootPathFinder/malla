@@ -107,6 +107,9 @@ class JobProgressCallback:
             # Wait a bit before checking again
             time_module.sleep(0.5)
 
+        # Job was resumed - set status back to RUNNING
+        JobRepository.update_job_status(self.job_id, JobStatus.RUNNING)
+
     def check_cancelled_and_paused(self) -> None:
         """
         Check for both cancellation and pause requests.
