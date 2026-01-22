@@ -8124,9 +8124,10 @@
             const job = await jobManager.getJob(jobId);
             renderJobDetailsModal(job);
 
-            // Set up polling for active jobs
+            // Set up polling for active jobs - faster polling for real-time updates
             if (job.status === 'running' || job.status === 'queued') {
                 if (!jobDetailsPollingInterval) {
+                    // Poll every 800ms for responsive progress updates
                     jobDetailsPollingInterval = setInterval(async () => {
                         if (currentJobDetailsId) {
                             try {
@@ -8139,7 +8140,7 @@
                                 clearJobDetailsPolling();
                             }
                         }
-                    }, 1500);
+                    }, 800);
                 }
             }
         } catch (error) {

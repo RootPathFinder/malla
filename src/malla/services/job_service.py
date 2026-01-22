@@ -1519,6 +1519,28 @@ class JobService:
         from ..database.admin_repository import AdminRepository
         from .admin_service import ConfigType, get_admin_service
 
+        # Helper function for waiting with progress updates
+        def wait_with_progress(
+            seconds: int,
+            base_message: str,
+            base_pct: int,
+            phase: str,
+            current: int,
+            total: int,
+        ) -> None:
+            """Wait for specified seconds while updating progress with countdown."""
+            for remaining in range(seconds, 0, -1):
+                progress.update(
+                    base_pct,
+                    f"{base_message} (waiting {remaining}s...)",
+                    phase,
+                    current=current,
+                    total=total,
+                )
+                time.sleep(1)
+                # Check for cancellation during wait
+                progress.check_cancelled()
+
         job_data = job["job_data"]
         template_id = job_data.get("template_id")
         node_ids = job_data.get("node_ids", [])
@@ -1592,13 +1614,23 @@ class JobService:
             except Exception as e:
                 return False, [{"error": str(e)}]
 
-        progress.update(5, f"Fixing {total_nodes} non-compliant node(s)...", "fixing")
+        progress.update(
+            2,
+            f"Starting compliance fix for {total_nodes} node(s)...",
+            "starting",
+            current=0,
+            total=total_nodes,
+        )
 
         skipped_count = 0
 
         for idx, node_id in enumerate(node_ids):
+            # Check for cancellation at start of each node
+            progress.check_cancelled()
+
             node_hex = f"!{node_id:08x}"
-            node_pct = int(5 + (idx / total_nodes) * 70)
+            # Calculate progress: 5-75% for fixing nodes
+            node_pct = int(5 + ((idx + 0.5) / total_nodes) * 70)
             node_success = False
             last_error = None
             attempts_made = 0
@@ -1606,7 +1638,7 @@ class JobService:
             # Check if node is already compliant before applying changes
             progress.update(
                 node_pct,
-                f"Checking compliance for {node_hex} ({idx + 1}/{total_nodes})...",
+                f"📡 Checking {node_hex} ({idx + 1}/{total_nodes})...",
                 "checking",
                 current=idx + 1,
                 total=total_nodes,
@@ -1637,23 +1669,31 @@ class JobService:
             # Try up to max_retries times for each node
             for attempt in range(max_retries):
                 attempts_made = attempt + 1
+                attempt_label = (
+                    f" [retry {attempt}/{max_retries - 1}]" if attempt > 0 else ""
+                )
 
                 progress.update(
                     node_pct,
-                    f"Applying {template_type} config to {node_hex} ({idx + 1}/{total_nodes})"
-                    + (
-                        f" [attempt {attempts_made}/{max_retries}]"
-                        if attempt > 0
-                        else ""
-                    ),
+                    f"⚙️ Applying {template_type} to {node_hex} ({idx + 1}/{total_nodes}){attempt_label}",
                     "fixing",
                     current=idx + 1,
                     total=total_nodes,
                 )
 
                 try:
+                    # Check for cancellation before network operations
+                    progress.check_cancelled()
+
                     # Begin edit settings transaction (follows Meshtastic web protocol)
                     # This ensures atomic config updates - changes held in memory until commit
+                    progress.update(
+                        node_pct,
+                        f"🔓 Beginning transaction for {node_hex}{attempt_label}...",
+                        "fixing",
+                        current=idx + 1,
+                        total=total_nodes,
+                    )
                     begin_result = admin_service.begin_edit_settings(
                         target_node_id=node_id
                     )
@@ -1663,6 +1703,13 @@ class JobService:
                             "continuing without transaction"
                         )
 
+                    progress.update(
+                        node_pct,
+                        f"📤 Sending {template_type} config to {node_hex}{attempt_label}...",
+                        "fixing",
+                        current=idx + 1,
+                        total=total_nodes,
+                    )
                     result = admin_service.set_config(
                         target_node_id=node_id,
                         config_type=config_enum,
@@ -1677,11 +1724,25 @@ class JobService:
                         # Wait before retry with exponential backoff
                         if attempt < max_retries - 1:
                             delay = 2**attempt  # 1s, 2s, 4s
-                            time.sleep(delay)
+                            wait_with_progress(
+                                delay,
+                                f"✗ Config failed for {node_hex}, retrying",
+                                node_pct,
+                                "retrying",
+                                idx + 1,
+                                total_nodes,
+                            )
                         continue
 
                     # Commit edit settings transaction (follows Meshtastic web protocol)
                     # This saves changes to flash
+                    progress.update(
+                        node_pct,
+                        f"💾 Committing config to {node_hex}...",
+                        "committing",
+                        current=idx + 1,
+                        total=total_nodes,
+                    )
                     commit_result = admin_service.commit_edit_settings(
                         target_node_id=node_id
                     )
@@ -1693,13 +1754,34 @@ class JobService:
 
                     # set_config succeeded, now wait and verify
                     # Wait for config to be applied (mesh network latency)
-                    time.sleep(3)
+                    wait_with_progress(
+                        3,
+                        f"⏳ Config sent to {node_hex}, waiting for node",
+                        node_pct,
+                        "waiting",
+                        idx + 1,
+                        total_nodes,
+                    )
 
                     # Verify the config was actually applied
+                    progress.update(
+                        node_pct,
+                        f"🔍 Verifying {node_hex}...",
+                        "verifying",
+                        current=idx + 1,
+                        total=total_nodes,
+                    )
                     is_compliant, differences = verify_node_compliant(node_id, node_hex)
 
                     if is_compliant:
                         node_success = True
+                        progress.update(
+                            node_pct,
+                            f"✓ {node_hex} now compliant ({idx + 1}/{total_nodes})",
+                            "success",
+                            current=idx + 1,
+                            total=total_nodes,
+                        )
                         logger.info(
                             f"Compliance fix verified for {node_hex} on attempt {attempts_made}"
                         )
@@ -1715,7 +1797,14 @@ class JobService:
                         if attempt < max_retries - 1:
                             delay = 3 + (2**attempt)  # 4s, 5s, 7s
                             logger.info(f"Waiting {delay}s before retry...")
-                            time.sleep(delay)
+                            wait_with_progress(
+                                delay,
+                                f"⚠ {node_hex} not yet compliant, retrying",
+                                node_pct,
+                                "retrying",
+                                idx + 1,
+                                total_nodes,
+                            )
 
                 except Exception as e:
                     last_error = str(e)
@@ -1723,7 +1812,15 @@ class JobService:
                         f"Error fixing {node_hex} attempt {attempts_made}: {e}"
                     )
                     if attempt < max_retries - 1:
-                        time.sleep(2**attempt)
+                        delay = 2**attempt
+                        wait_with_progress(
+                            delay,
+                            f"✗ Error on {node_hex}, retrying",
+                            node_pct,
+                            "retrying",
+                            idx + 1,
+                            total_nodes,
+                        )
 
             if node_success:
                 fixed_count += 1
@@ -1737,6 +1834,14 @@ class JobService:
                 )
             else:
                 failed_count += 1
+                progress.update(
+                    node_pct,
+                    f"✗ Failed to fix {node_hex} after {attempts_made} attempts",
+                    "failed",
+                    current=idx + 1,
+                    total=total_nodes,
+                    is_error=True,
+                )
                 results.append(
                     {
                         "node_id": node_id,
@@ -1750,23 +1855,41 @@ class JobService:
                     f"Failed to fix {node_hex} after {attempts_made} attempts: {last_error}"
                 )
 
+        # Provide summary before verification
+        progress.update(
+            76,
+            f"Fixing complete: {fixed_count} fixed, {skipped_count} skipped, {failed_count} failed",
+            "summary",
+            current=total_nodes,
+            total=total_nodes,
+        )
+
         # Since we already verified during retry loop, we just need to record results
         # But still do a final verification pass to update compliance_checks table
         verification_results = []
-        if verify_after and fixed_count > 0:
-            progress.update(80, "Verifying compliance after fix...", "verifying")
+        nodes_to_verify = [
+            r for r in results if r.get("success") and not r.get("skipped")
+        ]
+        if verify_after and len(nodes_to_verify) > 0:
+            progress.update(
+                78,
+                f"📋 Final verification of {len(nodes_to_verify)} node(s)...",
+                "verifying",
+                current=0,
+                total=len(nodes_to_verify),
+            )
 
-            for idx, result in enumerate(results):
-                if not result["success"]:
-                    continue
+            for idx, result in enumerate(nodes_to_verify):
+                # Check for cancellation
+                progress.check_cancelled()
 
                 node_id = result["node_id"]
                 node_hex = result["node_hex"]
-                verify_pct = int(80 + (idx / len(results)) * 15)
+                verify_pct = int(78 + ((idx + 1) / len(nodes_to_verify)) * 17)
 
                 progress.update(
                     verify_pct,
-                    f"Verifying {node_hex}...",
+                    f"🔍 Verifying {node_hex} ({idx + 1}/{len(nodes_to_verify)})...",
                     "verifying",
                     current=idx + 1,
                     total=fixed_count,
@@ -1843,27 +1966,43 @@ class JobService:
         # If reboot_after is set and we have nodes that sent config successfully,
         # send reboot commands to those nodes
         rebooted_nodes = []
-        if reboot_after and fixed_count > 0:
-            progress.update(95, "Sending reboot commands...", "rebooting")
-            for result in results:
-                if result.get("success"):
-                    node_id = result["node_id"]
-                    node_hex = result["node_hex"]
-                    try:
-                        reboot_result = admin_service.reboot_node(
-                            target_node_id=node_id,
-                            delay_seconds=5,
-                        )
-                        if reboot_result.success:
-                            rebooted_nodes.append(node_hex)
-                            logger.info(f"Reboot sent to {node_hex}")
-                    except Exception as e:
-                        logger.warning(f"Failed to reboot {node_hex}: {e}")
+        nodes_to_reboot = [
+            r for r in results if r.get("success") and not r.get("skipped")
+        ]
+        if reboot_after and len(nodes_to_reboot) > 0:
+            progress.update(
+                96,
+                f"🔄 Sending reboot commands to {len(nodes_to_reboot)} node(s)...",
+                "rebooting",
+                current=0,
+                total=len(nodes_to_reboot),
+            )
+            for idx, result in enumerate(nodes_to_reboot):
+                node_id = result["node_id"]
+                node_hex = result["node_hex"]
+                progress.update(
+                    96 + int((idx + 1) / len(nodes_to_reboot) * 3),
+                    f"🔄 Rebooting {node_hex} ({idx + 1}/{len(nodes_to_reboot)})...",
+                    "rebooting",
+                    current=idx + 1,
+                    total=len(nodes_to_reboot),
+                )
+                try:
+                    reboot_result = admin_service.reboot_node(
+                        target_node_id=node_id,
+                        delay_seconds=5,
+                    )
+                    if reboot_result.success:
+                        rebooted_nodes.append(node_hex)
+                        logger.info(f"Reboot sent to {node_hex}")
+                except Exception as e:
+                    logger.warning(f"Failed to reboot {node_hex}: {e}")
 
         skip_msg = f", {skipped_count} skipped" if skipped_count > 0 else ""
+        reboot_msg = f", {len(rebooted_nodes)} rebooted" if rebooted_nodes else ""
         progress.update(
             100,
-            f"✓ Fixed {fixed_count}/{total_nodes}{skip_msg}, {now_compliant} now compliant",
+            f"✓ Complete: {fixed_count} fixed{skip_msg}, {failed_count} failed{reboot_msg}",
             "complete",
         )
 
