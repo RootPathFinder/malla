@@ -4953,20 +4953,21 @@
         `;
 
         try {
-            const response = await fetch('/api/admin/log?limit=50');
+            const response = await fetch('/api/admin/log?limit=100');
             const data = await response.json();
 
             if (data.log && data.log.length > 0) {
                 let html = `
                     <div class="table-responsive">
-                        <table class="table table-sm table-hover">
-                            <thead>
+                        <table class="table table-sm table-hover audit-log-table">
+                            <thead class="table-light">
                                 <tr>
-                                    <th>Time</th>
-                                    <th>Target</th>
-                                    <th>Command</th>
-                                    <th>Status</th>
-                                    <th></th>
+                                    <th style="width: 140px;">Time</th>
+                                    <th style="width: 200px;">Target Node</th>
+                                    <th>Action</th>
+                                    <th style="width: 100px;">Duration</th>
+                                    <th style="width: 90px;">Status</th>
+                                    <th style="width: 40px;"></th>
                                 </tr>
                             </thead>
                             <tbody>
@@ -4977,11 +4978,39 @@
                     const statusClass = `log-status-${entry.status}`;
                     const entryId = `log-entry-${entry.id}`;
 
+                    // Build target display with both hex ID and name
+                    const targetHex = entry.target_node_hex || `!${(entry.target_node_id >>> 0).toString(16).padStart(8, '0')}`;
+                    const targetName = entry.target_node_name || '';
+                    const targetDisplay = targetName
+                        ? `<div><code class="small">${targetHex}</code></div><div class="text-muted small">${escapeHtmlBasic(targetName)}</div>`
+                        : `<code>${targetHex}</code>`;
+
+                    // Get friendly command name and icon
+                    const cmdInfo = getCommandDisplayInfo(entry.command_type);
+
+                    // Build command summary
+                    let commandDetail = '';
+                    if (entry.command_summary) {
+                        commandDetail = `<div class="text-muted small text-truncate" style="max-width: 300px;">${escapeHtmlBasic(entry.command_summary)}</div>`;
+                    }
+
+                    // Format duration
+                    let durationDisplay = '—';
+                    if (entry.duration_ms !== undefined) {
+                        if (entry.duration_ms < 1000) {
+                            durationDisplay = `${entry.duration_ms}ms`;
+                        } else {
+                            durationDisplay = `${(entry.duration_ms / 1000).toFixed(1)}s`;
+                        }
+                    } else if (entry.status === 'pending') {
+                        durationDisplay = '<span class="spinner-border spinner-border-sm" role="status"></span>';
+                    }
+
                     // Build popover content
                     const popoverContent = buildLogPopoverContent(entry);
 
                     html += `
-                        <tr class="log-entry"
+                        <tr class="log-entry ${entry.status === 'failed' || entry.status === 'timeout' ? 'table-danger' : ''}"
                             id="${entryId}"
                             data-bs-toggle="popover"
                             data-bs-trigger="click"
@@ -4989,16 +5018,28 @@
                             data-bs-html="true"
                             data-bs-custom-class="log-details-popover"
                             data-bs-content="${escapeHtml(popoverContent)}"
-                            title="Command Details">
-                            <td class="log-timestamp">${timestamp}</td>
-                            <td><code>${entry.target_node_hex || entry.target_node_id}</code></td>
-                            <td>${entry.command_type}</td>
-                            <td class="${statusClass}">
-                                <i class="bi bi-${getStatusIcon(entry.status)}"></i>
-                                ${entry.status}
-                            </td>
+                            title="${cmdInfo.name} Details"
+                            style="cursor: pointer;">
+                            <td class="log-timestamp small">${timestamp}</td>
+                            <td>${targetDisplay}</td>
                             <td>
-                                <i class="bi bi-info-circle text-muted" title="Click for details"></i>
+                                <div class="d-flex align-items-center gap-2">
+                                    <i class="bi bi-${cmdInfo.icon} text-${cmdInfo.color}"></i>
+                                    <div>
+                                        <div>${cmdInfo.name}</div>
+                                        ${commandDetail}
+                                    </div>
+                                </div>
+                            </td>
+                            <td class="text-center small">${durationDisplay}</td>
+                            <td class="${statusClass}">
+                                <span class="badge bg-${getStatusBadgeColor(entry.status)}">
+                                    <i class="bi bi-${getStatusIcon(entry.status)}"></i>
+                                    ${entry.status}
+                                </span>
+                            </td>
+                            <td class="text-center">
+                                <i class="bi bi-chevron-right text-muted"></i>
                             </td>
                         </tr>
                     `;
@@ -5029,35 +5070,104 @@
             } else {
                 container.innerHTML = `
                     <div class="text-center py-5 text-muted">
-                        <i class="bi bi-journal"></i> No admin commands logged yet
+                        <i class="bi bi-journal fs-1 d-block mb-2"></i>
+                        No admin commands logged yet.<br>
+                        <small>Commands will appear here when you interact with nodes.</small>
                     </div>
                 `;
             }
         } catch (error) {
             container.innerHTML = `
                 <div class="alert alert-danger">
-                    Error loading audit log: ${error.message}
+                    <i class="bi bi-exclamation-triangle"></i> Error loading audit log: ${error.message}
                 </div>
             `;
         }
     }
 
+    // Get display info for command types
+    function getCommandDisplayInfo(commandType) {
+        const commands = {
+            'get_config': { name: 'Get Config', icon: 'gear', color: 'primary' },
+            'set_config': { name: 'Set Config', icon: 'gear-fill', color: 'warning' },
+            'get_module_config': { name: 'Get Module Config', icon: 'puzzle', color: 'primary' },
+            'set_module_config': { name: 'Set Module Config', icon: 'puzzle-fill', color: 'warning' },
+            'get_channel': { name: 'Get Channel', icon: 'broadcast', color: 'primary' },
+            'set_channel': { name: 'Set Channel', icon: 'broadcast-pin', color: 'warning' },
+            'reboot': { name: 'Reboot', icon: 'arrow-clockwise', color: 'danger' },
+            'shutdown': { name: 'Shutdown', icon: 'power', color: 'danger' },
+            'factory_reset': { name: 'Factory Reset', icon: 'exclamation-triangle', color: 'danger' },
+            'nodedb_reset': { name: 'NodeDB Reset', icon: 'database-x', color: 'danger' },
+            'remove_node': { name: 'Remove Node', icon: 'person-x', color: 'warning' },
+            'enter_dfu': { name: 'Enter DFU', icon: 'download', color: 'info' },
+            'traceroute': { name: 'Traceroute', icon: 'diagram-3', color: 'info' },
+            'request_position': { name: 'Request Position', icon: 'geo-alt', color: 'info' },
+            'begin_edit': { name: 'Begin Edit', icon: 'pencil-square', color: 'secondary' },
+            'commit_edit': { name: 'Commit Edit', icon: 'check-square', color: 'success' },
+            'set_owner': { name: 'Set Owner', icon: 'person-badge', color: 'warning' },
+            'set_fixed_position': { name: 'Set Position', icon: 'geo-alt-fill', color: 'warning' },
+        };
+
+        return commands[commandType] || { name: commandType, icon: 'terminal', color: 'secondary' };
+    }
+
+    // Get badge color for status
+    function getStatusBadgeColor(status) {
+        const colors = {
+            'success': 'success',
+            'failed': 'danger',
+            'pending': 'warning',
+            'timeout': 'secondary'
+        };
+        return colors[status] || 'secondary';
+    }
+
+    // Basic HTML escape (for simple strings, not for data attributes)
+    function escapeHtmlBasic(text) {
+        if (!text) return '';
+        return text.replace(/&/g, '&amp;')
+                   .replace(/</g, '&lt;')
+                   .replace(/>/g, '&gt;');
+    }
+
     // Build popover content for a log entry
     function buildLogPopoverContent(entry) {
         let content = '';
+        const cmdInfo = getCommandDisplayInfo(entry.command_type);
+
+        // Header with action info
+        content += `<div class="log-popover-header mb-2 pb-2 border-bottom">`;
+        content += `<div class="d-flex align-items-center gap-2">`;
+        content += `<i class="bi bi-${cmdInfo.icon} text-${cmdInfo.color}"></i>`;
+        content += `<strong>${cmdInfo.name}</strong>`;
+        content += `</div>`;
+
+        // Target node info
+        const targetHex = entry.target_node_hex || `!${(entry.target_node_id >>> 0).toString(16).padStart(8, '0')}`;
+        content += `<div class="small text-muted mt-1">`;
+        content += `Target: <code>${targetHex}</code>`;
+        if (entry.target_node_name) {
+            content += ` (${escapeHtmlBasic(entry.target_node_name)})`;
+        }
+        content += `</div>`;
+
+        // Timestamp
+        const timestamp = formatAdminDateTime(new Date(entry.timestamp * 1000));
+        content += `<div class="small text-muted">Sent: ${timestamp}</div>`;
+        content += `</div>`;
 
         // Command data section
         if (entry.command_data) {
             try {
                 const cmdData = JSON.parse(entry.command_data);
                 content += `<div class="log-details-section">`;
-                content += `<div class="log-details-label">Command Sent</div>`;
-                content += `<div class="log-details-content">${JSON.stringify(cmdData, null, 2)}</div>`;
+                content += `<div class="log-details-label"><i class="bi bi-send"></i> Request Data</div>`;
+                content += `<div class="log-details-content"><pre style="margin:0; white-space:pre-wrap; font-size:0.75rem;">${escapeHtmlBasic(JSON.stringify(cmdData, null, 2))}</pre></div>`;
                 content += `</div>`;
             } catch (e) {
                 content += `<div class="log-details-section">`;
-                content += `<div class="log-details-label">Command Sent</div>`;
-                content += `<div class="log-details-content">${entry.command_data}</div>`;
+                content += `<div class="log-details-label"><i class="bi bi-send"></i> Request Data</div>`;
+                content += `<div class="log-details-content">${escapeHtmlBasic(entry.command_data)}</div>`;
                 content += `</div>`;
             }
         }
@@ -5067,13 +5177,13 @@
             try {
                 const respData = JSON.parse(entry.response_data);
                 content += `<div class="log-details-section">`;
-                content += `<div class="log-details-label">Response</div>`;
-                content += `<div class="log-details-content log-success-content">${JSON.stringify(respData, null, 2)}</div>`;
+                content += `<div class="log-details-label"><i class="bi bi-reply"></i> Response Data</div>`;
+                content += `<div class="log-details-content log-success-content"><pre style="margin:0; white-space:pre-wrap; font-size:0.75rem;">${escapeHtmlBasic(JSON.stringify(respData, null, 2))}</pre></div>`;
                 content += `</div>`;
             } catch (e) {
                 content += `<div class="log-details-section">`;
-                content += `<div class="log-details-label">Response</div>`;
-                content += `<div class="log-details-content log-success-content">${entry.response_data}</div>`;
+                content += `<div class="log-details-label"><i class="bi bi-reply"></i> Response Data</div>`;
+                content += `<div class="log-details-content log-success-content">${escapeHtmlBasic(entry.response_data)}</div>`;
                 content += `</div>`;
             }
         }
@@ -5081,23 +5191,28 @@
         // Error message section
         if (entry.error_message) {
             content += `<div class="log-details-section">`;
-            content += `<div class="log-details-label">Error</div>`;
-            content += `<div class="log-details-content log-error-content">${entry.error_message}</div>`;
+            content += `<div class="log-details-label text-danger"><i class="bi bi-exclamation-circle"></i> Error</div>`;
+            content += `<div class="log-details-content log-error-content">${escapeHtmlBasic(entry.error_message)}</div>`;
             content += `</div>`;
         }
 
-        // If no details available
-        if (!content) {
-            content = `<div class="text-muted">No additional details available</div>`;
+        // If no command or response details, show a message
+        if (!entry.command_data && !entry.response_data && !entry.error_message) {
+            content += `<div class="text-muted small">No additional details recorded.</div>`;
         }
 
-        // Add timing info if available
-        if (entry.response_timestamp && entry.timestamp) {
+        // Footer with timing info
+        content += `<div class="log-popover-footer mt-2 pt-2 border-top small text-muted">`;
+        content += `<div class="d-flex justify-content-between">`;
+        content += `<span>Log ID: ${entry.id}</span>`;
+        if (entry.duration_ms !== undefined) {
+            content += `<span>Duration: ${entry.duration_ms}ms</span>`;
+        } else if (entry.response_timestamp && entry.timestamp) {
             const durationMs = ((entry.response_timestamp - entry.timestamp) * 1000).toFixed(0);
-            content += `<div class="log-details-section mt-2">`;
-            content += `<small class="text-muted">Duration: ${durationMs}ms</small>`;
-            content += `</div>`;
+            content += `<span>Duration: ${durationMs}ms</span>`;
         }
+        content += `</div>`;
+        content += `</div>`;
 
         return content;
     }

@@ -2561,10 +2561,60 @@ def api_admin_log():
             limit=limit,
         )
 
-        # Enhance log entries with hex node IDs
+        # Get node names for better display
+        from ..database import get_db_connection
+
+        conn = get_db_connection()
+        cursor = conn.cursor()
+        cursor.execute("SELECT node_id, long_name, short_name, hex_id FROM node_info")
+        node_info_rows = cursor.fetchall()
+        conn.close()
+
+        # Build lookup of node names by node_id
+        node_names = {}
+        for row in node_info_rows:
+            node_names[row["node_id"]] = {
+                "long_name": row["long_name"],
+                "short_name": row["short_name"],
+                "hex_id": row["hex_id"],
+            }
+
+        # Enhance log entries with hex node IDs and node names
         for entry in log_entries:
             if entry.get("target_node_id"):
-                entry["target_node_hex"] = f"!{entry['target_node_id']:08x}"
+                target_id = entry["target_node_id"]
+                entry["target_node_hex"] = f"!{target_id:08x}"
+                node_info = node_names.get(target_id, {})
+                entry["target_node_name"] = (
+                    node_info.get("long_name") or node_info.get("short_name") or None
+                )
+
+            # Calculate duration if we have response timestamp
+            if entry.get("response_timestamp") and entry.get("timestamp"):
+                entry["duration_ms"] = round(
+                    (entry["response_timestamp"] - entry["timestamp"]) * 1000
+                )
+
+            # Parse command data for summary
+            if entry.get("command_data"):
+                try:
+                    import json
+
+                    cmd_data = json.loads(entry["command_data"])
+                    # Create a short summary of key fields
+                    summary_parts = []
+                    for key, value in list(cmd_data.items())[:3]:
+                        if isinstance(value, dict):
+                            summary_parts.append(f"{key}: {{...}}")
+                        elif isinstance(value, list):
+                            summary_parts.append(f"{key}: [{len(value)} items]")
+                        elif isinstance(value, str) and len(value) > 20:
+                            summary_parts.append(f"{key}: {value[:20]}...")
+                        else:
+                            summary_parts.append(f"{key}: {value}")
+                    entry["command_summary"] = ", ".join(summary_parts)
+                except Exception:
+                    entry["command_summary"] = None
 
         return jsonify(
             {
