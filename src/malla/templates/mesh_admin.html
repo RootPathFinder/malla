@@ -137,6 +137,15 @@
         font-family: monospace;
         opacity: 0.8;
     }
+    .autocomplete-section-header {
+        padding: 0.5rem 0.75rem;
+        background: var(--bs-tertiary-bg);
+        border-bottom: 1px solid var(--bs-border-color);
+        font-weight: 500;
+    }
+    .autocomplete-section-footer {
+        background: var(--bs-tertiary-bg);
+    }
     .config-display {
         font-family: 'SF Mono', 'Monaco', 'Inconsolata', 'Fira Mono', monospace;
         font-size: 0.8rem;
@@ -577,7 +586,7 @@
                 <li class="nav-item" role="presentation">
                     <button class="nav-link" id="commands-tab" data-bs-toggle="tab"
                             data-bs-target="#commands-pane" type="button" role="tab">
-                        <i class="bi bi-terminal"></i> Send Command
+                        <i class="bi bi-gear"></i> Node Config
                     </button>
                 </li>
                 <li class="nav-item" role="presentation">
@@ -735,19 +744,22 @@
                     {% endif %}
                 </div>
 
-                <!-- Send Command Tab -->
+                <!-- Node Config Tab -->
                 <div class="tab-pane fade" id="commands-pane" role="tabpanel">
                     <div class="row">
                         <div class="col-lg-6">
                             <div class="mb-3 node-autocomplete-container">
                                 <label for="targetNodeInput" class="form-label">Target Node</label>
                                 <input type="text" class="form-control" id="targetNodeInput"
-                                       placeholder="Start typing node name or ID..."
+                                       placeholder="Click to select or type to search..."
                                        autocomplete="off"
-                                       oninput="searchNodes(this.value, 'targetNodeResults'); checkAdminStatusDebounced()"
-                                       onfocus="if(this.value.length >= 1) searchNodes(this.value, 'targetNodeResults')"
+                                       oninput="onTargetNodeInput(this.value)"
+                                       onfocus="showNodeSelector()"
                                        onblur="setTimeout(() => hideAutocomplete('targetNodeResults'), 200)">
                                 <div id="targetNodeResults" class="node-autocomplete-results" style="display:none;"></div>
+                                <div class="form-text text-muted small">
+                                    <i class="bi bi-info-circle"></i> Shows administrable nodes by default. Type to search all known nodes.
+                                </div>
                             </div>
 
                             <!-- Admin Status Banner -->
@@ -2453,6 +2465,99 @@
     // Node Autocomplete
     // ============================================================================
 
+    // Cache of administrable nodes (populated from page data)
+    const administrableNodesCache = [
+        {% for node in administrable_nodes %}
+        {
+            node_id: {{ node.node_id }},
+            hex_id: "{{ node.hex_id or ('!' + '%08x'|format(node.node_id)) }}",
+            long_name: {{ node.long_name|tojson if node.long_name else 'null' }},
+            short_name: {{ node.short_name|tojson if node.short_name else 'null' }},
+            hw_model: {{ node.hw_model|tojson if node.hw_model else 'null' }},
+            is_administrable: true
+        },
+        {% endfor %}
+    ];
+
+    // Handle target node input changes
+    function onTargetNodeInput(value) {
+        if (!value || value.length < 1) {
+            // Show administrable nodes when input is empty
+            showAdministrableNodes();
+        } else {
+            // Search all nodes when user types
+            searchNodes(value, 'targetNodeResults');
+        }
+        checkAdminStatusDebounced();
+    }
+
+    // Show node selector dropdown - defaults to administrable nodes
+    function showNodeSelector() {
+        const input = document.getElementById('targetNodeInput');
+        const value = input ? input.value.trim() : '';
+
+        if (!value || value.length < 1) {
+            // Show administrable nodes by default
+            showAdministrableNodes();
+        } else {
+            // If there's already text, search all nodes
+            searchNodes(value, 'targetNodeResults');
+        }
+    }
+
+    // Show administrable nodes in the dropdown
+    function showAdministrableNodes() {
+        const resultsDiv = document.getElementById('targetNodeResults');
+        if (!resultsDiv) return;
+
+        if (administrableNodesCache.length === 0) {
+            // No administrable nodes - show a message
+            resultsDiv.innerHTML = `
+                <div class="node-autocomplete-item text-muted" style="cursor: default;">
+                    <div class="small">No administrable nodes found</div>
+                    <div class="small text-muted">Type to search all known nodes</div>
+                </div>
+            `;
+            resultsDiv.style.display = 'block';
+            return;
+        }
+
+        // Build results HTML with administrable nodes
+        let html = `
+            <div class="autocomplete-section-header">
+                <i class="bi bi-shield-check text-success me-1"></i>
+                <span class="small text-muted">Administrable Nodes</span>
+            </div>
+        `;
+
+        for (const node of administrableNodesCache) {
+            const displayName = node.long_name || node.short_name || 'Unknown';
+            const hexId = node.hex_id || `!${(node.node_id >>> 0).toString(16).padStart(8, '0')}`;
+            const hwModel = node.hw_model ? `<span class="badge bg-secondary ms-1">${escapeHtml(node.hw_model)}</span>` : '';
+            html += `
+                <div class="node-autocomplete-item"
+                     onclick="selectAutocompleteNode('${hexId}', '${escapeHtml(displayName)}', 'targetNodeResults')">
+                    <div class="node-name">
+                        ${escapeHtml(displayName)}
+                        ${hwModel}
+                        <i class="bi bi-shield-check text-success ms-1" title="Administrable"></i>
+                    </div>
+                    <div class="node-id">${hexId}</div>
+                </div>
+            `;
+        }
+
+        // Add a divider and hint
+        html += `
+            <div class="autocomplete-section-footer small text-muted border-top pt-2 mt-1 px-2">
+                <i class="bi bi-search"></i> Type to search all nodes
+            </div>
+        `;
+
+        resultsDiv.innerHTML = html;
+        resultsDiv.style.display = 'block';
+    }
+
     async function searchNodes(query, resultsContainerId) {
         const resultsDiv = document.getElementById(resultsContainerId);
 
@@ -2494,14 +2599,22 @@
 
         // Build results HTML
         let html = '';
+
+        // Build a set of administrable node IDs for quick lookup
+        const administrableNodeIds = new Set(administrableNodesCache.map(n => n.node_id));
+
         for (const node of matches) {
             const displayName = node.long_name || node.short_name || 'Unknown';
             const hexId = node.hex_id || `!${(node.node_id >>> 0).toString(16).padStart(8, '0')}`;
             const displayText = `${hexId} - ${displayName}`;
+            const isAdministrable = administrableNodeIds.has(node.node_id);
+            const adminBadge = isAdministrable
+                ? '<i class="bi bi-shield-check text-success ms-1" title="Administrable"></i>'
+                : '';
             html += `
                 <div class="node-autocomplete-item"
                      onclick="selectAutocompleteNode('${hexId}', '${escapeHtml(displayName)}', '${resultsContainerId}')">
-                    <div class="node-name">${escapeHtml(displayName)}</div>
+                    <div class="node-name">${escapeHtml(displayName)}${adminBadge}</div>
                     <div class="node-id">${hexId}</div>
                 </div>
             `;
