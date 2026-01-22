@@ -2159,7 +2159,7 @@
             clearTimeout(adminStatusTimeout);
         }
         adminStatusTimeout = setTimeout(() => {
-            const nodeId = document.getElementById('targetNodeInput').value.trim();
+            const nodeId = getNodeIdFromInput('targetNodeInput');
             if (nodeId && nodeId.length >= 3) {
                 checkAdminStatus(nodeId);
             } else {
@@ -2208,7 +2208,7 @@
     // Refresh admin status for current node
     function refreshAdminStatus() {
         lastCheckedNodeId = null; // Force refresh
-        const nodeId = document.getElementById('targetNodeInput').value.trim();
+        const nodeId = getNodeIdFromInput('targetNodeInput');
         if (nodeId) {
             checkAdminStatus(nodeId);
         }
@@ -2396,7 +2396,7 @@
 
     // Test admin access for the current target node
     async function testCurrentNode() {
-        const nodeId = document.getElementById('targetNodeInput').value.trim();
+        const nodeId = getNodeIdFromInput('targetNodeInput');
         if (!nodeId) {
             alert('Please enter a target node ID');
             return;
@@ -2497,9 +2497,10 @@
         for (const node of matches) {
             const displayName = node.long_name || node.short_name || 'Unknown';
             const hexId = node.hex_id || `!${(node.node_id >>> 0).toString(16).padStart(8, '0')}`;
+            const displayText = `${hexId} - ${displayName}`;
             html += `
                 <div class="node-autocomplete-item"
-                     onclick="selectAutocompleteNode('${hexId}', '${resultsContainerId}')">
+                     onclick="selectAutocompleteNode('${hexId}', '${escapeHtml(displayName)}', '${resultsContainerId}')">
                     <div class="node-name">${escapeHtml(displayName)}</div>
                     <div class="node-id">${hexId}</div>
                 </div>
@@ -2510,19 +2511,81 @@
         resultsDiv.style.display = 'block';
     }
 
-    function selectAutocompleteNode(nodeId, resultsContainerId) {
+    function selectAutocompleteNode(nodeId, nodeName, resultsContainerId) {
         // Find the input associated with this results container
         const resultsDiv = document.getElementById(resultsContainerId);
         const inputId = resultsContainerId === 'testNodeResults' ? 'testNodeInput' : 'targetNodeInput';
         const input = document.getElementById(inputId);
 
-        input.value = nodeId;
+        // Display both hex ID and node name for easy identification
+        input.value = `${nodeId} - ${nodeName}`;
+        // Store the actual node ID in a data attribute for API calls
+        input.dataset.nodeId = nodeId;
         hideAutocomplete(resultsContainerId);
 
         // If it's the target node input, also store the selected node and check admin status
         if (inputId === 'targetNodeInput') {
             selectedNodeId = nodeId;
             checkAdminStatus(nodeId);
+        }
+    }
+
+    // Extract the actual node ID from the input value
+    // The input may contain "!hexid - NodeName" format, we need just the hex ID
+    function getNodeIdFromInput(inputId) {
+        const input = document.getElementById(inputId);
+        if (!input) return null;
+
+        // First check if we have a stored node ID in the data attribute
+        if (input.dataset.nodeId) {
+            return input.dataset.nodeId;
+        }
+
+        // Otherwise, parse the value - it could be:
+        // 1. Just a hex ID: "!abcd1234"
+        // 2. Hex ID with name: "!abcd1234 - Node Name"
+        // 3. Decimal ID: "1234567890"
+        const value = input.value.trim();
+        if (!value) return null;
+
+        // If it contains " - ", extract the part before it
+        if (value.includes(' - ')) {
+            return value.split(' - ')[0].trim();
+        }
+
+        return value;
+    }
+
+    // Set the target node input with both hex ID and node name for easy identification
+    function setTargetNode(nodeId, nodeName = null) {
+        const input = document.getElementById('targetNodeInput');
+        if (!input) return;
+
+        // Store the actual node ID in the data attribute
+        input.dataset.nodeId = nodeId;
+
+        // If we have a node name, display both
+        if (nodeName) {
+            input.value = `${nodeId} - ${nodeName}`;
+        } else {
+            // Try to look up the node name from cache
+            if (cachedNodes && cachedNodes.length > 0) {
+                const hexLower = nodeId.toLowerCase();
+                const node = cachedNodes.find(n => {
+                    const nHex = (n.hex_id || `!${(n.node_id >>> 0).toString(16).padStart(8, '0')}`).toLowerCase();
+                    return nHex === hexLower || n.node_id?.toString() === nodeId;
+                });
+                if (node) {
+                    const displayName = node.long_name || node.short_name || 'Unknown';
+                    input.value = `${nodeId} - ${displayName}`;
+                } else {
+                    // No name found, just use the ID
+                    input.value = nodeId;
+                }
+            } else {
+                // No cache yet, just use the ID
+                input.value = nodeId;
+            }
         }
     }
 
@@ -3333,7 +3396,7 @@
     // Select node for commands
     function selectNode(nodeId) {
         selectedNodeId = nodeId;
-        document.getElementById('targetNodeInput').value = nodeId;
+        setTargetNode(nodeId);
 
         // Switch to commands tab
         const commandsTab = document.getElementById('commands-tab');
@@ -3441,7 +3504,7 @@
     async function getConfig(configType, btn = null) {
         highlightConfigButton(btn);
 
-        const nodeId = document.getElementById('targetNodeInput').value.trim();
+        const nodeId = getNodeIdFromInput('targetNodeInput');
         if (!nodeId) {
             alert('Please enter a target node ID');
             return;
@@ -3518,7 +3581,7 @@
     async function getModuleConfig(moduleType, btn = null) {
         highlightConfigButton(btn);
 
-        const nodeId = document.getElementById('targetNodeInput').value.trim();
+        const nodeId = getNodeIdFromInput('targetNodeInput');
         if (!nodeId) {
             alert('Please enter a target node ID');
             return;
@@ -3719,7 +3782,7 @@
 
     // Save config changes as a background job
     async function saveConfig() {
-        const nodeId = document.getElementById('targetNodeInput').value.trim();
+        const nodeId = getNodeIdFromInput('targetNodeInput');
         if (!nodeId || !currentConfigType || !currentConfigSchema) {
             alert('No configuration loaded to save');
             return;
@@ -3796,7 +3859,7 @@
     async function getChannel(channelIndex, btn = null) {
         highlightConfigButton(btn);
 
-        const nodeId = document.getElementById('targetNodeInput').value.trim();
+        const nodeId = getNodeIdFromInput('targetNodeInput');
         if (!nodeId) {
             alert('Please enter a target node ID');
             return;
@@ -3920,7 +3983,7 @@
     // Override saveConfig for channels
     const originalSaveConfig = saveConfig;
     saveConfig = async function() {
-        const nodeId = document.getElementById('targetNodeInput').value.trim();
+        const nodeId = getNodeIdFromInput('targetNodeInput');
         if (!nodeId || !currentConfigType) {
             alert('No configuration loaded to save');
             return;
@@ -3993,7 +4056,7 @@
 
     // Save channel
     async function saveChannel() {
-        const nodeId = document.getElementById('targetNodeInput').value.trim();
+        const nodeId = getNodeIdFromInput('targetNodeInput');
         const channelIndex = parseInt(document.getElementById('channel_index').value);
 
         const channelData = {
@@ -4026,7 +4089,7 @@
 
     // Get node config shortcut from nodes table
     async function getNodeConfig(nodeId, configType) {
-        document.getElementById('targetNodeInput').value = nodeId;
+        setTargetNode(nodeId);
 
         // Switch to commands tab
         const commandsTab = document.getElementById('commands-tab');
@@ -4350,7 +4413,7 @@
 
     // Confirm reboot target node
     function confirmRebootTarget() {
-        const nodeId = document.getElementById('targetNodeInput').value.trim();
+        const nodeId = getNodeIdFromInput('targetNodeInput');
         if (!nodeId) {
             alert('Please enter a target node ID');
             return;
@@ -4360,7 +4423,7 @@
 
     // Confirm shutdown target node
     function confirmShutdownTarget() {
-        const nodeId = document.getElementById('targetNodeInput').value.trim();
+        const nodeId = getNodeIdFromInput('targetNodeInput');
         if (!nodeId) {
             alert('Please enter a target node ID');
             return;
@@ -4377,7 +4440,7 @@
 
     // Confirm remove node from nodedb
     function confirmRemoveNode() {
-        const targetNodeId = document.getElementById('targetNodeInput').value.trim();
+        const targetNodeId = getNodeIdFromInput('targetNodeInput');
         const nodeToRemove = document.getElementById('nodeToRemoveInput').value.trim();
 
         if (!targetNodeId) {
@@ -4430,7 +4493,7 @@
 
     // Show nodedb reset modal
     function showNodedbResetModal() {
-        const nodeId = document.getElementById('targetNodeInput').value.trim();
+        const nodeId = getNodeIdFromInput('targetNodeInput');
         if (!nodeId) {
             alert('Please enter a target node ID');
             return;
@@ -4474,7 +4537,7 @@
 
     // Show factory reset modal
     function showFactoryResetModal() {
-        const nodeId = document.getElementById('targetNodeInput').value.trim();
+        const nodeId = getNodeIdFromInput('targetNodeInput');
         if (!nodeId) {
             alert('Please enter a target node ID');
             return;
@@ -5149,7 +5212,7 @@
         const urlParams = new URLSearchParams(window.location.search);
         const nodeParam = urlParams.get('node');
         if (nodeParam) {
-            document.getElementById('targetNodeInput').value = nodeParam;
+            setTargetNode(nodeParam);
             // Store the node ID for commands
             window.selectedTargetNode = nodeParam;
             // Switch to the Commands tab
