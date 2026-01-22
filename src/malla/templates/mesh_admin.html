@@ -3947,10 +3947,17 @@
             showAlert('info', 'Saving configuration...');
 
             try {
+                // Define known config types - module configs go to /moduleconfig, others to /config
+                const moduleConfigTypes = ['mqtt', 'serial', 'extnotif', 'storeforward', 'rangetest',
+                                           'telemetry', 'cannedmsg', 'audio', 'remotehardware',
+                                           'neighborinfo', 'ambientlighting', 'detectionsensor', 'paxcounter'];
+                const isModule = moduleConfigTypes.includes(currentConfigType.toLowerCase());
+
                 // Use correct endpoint based on whether this is a module config or regular config
-                const endpoint = isModuleConfig
+                const endpoint = isModule
                     ? `/api/admin/node/${encodeURIComponent(nodeId)}/moduleconfig/${currentConfigType}`
                     : `/api/admin/node/${encodeURIComponent(nodeId)}/config/${currentConfigType}`;
+                console.log(`Saving config: type=${currentConfigType}, isModule=${isModule}, endpoint=${endpoint}`);
                 const response = await fetch(endpoint, {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
@@ -3959,8 +3966,8 @@
                 const data = await response.json();
 
                 if (data.success) {
-                    const configLabel = isModuleConfig ? 'module' : '';
-                    showAlert('success', `${currentConfigType} ${configLabel} configuration saved successfully!`);
+                    const configLabel = isModule ? 'module ' : '';
+                    showAlert('success', `${currentConfigType} ${configLabel}configuration saved successfully!`);
                     showCommandResponse(JSON.stringify({saved: formData, message: data.message}, null, 2));
                 } else {
                     showAlert('danger', `Failed to save: ${data.error}`);
