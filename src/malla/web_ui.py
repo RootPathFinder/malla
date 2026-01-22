@@ -21,6 +21,7 @@ from .config import AppConfig, get_config
 from .database.connection import init_database
 from .routes import register_routes
 from .services.alert_service import AlertService
+from .services.log_service import install_log_handler
 from .services.power_monitor import start_power_monitor, stop_power_monitor
 from .utils.formatting import format_node_id, format_time_ago
 from .utils.node_utils import start_cache_cleanup, stop_cache_cleanup
@@ -84,6 +85,9 @@ logging.basicConfig(
     format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
     handlers=[logging.FileHandler("app.log"), logging.StreamHandler(sys.stdout)],
 )
+
+# Install memory log handler for admin log viewing
+install_log_handler(level=logging.DEBUG)
 
 logger = logging.getLogger(__name__)
 

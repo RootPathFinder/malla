@@ -4528,3 +4528,142 @@ def api_nodes_hop_estimates():
     except Exception as e:
         logger.error(f"Error getting hop estimates: {e}")
         return jsonify({"error": str(e)}), 500
+
+
+# ============================================================================
+# Server Logs API
+# ============================================================================
+
+
+@admin_bp.route("/api/admin/logs")
+def api_get_server_logs():
+    """
+    Get recent server log entries.
+
+    Query parameters:
+        limit: Maximum number of entries (default 100, max 500)
+        level: Minimum log level (DEBUG, INFO, WARNING, ERROR, CRITICAL)
+        logger: Filter by logger name (partial match)
+        search: Search text in message
+        since: Only return entries after this Unix timestamp
+
+    Returns:
+        JSON with log entries and statistics
+    """
+    try:
+        from ..services.log_service import get_log_stats, get_logs
+
+        limit = min(request.args.get("limit", 100, type=int), 500)
+        min_level = request.args.get("level", "DEBUG").upper()
+        logger_filter = request.args.get("logger")
+        search = request.args.get("search")
+        since_timestamp = request.args.get("since", type=float)
+
+        logs = get_logs(
+            limit=limit,
+            min_level=min_level,
+            logger_filter=logger_filter,
+            search=search,
+            since_timestamp=since_timestamp,
+        )
+
+        stats = get_log_stats()
+
+        return jsonify(
+            {
+                "logs": logs,
+                "count": len(logs),
+                "stats": stats,
+            }
+        )
+
+    except Exception as e:
+        logger.error(f"Error getting server logs: {e}")
+        return jsonify({"error": str(e)}), 500
+
+
+@admin_bp.route("/api/admin/logs/stats")
+def api_get_log_stats():
+    """Get log statistics without fetching entries."""
+    try:
+        from ..services.log_service import get_log_stats
+
+        stats = get_log_stats()
+        return jsonify(stats)
+
+    except Exception as e:
+        logger.error(f"Error getting log stats: {e}")
+        return jsonify({"error": str(e)}), 500
+
+
+@admin_bp.route("/api/admin/logs/clear", methods=["POST"])
+def api_clear_logs():
+    """Clear all captured log entries from memory."""
+    try:
+        from ..services.log_service import clear_logs
+
+        clear_logs()
+        logger.info("Server logs cleared by admin")
+        return jsonify({"success": True, "message": "Logs cleared"})
+
+    except Exception as e:
+        logger.error(f"Error clearing logs: {e}")
+        return jsonify({"error": str(e)}), 500
+
+
+@admin_bp.route("/api/admin/logs/stream")
+def api_stream_logs():
+    """
+    Stream log entries in real-time using Server-Sent Events.
+
+    Query parameters:
+        level: Minimum log level (default INFO)
+
+    Returns:
+        SSE stream of log entries
+    """
+    min_level = request.args.get("level", "INFO").upper()
+
+    def generate():
+        from ..services.log_service import get_logs
+
+        last_timestamp = None
+
+        yield 'data: {"type": "connected"}\n\n'
+
+        while True:
+            try:
+                # Get new logs since last check
+                logs = get_logs(
+                    limit=50,
+                    min_level=min_level,
+                    since_timestamp=last_timestamp,
+                )
+
+                if logs:
+                    # Update last timestamp (logs are newest first)
+                    last_timestamp = logs[0]["timestamp"]
+
+                    # Send each log entry (reverse to send oldest first)
+                    for log_entry in reversed(logs):
+                        yield f"data: {json.dumps({'type': 'log', 'entry': log_entry})}\n\n"
+
+                # Send heartbeat
+                yield 'data: {"type": "heartbeat"}\n\n'
+
+                time.sleep(1)  # Poll every second
+
+            except GeneratorExit:
+                break
+            except Exception as e:
+                yield f"data: {json.dumps({'type': 'error', 'message': str(e)})}\n\n"
+                break
+
+    return Response(
+        stream_with_context(generate()),
+        mimetype="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache",
+            "X-Accel-Buffering": "no",
+        },
+    )

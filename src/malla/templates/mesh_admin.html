@@ -146,6 +146,23 @@
     .autocomplete-section-footer {
         background: var(--bs-tertiary-bg);
     }
+    /* Server logs styling */
+    .server-logs-container {
+        font-family: 'SF Mono', 'Monaco', 'Inconsolata', 'Fira Mono', monospace;
+        font-size: 0.8rem;
+    }
+    .server-logs-container .log-entry {
+        line-height: 1.4;
+    }
+    .server-logs-container .log-entry:hover {
+        background: var(--bs-secondary-bg);
+    }
+    [data-bs-theme="dark"] .server-logs-container {
+        background: #0d1117 !important;
+    }
+    [data-bs-theme="dark"] .server-logs-container .log-entry:hover {
+        background: #161b22;
+    }
     .config-display {
         font-family: 'SF Mono', 'Monaco', 'Inconsolata', 'Fira Mono', monospace;
         font-size: 0.8rem;
@@ -612,6 +629,13 @@
                     <button class="nav-link" id="log-tab" data-bs-toggle="tab"
                             data-bs-target="#log-pane" type="button" role="tab">
                         <i class="bi bi-journal-text"></i> Audit Log
+                    </button>
+                </li>
+                <li class="nav-item" role="presentation">
+                    <button class="nav-link" id="server-logs-tab" data-bs-toggle="tab"
+                            data-bs-target="#server-logs-pane" type="button" role="tab">
+                        <i class="bi bi-terminal"></i> Server Logs
+                        <span class="badge bg-danger d-none" id="serverLogsErrorBadge">0</span>
                     </button>
                 </li>
                 <li class="nav-item" role="presentation">
@@ -1426,6 +1450,50 @@
                             <div class="spinner-border text-primary" role="status">
                                 <span class="visually-hidden">Loading...</span>
                             </div>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Server Logs Tab -->
+                <div class="tab-pane fade" id="server-logs-pane" role="tabpanel">
+                    <div class="d-flex justify-content-between align-items-center mb-3">
+                        <div class="d-flex align-items-center gap-3">
+                            <h5 class="mb-0"><i class="bi bi-terminal me-2"></i>Server Logs</h5>
+                            <div class="form-check form-switch">
+                                <input class="form-check-input" type="checkbox" id="serverLogsAutoRefresh" checked>
+                                <label class="form-check-label" for="serverLogsAutoRefresh">Auto-refresh</label>
+                            </div>
+                        </div>
+                        <div class="d-flex align-items-center gap-2">
+                            <select class="form-select form-select-sm" id="serverLogsLevelFilter" style="width: auto;">
+                                <option value="DEBUG">All Levels</option>
+                                <option value="INFO" selected>Info+</option>
+                                <option value="WARNING">Warning+</option>
+                                <option value="ERROR">Error+</option>
+                            </select>
+                            <input type="text" class="form-control form-control-sm" id="serverLogsSearch"
+                                   placeholder="Search logs..." style="width: 200px;">
+                            <button class="btn btn-outline-primary btn-sm" onclick="refreshServerLogs()">
+                                <i class="bi bi-arrow-repeat"></i> Refresh
+                            </button>
+                            <button class="btn btn-outline-danger btn-sm" onclick="clearServerLogs()">
+                                <i class="bi bi-trash"></i> Clear
+                            </button>
+                        </div>
+                    </div>
+
+                    <!-- Log Stats Bar -->
+                    <div class="d-flex gap-3 mb-3 small" id="serverLogsStats">
+                        <span class="text-muted">Total: <strong id="logStatTotal">0</strong></span>
+                        <span class="text-info"><i class="bi bi-info-circle"></i> <span id="logStatInfo">0</span></span>
+                        <span class="text-warning"><i class="bi bi-exclamation-triangle"></i> <span id="logStatWarning">0</span></span>
+                        <span class="text-danger"><i class="bi bi-x-circle"></i> <span id="logStatError">0</span></span>
+                    </div>
+
+                    <!-- Logs Container -->
+                    <div id="serverLogsContainer" class="server-logs-container" style="height: calc(100vh - 400px); min-height: 300px; overflow-y: auto; font-family: 'SF Mono', 'Monaco', 'Inconsolata', monospace; font-size: 0.8rem; background: var(--bs-tertiary-bg); border-radius: 0.375rem; padding: 0.5rem;">
+                        <div class="text-center py-4 text-muted">
+                            <i class="bi bi-hourglass-split"></i> Loading logs...
                         </div>
                     </div>
                 </div>
@@ -8484,6 +8552,197 @@
     document.getElementById('jobs-tab')?.addEventListener('shown.bs.tab', function() {
         refreshJobsList();
     });
+
+    // ============================================================================
+    // Server Logs Functions
+    // ============================================================================
+
+    let serverLogsPollingInterval = null;
+    let lastLogTimestamp = null;
+
+    // Initialize server logs when tab is shown
+    document.getElementById('server-logs-tab')?.addEventListener('shown.bs.tab', function() {
+        refreshServerLogs();
+        startServerLogsPolling();
+    });
+
+    // Stop polling when tab is hidden
+    document.getElementById('server-logs-tab')?.addEventListener('hidden.bs.tab', function() {
+        stopServerLogsPolling();
+    });
+
+    // Handle auto-refresh toggle
+    document.getElementById('serverLogsAutoRefresh')?.addEventListener('change', function() {
+        if (this.checked) {
+            startServerLogsPolling();
+        } else {
+            stopServerLogsPolling();
+        }
+    });
+
+    // Handle level filter change
+    document.getElementById('serverLogsLevelFilter')?.addEventListener('change', function() {
+        refreshServerLogs();
+    });
+
+    // Handle search with debounce
+    let serverLogsSearchTimeout = null;
+    document.getElementById('serverLogsSearch')?.addEventListener('input', function() {
+        clearTimeout(serverLogsSearchTimeout);
+        serverLogsSearchTimeout = setTimeout(refreshServerLogs, 300);
+    });
+
+    function startServerLogsPolling() {
+        if (serverLogsPollingInterval) return;
+        const autoRefresh = document.getElementById('serverLogsAutoRefresh');
+        if (!autoRefresh?.checked) return;
+
+        serverLogsPollingInterval = setInterval(refreshServerLogs, 2000);
+    }
+
+    function stopServerLogsPolling() {
+        if (serverLogsPollingInterval) {
+            clearInterval(serverLogsPollingInterval);
+            serverLogsPollingInterval = null;
+        }
+    }
+
+    async function refreshServerLogs() {
+        const container = document.getElementById('serverLogsContainer');
+        const level = document.getElementById('serverLogsLevelFilter')?.value || 'INFO';
+        const search = document.getElementById('serverLogsSearch')?.value || '';
+
+        try {
+            const params = new URLSearchParams({
+                limit: '200',
+                level: level,
+            });
+            if (search) params.append('search', search);
+
+            const response = await fetch(`/api/admin/logs?${params}`);
+            const data = await response.json();
+
+            if (data.error) {
+                container.innerHTML = `<div class="text-danger p-3"><i class="bi bi-exclamation-triangle"></i> ${escapeHtml(data.error)}</div>`;
+                return;
+            }
+
+            // Update stats
+            if (data.stats) {
+                document.getElementById('logStatTotal').textContent = data.stats.total_entries || 0;
+                const counts = data.stats.level_counts || {};
+                document.getElementById('logStatInfo').textContent = counts.INFO || 0;
+                document.getElementById('logStatWarning').textContent = counts.WARNING || 0;
+                document.getElementById('logStatError').textContent = (counts.ERROR || 0) + (counts.CRITICAL || 0);
+
+                // Update error badge
+                const errorBadge = document.getElementById('serverLogsErrorBadge');
+                const errorCount = (counts.ERROR || 0) + (counts.CRITICAL || 0);
+                if (errorCount > 0) {
+                    errorBadge.textContent = errorCount;
+                    errorBadge.classList.remove('d-none');
+                } else {
+                    errorBadge.classList.add('d-none');
+                }
+            }
+
+            // Render logs
+            if (!data.logs || data.logs.length === 0) {
+                container.innerHTML = `
+                    <div class="text-center py-4 text-muted">
+                        <i class="bi bi-inbox fs-1 d-block mb-2"></i>
+                        No log entries found
+                    </div>
+                `;
+                return;
+            }
+
+            // Check if we should auto-scroll (user is at bottom)
+            const wasAtBottom = container.scrollHeight - container.scrollTop <= container.clientHeight + 50;
+
+            let html = '';
+            for (const log of data.logs.reverse()) {
+                html += renderLogEntry(log);
+            }
+            container.innerHTML = html;
+
+            // Auto-scroll to bottom if user was there
+            if (wasAtBottom) {
+                container.scrollTop = container.scrollHeight;
+            }
+
+        } catch (error) {
+            container.innerHTML = `<div class="text-danger p-3"><i class="bi bi-exclamation-triangle"></i> Error loading logs: ${escapeHtml(error.message)}</div>`;
+        }
+    }
+
+    function renderLogEntry(log) {
+        const timestamp = new Date(log.timestamp * 1000);
+        const timeStr = timestamp.toLocaleTimeString('en-US', { hour12: false, hour: '2-digit', minute: '2-digit', second: '2-digit' });
+        const dateStr = timestamp.toLocaleDateString('en-US', { month: 'short', day: 'numeric' });
+
+        let levelClass = 'text-secondary';
+        let levelIcon = 'bi-dot';
+        switch (log.level) {
+            case 'DEBUG':
+                levelClass = 'text-secondary';
+                levelIcon = 'bi-bug';
+                break;
+            case 'INFO':
+                levelClass = 'text-info';
+                levelIcon = 'bi-info-circle';
+                break;
+            case 'WARNING':
+                levelClass = 'text-warning';
+                levelIcon = 'bi-exclamation-triangle';
+                break;
+            case 'ERROR':
+                levelClass = 'text-danger';
+                levelIcon = 'bi-x-circle';
+                break;
+            case 'CRITICAL':
+                levelClass = 'text-danger fw-bold';
+                levelIcon = 'bi-exclamation-octagon-fill';
+                break;
+        }
+
+        // Shorten logger name (show last two parts)
+        const loggerParts = log.logger_name.split('.');
+        const shortLogger = loggerParts.slice(-2).join('.');
+
+        let excInfo = '';
+        if (log.exc_info) {
+            excInfo = `<pre class="text-danger small mb-0 mt-1" style="white-space: pre-wrap;">${escapeHtml(log.exc_info)}</pre>`;
+        }
+
+        return `
+            <div class="log-entry py-1 px-2 border-bottom border-secondary border-opacity-25 ${log.level === 'ERROR' || log.level === 'CRITICAL' ? 'bg-danger bg-opacity-10' : ''}">
+                <span class="text-muted">${dateStr} ${timeStr}</span>
+                <span class="${levelClass} mx-2"><i class="bi ${levelIcon}"></i> ${log.level.padEnd(8)}</span>
+                <span class="text-primary">[${shortLogger}]</span>
+                <span class="ms-2">${escapeHtml(log.message)}</span>
+                ${excInfo}
+            </div>
+        `;
+    }
+
+    async function clearServerLogs() {
+        if (!confirm('Clear all captured log entries from memory? This cannot be undone.')) return;
+
+        try {
+            const response = await fetch('/api/admin/logs/clear', { method: 'POST' });
+            const data = await response.json();
+
+            if (data.success) {
+                showAlert('success', 'Logs cleared');
+                refreshServerLogs();
+            } else {
+                showAlert('danger', data.error || 'Failed to clear logs');
+            }
+        } catch (error) {
+            showAlert('danger', `Error: ${error.message}`);
+        }
+    }
 
     // ============================================================================
     // Background Job Backup/Restore Functions
