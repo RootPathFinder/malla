@@ -157,11 +157,35 @@
     .server-logs-container .log-entry:hover {
         background: var(--bs-secondary-bg);
     }
+    .server-logs-container .log-clickable {
+        cursor: pointer;
+        border-radius: 3px;
+        transition: background 0.15s;
+    }
+    .server-logs-container .log-clickable:hover {
+        background: var(--bs-primary-bg-subtle);
+        text-decoration: underline;
+    }
+    .log-filter-badge {
+        display: inline-flex;
+        align-items: center;
+        gap: 0.25rem;
+        padding: 0.2rem 0.5rem;
+        font-family: 'SF Mono', 'Monaco', 'Inconsolata', 'Fira Mono', monospace;
+        font-size: 0.75rem;
+    }
+    .log-filter-badge .btn-close {
+        font-size: 0.5rem;
+        padding: 0.25rem;
+    }
     [data-bs-theme="dark"] .server-logs-container {
         background: #0d1117 !important;
     }
     [data-bs-theme="dark"] .server-logs-container .log-entry:hover {
         background: #161b22;
+    }
+    [data-bs-theme="dark"] .server-logs-container .log-clickable:hover {
+        background: rgba(88, 166, 255, 0.15);
     }
     .config-display {
         font-family: 'SF Mono', 'Monaco', 'Inconsolata', 'Fira Mono', monospace;
@@ -1480,6 +1504,15 @@
                                 <i class="bi bi-trash"></i> Clear
                             </button>
                         </div>
+                    </div>
+
+                    <!-- Active Filters Breadcrumbs -->
+                    <div id="serverLogsFilters" class="mb-2 d-none">
+                        <span class="text-muted small me-2"><i class="bi bi-funnel"></i> Filters:</span>
+                        <span id="serverLogsFilterBadges"></span>
+                        <button class="btn btn-link btn-sm text-muted p-0 ms-2" onclick="clearAllLogFilters()" title="Clear all filters">
+                            <i class="bi bi-x-lg"></i> Clear all
+                        </button>
                     </div>
 
                     <!-- Log Stats Bar -->
@@ -8646,12 +8679,16 @@
                 }
             }
 
-            // Render logs
-            if (!data.logs || data.logs.length === 0) {
+            // Render logs (apply client-side filters)
+            let filteredLogs = data.logs.filter(log => logMatchesFilters(log));
+
+            if (filteredLogs.length === 0) {
+                const hasFilters = serverLogFilters.length > 0;
                 container.innerHTML = `
                     <div class="text-center py-4 text-muted">
                         <i class="bi bi-inbox fs-1 d-block mb-2"></i>
-                        No log entries found
+                        ${hasFilters ? 'No logs match the current filters' : 'No log entries found'}
+                        ${hasFilters ? '<br><button class="btn btn-link btn-sm" onclick="clearAllLogFilters()">Clear filters</button>' : ''}
                     </div>
                 `;
                 return;
@@ -8661,7 +8698,7 @@
             const wasAtBottom = container.scrollHeight - container.scrollTop <= container.clientHeight + 50;
 
             let html = '';
-            for (const log of data.logs.reverse()) {
+            for (const log of filteredLogs.reverse()) {
                 html += renderLogEntry(log);
             }
             container.innerHTML = html;
@@ -8674,6 +8711,87 @@
         } catch (error) {
             container.innerHTML = `<div class="text-danger p-3"><i class="bi bi-exclamation-triangle"></i> Error loading logs: ${escapeHtml(error.message)}</div>`;
         }
+    }
+
+    // Active log filters (array of {type, value, display} objects)
+    let serverLogFilters = [];
+
+    function addLogFilter(type, value, display) {
+        // Check if filter already exists
+        if (serverLogFilters.some(f => f.type === type && f.value === value)) {
+            return; // Already filtered
+        }
+        serverLogFilters.push({ type, value, display: display || value });
+        updateLogFilterBadges();
+        refreshServerLogs();
+    }
+
+    function removeLogFilter(index) {
+        serverLogFilters.splice(index, 1);
+        updateLogFilterBadges();
+        refreshServerLogs();
+    }
+
+    function clearAllLogFilters() {
+        serverLogFilters = [];
+        updateLogFilterBadges();
+        refreshServerLogs();
+    }
+
+    function updateLogFilterBadges() {
+        const container = document.getElementById('serverLogsFilters');
+        const badgesContainer = document.getElementById('serverLogsFilterBadges');
+
+        if (serverLogFilters.length === 0) {
+            container.classList.add('d-none');
+            badgesContainer.innerHTML = '';
+            return;
+        }
+
+        container.classList.remove('d-none');
+
+        const typeColors = {
+            'logger': 'primary',
+            'level': 'info',
+            'text': 'secondary'
+        };
+
+        const typeIcons = {
+            'logger': 'bi-journal-code',
+            'level': 'bi-filter',
+            'text': 'bi-search'
+        };
+
+        badgesContainer.innerHTML = serverLogFilters.map((f, i) => `
+            <span class="badge bg-${typeColors[f.type] || 'secondary'} log-filter-badge me-1">
+                <i class="bi ${typeIcons[f.type] || 'bi-tag'}"></i>
+                ${escapeHtml(f.display)}
+                <button type="button" class="btn-close btn-close-white" aria-label="Remove" onclick="removeLogFilter(${i})"></button>
+            </span>
+        `).join('');
+    }
+
+    function logMatchesFilters(log) {
+        if (serverLogFilters.length === 0) return true;
+
+        for (const filter of serverLogFilters) {
+            let matches = false;
+            switch (filter.type) {
+                case 'logger':
+                    matches = log.logger_name.includes(filter.value);
+                    break;
+                case 'level':
+                    matches = log.level === filter.value;
+                    break;
+                case 'text':
+                    matches = log.message.toLowerCase().includes(filter.value.toLowerCase());
+                    break;
+                default:
+                    matches = true;
+            }
+            if (!matches) return false;
+        }
+        return true;
     }
 
     function renderLogEntry(log) {
@@ -8715,15 +8833,51 @@
             excInfo = `<pre class="text-danger small mb-0 mt-1" style="white-space: pre-wrap;">${escapeHtml(log.exc_info)}</pre>`;
         }
 
+        // Make message words clickable (extract significant tokens)
+        const messageHtml = makeMessageClickable(log.message);
+
         return `
             <div class="log-entry py-1 px-2 border-bottom border-secondary border-opacity-25 ${log.level === 'ERROR' || log.level === 'CRITICAL' ? 'bg-danger bg-opacity-10' : ''}">
                 <span class="text-muted">${dateStr} ${timeStr}</span>
-                <span class="${levelClass} mx-2"><i class="bi ${levelIcon}"></i> ${log.level.padEnd(8)}</span>
-                <span class="text-primary">[${shortLogger}]</span>
-                <span class="ms-2">${escapeHtml(log.message)}</span>
+                <span class="${levelClass} mx-2 log-clickable" onclick="addLogFilter('level', '${log.level}', '${log.level}')" title="Filter by level: ${log.level}"><i class="bi ${levelIcon}"></i> ${log.level.padEnd(8)}</span>
+                <span class="text-primary log-clickable" onclick="addLogFilter('logger', '${escapeHtml(log.logger_name)}', '[${escapeHtml(shortLogger)}]')" title="Filter by logger: ${log.logger_name}">[${shortLogger}]</span>
+                <span class="ms-2">${messageHtml}</span>
                 ${excInfo}
             </div>
         `;
+    }
+
+    function makeMessageClickable(message) {
+        // Split message into tokens that could be useful filters
+        // Match: identifiers, hex IDs, URLs, quoted strings, etc.
+        const escaped = escapeHtml(message);
+
+        // Pattern to match significant tokens:
+        // - Hex node IDs like !aabbccdd
+        // - Identifiers with underscores/dots like some_function or module.name
+        // - Quoted strings
+        // - IP addresses
+        // - File paths
+        const tokenPattern = /(!?[0-9a-fA-F]{8})|([a-zA-Z_][a-zA-Z0-9_.]{3,})|(\/[a-zA-Z0-9_\/.]+)|(\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3})/g;
+
+        let result = escaped;
+        const matches = [...escaped.matchAll(tokenPattern)];
+
+        // Process matches in reverse order to preserve positions
+        for (let i = matches.length - 1; i >= 0; i--) {
+            const match = matches[i];
+            const token = match[0];
+            const start = match.index;
+            const end = start + token.length;
+
+            // Skip very common/short tokens
+            if (['true', 'false', 'null', 'None', 'self', 'this'].includes(token)) continue;
+
+            const clickable = `<span class="log-clickable text-body" onclick="addLogFilter('text', '${token.replace(/'/g, "\\'")}', '${token.replace(/'/g, "\\'").substring(0, 20)}${token.length > 20 ? '…' : ''}')" title="Filter by: ${token}">${token}</span>`;
+            result = result.substring(0, start) + clickable + result.substring(end);
+        }
+
+        return result;
     }
 
     async function clearServerLogs() {
