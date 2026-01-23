@@ -1903,71 +1903,97 @@ class TCPPublisher:
                 # Default to device_metrics
                 telemetry.device_metrics.CopyFrom(telemetry_pb2.DeviceMetrics())
 
-            # Track response
+            # Track response using threading primitives
             response_received = threading.Event()
             response_data: dict[str, Any] = {}
 
-            def on_telemetry_response(packet: dict, interface: Any = None) -> None:
-                """Handle telemetry response."""
+            def on_response_callback(packet: dict) -> None:
+                """
+                Handle telemetry response via onResponse callback.
+
+                This callback is called by the meshtastic library when a response
+                is received for our request. Using onResponse is more reliable than
+                subscribing to pubsub events because:
+                1. It's tied to the specific request ID
+                2. It handles both data responses and NAK/ACK properly
+                3. It avoids subscription management issues with pubsub
+                """
                 try:
                     decoded = packet.get("decoded", {})
-                    if decoded.get("portnum") == "TELEMETRY_APP":
-                        telemetry_data = decoded.get("telemetry", {})
-                        from_id = packet.get("fromId", "")
+                    portnum = decoded.get("portnum")
+                    from_id = packet.get("fromId", "") or packet.get("from", "")
 
-                        # Check if this is from our target node
-                        target_hex = f"!{target_node_id:08x}"
-                        if from_id == target_hex or str(from_id) == str(target_node_id):
-                            # Convert to JSON-serializable dict
-                            telemetry_dict = convert_to_dict(telemetry_data)
+                    logger.debug(
+                        f"Telemetry onResponse callback: portnum={portnum}, "
+                        f"from={from_id}, packet_keys={list(packet.keys())}"
+                    )
 
-                            response_data["telemetry"] = telemetry_dict
-                            response_data["from_id"] = from_id
-                            response_data["timestamp"] = time.time()
+                    # Check for NAK response (routing error)
+                    if portnum == "ROUTING_APP":
+                        routing = decoded.get("routing", {})
+                        error_reason = routing.get("errorReason", "NONE")
+                        if error_reason != "NONE":
+                            logger.warning(
+                                f"Telemetry request NAK from {from_id}: {error_reason}"
+                            )
+                            response_data["error"] = error_reason
                             response_received.set()
-                            logger.info(f"Received telemetry response from {from_id}")
+                            return
+
+                    # Check for telemetry response
+                    if portnum == "TELEMETRY_APP":
+                        telemetry_data = decoded.get("telemetry", {})
+
+                        # Convert to JSON-serializable dict
+                        telemetry_dict = convert_to_dict(telemetry_data)
+
+                        response_data["telemetry"] = telemetry_dict
+                        response_data["from_id"] = from_id
+                        response_data["timestamp"] = time.time()
+                        response_received.set()
+                        logger.info(f"Received telemetry response from {from_id}")
+                        return
+
+                    # Log unexpected portnum for debugging
+                    logger.debug(
+                        f"Telemetry onResponse received non-telemetry packet: "
+                        f"portnum={portnum}"
+                    )
+
                 except Exception as e:
                     logger.error(f"Error processing telemetry response: {e}")
 
-            # Subscribe to packet reception
-            pub.subscribe(on_telemetry_response, "meshtastic.receive")
+            # Send telemetry request with wantResponse=True and onResponse callback
+            logger.info(
+                f"Sending telemetry request to !{target_node_id:08x} "
+                f"(type={telemetry_type})"
+            )
 
-            try:
-                # Send telemetry request with wantResponse=True
-                logger.info(
-                    f"Sending telemetry request to !{target_node_id:08x} "
-                    f"(type={telemetry_type})"
-                )
+            self._interface.sendData(
+                data=telemetry,
+                destinationId=target_node_id,
+                portNum=portnums_pb2.PortNum.TELEMETRY_APP,
+                wantAck=True,
+                wantResponse=True,
+                onResponse=on_response_callback,
+            )
 
-                self._interface.sendData(
-                    data=telemetry,
-                    destinationId=target_node_id,
-                    portNum=portnums_pb2.PortNum.TELEMETRY_APP,
-                    wantAck=True,
-                    wantResponse=True,
-                )
+            # Update activity time
+            self._last_activity_time = time.time()
 
-                # Update activity time
-                self._last_activity_time = time.time()
-
-                # Wait for response with timeout
-                if response_received.wait(timeout=timeout):
-                    logger.info(
-                        f"Telemetry request successful for !{target_node_id:08x}"
-                    )
-                    return response_data
-                else:
+            # Wait for response with timeout
+            if response_received.wait(timeout=timeout):
+                if "error" in response_data:
                     logger.warning(
-                        f"Telemetry request timeout for !{target_node_id:08x}"
+                        f"Telemetry request failed for !{target_node_id:08x}: "
+                        f"{response_data.get('error')}"
                     )
                     return None
-
-            finally:
-                # Unsubscribe from events
-                try:
-                    pub.unsubscribe(on_telemetry_response, "meshtastic.receive")
-                except Exception:
-                    pass
+                logger.info(f"Telemetry request successful for !{target_node_id:08x}")
+                return response_data
+            else:
+                logger.warning(f"Telemetry request timeout for !{target_node_id:08x}")
+                return None
 
         except Exception as e:
             logger.error(f"Failed to send telemetry request: {e}")
