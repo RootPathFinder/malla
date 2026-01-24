@@ -646,12 +646,26 @@ class TCPPublisher:
                         from_node_id = int(from_node_id[1:], 16)
                     except ValueError:
                         pass
+                elif isinstance(from_node_id, str):
+                    # Try to convert plain string to int
+                    try:
+                        from_node_id = int(from_node_id)
+                    except ValueError:
+                        pass
 
                 logger.info(
-                    f"Received TELEMETRY_APP packet from {from_id} (node_id={from_node_id})"
+                    f"Received TELEMETRY_APP packet from {from_id} "
+                    f"(converted node_id={from_node_id}, type={type(from_node_id).__name__})"
                 )
 
                 with self._pending_telemetry_lock:
+                    # Log pending requests for debugging
+                    pending_keys = list(self._pending_telemetry_requests.keys())
+                    logger.info(
+                        f"Pending telemetry requests: {pending_keys} "
+                        f"(looking for {from_node_id})"
+                    )
+
                     # Check if we have a pending request for this node
                     if from_node_id in self._pending_telemetry_requests:
                         request_info = self._pending_telemetry_requests[from_node_id]
@@ -668,8 +682,9 @@ class TCPPublisher:
                             f"Telemetry response matched pending request for node {from_node_id}"
                         )
                     else:
-                        logger.debug(
-                            f"No pending telemetry request for node {from_node_id}"
+                        logger.warning(
+                            f"No pending telemetry request for node {from_node_id} "
+                            f"(pending: {pending_keys})"
                         )
 
             elif portnum == "ADMIN_APP":
