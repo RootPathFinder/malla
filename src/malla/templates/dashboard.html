@@ -612,12 +612,15 @@ function createTimeSeriesChart(temporalData) {
     const ctx = document.getElementById('timeSeriesChart');
     if (!ctx) return;
 
-    // Convert hourly data to chart format
+    // Convert hourly data to chart format with 12-hour AM/PM labels
     const labels = [];
     const data = [];
 
     temporalData.hourly_breakdown.forEach(item => {
-        labels.push(`${item.hour}:00`);
+        const hour24 = item.hour;
+        const hour12 = hour24 === 0 ? 12 : (hour24 > 12 ? hour24 - 12 : hour24);
+        const ampm = hour24 < 12 ? 'AM' : 'PM';
+        labels.push(`${hour12} ${ampm}`);
         data.push(item.total_packets);
     });
 
