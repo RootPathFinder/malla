@@ -2006,76 +2006,36 @@ class TCPPublisher:
                 )
 
             try:
-                # Create onResponse callback to handle telemetry response directly
-                # This is more reliable than pubsub since meshtastic may intercept
-                # responses before they reach pubsub
-                def on_telemetry_response(packet: dict[str, Any]) -> None:
-                    """Handle telemetry response from sendData."""
-                    logger.info(
-                        f"onResponse callback triggered for telemetry request "
-                        f"to !{target_node_id:08x}"
-                    )
-
-                    decoded = packet.get("decoded", {})
-                    portnum = decoded.get("portnum")
-                    from_id = packet.get("from") or packet.get("fromId")
-
-                    logger.info(
-                        f"onResponse: portnum={portnum}, from={from_id}, "
-                        f"packet keys={list(packet.keys())}"
-                    )
-
-                    # Handle ROUTING_APP (ACK/NAK) - just log, don't set event
-                    if portnum == "ROUTING_APP":
-                        routing = decoded.get("routing", {})
-                        error_reason = routing.get("errorReason", "NONE")
-                        logger.info(f"onResponse: ROUTING_APP - {error_reason}")
-                        if error_reason != "NONE":
-                            # NAK received - set error and signal
-                            response_data["error"] = error_reason
-                            response_event.set()
-                        # For ACK, just log and continue waiting for telemetry
-                        return
-
-                    # Handle TELEMETRY_APP - this is what we want
-                    if portnum == "TELEMETRY_APP":
-                        telemetry_data = decoded.get("telemetry", {})
-                        telemetry_dict = convert_to_dict(telemetry_data)
-
-                        response_data["telemetry"] = telemetry_dict
-                        response_data["from_id"] = str(from_id)
-                        response_data["timestamp"] = time.time()
-                        response_event.set()
-                        logger.info(
-                            f"onResponse: TELEMETRY_APP received from {from_id}"
-                        )
-                        return
-
-                    # Unknown response type
-                    logger.warning(
-                        f"onResponse: unexpected portnum={portnum} from {from_id}"
-                    )
-
                 # Send telemetry request
+                # Note: We don't use onResponse because it's unreliable in the
+                # meshtastic library (~50% callback loss). Instead, we register
+                # the pending request and catch the response via pubsub in _on_receive.
                 logger.info(
                     f"Sending telemetry request to !{target_node_id:08x} "
                     f"(type={telemetry_type})"
                 )
 
-                self._interface.sendData(
+                # sendData returns a MeshPacket with the assigned requestId
+                mesh_packet = self._interface.sendData(
                     data=telemetry,
                     destinationId=target_node_id,
                     portNum=portnums_pb2.PortNum.TELEMETRY_APP,
-                    wantAck=True,
-                    wantResponse=True,
-                    onResponse=on_telemetry_response,
+                    wantAck=False,  # Don't wait for ACK
+                    wantResponse=True,  # Request a response
+                )
+
+                # Log the request ID for debugging
+                request_id = getattr(mesh_packet, "id", None)
+                logger.info(
+                    f"Telemetry request sent, packet_id={request_id} "
+                    f"(target=!{target_node_id:08x})"
                 )
 
                 # Update activity time
                 self._last_activity_time = time.time()
 
                 # Wait for response with timeout
-                # Response handled by onResponse callback above
+                # Response handled by _on_receive via pubsub
                 if response_event.wait(timeout=timeout):
                     if "error" in response_data:
                         logger.warning(
