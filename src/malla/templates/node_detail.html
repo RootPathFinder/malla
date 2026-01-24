@@ -350,7 +350,7 @@
                                    data-bs-toggle="tooltip" data-bs-placement="top"
                                    title="Requests real-time telemetry from the node. Not all nodes respond: Routers typically do, but Client/Tracker/Sensor roles or sleeping nodes may not."></i>
                             </h5>
-                            <small class="text-muted" id="live-telemetry-interval-info">Adaptive polling (5-30s based on response time)</small>
+                            <small class="text-muted" id="live-telemetry-interval-info">Adaptive polling (10-30s based on response time)</small>
                         </div>
                         <div class="d-flex align-items-center gap-2 flex-wrap">
                             <!-- Duration selector -->
@@ -2132,8 +2132,8 @@ let liveTelemetryPollTimeout = null;
 let liveTelemetryIsPolling = false;
 
 // Adaptive polling configuration
-let liveTelemetryPollInterval = 5000; // Start at 5 seconds
-const LIVE_TELEMETRY_MIN_INTERVAL = 5000; // 5 seconds minimum
+let liveTelemetryPollInterval = 10000; // Start at 10 seconds
+const LIVE_TELEMETRY_MIN_INTERVAL = 10000; // 10 seconds minimum
 const LIVE_TELEMETRY_MAX_INTERVAL = 30000; // 30 seconds maximum
 let liveTelemetrySelectedDuration = 60000; // Default 1 minute
 let liveTelemetryLastResponseTime = 0;
