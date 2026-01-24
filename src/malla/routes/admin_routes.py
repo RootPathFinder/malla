@@ -2503,16 +2503,20 @@ def api_request_live_telemetry(node_id):
                         "hex_id": f"!{node_id_int:08x}",
                         "telemetry": result.get("telemetry", {}),
                         "timestamp": result.get("timestamp"),
+                        "stats": result.get("stats", {}),
                         "live": True,
                     }
                 )
             else:
+                # Get stats even on failure
+                stats = tcp_publisher.get_telemetry_stats(node_id_int)
                 return jsonify(
                     {
                         "success": False,
                         "error": f"No response from node within {timeout}s",
                         "node_id": node_id_int,
                         "hex_id": f"!{node_id_int:08x}",
+                        "stats": stats,
                     }
                 ), 408  # Request Timeout
 
@@ -2536,6 +2540,87 @@ def api_request_live_telemetry(node_id):
 
     except Exception as e:
         logger.error(f"Error requesting live telemetry: {e}")
+        return jsonify({"error": str(e)}), 500
+
+
+@admin_bp.route("/api/admin/nodes/<node_id>/telemetry/stats")
+def api_node_telemetry_stats(node_id: str):
+    """
+    Get telemetry request statistics for a node.
+
+    Returns success/failure rates and request counts.
+    """
+    try:
+        node_id_int = convert_node_id(node_id)
+
+        tcp_publisher = get_tcp_publisher()
+        stats = tcp_publisher.get_telemetry_stats(node_id_int)
+
+        return jsonify(
+            {
+                "success": True,
+                "node_id": node_id_int,
+                "hex_id": f"!{node_id_int:08x}",
+                "stats": stats,
+            }
+        )
+
+    except Exception as e:
+        logger.error(f"Error getting telemetry stats: {e}")
+        return jsonify({"error": str(e)}), 500
+
+
+@admin_bp.route("/api/admin/telemetry/stats")
+def api_telemetry_stats():
+    """
+    Get global telemetry request statistics.
+
+    Returns overall success/failure rates and per-node breakdown.
+    """
+    try:
+        tcp_publisher = get_tcp_publisher()
+        stats = tcp_publisher.get_telemetry_stats()
+
+        # Add per-node stats
+        with tcp_publisher._telemetry_stats_lock:
+            per_node = tcp_publisher._telemetry_stats.get("per_node_stats", {})
+            stats["per_node_stats"] = {}
+            for node_key, node_data in per_node.items():
+                try:
+                    node_id = int(node_key)
+                    node_total = node_data.get("requests", 0)
+                    node_successes = node_data.get("successes", 0)
+                    success_rate = (
+                        (node_successes / node_total * 100) if node_total > 0 else 0
+                    )
+                    stats["per_node_stats"][f"!{node_id:08x}"] = {
+                        "requests": node_total,
+                        "successes": node_successes,
+                        "timeouts": node_data.get("timeouts", 0),
+                        "errors": node_data.get("errors", 0),
+                        "success_rate": round(success_rate, 1),
+                    }
+                except ValueError:
+                    pass
+
+        return jsonify({"success": True, "stats": stats})
+
+    except Exception as e:
+        logger.error(f"Error getting telemetry stats: {e}")
+        return jsonify({"error": str(e)}), 500
+
+
+@admin_bp.route("/api/admin/telemetry/stats/reset", methods=["POST"])
+def api_telemetry_stats_reset():
+    """Reset telemetry request statistics."""
+    try:
+        tcp_publisher = get_tcp_publisher()
+        tcp_publisher.reset_telemetry_stats()
+
+        return jsonify({"success": True, "message": "Telemetry statistics reset"})
+
+    except Exception as e:
+        logger.error(f"Error resetting telemetry stats: {e}")
         return jsonify({"error": str(e)}), 500
 
 

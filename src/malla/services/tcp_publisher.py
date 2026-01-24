@@ -104,6 +104,18 @@ class TCPPublisher:
         self._pending_telemetry_requests: dict[int, dict[str, Any]] = {}
         self._pending_telemetry_lock = threading.Lock()
 
+        # Telemetry request statistics tracking
+        self._telemetry_stats: dict[str, Any] = {
+            "total_requests": 0,
+            "successful_responses": 0,
+            "timeouts": 0,
+            "errors": 0,
+            "last_request_time": None,
+            "last_success_time": None,
+            "per_node_stats": {},  # Key: node_id, Value: {requests, successes, timeouts}
+        }
+        self._telemetry_stats_lock = threading.Lock()
+
         # Session passkey storage per target node
         # Key: node_id (int), Value: session_passkey (bytes)
         # Session passkeys are returned by nodes in admin responses and must
@@ -1956,6 +1968,28 @@ class TCPPublisher:
                     "requested_at": time.time(),
                 }
 
+            # Track statistics - increment request count
+            request_time = time.time()
+            with self._telemetry_stats_lock:
+                self._telemetry_stats["total_requests"] += 1
+                self._telemetry_stats["last_request_time"] = request_time
+
+                # Per-node stats
+                node_key = str(target_node_id)
+                if node_key not in self._telemetry_stats["per_node_stats"]:
+                    self._telemetry_stats["per_node_stats"][node_key] = {
+                        "requests": 0,
+                        "successes": 0,
+                        "timeouts": 0,
+                        "errors": 0,
+                        "last_request": None,
+                        "last_success": None,
+                    }
+                self._telemetry_stats["per_node_stats"][node_key]["requests"] += 1
+                self._telemetry_stats["per_node_stats"][node_key]["last_request"] = (
+                    request_time
+                )
+
             try:
                 # Send telemetry request
                 logger.info(
@@ -1983,15 +2017,42 @@ class TCPPublisher:
                             f"Telemetry request failed for !{target_node_id:08x}: "
                             f"{response_data.get('error')}"
                         )
+                        # Track error
+                        with self._telemetry_stats_lock:
+                            self._telemetry_stats["errors"] += 1
+                            self._telemetry_stats["per_node_stats"][node_key][
+                                "errors"
+                            ] += 1
                         return None
+
                     logger.info(
                         f"Telemetry request successful for !{target_node_id:08x}"
                     )
+                    # Track success
+                    success_time = time.time()
+                    with self._telemetry_stats_lock:
+                        self._telemetry_stats["successful_responses"] += 1
+                        self._telemetry_stats["last_success_time"] = success_time
+                        self._telemetry_stats["per_node_stats"][node_key][
+                            "successes"
+                        ] += 1
+                        self._telemetry_stats["per_node_stats"][node_key][
+                            "last_success"
+                        ] = success_time
+
+                    # Include stats in response
+                    response_data["stats"] = self.get_telemetry_stats(target_node_id)
                     return response_data
                 else:
                     logger.warning(
                         f"Telemetry request timeout for !{target_node_id:08x}"
                     )
+                    # Track timeout
+                    with self._telemetry_stats_lock:
+                        self._telemetry_stats["timeouts"] += 1
+                        self._telemetry_stats["per_node_stats"][node_key][
+                            "timeouts"
+                        ] += 1
                     return None
 
             finally:
@@ -2001,7 +2062,79 @@ class TCPPublisher:
 
         except Exception as e:
             logger.error(f"Failed to send telemetry request: {e}")
+            # Track error
+            with self._telemetry_stats_lock:
+                self._telemetry_stats["errors"] += 1
             return None
+
+    def get_telemetry_stats(self, node_id: int | None = None) -> dict[str, Any]:
+        """
+        Get telemetry request statistics.
+
+        Args:
+            node_id: Optional node ID to get per-node stats for
+
+        Returns:
+            Dictionary with statistics
+        """
+        with self._telemetry_stats_lock:
+            total = self._telemetry_stats["total_requests"]
+            successes = self._telemetry_stats["successful_responses"]
+            timeouts = self._telemetry_stats["timeouts"]
+            errors = self._telemetry_stats["errors"]
+
+            # Calculate success rate
+            success_rate = (successes / total * 100) if total > 0 else 0
+            failure_rate = 100 - success_rate
+
+            stats = {
+                "total_requests": total,
+                "successful_responses": successes,
+                "timeouts": timeouts,
+                "errors": errors,
+                "success_rate": round(success_rate, 1),
+                "failure_rate": round(failure_rate, 1),
+                "last_request_time": self._telemetry_stats["last_request_time"],
+                "last_success_time": self._telemetry_stats["last_success_time"],
+            }
+
+            # Add per-node stats if requested
+            if node_id is not None:
+                node_key = str(node_id)
+                node_stats = self._telemetry_stats["per_node_stats"].get(node_key, {})
+                if node_stats:
+                    node_total = node_stats.get("requests", 0)
+                    node_successes = node_stats.get("successes", 0)
+                    node_success_rate = (
+                        (node_successes / node_total * 100) if node_total > 0 else 0
+                    )
+                    stats["node_stats"] = {
+                        "node_id": node_id,
+                        "hex_id": f"!{node_id:08x}",
+                        "requests": node_total,
+                        "successes": node_successes,
+                        "timeouts": node_stats.get("timeouts", 0),
+                        "errors": node_stats.get("errors", 0),
+                        "success_rate": round(node_success_rate, 1),
+                        "last_request": node_stats.get("last_request"),
+                        "last_success": node_stats.get("last_success"),
+                    }
+
+            return stats
+
+    def reset_telemetry_stats(self) -> None:
+        """Reset all telemetry statistics."""
+        with self._telemetry_stats_lock:
+            self._telemetry_stats = {
+                "total_requests": 0,
+                "successful_responses": 0,
+                "timeouts": 0,
+                "errors": 0,
+                "last_request_time": None,
+                "last_success_time": None,
+                "per_node_stats": {},
+            }
+            logger.info("Telemetry statistics reset")
 
 
 # Module-level singleton accessor

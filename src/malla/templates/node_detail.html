@@ -477,6 +477,23 @@
                         <small class="text-muted" id="live-telemetry-status">
                             <i class="bi bi-info-circle"></i> Select duration and click "Start Live" to begin polling.
                         </small>
+                        <!-- Telemetry Stats Display -->
+                        <div id="live-telemetry-stats" class="mt-2 d-none">
+                            <small class="text-muted">
+                                <span class="me-3">
+                                    <i class="bi bi-arrow-repeat"></i> Requests: <span id="stats-requests">0</span>
+                                </span>
+                                <span class="me-3 text-success">
+                                    <i class="bi bi-check-circle"></i> Success: <span id="stats-successes">0</span>
+                                </span>
+                                <span class="me-3 text-warning">
+                                    <i class="bi bi-clock"></i> Timeouts: <span id="stats-timeouts">0</span>
+                                </span>
+                                <span class="badge" id="stats-success-rate-badge">
+                                    <span id="stats-success-rate">0</span>% success
+                                </span>
+                            </small>
+                        </div>
                     </div>
                 </div>
             </div>
@@ -2145,6 +2162,39 @@ document.addEventListener('DOMContentLoaded', function() {
     });
 });
 
+function updateTelemetryStats(stats) {
+    // Update the stats display elements
+    const statsContainer = document.getElementById('live-telemetry-stats');
+    if (!statsContainer) return;
+
+    // Show the stats container
+    statsContainer.classList.remove('d-none');
+
+    // Get node-specific stats if available
+    const nodeStats = stats.node_stats || stats;
+
+    // Update stat values
+    const requests = nodeStats.requests || stats.total_requests || 0;
+    const successes = nodeStats.successes || stats.successful_responses || 0;
+    const timeouts = nodeStats.timeouts || stats.timeouts || 0;
+    const successRate = nodeStats.success_rate || stats.success_rate || 0;
+
+    document.getElementById('stats-requests').textContent = requests;
+    document.getElementById('stats-successes').textContent = successes;
+    document.getElementById('stats-timeouts').textContent = timeouts;
+    document.getElementById('stats-success-rate').textContent = successRate.toFixed(1);
+
+    // Color the badge based on success rate
+    const badge = document.getElementById('stats-success-rate-badge');
+    if (successRate >= 80) {
+        badge.className = 'badge bg-success';
+    } else if (successRate >= 50) {
+        badge.className = 'badge bg-warning';
+    } else {
+        badge.className = 'badge bg-danger';
+    }
+}
+
 function toggleLiveTelemetry() {
     if (liveTelemetryIsPolling) {
         stopLiveTelemetry();
@@ -2480,6 +2530,11 @@ async function pollLiveTelemetry() {
 
         // Update polling metrics visualization
         updatePollingMetrics(liveTelemetryPollInterval, responseTime, data.success);
+
+        // Update telemetry stats display if available
+        if (data.stats) {
+            updateTelemetryStats(data.stats);
+        }
 
         // Handle successful live response
         if (data.success && data.telemetry) {
