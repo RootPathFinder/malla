@@ -2464,7 +2464,7 @@ def api_request_live_telemetry(node_id):
 
     Request body (optional):
         telemetry_type: Type of telemetry (device_metrics, environment_metrics)
-        timeout: Timeout in seconds (default: 10, max: 30)
+        timeout: Timeout in seconds (default: 25, max: 60)
 
     Returns:
         Telemetry data if successful, or error information
@@ -2474,7 +2474,7 @@ def api_request_live_telemetry(node_id):
 
         data = request.get_json() or {}
         telemetry_type = data.get("telemetry_type", "device_metrics")
-        timeout = min(data.get("timeout", 10), 30)  # Max 30 seconds
+        timeout = min(data.get("timeout", 25), 60)  # Max 60 seconds for mesh
 
         admin_service = get_admin_service()
         connection_type = admin_service.connection_type.value

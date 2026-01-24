@@ -1927,7 +1927,7 @@ class TCPPublisher:
         self,
         target_node_id: int,
         telemetry_type: str = "device_metrics",
-        timeout: float = 10.0,
+        timeout: float = 25.0,
     ) -> dict[str, Any] | None:
         """
         Request telemetry from a target node and wait for response.
@@ -1939,7 +1939,7 @@ class TCPPublisher:
             target_node_id: The destination node ID
             telemetry_type: Type of telemetry to request
                            (device_metrics, environment_metrics, etc.)
-            timeout: Timeout in seconds to wait for response
+            timeout: Timeout in seconds to wait for response (default 25s for mesh)
 
         Returns:
             Dictionary with telemetry data if successful, None otherwise
