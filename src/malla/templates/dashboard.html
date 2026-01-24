@@ -159,34 +159,18 @@
                     </div>
 
                     <div class="mb-3">
-                        <h6 style="font-family: var(--bs-font-sans-serif); font-weight: 600; margin-bottom: 0.5rem;">Node Health Status</h6>
+                        <h6 style="font-family: var(--bs-font-sans-serif); font-weight: 600; margin-bottom: 0.5rem;">Nodes with Issues</h6>
                         <div id="network-health-loading" class="text-center p-2">
                             <div class="spinner-border spinner-border-sm text-primary" role="status">
                                 <span class="visually-hidden">Loading...</span>
                             </div>
                         </div>
                         <div id="network-health-content" style="display: none;">
-                            <div class="progress mb-2" style="height: 32px; font-size: 0.875rem;">
-                                <div class="progress-bar bg-success" role="progressbar" id="dash-healthy-bar" style="width: 0%"
-                                     data-bs-toggle="tooltip" data-bs-placement="top" title="">
-                                    <span class="health-bar-text" id="dash-healthy-count">0</span>
-                                </div>
-                                <div class="progress-bar bg-warning" role="progressbar" id="dash-degraded-bar" style="width: 0%"
-                                     data-bs-toggle="tooltip" data-bs-placement="top" title="">
-                                    <span class="health-bar-text" id="dash-degraded-count">0</span>
-                                </div>
-                                <div class="progress-bar bg-danger" role="progressbar" id="dash-poor-bar" style="width: 0%"
-                                     data-bs-toggle="tooltip" data-bs-placement="top" title="">
-                                    <span class="health-bar-text" id="dash-poor-count">0</span>
-                                </div>
-                            </div>
-                            <div class="d-flex justify-content-between small text-muted mb-2">
-                                <span><span class="text-success">●</span> <span id="dash-healthy-text">0</span> Healthy</span>
-                                <span><span class="text-warning">●</span> <span id="dash-degraded-text">0</span> Degraded</span>
-                                <span><span class="text-danger">●</span> <span id="dash-poor-text">0</span> Poor</span>
+                            <div id="nodes-with-issues-list" class="small">
+                                <!-- Populated by JavaScript -->
                             </div>
                             <small class="text-muted" style="font-family: var(--bs-font-sans-serif);">
-                                <a href="{{ url_for('main.node_health') }}">View detailed health analysis →</a>
+                                <a href="{{ url_for('main.node_health') }}">View all node health →</a>
                             </small>
                         </div>
                     </div>
@@ -941,54 +925,50 @@ function updateSortIndicators() {
     });
 }
 
-// Load network health summary for dashboard
+// Load nodes with issues for dashboard
 async function loadDashboardNetworkHealth() {
     try {
-        const response = await fetch('/api/health/network-summary?hours=24');
+        const response = await fetch('/api/health/problematic-nodes?hours=24&min_health_score=70&limit=5');
         const data = await response.json();
 
         if (data.error) {
-            console.error('Error loading network health:', data.error);
+            console.error('Error loading nodes with issues:', data.error);
             return;
         }
 
-        // Update health distribution
-        const dist = data.health_distribution;
-        const total = dist.healthy + dist.degraded + dist.poor + dist.critical;
+        const listContainer = document.getElementById('nodes-with-issues-list');
+        const nodes = data.problematic_nodes || [];
 
-        if (total > 0) {
-            const healthyPct = (dist.healthy / total * 100).toFixed(0);
-            const degradedPct = (dist.degraded / total * 100).toFixed(0);
-            const poorPct = (dist.poor / total * 100).toFixed(0);
-
-            const healthyBar = document.getElementById('dash-healthy-bar');
-            const degradedBar = document.getElementById('dash-degraded-bar');
-            const poorBar = document.getElementById('dash-poor-bar');
-
-            healthyBar.style.width = healthyPct + '%';
-            degradedBar.style.width = degradedPct + '%';
-            poorBar.style.width = poorPct + '%';
-
-            document.getElementById('dash-healthy-count').textContent = dist.healthy;
-            document.getElementById('dash-degraded-count').textContent = dist.degraded;
-            document.getElementById('dash-poor-count').textContent = dist.poor;
-
-            // Update text labels below bar
-            document.getElementById('dash-healthy-text').textContent = dist.healthy;
-            document.getElementById('dash-degraded-text').textContent = dist.degraded;
-            document.getElementById('dash-poor-text').textContent = dist.poor;
-
-            // Update tooltips
-            healthyBar.setAttribute('title', `Healthy: ${dist.healthy} nodes (${healthyPct}%)`);
-            degradedBar.setAttribute('title', `Degraded: ${dist.degraded} nodes (${degradedPct}%)`);
-            poorBar.setAttribute('title', `Poor: ${dist.poor} nodes (${poorPct}%)`);
+        if (nodes.length === 0) {
+            listContainer.innerHTML = '<div class="text-success mb-2"><i class="bi bi-check-circle"></i> All nodes healthy</div>';
+        } else {
+            let html = '<ul class="list-unstyled mb-2">';
+            nodes.forEach(node => {
+                const statusClass = node.health_score < 50 ? 'text-danger' : 'text-warning';
+                const statusIcon = node.health_score < 50 ? 'exclamation-triangle-fill' : 'exclamation-circle';
+                const nodeName = node.display_name || node.short_name || `!${node.node_id.toString(16).padStart(8, '0')}`;
+                const topIssue = node.issues && node.issues.length > 0 ? node.issues[0].message : 'Health issues detected';
+                // Truncate issue message if too long
+                const truncatedIssue = topIssue.length > 40 ? topIssue.substring(0, 40) + '...' : topIssue;
+                html += `<li class="mb-1">
+                    <a href="/nodes/${node.node_id}" class="${statusClass}" style="text-decoration: none;">
+                        <i class="bi bi-${statusIcon}"></i> ${nodeName}
+                    </a>
+                    <div class="text-muted" style="font-size: 0.75rem; margin-left: 1.1rem;">${truncatedIssue}</div>
+                </li>`;
+            });
+            html += '</ul>';
+            if (data.total_count > 5) {
+                html += `<div class="text-muted mb-1">+ ${data.total_count - 5} more nodes with issues</div>`;
+            }
+            listContainer.innerHTML = html;
         }
 
         document.getElementById('network-health-loading').style.display = 'none';
         document.getElementById('network-health-content').style.display = 'block';
 
     } catch (error) {
-        console.error('Error loading network health:', error);
+        console.error('Error loading nodes with issues:', error);
     }
 }
 
