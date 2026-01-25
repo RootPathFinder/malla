@@ -286,48 +286,49 @@
                 </ul>
 
                 <!-- Timezone Toggle, Temperature Toggle, and Dark Mode Toggle -->
-                <div class="navbar-nav d-flex flex-row align-items-center gap-2">
-                    <!-- Global Node Search -->
-                    <div class="position-relative d-none d-md-block" style="width: 200px;">
+                <div class="navbar-nav d-flex flex-row align-items-center gap-1">
+                    <!-- Global Node Search - Collapsible -->
+                    <div class="position-relative d-none d-lg-block" style="width: 160px;">
                         <input type="text" id="global-node-search" class="form-control form-control-sm"
                                placeholder="Search nodes..." autocomplete="off"
-                               style="padding-right: 30px;">
-                        <i class="bi bi-search position-absolute" style="right: 10px; top: 50%; transform: translateY(-50%); opacity: 0.5;"></i>
+                               style="padding-right: 28px; font-size: 0.8rem;">
+                        <i class="bi bi-search position-absolute" style="right: 8px; top: 50%; transform: translateY(-50%); opacity: 0.5; font-size: 0.75rem;"></i>
                         <div id="global-search-results" class="position-absolute w-100 bg-body border rounded shadow-sm"
-                             style="top: 100%; left: 0; max-height: 300px; overflow-y: auto; z-index: 1050; display: none;">
+                             style="top: 100%; left: 0; max-height: 300px; overflow-y: auto; z-index: 1050; display: none; min-width: 250px;">
                         </div>
                     </div>
                     {% if APP_CONFIG.admin_enabled %}
                     <!-- Background Jobs Indicator -->
                     <a id="jobs-indicator" href="{{ url_for('admin.admin_page') }}?tab=jobs"
-                       class="btn btn-outline-light btn-sm d-flex align-items-center gap-1 d-none"
+                       class="btn btn-outline-light btn-sm d-flex align-items-center d-none px-2"
                        title="Background jobs">
                         <i class="bi bi-list-task"></i>
-                        <span class="jobs-count badge bg-primary ms-1">0</span>
+                        <span class="jobs-count badge bg-primary ms-1" style="font-size: 0.65rem;">0</span>
                     </a>
                     <!-- Node Connection Indicator -->
                     <a id="node-connection-indicator" href="{{ url_for('admin.admin_page') }}"
-                       class="btn btn-outline-light btn-sm d-flex align-items-center gap-1 disconnected"
+                       class="btn btn-outline-light btn-sm d-flex align-items-center disconnected px-2"
                        title="Not connected to any node">
                         <i class="bi bi-broadcast connection-icon"></i>
-                        <span class="connection-text d-none d-md-inline">No Node</span>
+                        <span class="connection-text d-none d-xl-inline ms-1" style="font-size: 0.75rem;">No Node</span>
                     </a>
-                    <div class="vr d-none d-md-block" style="height: 24px; opacity: 0.3;"></div>
                     {% endif %}
-                    <button id="timezone-toggle" class="btn btn-outline-light btn-sm" type="button"
+                    <div class="vr d-none d-lg-block mx-1" style="height: 20px; opacity: 0.3;"></div>
+                    <button id="timezone-toggle" class="btn btn-outline-light btn-sm px-2" type="button"
                             title="Toggle timezone"
                             aria-label="Toggle timezone">
                         <i class="bi bi-globe"></i>
                     </button>
-                    <button id="temperature-toggle" class="btn btn-outline-light btn-sm" type="button"
+                    <button id="temperature-toggle" class="btn btn-outline-light btn-sm px-2" type="button"
                             title="Toggle temperature unit"
                             aria-label="Toggle temperature unit">
-                        <i class="bi bi-thermometer-half"></i> C
+                        <i class="bi bi-thermometer-half"></i><span class="d-none d-xl-inline ms-1">C</span>
                     </button>
-                    <button id="theme-toggle" class="btn btn-outline-light btn-sm" type="button"
+                    <button id="theme-toggle" class="btn btn-outline-light btn-sm px-2" type="button"
                             title="Toggle theme mode"
                             aria-label="Toggle theme mode">
                         <i class="bi bi-circle-half"></i>
+                    </button>
                     </button>
                 </div>
             </div>
