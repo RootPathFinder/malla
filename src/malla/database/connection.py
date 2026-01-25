@@ -312,3 +312,36 @@ def _ensure_schema_migrations(cursor: sqlite3.Cursor) -> None:
                 _SCHEMA_MIGRATIONS_DONE.add("node_info_archived")
             else:
                 logging.warning(f"Failed to add archived column: {exc}")
+
+    # Migration: Add scaling indexes for 1000+ node performance
+    if "scaling_indexes" not in _SCHEMA_MIGRATIONS_DONE:
+        try:
+            # Index on destination for packet filtering
+            cursor.execute(
+                "CREATE INDEX IF NOT EXISTS idx_packet_destination ON packet_history(destination)"
+            )
+            # Index on short_name for text search
+            cursor.execute(
+                "CREATE INDEX IF NOT EXISTS idx_node_short_name ON node_info(short_name)"
+            )
+            # Index on long_name for text search
+            cursor.execute(
+                "CREATE INDEX IF NOT EXISTS idx_node_long_name ON node_info(long_name)"
+            )
+            # Composite index for common packet queries
+            cursor.execute(
+                "CREATE INDEX IF NOT EXISTS idx_packet_from_time ON packet_history(from_node_id, timestamp DESC)"
+            )
+            # Index for traceroute queries
+            cursor.execute(
+                "CREATE INDEX IF NOT EXISTS idx_packet_portnum_time ON packet_history(portnum_name, timestamp DESC)"
+            )
+            # Index for gateway queries
+            cursor.execute(
+                "CREATE INDEX IF NOT EXISTS idx_packet_gateway_time ON packet_history(gateway_id, timestamp DESC)"
+            )
+            logging.info("Added scaling indexes for 1000+ node performance")
+            _SCHEMA_MIGRATIONS_DONE.add("scaling_indexes")
+        except sqlite3.OperationalError as exc:
+            logging.warning(f"Failed to add scaling indexes: {exc}")
+            _SCHEMA_MIGRATIONS_DONE.add("scaling_indexes")

@@ -1,0 +1,131 @@
+{% extends "base.html" %}
+
+{% block title %}Edit User - {{ APP_NAME }}{% endblock %}
+
+{% block content %}
+<div class="container">
+    <div class="row">
+        <div class="col-lg-6 mx-auto">
+            <div class="d-flex justify-content-between align-items-center mb-4">
+                <h2><i class="bi bi-person-gear me-2"></i>Edit User</h2>
+                <a href="{{ url_for('auth.user_list') }}" class="btn btn-outline-secondary">
+                    <i class="bi bi-arrow-left me-1"></i>Back to Users
+                </a>
+            </div>
+
+            {% with messages = get_flashed_messages(with_categories=true) %}
+                {% if messages %}
+                    {% for category, message in messages %}
+                        <div class="alert alert-{{ category }} alert-dismissible fade show" role="alert">
+                            {{ message }}
+                            <button type="button" class="btn-close" data-bs-dismiss="alert" aria-label="Close"></button>
+                        </div>
+                    {% endfor %}
+                {% endif %}
+            {% endwith %}
+
+            <!-- User Info -->
+            <div class="card mb-4">
+                <div class="card-header">
+                    <h5 class="mb-0">
+                        <i class="bi bi-person me-2"></i>{{ user.username }}
+                        {% if not user.is_active %}
+                            <span class="badge bg-dark ms-2">Inactive</span>
+                        {% endif %}
+                    </h5>
+                </div>
+                <div class="card-body">
+                    <div class="row text-muted small mb-2">
+                        <div class="col-6">
+                            <strong>Created:</strong> {{ user.created_at | format_timestamp }}
+                        </div>
+                        <div class="col-6">
+                            <strong>Last Login:</strong>
+                            {% if user.last_login %}
+                                {{ user.last_login | format_timestamp }}
+                            {% else %}
+                                Never
+                            {% endif %}
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Update Role -->
+            <div class="card mb-4">
+                <div class="card-header">
+                    <h5 class="mb-0"><i class="bi bi-shield me-2"></i>Update Role</h5>
+                </div>
+                <div class="card-body">
+                    <form method="POST">
+                        <input type="hidden" name="action" value="update_role">
+                        <div class="mb-3">
+                            <label for="role" class="form-label">Role</label>
+                            <select class="form-select" id="role" name="role" required>
+                                <option value="viewer" {{ 'selected' if user.role.value == 'viewer' else '' }}>
+                                    Viewer - Read-only access
+                                </option>
+                                <option value="operator" {{ 'selected' if user.role.value == 'operator' else '' }}>
+                                    Operator - Can use admin features
+                                </option>
+                                <option value="admin" {{ 'selected' if user.role.value == 'admin' else '' }}>
+                                    Admin - Full access including user management
+                                </option>
+                            </select>
+                        </div>
+                        <button type="submit" class="btn btn-primary">
+                            <i class="bi bi-check-lg me-1"></i>Update Role
+                        </button>
+                    </form>
+                </div>
+            </div>
+
+            <!-- Reset Password -->
+            <div class="card mb-4">
+                <div class="card-header">
+                    <h5 class="mb-0"><i class="bi bi-key me-2"></i>Reset Password</h5>
+                </div>
+                <div class="card-body">
+                    <form method="POST">
+                        <input type="hidden" name="action" value="reset_password">
+                        <div class="mb-3">
+                            <label for="new_password" class="form-label">New Password</label>
+                            <input type="password"
+                                   class="form-control"
+                                   id="new_password"
+                                   name="new_password"
+                                   minlength="8"
+                                   autocomplete="new-password"
+                                   required>
+                            <div class="form-text">At least 8 characters.</div>
+                        </div>
+                        <button type="submit" class="btn btn-warning">
+                            <i class="bi bi-arrow-repeat me-1"></i>Reset Password
+                        </button>
+                    </form>
+                </div>
+            </div>
+
+            <!-- Deactivate User -->
+            {% if user.is_active %}
+            <div class="card border-danger">
+                <div class="card-header bg-danger text-white">
+                    <h5 class="mb-0"><i class="bi bi-exclamation-triangle me-2"></i>Danger Zone</h5>
+                </div>
+                <div class="card-body">
+                    <p class="text-muted">
+                        Deactivating a user will prevent them from logging in. This action can be reversed.
+                    </p>
+                    <form method="POST" onsubmit="return confirm('Are you sure you want to deactivate this user?');">
+                        <input type="hidden" name="action" value="deactivate">
+                        <button type="submit" class="btn btn-danger">
+                            <i class="bi bi-person-x me-1"></i>Deactivate User
+                        </button>
+                    </form>
+                </div>
+            </div>
+            {% endif %}
+        </div>
+    </div>
+</div>
+{% endblock %}

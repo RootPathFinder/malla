@@ -1769,7 +1769,12 @@ class AlertService:
                         "link": "/nodes",
                         "value": len(offline_infra),
                         "value_label": "nodes",
-                        "affected_nodes": [n["name"] for n in sorted(offline_infra, key=lambda x: -x["hours_offline"])[:10]],
+                        "affected_nodes": [
+                            n["name"]
+                            for n in sorted(
+                                offline_infra, key=lambda x: -x["hours_offline"]
+                            )[:10]
+                        ],
                     }
                 )
 
@@ -1786,7 +1791,12 @@ class AlertService:
                         "link": "/nodes",
                         "value": len(offline_clients),
                         "value_label": "nodes",
-                        "affected_nodes": [n["name"] for n in sorted(offline_clients, key=lambda x: -x["hours_offline"])[:10]],
+                        "affected_nodes": [
+                            n["name"]
+                            for n in sorted(
+                                offline_clients, key=lambda x: -x["hours_offline"]
+                            )[:10]
+                        ],
                     }
                 )
 

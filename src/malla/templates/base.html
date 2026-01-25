@@ -327,7 +327,55 @@
                             aria-label="Toggle theme mode">
                         <i class="bi bi-circle-half"></i>
                     </button>
-                    </button>
+                    <!-- User Account Dropdown -->
+                    <div class="vr d-none d-lg-block mx-1" style="height: 20px; opacity: 0.3;"></div>
+                    {% if current_user.is_authenticated %}
+                    <div class="dropdown">
+                        <button class="btn btn-outline-light btn-sm dropdown-toggle px-2" type="button"
+                                id="userDropdown" data-bs-toggle="dropdown" aria-expanded="false"
+                                title="Account">
+                            <i class="bi bi-person-circle"></i>
+                            <span class="d-none d-xl-inline ms-1">{{ current_user.username }}</span>
+                        </button>
+                        <ul class="dropdown-menu dropdown-menu-end" aria-labelledby="userDropdown">
+                            <li class="dropdown-header">
+                                {% if current_user.role.value == 'admin' %}
+                                    <span class="badge bg-danger me-1">Admin</span>
+                                {% elif current_user.role.value == 'operator' %}
+                                    <span class="badge bg-warning text-dark me-1">Operator</span>
+                                {% else %}
+                                    <span class="badge bg-secondary me-1">Viewer</span>
+                                {% endif %}
+                                {{ current_user.username }}
+                            </li>
+                            <li><hr class="dropdown-divider"></li>
+                            <li>
+                                <a class="dropdown-item" href="{{ url_for('auth.profile') }}">
+                                    <i class="bi bi-person me-2"></i>Profile
+                                </a>
+                            </li>
+                            {% if current_user.is_admin() %}
+                            <li>
+                                <a class="dropdown-item" href="{{ url_for('auth.user_list') }}">
+                                    <i class="bi bi-people me-2"></i>Manage Users
+                                </a>
+                            </li>
+                            {% endif %}
+                            <li><hr class="dropdown-divider"></li>
+                            <li>
+                                <a class="dropdown-item" href="{{ url_for('auth.logout') }}">
+                                    <i class="bi bi-box-arrow-right me-2"></i>Logout
+                                </a>
+                            </li>
+                        </ul>
+                    </div>
+                    {% else %}
+                    <a href="{{ url_for('auth.login') }}" class="btn btn-outline-light btn-sm px-2"
+                       title="Login">
+                        <i class="bi bi-box-arrow-in-right"></i>
+                        <span class="d-none d-xl-inline ms-1">Login</span>
+                    </a>
+                    {% endif %}
                 </div>
             </div>
         </div>

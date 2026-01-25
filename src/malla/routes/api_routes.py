@@ -2839,15 +2839,19 @@ def api_weather_sensors():
                     if htel.HasField("environment_metrics"):
                         henv = htel.environment_metrics
                         if henv.temperature != 0:
-                            temp_history.append({
-                                "t": hrow["timestamp"],
-                                "v": round(henv.temperature, 1)
-                            })
+                            temp_history.append(
+                                {
+                                    "t": hrow["timestamp"],
+                                    "v": round(henv.temperature, 1),
+                                }
+                            )
                         if henv.relative_humidity != 0:
-                            humidity_history.append({
-                                "t": hrow["timestamp"],
-                                "v": round(henv.relative_humidity, 1)
-                            })
+                            humidity_history.append(
+                                {
+                                    "t": hrow["timestamp"],
+                                    "v": round(henv.relative_humidity, 1),
+                                }
+                            )
                 except Exception:
                     continue
             sensor["temp_history"] = temp_history
@@ -2866,7 +2870,9 @@ def api_weather_sensors():
                     url = f"https://nominatim.openstreetmap.org/reverse?format=json&lat={sensor['latitude']}&lon={sensor['longitude']}&zoom=10"
                     req = urllib.request.Request(
                         url,
-                        headers={"User-Agent": "Malla/1.0 (Meshtastic Mesh Health Monitor)"}
+                        headers={
+                            "User-Agent": "Malla/1.0 (Meshtastic Mesh Health Monitor)"
+                        },
                     )
                     with urllib.request.urlopen(req, timeout=2) as response:
                         data = json.loads(response.read().decode())

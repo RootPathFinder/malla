@@ -16,9 +16,11 @@ from flask import (
     request,
     stream_with_context,
 )
+from flask_login import current_user
 
 from ..config import get_config
 from ..database.admin_repository import AdminRepository
+from ..models.user import UserRole
 from ..services.admin_service import ConfigType, get_admin_service
 from ..services.serial_publisher import discover_serial_ports, get_serial_publisher
 from ..services.tcp_publisher import get_tcp_publisher
@@ -28,6 +30,30 @@ from ..utils.node_utils import convert_node_id
 logger = logging.getLogger(__name__)
 
 admin_bp = Blueprint("admin", __name__)
+
+
+def _check_operator_access():
+    """Check if current user has operator or higher access."""
+    if not current_user.is_authenticated:
+        if request.is_json:
+            return jsonify({"error": "Authentication required"}), 401
+        from flask import redirect, url_for
+
+        return redirect(url_for("auth.login", next=request.path))
+    if not current_user.has_role(UserRole.OPERATOR):
+        if request.is_json:
+            return jsonify(
+                {
+                    "error": "Insufficient permissions",
+                    "required_role": "operator",
+                    "your_role": current_user.role.value,
+                }
+            ), 403
+        from flask import flash, redirect, url_for
+
+        flash("You need operator or admin access for this feature.", "warning")
+        return redirect(url_for("main.index"))
+    return None
 
 
 @admin_bp.before_request
@@ -52,6 +78,13 @@ def check_admin_enabled():
                 "Set MALLA_ADMIN_ENABLED=true to enable.",
             }
         ), 403
+
+    # Check operator access for all admin endpoints except status checks
+    if request.endpoint not in ("admin.api_admin_enabled", "admin.api_admin_status"):
+        auth_result = _check_operator_access()
+        if auth_result:
+            return auth_result
+
     return None
 
 

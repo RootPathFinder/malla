@@ -901,7 +901,9 @@ def log_packet_to_database(
                 (current_time, from_node_id),
             )
             if cursor.rowcount > 0:
-                logging.info(f"Auto-unarchived node {from_node_id} due to new packet activity")
+                logging.info(
+                    f"Auto-unarchived node {from_node_id} due to new packet activity"
+                )
 
         conn.commit()
         conn.close()

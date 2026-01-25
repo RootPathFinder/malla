@@ -266,6 +266,19 @@ def create_app(cfg: AppConfig | None = None):  # noqa: D401
         except (ValueError, TypeError, OSError):
             return str(timestamp)
 
+    @app.template_filter("format_timestamp")
+    def format_timestamp_filter(timestamp):
+        """Template filter to format Unix timestamp as human-readable datetime."""
+        if timestamp is None:
+            return "N/A"
+        try:
+            from datetime import datetime
+
+            dt = datetime.fromtimestamp(float(timestamp))
+            return dt.strftime("%Y-%m-%d %H:%M:%S")
+        except (ValueError, TypeError, OSError):
+            return str(timestamp)
+
     # ------------------------------------------------------------------
     # Markdown rendering filter & context processor for config variables
     # ------------------------------------------------------------------
@@ -301,6 +314,12 @@ def create_app(cfg: AppConfig | None = None):  # noqa: D401
     # Initialize database
     logger.info("Initializing database connection")
     init_database()
+
+    # Initialize authentication system
+    from .services.auth_service import init_auth
+
+    logger.info("Initializing authentication system")
+    init_auth(app)
 
     # Initialize admin tables
     from .database.admin_repository import init_admin_tables
