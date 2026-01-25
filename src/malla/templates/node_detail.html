@@ -2195,6 +2195,10 @@ let liveChartData = {
     airUtil: []
 };
 
+// Poll timeline tracking - stores each poll result
+let pollTimelineResults = [];
+const MAX_TIMELINE_RESULTS = 50; // Keep last 50 polls visible
+
 // Initialize duration selector
 document.addEventListener('DOMContentLoaded', function() {
     const durationBtns = document.querySelectorAll('#live-duration-selector button');
@@ -2227,6 +2231,106 @@ function resetTelemetryStats() {
     if (badge) {
         badge.className = 'badge bg-secondary';
     }
+
+    // Reset poll timeline
+    resetPollTimeline();
+}
+
+function resetPollTimeline() {
+    pollTimelineResults = [];
+    const timeline = document.getElementById('poll-timeline');
+    const summary = document.getElementById('poll-timeline-summary');
+    if (timeline) {
+        timeline.innerHTML = '<span class="text-muted small">Waiting for first poll...</span>';
+    }
+    if (summary) {
+        summary.textContent = '--';
+    }
+}
+
+function addPollResult(success, responseTime) {
+    // Add a new poll result to the timeline
+    const now = new Date();
+    const result = {
+        timestamp: now,
+        success: success,
+        responseTime: responseTime,
+        slow: success && responseTime > 4000 // Consider >4s as slow
+    };
+
+    pollTimelineResults.push(result);
+
+    // Keep only last N results
+    if (pollTimelineResults.length > MAX_TIMELINE_RESULTS) {
+        pollTimelineResults = pollTimelineResults.slice(-MAX_TIMELINE_RESULTS);
+    }
+
+    updatePollTimelineDisplay();
+}
+
+function updatePollTimelineDisplay() {
+    const timeline = document.getElementById('poll-timeline');
+    const summary = document.getElementById('poll-timeline-summary');
+
+    if (!timeline) return;
+
+    // Calculate stats
+    const total = pollTimelineResults.length;
+    const successes = pollTimelineResults.filter(r => r.success).length;
+    const failures = pollTimelineResults.filter(r => !r.success).length;
+    const slow = pollTimelineResults.filter(r => r.slow).length;
+    const successRate = total > 0 ? ((successes / total) * 100).toFixed(0) : 0;
+
+    // Update summary
+    if (summary) {
+        const avgResponseTime = total > 0
+            ? (pollTimelineResults.filter(r => r.success).reduce((sum, r) => sum + r.responseTime, 0) / Math.max(successes, 1) / 1000).toFixed(1)
+            : 0;
+        summary.innerHTML = `<span class="${failures > 0 ? 'text-danger' : 'text-success'}">${successRate}% success</span> · ${avgResponseTime}s avg`;
+    }
+
+    // Build timeline dots
+    let html = '';
+    pollTimelineResults.forEach((result, index) => {
+        let color, title, icon;
+        if (!result.success) {
+            color = '#dc3545'; // Red for failure
+            title = `Poll #${index + 1}: Failed at ${result.timestamp.toLocaleTimeString()}`;
+            icon = '✕';
+        } else if (result.slow) {
+            color = '#ffc107'; // Yellow for slow
+            title = `Poll #${index + 1}: ${(result.responseTime / 1000).toFixed(1)}s (slow) at ${result.timestamp.toLocaleTimeString()}`;
+            icon = '!';
+        } else {
+            color = '#198754'; // Green for success
+            title = `Poll #${index + 1}: ${(result.responseTime / 1000).toFixed(1)}s at ${result.timestamp.toLocaleTimeString()}`;
+            icon = '✓';
+        }
+
+        // Create a dot with tooltip
+        html += `<div class="poll-dot" style="
+            width: 18px;
+            height: 18px;
+            background: ${color};
+            border-radius: 50%;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-size: 10px;
+            font-weight: bold;
+            color: white;
+            cursor: help;
+            transition: transform 0.15s;
+            flex-shrink: 0;
+        " title="${title}" onmouseover="this.style.transform='scale(1.3)'" onmouseout="this.style.transform='scale(1)'">${icon}</div>`;
+    });
+
+    // Add "newest" indicator
+    if (pollTimelineResults.length > 0) {
+        html += '<span class="text-muted small ms-2">newest →</span>';
+    }
+
+    timeline.innerHTML = html || '<span class="text-muted small">Waiting for first poll...</span>';
 }
 
 function updateTelemetryStats(stats) {
@@ -2633,6 +2737,9 @@ async function pollLiveTelemetry() {
 
         // Handle successful live response
         if (data.success && data.telemetry) {
+            // Add successful result to timeline
+            addPollResult(true, responseTime);
+
             const intervalSec = Math.round(liveTelemetryPollInterval / 1000);
             const responseSec = Math.round(responseTime/1000);
             statusIndicator.innerHTML = `<span class="badge bg-success">Live</span> <small class="text-muted ms-2">Response: ${responseSec}s | Next poll: ${intervalSec}s</small>`;
@@ -2651,6 +2758,9 @@ async function pollLiveTelemetry() {
 
         // Handle timeout (408) - node didn't respond in time
         if (response.status === 408) {
+            // Add failed result to timeline
+            addPollResult(false, responseTime);
+
             statusIndicator.innerHTML = '<span class="badge bg-warning">No Response</span> <small class="text-muted ms-2">Node didn\'t respond (may be sleeping, distant, or not configured to reply). Retrying...</small>';
             adjustPollingInterval(responseTime, false);
             scheduleNextPoll();
@@ -2658,6 +2768,9 @@ async function pollLiveTelemetry() {
         }
 
         // Handle other errors - show error but keep trying live
+        // Add failed result to timeline
+        addPollResult(false, responseTime);
+
         const errorMsg = data.error || 'Unknown error';
         if (errorMsg.includes('TCP not connected')) {
             statusIndicator.innerHTML = '<span class="badge bg-danger">Not Connected</span> <small class="text-muted ms-2">Connect via Admin page first</small>';
@@ -2673,6 +2786,9 @@ async function pollLiveTelemetry() {
 
     } catch (error) {
         console.error('Live telemetry fetch failed:', error);
+        // Add failed result to timeline for network errors
+        addPollResult(false, Date.now() - pollStartTime);
+
         statusIndicator.innerHTML = '<span class="badge bg-danger">Network Error</span> <small class="text-muted ms-2">Check connection...</small>';
         adjustPollingInterval(Date.now() - pollStartTime, false);
         scheduleNextPoll();
