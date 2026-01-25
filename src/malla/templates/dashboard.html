@@ -194,6 +194,46 @@
         </div>
     </div>
 
+    <!-- Network Insights Summary Row -->
+    <div class="row mb-4">
+        <div class="col-12">
+            <div class="card">
+                <div class="card-header d-flex justify-content-between align-items-center">
+                    <h5 class="card-title mb-0">
+                        <i class="bi bi-lightbulb"></i> Network Insights
+                        <span class="badge bg-secondary ms-2" id="insightCountBadge" style="display: none;">0</span>
+                    </h5>
+                    <a href="{{ url_for('alerts.insights') }}" class="btn btn-sm btn-outline-primary">
+                        View All <i class="bi bi-arrow-right"></i>
+                    </a>
+                </div>
+                <div class="card-body">
+                    <div class="row">
+                        <!-- Health Score -->
+                        <div class="col-md-2 text-center border-end">
+                            <div id="dashboardHealthScore" class="mb-2">
+                                <div class="spinner-border spinner-border-sm text-primary" role="status">
+                                    <span class="visually-hidden">Loading...</span>
+                                </div>
+                            </div>
+                        </div>
+                        <!-- Insights List -->
+                        <div class="col-md-10">
+                            <div id="dashboardInsightsList">
+                                <div class="text-center py-3">
+                                    <div class="spinner-border spinner-border-sm text-primary" role="status">
+                                        <span class="visually-hidden">Loading...</span>
+                                    </div>
+                                    <span class="ms-2 text-muted">Loading insights...</span>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
     <!-- Signal Quality and Activity Charts Row -->
     <div class="row mb-4">
         <!-- Active Nodes Distribution -->
@@ -1049,6 +1089,103 @@ document.addEventListener('visibilitychange', () => {
 // Initialize health data loading
 loadDashboardNetworkHealth();
 startHealthPolling();
+
+// Load Network Insights for dashboard
+async function loadDashboardInsights() {
+    try {
+        const response = await fetch('/alerts/api/insights');
+        const data = await response.json();
+
+        if (data.error) {
+            console.error('Error loading insights:', data.error);
+            document.getElementById('dashboardInsightsList').innerHTML =
+                '<div class="text-muted"><i class="bi bi-info-circle"></i> Unable to load insights</div>';
+            return;
+        }
+
+        // Update health score
+        const healthScore = data.health_score || 0;
+        const healthLabel = healthScore >= 80 ? 'Healthy' : healthScore >= 60 ? 'Fair' : healthScore >= 40 ? 'Poor' : 'Critical';
+        const healthColor = healthScore >= 80 ? '#198754' : healthScore >= 60 ? '#ffc107' : healthScore >= 40 ? '#fd7e14' : '#dc3545';
+
+        document.getElementById('dashboardHealthScore').innerHTML = `
+            <div style="font-size: 2.5rem; font-weight: 700; color: ${healthColor};">${healthScore}</div>
+            <div class="text-muted small">${healthLabel}</div>
+        `;
+
+        // Update insights list
+        const insights = data.insights || [];
+        const insightCountBadge = document.getElementById('insightCountBadge');
+
+        if (insights.length === 0) {
+            insightCountBadge.style.display = 'none';
+            document.getElementById('dashboardInsightsList').innerHTML = `
+                <div class="d-flex align-items-center text-success">
+                    <i class="bi bi-check-circle-fill me-2"></i>
+                    <span>All systems healthy - no issues detected</span>
+                </div>
+            `;
+        } else {
+            insightCountBadge.textContent = insights.length;
+            insightCountBadge.style.display = 'inline-block';
+            insightCountBadge.className = 'badge ms-2 ' + (
+                insights.some(i => i.priority === 'high') ? 'bg-danger' :
+                insights.some(i => i.priority === 'medium') ? 'bg-warning' : 'bg-info'
+            );
+
+            // Show top 3 insights
+            const topInsights = insights.slice(0, 3);
+            let html = '<div class="row g-2">';
+
+            topInsights.forEach(insight => {
+                const priorityClass = insight.priority === 'high' ? 'danger' :
+                                     insight.priority === 'medium' ? 'warning' :
+                                     insight.priority === 'good' ? 'success' : 'info';
+                const icon = insight.icon || 'info-circle';
+
+                html += `
+                    <div class="col-md-4">
+                        <a href="${insight.link || '/alerts/insights'}" class="text-decoration-none">
+                            <div class="d-flex align-items-start p-2 rounded border-start border-3 border-${priorityClass}"
+                                 style="background: var(--bs-tertiary-bg); transition: transform 0.15s;"
+                                 onmouseover="this.style.transform='translateX(4px)'"
+                                 onmouseout="this.style.transform='none'">
+                                <div class="me-2">
+                                    <i class="bi bi-${icon} text-${priorityClass}"></i>
+                                </div>
+                                <div class="flex-grow-1 overflow-hidden">
+                                    <div class="fw-semibold text-body small text-truncate">${insight.title}</div>
+                                    <div class="text-muted" style="font-size: 0.75rem; line-height: 1.2;">
+                                        ${insight.description.length > 60 ? insight.description.substring(0, 60) + '...' : insight.description}
+                                    </div>
+                                </div>
+                            </div>
+                        </a>
+                    </div>
+                `;
+            });
+
+            html += '</div>';
+
+            if (insights.length > 3) {
+                html += `<div class="text-muted small mt-2">+ ${insights.length - 3} more insights</div>`;
+            }
+
+            document.getElementById('dashboardInsightsList').innerHTML = html;
+        }
+
+    } catch (error) {
+        console.error('Error loading insights:', error);
+        document.getElementById('dashboardInsightsList').innerHTML =
+            '<div class="text-muted"><i class="bi bi-exclamation-circle"></i> Error loading insights</div>';
+    }
+}
+
+// Initialize insights loading
+loadDashboardInsights();
+
+// Refresh insights periodically (every 2 minutes)
+setInterval(loadDashboardInsights, 120000);
 </script>
 
 <!-- Chart.js for analytics charts -->

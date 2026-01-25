@@ -2159,9 +2159,9 @@ let liveTelemetryPollTimeout = null;
 let liveTelemetryIsPolling = false;
 
 // Adaptive polling configuration
-let liveTelemetryPollInterval = 10000; // Start at 10 seconds
-const LIVE_TELEMETRY_MIN_INTERVAL = 10000; // 10 seconds minimum
-const LIVE_TELEMETRY_MAX_INTERVAL = 30000; // 30 seconds maximum
+let liveTelemetryPollInterval = 5000; // Start at 5 seconds
+const LIVE_TELEMETRY_MIN_INTERVAL = 3000; // 3 seconds minimum (near real-time)
+const LIVE_TELEMETRY_MAX_INTERVAL = 20000; // 20 seconds maximum
 let liveTelemetrySelectedDuration = 60000; // Default 1 minute
 let liveTelemetryLastResponseTime = 0;
 let liveTelemetryConsecutiveSlowResponses = 0;
@@ -2238,10 +2238,13 @@ function startLiveTelemetry() {
     const pollingMetrics = document.getElementById('polling-metrics-container');
     const durationSelector = document.getElementById('live-duration-selector');
 
-    // Reset adaptive polling
-    liveTelemetryPollInterval = LIVE_TELEMETRY_MIN_INTERVAL;
+    // Reset adaptive polling - start at 5s, will speed up if responses are fast
+    liveTelemetryPollInterval = 5000;
     liveTelemetryConsecutiveSlowResponses = 0;
     liveTelemetryConsecutiveFastResponses = 0;
+
+    // Reset stats display
+    resetTelemetryStats();
 
     // Reset chart data
     liveChartData = {
@@ -2448,34 +2451,59 @@ function updateLiveCharts(dm) {
 }
 
 function adjustPollingInterval(responseTime, success) {
-    // Adaptive polling: increase interval if responses are slow, decrease if fast
-    const SLOW_THRESHOLD = 5000; // 5 seconds
-    const FAST_THRESHOLD = 2000; // 2 seconds
+    // Aggressive adaptive polling: try to get as close to real-time as possible
+    // Use response time + small buffer as the target interval
+    const SLOW_THRESHOLD = 4000; // 4 seconds considered slow
+    const FAST_THRESHOLD = 1500; // 1.5 seconds considered fast
+    const VERY_FAST_THRESHOLD = 800; // Under 800ms is very fast
 
-    if (!success || responseTime > SLOW_THRESHOLD) {
+    if (!success) {
+        // Failed request - back off significantly
+        liveTelemetryConsecutiveSlowResponses++;
+        liveTelemetryConsecutiveFastResponses = 0;
+        liveTelemetryPollInterval = Math.min(
+            liveTelemetryPollInterval + 3000,
+            LIVE_TELEMETRY_MAX_INTERVAL
+        );
+    } else if (responseTime > SLOW_THRESHOLD) {
         liveTelemetryConsecutiveSlowResponses++;
         liveTelemetryConsecutiveFastResponses = 0;
 
         // Increase interval after 2 consecutive slow responses
         if (liveTelemetryConsecutiveSlowResponses >= 2) {
             liveTelemetryPollInterval = Math.min(
-                liveTelemetryPollInterval + 5000,
+                liveTelemetryPollInterval + 2000,
                 LIVE_TELEMETRY_MAX_INTERVAL
             );
             liveTelemetryConsecutiveSlowResponses = 0;
         }
+    } else if (responseTime < VERY_FAST_THRESHOLD) {
+        // Very fast response - speed up aggressively
+        liveTelemetryConsecutiveFastResponses++;
+        liveTelemetryConsecutiveSlowResponses = 0;
+
+        // Speed up after just 1 very fast response
+        liveTelemetryPollInterval = Math.max(
+            Math.min(liveTelemetryPollInterval - 1000, responseTime + 2000),
+            LIVE_TELEMETRY_MIN_INTERVAL
+        );
+        liveTelemetryConsecutiveFastResponses = 0;
     } else if (responseTime < FAST_THRESHOLD) {
         liveTelemetryConsecutiveFastResponses++;
         liveTelemetryConsecutiveSlowResponses = 0;
 
-        // Decrease interval after 3 consecutive fast responses
-        if (liveTelemetryConsecutiveFastResponses >= 3) {
+        // Speed up after 2 consecutive fast responses
+        if (liveTelemetryConsecutiveFastResponses >= 2) {
             liveTelemetryPollInterval = Math.max(
-                liveTelemetryPollInterval - 2000,
+                liveTelemetryPollInterval - 500,
                 LIVE_TELEMETRY_MIN_INTERVAL
             );
             liveTelemetryConsecutiveFastResponses = 0;
         }
+    } else {
+        // Response time is acceptable, reset counters
+        liveTelemetryConsecutiveSlowResponses = 0;
+        liveTelemetryConsecutiveFastResponses = 0;
     }
 }
 
