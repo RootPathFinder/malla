@@ -1943,13 +1943,13 @@ class AlertService:
                         }
                     )
 
-            # 5. Check for new nodes in last 24h
+            # 5. Check for new nodes in last 24h (truly new nodes, not just updated)
             cursor.execute(
                 """
                 SELECT node_id, COALESCE(long_name, short_name, printf('!%08x', node_id)) as name
                 FROM node_info
-                WHERE last_updated > ? AND COALESCE(archived, 0) = 0
-                ORDER BY last_updated DESC
+                WHERE first_seen > ? AND COALESCE(archived, 0) = 0
+                ORDER BY first_seen DESC
                 """,
                 (now - 24 * 3600,),
             )

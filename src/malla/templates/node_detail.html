@@ -93,6 +93,9 @@
                 <a id="adminButton" href="/admin?node={{ node.hex_id }}" class="btn btn-sm btn-outline-info d-none ms-2" title="Administer this node">
                     <i class="bi bi-sliders"></i> Admin
                 </a>
+                <button id="archiveButton" class="btn btn-sm btn-outline-warning ms-2" onclick="archiveNode({{ node.node_id }})" title="Archive this node">
+                    <i class="bi bi-archive"></i> Archive
+                </button>
             </h1>
             <p class="text-muted">
                 Node ID: {{ node.hex_id }} ({{ node.node_id }})
@@ -1028,6 +1031,30 @@ async function checkAdminStatus() {
     } catch (error) {
         // Silently fail - admin feature may not be available
         console.debug('Admin check failed:', error);
+    }
+}
+
+async function archiveNode(nodeId) {
+    if (!confirm('Are you sure you want to archive this node? It will be hidden from normal views. If the node sends new packets, it will automatically be restored.')) {
+        return;
+    }
+
+    try {
+        const response = await fetch(`/api/archive-node/${nodeId}`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' }
+        });
+        const data = await response.json();
+
+        if (data.success) {
+            alert('Node archived successfully. Redirecting to nodes list...');
+            window.location.href = '/nodes';
+        } else {
+            alert('Failed to archive node: ' + (data.message || 'Unknown error'));
+        }
+    } catch (error) {
+        console.error('Error archiving node:', error);
+        alert('Error archiving node: ' + error.message);
     }
 }
 

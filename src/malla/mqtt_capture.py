@@ -890,6 +890,19 @@ def log_packet_to_database(
             ),
         )
 
+        # Auto-unarchive node if it sends a packet (node is active again)
+        if from_node_id:
+            cursor.execute(
+                """
+                UPDATE node_info
+                SET archived = 0, last_updated = ?
+                WHERE node_id = ? AND archived = 1
+                """,
+                (current_time, from_node_id),
+            )
+            if cursor.rowcount > 0:
+                logging.info(f"Auto-unarchived node {from_node_id} due to new packet activity")
+
         conn.commit()
         conn.close()
 
