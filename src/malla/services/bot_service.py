@@ -2012,7 +2012,8 @@ class BotService:
                     name = name[:8]
                 parts = []
                 if r["temp"] != 0:
-                    parts.append(f"{r['temp']:.1f}°C")
+                    temp_f = r["temp"] * 9 / 5 + 32
+                    parts.append(f"{temp_f:.1f}°F")
                 if r["humidity"] != 0:
                     parts.append(f"{r['humidity']:.0f}%RH")
                 if r["pressure"] != 0:
