@@ -46,7 +46,7 @@ def role_required(role: UserRole):
                         }
                     ), 403
                 flash("You don't have permission to access this page.", "danger")
-                return redirect(url_for("main.index"))
+                return redirect(url_for("main.dashboard"))
             return f(*args, **kwargs)
 
         return decorated_function
@@ -73,7 +73,7 @@ def operator_required(f):
 def login():
     """Login page and form handler."""
     if current_user.is_authenticated:
-        return redirect(url_for("main.index"))
+        return redirect(url_for("main.dashboard"))
 
     if request.method == "POST":
         username = request.form.get("username", "").strip()
@@ -93,7 +93,7 @@ def login():
             next_page = request.args.get("next")
             if next_page and next_page.startswith("/"):
                 return redirect(next_page)
-            return redirect(url_for("main.index"))
+            return redirect(url_for("main.dashboard"))
 
         flash("Invalid username or password.", "danger")
         logger.warning(f"Failed login attempt for username: {username}")
@@ -109,7 +109,7 @@ def logout():
     logout_user()
     flash("You have been logged out.", "info")
     logger.info(f"User '{username}' logged out")
-    return redirect(url_for("main.index"))
+    return redirect(url_for("main.dashboard"))
 
 
 @auth_bp.route("/profile")

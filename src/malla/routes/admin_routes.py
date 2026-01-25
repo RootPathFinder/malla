@@ -52,7 +52,7 @@ def _check_operator_access():
         from flask import flash, redirect, url_for
 
         flash("You need operator or admin access for this feature.", "warning")
-        return redirect(url_for("main.index"))
+        return redirect(url_for("main.dashboard"))
     return None
 
 
