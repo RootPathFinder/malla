@@ -62,6 +62,14 @@
                     </label>
                 </div>
             </div>
+            <div class="col-12">
+                <div class="form-check">
+                    <input class="form-check-input" type="checkbox" id="show_archived" name="show_archived" value="1">
+                    <label class="form-check-label" for="show_archived">
+                        <i class="bi bi-archive"></i> Show archived nodes
+                    </label>
+                </div>
+            </div>
         </div>
     {% endcall %}
 
@@ -214,10 +222,11 @@ document.addEventListener('DOMContentLoaded', function() {
     // ------------------------------------------------------------------
     let allNodeData = [];
 
-    async function fetchAllNodes() {
+    async function fetchAllNodes(includeArchived = false) {
         try {
             // Fetch up to 10k nodes in a single request – more than enough for typical deployments
-            const response = await fetch('/api/nodes/data?limit=10000&page=1');
+            const archiveParam = includeArchived ? '&include_archived=1' : '';
+            const response = await fetch('/api/nodes/data?limit=10000&page=1' + archiveParam);
             const json = await response.json();
             // The endpoint returns an object with a "data" property
             allNodeData = json.data || [];
@@ -376,14 +385,25 @@ document.addEventListener('DOMContentLoaded', function() {
     });
 
     // We no longer paginate or infinite-scroll; the whole dataset will be rendered at once.
+    // Track whether we have archived nodes loaded
+    let lastArchivedState = false;
 
     // ------------------------------------------------------------------
     // Override ModernTable logic – perform all processing client-side
     // ------------------------------------------------------------------
     table.loadData = async function() {
+        const filters = this.state.filters || {};
+        const showArchived = filters.show_archived === true || filters.show_archived === '1';
+
+        // If show_archived state changed, refetch data
+        if (showArchived !== lastArchivedState) {
+            lastArchivedState = showArchived;
+            await fetchAllNodes(showArchived);
+        }
+
         // If dataset not yet available (should not happen after initial Promise), fetch it now
         if (allNodeData.length === 0) {
-            await fetchAllNodes();
+            await fetchAllNodes(showArchived);
         }
 
         this.state.loading = true;

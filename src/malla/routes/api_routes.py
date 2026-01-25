@@ -1665,6 +1665,11 @@ def api_nodes_data():
         if primary_channel:
             filters["primary_channel"] = primary_channel
 
+        # Include archived nodes if requested
+        include_archived = request.args.get("include_archived", "").strip()
+        if include_archived == "1":
+            filters["include_archived"] = True
+
         # Calculate offset
         offset = (page - 1) * limit
 

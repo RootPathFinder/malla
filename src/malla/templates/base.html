@@ -287,6 +287,16 @@
 
                 <!-- Timezone Toggle, Temperature Toggle, and Dark Mode Toggle -->
                 <div class="navbar-nav d-flex flex-row align-items-center gap-2">
+                    <!-- Global Node Search -->
+                    <div class="position-relative d-none d-md-block" style="width: 200px;">
+                        <input type="text" id="global-node-search" class="form-control form-control-sm"
+                               placeholder="Search nodes..." autocomplete="off"
+                               style="padding-right: 30px;">
+                        <i class="bi bi-search position-absolute" style="right: 10px; top: 50%; transform: translateY(-50%); opacity: 0.5;"></i>
+                        <div id="global-search-results" class="position-absolute w-100 bg-body border rounded shadow-sm"
+                             style="top: 100%; left: 0; max-height: 300px; overflow-y: auto; z-index: 1050; display: none;">
+                        </div>
+                    </div>
                     {% if APP_CONFIG.admin_enabled %}
                     <!-- Background Jobs Indicator -->
                     <a id="jobs-indicator" href="{{ url_for('admin.admin_page') }}?tab=jobs"
@@ -599,6 +609,132 @@
         if (!document.hidden) {
             startPolling();
         }
+    })();
+    </script>
+
+    <!-- Global Node Search -->
+    <script>
+    (function() {
+        const searchInput = document.getElementById('global-node-search');
+        const resultsContainer = document.getElementById('global-search-results');
+
+        if (!searchInput || !resultsContainer) return;
+
+        let searchTimeout = null;
+        let cachedNodes = null;
+
+        // Fetch nodes for search (cached)
+        async function fetchNodesForSearch() {
+            if (cachedNodes) return cachedNodes;
+            try {
+                const response = await fetch('/api/nodes/data?limit=10000&page=1');
+                const data = await response.json();
+                cachedNodes = data.data || [];
+                // Cache expires after 5 minutes
+                setTimeout(() => { cachedNodes = null; }, 300000);
+                return cachedNodes;
+            } catch (err) {
+                console.error('Error fetching nodes for search:', err);
+                return [];
+            }
+        }
+
+        // Perform search
+        async function performSearch(query) {
+            if (!query || query.length < 2) {
+                resultsContainer.style.display = 'none';
+                return;
+            }
+
+            const nodes = await fetchNodesForSearch();
+            const lowerQuery = query.toLowerCase();
+
+            // Search nodes
+            const matches = nodes.filter(node => {
+                const searchFields = [
+                    node.node_name,
+                    node.long_name,
+                    node.short_name,
+                    node.hex_id,
+                    node.hw_model
+                ].filter(Boolean).join(' ').toLowerCase();
+                return searchFields.includes(lowerQuery);
+            }).slice(0, 10); // Limit to 10 results
+
+            if (matches.length === 0) {
+                resultsContainer.innerHTML = '<div class="p-2 text-muted small">No nodes found</div>';
+                resultsContainer.style.display = 'block';
+                return;
+            }
+
+            let html = '';
+            matches.forEach(node => {
+                const name = node.node_name || node.long_name || node.short_name || 'Unnamed';
+                const statusClass = node.packet_count_24h > 0 ? 'text-success' : 'text-muted';
+                const statusIcon = node.packet_count_24h > 0 ? 'bi-circle-fill' : 'bi-circle';
+                html += `
+                    <a href="/node/${node.node_id}" class="d-flex align-items-center px-3 py-2 text-decoration-none border-bottom search-result-item"
+                       style="transition: background 0.15s;">
+                        <i class="bi ${statusIcon} ${statusClass} me-2" style="font-size: 0.5rem;"></i>
+                        <div class="flex-grow-1 overflow-hidden">
+                            <div class="text-body text-truncate">${name}</div>
+                            <div class="text-muted small">${node.hex_id} · ${node.hw_model || 'Unknown'}</div>
+                        </div>
+                    </a>
+                `;
+            });
+
+            if (nodes.filter(node => {
+                const searchFields = [node.node_name, node.long_name, node.short_name, node.hex_id, node.hw_model].filter(Boolean).join(' ').toLowerCase();
+                return searchFields.includes(lowerQuery);
+            }).length > 10) {
+                html += `<a href="/nodes?search=${encodeURIComponent(query)}" class="d-block px-3 py-2 text-center text-primary small">View all results →</a>`;
+            }
+
+            resultsContainer.innerHTML = html;
+            resultsContainer.style.display = 'block';
+
+            // Add hover effect
+            resultsContainer.querySelectorAll('.search-result-item').forEach(item => {
+                item.addEventListener('mouseenter', () => item.style.background = 'var(--bs-tertiary-bg)');
+                item.addEventListener('mouseleave', () => item.style.background = '');
+            });
+        }
+
+        // Debounced search
+        searchInput.addEventListener('input', function() {
+            clearTimeout(searchTimeout);
+            searchTimeout = setTimeout(() => {
+                performSearch(this.value.trim());
+            }, 200);
+        });
+
+        // Hide results when clicking outside
+        document.addEventListener('click', function(e) {
+            if (!searchInput.contains(e.target) && !resultsContainer.contains(e.target)) {
+                resultsContainer.style.display = 'none';
+            }
+        });
+
+        // Show results when focusing input with existing query
+        searchInput.addEventListener('focus', function() {
+            if (this.value.trim().length >= 2) {
+                performSearch(this.value.trim());
+            }
+        });
+
+        // Keyboard navigation
+        searchInput.addEventListener('keydown', function(e) {
+            if (e.key === 'Escape') {
+                resultsContainer.style.display = 'none';
+                this.blur();
+            } else if (e.key === 'Enter') {
+                const firstResult = resultsContainer.querySelector('a');
+                if (firstResult) {
+                    firstResult.click();
+                }
+            }
+        });
     })();
     </script>
 
