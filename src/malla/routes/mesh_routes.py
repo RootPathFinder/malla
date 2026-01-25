@@ -12,7 +12,7 @@ import logging
 
 from flask import Blueprint, jsonify, render_template, request
 
-from ..services.neighbor_service import NeighborService
+from ..services.neighbor_service import ROUTER_ROLES, NeighborService
 from ..services.node_health_service import NodeHealthService
 from ..services.traceroute_service import TracerouteService
 
@@ -84,10 +84,24 @@ def api_topology():
                         source_used = "traceroute"
                         # Convert traceroute graph to neighbor service format for compatibility
                         # Traceroute nodes have: {id, name, ...}
-                        # Need to convert to: {node_id, name, hex_id, neighbor_count, ...}
+                        # Need to convert to: {node_id, name, hex_id, neighbor_count, role, is_router, ...}
+
+                        # Collect all node IDs to fetch roles
+                        all_node_ids = [
+                            node.get("id")
+                            for node in traceroute_graph.get("nodes", [])
+                            if node.get("id")
+                        ]
+                        node_roles = (
+                            NeighborService._get_bulk_node_roles(all_node_ids)
+                            if all_node_ids
+                            else {}
+                        )
+
                         converted_nodes = []
                         for node in traceroute_graph.get("nodes", []):
                             node_id = node.get("id")
+                            role = node_roles.get(node_id) if node_id else None
                             converted_nodes.append(
                                 {
                                     "node_id": node_id,
@@ -101,6 +115,10 @@ def api_topology():
                                     "neighbor_count": node.get("connections", 0),
                                     "last_seen": node.get("last_seen"),
                                     "broadcast_interval": None,
+                                    "role": role,
+                                    "is_router": role in ROUTER_ROLES
+                                    if role
+                                    else False,
                                 }
                             )
 

@@ -112,3 +112,14 @@ def weather_map():
     except Exception as e:
         logger.error(f"Error in weather map route: {e}")
         return f"Weather map error: {e}", 500
+
+
+@main_bp.route("/network-dependency")
+def network_dependency():
+    """Network dependency analysis dashboard for impact assessment."""
+    logger.info("Network dependency route accessed")
+    try:
+        return render_template("network_dependency.html")
+    except Exception as e:
+        logger.error(f"Error in network dependency route: {e}")
+        return f"Network dependency error: {e}", 500
