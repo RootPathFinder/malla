@@ -2797,96 +2797,89 @@ def api_weather_sensors():
             except Exception:
                 continue
 
-        # Now get position data for each sensor node
-        for sensor in sensors:
-            node_id = sensor["node_id"]
+        # Now get position data for all sensor nodes in one query
+        if sensors:
+            node_ids = [s["node_id"] for s in sensors]
+            placeholders = ",".join("?" * len(node_ids))
             cursor.execute(
-                """SELECT raw_payload FROM packet_history
-                   WHERE from_node_id = ? AND portnum = 3
+                f"""SELECT from_node_id, raw_payload FROM packet_history
+                   WHERE from_node_id IN ({placeholders}) AND portnum = 3
                    AND raw_payload IS NOT NULL
-                   ORDER BY timestamp DESC LIMIT 1""",
-                (node_id,),
+                   ORDER BY timestamp DESC""",
+                node_ids,
             )
-            pos_row = cursor.fetchone()
-            if pos_row:
-                try:
-                    pos = mesh_pb2.Position()
-                    pos.ParseFromString(pos_row["raw_payload"])
-                    if pos.latitude_i != 0 and pos.longitude_i != 0:
-                        sensor["latitude"] = pos.latitude_i / 1e7
-                        sensor["longitude"] = pos.longitude_i / 1e7
-                except Exception:
-                    pass
+            position_rows = cursor.fetchall()
 
-        # Get 24-hour historical data for sparklines
-        history_cutoff = time.time() - 86400  # 24 hours
-        for sensor in sensors:
-            node_id = sensor["node_id"]
-            cursor.execute(
-                """SELECT raw_payload, timestamp FROM packet_history
-                   WHERE from_node_id = ? AND portnum = 67
-                   AND raw_payload IS NOT NULL AND timestamp > ?
-                   ORDER BY timestamp ASC LIMIT 100""",
-                (node_id, history_cutoff),
-            )
-            history_rows = cursor.fetchall()
-            temp_history = []
-            humidity_history = []
-            for hrow in history_rows:
-                try:
-                    htel = telemetry_pb2.Telemetry()
-                    htel.ParseFromString(hrow["raw_payload"])
-                    if htel.HasField("environment_metrics"):
-                        henv = htel.environment_metrics
-                        if henv.temperature != 0:
-                            temp_history.append(
-                                {
-                                    "t": hrow["timestamp"],
-                                    "v": round(henv.temperature, 1),
-                                }
-                            )
-                        if henv.relative_humidity != 0:
-                            humidity_history.append(
-                                {
-                                    "t": hrow["timestamp"],
-                                    "v": round(henv.relative_humidity, 1),
-                                }
-                            )
-                except Exception:
-                    continue
-            sensor["temp_history"] = temp_history
-            sensor["humidity_history"] = humidity_history
+            # Build a map of node_id -> position (only keep first/latest per node)
+            node_positions: dict[int, Any] = {}
+            for row in position_rows:
+                nid = row["from_node_id"]
+                if nid not in node_positions:
+                    node_positions[nid] = row["raw_payload"]
+
+            for sensor in sensors:
+                node_id = sensor["node_id"]
+                if node_id in node_positions:
+                    try:
+                        pos = mesh_pb2.Position()
+                        pos.ParseFromString(node_positions[node_id])
+                        if pos.latitude_i != 0 and pos.longitude_i != 0:
+                            sensor["latitude"] = pos.latitude_i / 1e7
+                            sensor["longitude"] = pos.longitude_i / 1e7
+                    except Exception:
+                        pass
+
+        # Skip 24-hour history by default (loaded on demand via separate endpoint)
+        # This significantly improves initial load time
+        include_history = request.args.get("include_history", "false").lower() == "true"
+        if include_history:
+            history_cutoff = time.time() - 86400  # 24 hours
+            for sensor in sensors:
+                node_id = sensor["node_id"]
+                cursor.execute(
+                    """SELECT raw_payload, timestamp FROM packet_history
+                       WHERE from_node_id = ? AND portnum = 67
+                       AND raw_payload IS NOT NULL AND timestamp > ?
+                       ORDER BY timestamp ASC LIMIT 100""",
+                    (node_id, history_cutoff),
+                )
+                history_rows = cursor.fetchall()
+                temp_history = []
+                humidity_history = []
+                for hrow in history_rows:
+                    try:
+                        htel = telemetry_pb2.Telemetry()
+                        htel.ParseFromString(hrow["raw_payload"])
+                        if htel.HasField("environment_metrics"):
+                            henv = htel.environment_metrics
+                            if henv.temperature != 0:
+                                temp_history.append(
+                                    {
+                                        "t": hrow["timestamp"],
+                                        "v": round(henv.temperature, 1),
+                                    }
+                                )
+                            if henv.relative_humidity != 0:
+                                humidity_history.append(
+                                    {
+                                        "t": hrow["timestamp"],
+                                        "v": round(henv.relative_humidity, 1),
+                                    }
+                                )
+                    except Exception:
+                        continue
+                sensor["temp_history"] = temp_history
+                sensor["humidity_history"] = humidity_history
+        else:
+            # Set empty history arrays for consistency
+            for sensor in sensors:
+                sensor["temp_history"] = []
+                sensor["humidity_history"] = []
 
         conn.close()
 
-        # Try to get city names for sensors with location (limit API calls)
-        import json
-        import urllib.error
-        import urllib.request
-
-        for sensor in sensors[:10]:  # Limit to first 10 to avoid rate limiting
-            if sensor["latitude"] and sensor["longitude"]:
-                try:
-                    url = f"https://nominatim.openstreetmap.org/reverse?format=json&lat={sensor['latitude']}&lon={sensor['longitude']}&zoom=10"
-                    req = urllib.request.Request(
-                        url,
-                        headers={
-                            "User-Agent": "Malla/1.0 (Meshtastic Mesh Health Monitor)"
-                        },
-                    )
-                    with urllib.request.urlopen(req, timeout=2) as response:
-                        data = json.loads(response.read().decode())
-                        addr = data.get("address", {})
-                        city = (
-                            addr.get("city")
-                            or addr.get("town")
-                            or addr.get("village")
-                            or addr.get("municipality")
-                            or addr.get("county")
-                        )
-                        sensor["city"] = city
-                except Exception:
-                    pass
+        # Note: City names are not fetched here to avoid slow external API calls.
+        # The frontend displays coordinates directly for performance.
 
         return safe_jsonify(
             {
@@ -2897,6 +2890,74 @@ def api_weather_sensors():
         )
     except Exception as e:
         logger.error(f"Error in API weather sensors: {e}")
+        return jsonify({"error": str(e)}), 500
+
+
+@api_bp.route("/weather-sensor-history/<node_id>")
+def api_weather_sensor_history(node_id: str):
+    """
+    Get 24-hour historical temperature/humidity data for a specific sensor.
+
+    This endpoint is used for lazy-loading sparkline history data.
+    """
+    try:
+        from meshtastic.protobuf import telemetry_pb2
+
+        # Parse node ID (can be hex like !1234abcd or decimal)
+        if node_id.startswith("!"):
+            node_id_int = int(node_id[1:], 16)
+        else:
+            node_id_int = int(node_id)
+
+        history_cutoff = time.time() - 86400  # 24 hours
+
+        conn = get_db_connection()
+        cursor = conn.cursor()
+
+        cursor.execute(
+            """SELECT raw_payload, timestamp FROM packet_history
+               WHERE from_node_id = ? AND portnum = 67
+               AND raw_payload IS NOT NULL AND timestamp > ?
+               ORDER BY timestamp ASC LIMIT 100""",
+            (node_id_int, history_cutoff),
+        )
+        history_rows = cursor.fetchall()
+        conn.close()
+
+        temp_history = []
+        humidity_history = []
+        for hrow in history_rows:
+            try:
+                htel = telemetry_pb2.Telemetry()
+                htel.ParseFromString(hrow["raw_payload"])
+                if htel.HasField("environment_metrics"):
+                    henv = htel.environment_metrics
+                    if henv.temperature != 0:
+                        temp_history.append(
+                            {
+                                "t": hrow["timestamp"],
+                                "v": round(henv.temperature, 1),
+                            }
+                        )
+                    if henv.relative_humidity != 0:
+                        humidity_history.append(
+                            {
+                                "t": hrow["timestamp"],
+                                "v": round(henv.relative_humidity, 1),
+                            }
+                        )
+            except Exception:
+                continue
+
+        return safe_jsonify(
+            {
+                "node_id": node_id,
+                "temp_history": temp_history,
+                "humidity_history": humidity_history,
+            }
+        )
+    except Exception as e:
+        logger.error(f"Error in API weather sensor history: {e}")
         return jsonify({"error": str(e)}), 500
 
 

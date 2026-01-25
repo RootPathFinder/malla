@@ -270,6 +270,7 @@ let map = null;
 let sensorMarkers = [];
 let sensorData = [];
 let selectedSensor = null;
+let historyCache = {}; // Cache for lazy-loaded history data
 
 // Initialize the map
 function initMap() {
@@ -300,16 +301,11 @@ function formatTimeAgo(timestamp) {
 function createWeatherMarker(sensor) {
     const tempF = celsiusToFahrenheit(sensor.temperature);
     const isStale = (Date.now() / 1000 - sensor.timestamp) > 3600; // 1 hour
-    const hasHistory = sensor.temp_history && sensor.temp_history.length > 1;
-    const markerSparklineId = `marker-sparkline-${sensor.node_id}`;
 
     let html = `<div class="weather-marker ${isStale ? 'stale' : ''}">`;
     html += `<div class="temp">${tempF.toFixed(1)}°F</div>`;
     if (sensor.humidity > 0) {
         html += `<div class="humidity">${sensor.humidity.toFixed(0)}%</div>`;
-    }
-    if (hasHistory) {
-        html += `<canvas id="${markerSparklineId}" class="mini-sparkline" width="56" height="16" style="width: 56px; height: 16px;"></canvas>`;
     }
     html += `<div class="node-name">${sensor.short_name || sensor.hex_id}</div>`;
     html += `</div>`;
@@ -317,39 +313,9 @@ function createWeatherMarker(sensor) {
     return L.divIcon({
         className: 'weather-marker-container',
         html: html,
-        iconSize: [80, hasHistory ? 75 : 60],
-        iconAnchor: [40, hasHistory ? 37 : 30]
+        iconSize: [80, 60],
+        iconAnchor: [40, 30]
     });
-}
-
-// Draw a mini sparkline for map markers (smaller, no dot)
-function drawMiniSparkline(canvasId, data) {
-    const canvas = document.getElementById(canvasId);
-    if (!canvas || data.length < 2) return;
-
-    const ctx = canvas.getContext('2d');
-    const width = canvas.width;
-    const height = canvas.height;
-
-    // Convert to Fahrenheit
-    const values = data.map(d => celsiusToFahrenheit(d.v));
-    const min = Math.min(...values);
-    const max = Math.max(...values);
-    const range = max - min || 1;
-
-    // Clear and draw
-    ctx.clearRect(0, 0, width, height);
-    ctx.beginPath();
-    ctx.strokeStyle = '#dc3545';
-    ctx.lineWidth = 1;
-
-    values.forEach((val, i) => {
-        const x = (i / (values.length - 1)) * width;
-        const y = height - ((val - min) / range) * (height - 2) - 1;
-        if (i === 0) ctx.moveTo(x, y);
-        else ctx.lineTo(x, y);
-    });
-    ctx.stroke();
 }
 
 // Draw a sparkline on a canvas element
@@ -407,39 +373,38 @@ function createPopupContent(sensor) {
     let html = `<div style="min-width: 250px;">`;
     html += `<h6 class="mb-2">${sensor.long_name || sensor.short_name || sensor.hex_id}</h6>`;
 
-    // Temperature with sparkline
+    // Temperature with sparkline placeholder
     html += `<div class="mb-2">`;
     html += `<div class="d-flex justify-content-between align-items-center">`;
     html += `<span><i class="bi bi-thermometer-half text-danger"></i> Temperature</span>`;
     html += `<span class="fw-bold">${tempF.toFixed(1)}°F</span>`;
     html += `</div>`;
-    if (sensor.temp_history && sensor.temp_history.length > 1) {
-        html += `<canvas id="${sparklineId}" width="230" height="30" style="width: 100%; height: 30px; margin-top: 4px;"></canvas>`;
-        html += `<div class="d-flex justify-content-between" style="font-size: 10px; color: #6c757d;">`;
-        const tempValues = sensor.temp_history.map(d => celsiusToFahrenheit(d.v));
-        html += `<span>${Math.min(...tempValues).toFixed(0)}°F</span>`;
-        html += `<span>24h</span>`;
-        html += `<span>${Math.max(...tempValues).toFixed(0)}°F</span>`;
-        html += `</div>`;
-    }
+    // Sparkline container (loaded lazily)
+    html += `<div id="temp-history-container-${sensor.node_id}">`;
+    html += `<canvas id="${sparklineId}" width="230" height="30" style="width: 100%; height: 30px; margin-top: 4px;"></canvas>`;
+    html += `<div class="d-flex justify-content-between" style="font-size: 10px; color: #6c757d;">`;
+    html += `<span id="temp-min-${sensor.node_id}">--</span>`;
+    html += `<span>24h</span>`;
+    html += `<span id="temp-max-${sensor.node_id}">--</span>`;
+    html += `</div>`;
+    html += `</div>`;
     html += `</div>`;
 
-    // Humidity with sparkline
+    // Humidity with sparkline placeholder
     if (sensor.humidity > 0) {
         html += `<div class="mb-2">`;
         html += `<div class="d-flex justify-content-between align-items-center">`;
         html += `<span><i class="bi bi-droplet text-primary"></i> Humidity</span>`;
         html += `<span class="fw-bold">${sensor.humidity.toFixed(1)}%</span>`;
         html += `</div>`;
-        if (sensor.humidity_history && sensor.humidity_history.length > 1) {
-            html += `<canvas id="${humiditySparklineId}" width="230" height="30" style="width: 100%; height: 30px; margin-top: 4px;"></canvas>`;
-            html += `<div class="d-flex justify-content-between" style="font-size: 10px; color: #6c757d;">`;
-            const humValues = sensor.humidity_history.map(d => d.v);
-            html += `<span>${Math.min(...humValues).toFixed(0)}%</span>`;
-            html += `<span>24h</span>`;
-            html += `<span>${Math.max(...humValues).toFixed(0)}%</span>`;
-            html += `</div>`;
-        }
+        html += `<div id="humidity-history-container-${sensor.node_id}">`;
+        html += `<canvas id="${humiditySparklineId}" width="230" height="30" style="width: 100%; height: 30px; margin-top: 4px;"></canvas>`;
+        html += `<div class="d-flex justify-content-between" style="font-size: 10px; color: #6c757d;">`;
+        html += `<span id="humidity-min-${sensor.node_id}">--</span>`;
+        html += `<span>24h</span>`;
+        html += `<span id="humidity-max-${sensor.node_id}">--</span>`;
+        html += `</div>`;
+        html += `</div>`;
         html += `</div>`;
     }
 
@@ -460,16 +425,51 @@ function createPopupContent(sensor) {
     return html;
 }
 
-// Render sparklines after popup opens
-function onPopupOpen(sensor) {
+// Render sparklines after popup opens (lazy-load history data)
+async function onPopupOpen(sensor) {
+    const sparklineId = `sparkline-${sensor.node_id}`;
+    const humiditySparklineId = `humidity-sparkline-${sensor.node_id}`;
+    const nodeId = sensor.hex_id;
+
+    // Check cache first
+    if (historyCache[nodeId]) {
+        const history = historyCache[nodeId];
+        renderPopupSparklines(sensor, history);
+        return;
+    }
+
+    // Fetch history data
+    try {
+        const response = await fetch(`/api/weather-sensor-history/${nodeId}`);
+        if (!response.ok) throw new Error('Failed to fetch history');
+        const history = await response.json();
+        historyCache[nodeId] = history;
+        renderPopupSparklines(sensor, history);
+    } catch (error) {
+        console.error('Error fetching sensor history:', error);
+    }
+}
+
+// Render sparklines in popup with loaded history data
+function renderPopupSparklines(sensor, history) {
     const sparklineId = `sparkline-${sensor.node_id}`;
     const humiditySparklineId = `humidity-sparkline-${sensor.node_id}`;
 
-    if (sensor.temp_history && sensor.temp_history.length > 1) {
-        drawSparkline(sparklineId, sensor.temp_history, '#dc3545', true);
+    if (history.temp_history && history.temp_history.length > 1) {
+        drawSparkline(sparklineId, history.temp_history, '#dc3545', true);
+        const tempValues = history.temp_history.map(d => celsiusToFahrenheit(d.v));
+        const minEl = document.getElementById(`temp-min-${sensor.node_id}`);
+        const maxEl = document.getElementById(`temp-max-${sensor.node_id}`);
+        if (minEl) minEl.textContent = Math.min(...tempValues).toFixed(0) + '°F';
+        if (maxEl) maxEl.textContent = Math.max(...tempValues).toFixed(0) + '°F';
     }
-    if (sensor.humidity_history && sensor.humidity_history.length > 1) {
-        drawSparkline(humiditySparklineId, sensor.humidity_history, '#0d6efd', false);
+    if (history.humidity_history && history.humidity_history.length > 1) {
+        drawSparkline(humiditySparklineId, history.humidity_history, '#0d6efd', false);
+        const humValues = history.humidity_history.map(d => d.v);
+        const minEl = document.getElementById(`humidity-min-${sensor.node_id}`);
+        const maxEl = document.getElementById(`humidity-max-${sensor.node_id}`);
+        if (minEl) minEl.textContent = Math.min(...humValues).toFixed(0) + '%';
+        if (maxEl) maxEl.textContent = Math.max(...humValues).toFixed(0) + '%';
     }
 }
 
@@ -492,15 +492,6 @@ function updateMapMarkers() {
         marker.addTo(map);
         sensorMarkers.push(marker);
     });
-
-    // Draw mini sparklines on map markers after they're added to DOM
-    setTimeout(() => {
-        sensorsWithLocation.forEach(sensor => {
-            if (sensor.temp_history && sensor.temp_history.length > 1) {
-                drawMiniSparkline(`marker-sparkline-${sensor.node_id}`, sensor.temp_history);
-            }
-        });
-    }, 100);
 }
 
 // Update the sensor list in sidebar
@@ -523,8 +514,6 @@ function updateSensorList() {
         const tempF = celsiusToFahrenheit(sensor.temperature);
         const hasLocation = sensor.latitude && sensor.longitude;
         const isSelected = selectedSensor && selectedSensor.node_id === sensor.node_id;
-        const sidebarSparklineId = `sidebar-sparkline-${index}`;
-        const hasHistory = sensor.temp_history && sensor.temp_history.length > 1;
 
         return `
             <div class="sensor-item ${hasLocation ? '' : 'no-location'} ${isSelected ? 'selected' : ''}"
@@ -539,20 +528,11 @@ function updateSensorList() {
                         ${sensor.humidity > 0 ? `<div class="sensor-humidity">${sensor.humidity.toFixed(0)}%</div>` : ''}
                     </div>
                 </div>
-                ${hasHistory ? `<canvas id="${sidebarSparklineId}" width="280" height="24" style="width: 100%; height: 24px; margin-top: 4px; border-radius: 3px; background: rgba(0,0,0,0.03);"></canvas>` : ''}
                 ${sensor.pressure > 0 ? `<div class="sensor-pressure mt-1">${sensor.pressure.toFixed(0)} hPa</div>` : ''}
                 ${!hasLocation ? '<div class="sensor-meta text-warning"><i class="bi bi-geo-alt"></i> No GPS</div>' : ''}
-                ${sensor.city ? `<div class="sensor-meta"><i class="bi bi-pin-map"></i> ${sensor.city}</div>` : ''}
             </div>
         `;
     }).join('');
-
-    // Draw sparklines for sidebar items
-    sorted.forEach((sensor, index) => {
-        if (sensor.temp_history && sensor.temp_history.length > 1) {
-            drawSparkline(`sidebar-sparkline-${index}`, sensor.temp_history, '#dc3545', true);
-        }
-    });
 }
 
 // Update statistics
