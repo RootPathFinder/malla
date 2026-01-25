@@ -1,0 +1,517 @@
+{% extends "base.html" %}
+{% from "components/sidebar_macros.html" import sidebar_container, selected_details_section, controls_section, stats_section, legend_section, sidebar_styles %}
+
+{% block title %}Weather Map - Malla{% endblock %}
+
+{% block extra_css %}
+<!-- Leaflet CSS -->
+<link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
+<style>
+.footer {
+    display: none !important;
+}
+
+.map-container {
+    position: fixed;
+    top: 56px;
+    left: 0;
+    right: 0;
+    bottom: 0;
+    display: flex;
+    background: var(--bs-body-bg);
+    z-index: 1;
+}
+
+.map-main {
+    flex: 1;
+    position: relative;
+    overflow: hidden;
+    order: 1;
+}
+
+.weather-map {
+    width: 100%;
+    height: 100%;
+}
+
+.loading-overlay, .error-overlay {
+    position: absolute;
+    top: 0;
+    left: 0;
+    right: 0;
+    bottom: 0;
+    display: flex;
+    flex-direction: column;
+    justify-content: center;
+    align-items: center;
+    background: rgba(var(--bs-body-bg-rgb), 0.9);
+    z-index: 100;
+    color: var(--bs-body-color);
+}
+
+.error-overlay {
+    color: var(--bs-danger);
+}
+
+/* Weather marker styles */
+.weather-marker {
+    background: white;
+    border: 2px solid #0d6efd;
+    border-radius: 8px;
+    padding: 4px 8px;
+    font-size: 12px;
+    font-weight: bold;
+    white-space: nowrap;
+    box-shadow: 0 2px 6px rgba(0,0,0,0.3);
+    text-align: center;
+    min-width: 60px;
+}
+
+.weather-marker .temp {
+    color: #dc3545;
+    font-size: 14px;
+}
+
+.weather-marker .humidity {
+    color: #0d6efd;
+    font-size: 11px;
+}
+
+.weather-marker .node-name {
+    color: #6c757d;
+    font-size: 10px;
+    border-top: 1px solid #dee2e6;
+    margin-top: 2px;
+    padding-top: 2px;
+}
+
+.weather-marker.stale {
+    opacity: 0.6;
+    border-color: #6c757d;
+}
+
+/* Sensor list in sidebar */
+.sensor-list {
+    max-height: 400px;
+    overflow-y: auto;
+}
+
+.sensor-item {
+    border: 1px solid var(--bs-border-color);
+    border-radius: 0.375rem;
+    padding: 0.5rem;
+    margin-bottom: 0.5rem;
+    cursor: pointer;
+    transition: background-color 0.2s;
+    font-size: 0.875rem;
+    color: var(--bs-body-color);
+}
+
+.sensor-item:hover {
+    background-color: var(--bs-tertiary-bg);
+}
+
+.sensor-item.selected {
+    background-color: rgba(var(--bs-primary-rgb), 0.2);
+    border-color: var(--bs-primary);
+}
+
+.sensor-item.no-location {
+    border-left: 3px solid #ffc107;
+}
+
+.sensor-temp {
+    font-size: 1.25rem;
+    font-weight: bold;
+    color: #dc3545;
+}
+
+.sensor-humidity {
+    color: #0d6efd;
+}
+
+.sensor-pressure {
+    color: #6c757d;
+    font-size: 0.8rem;
+}
+
+.sensor-meta {
+    font-size: 0.75rem;
+    color: #6c757d;
+}
+
+/* Stats card */
+.weather-stats .stat-value {
+    font-size: 1.5rem;
+    font-weight: bold;
+}
+
+.weather-stats .stat-label {
+    font-size: 0.75rem;
+    color: #6c757d;
+}
+
+/* Legend items */
+.legend-temp-high { color: #dc3545; }
+.legend-temp-low { color: #0d6efd; }
+</style>
+{% endblock %}
+
+{% block content %}
+</div> <!-- Close the base template's container -->
+
+<div class="map-container">
+    <!-- Main Map Area -->
+    <div class="map-main">
+        <div id="mapLoading" class="loading-overlay">
+            <div class="spinner-border text-primary" role="status">
+                <span class="visually-hidden">Loading...</span>
+            </div>
+            <p class="mt-2 text-muted">Loading weather sensors...</p>
+        </div>
+        <div id="weatherMap" class="weather-map"></div>
+        <div id="mapError" class="error-overlay" style="display: none;">
+            <i class="bi bi-exclamation-triangle"></i>
+            <p class="mt-2">Error loading weather data</p>
+        </div>
+    </div>
+
+    <!-- Sidebar -->
+    {% call sidebar_container("sidebar", "Mesh Weather", "bi bi-thermometer-half", "toggleSidebar") %}
+        <!-- Weather Statistics -->
+        <div class="sidebar-section weather-stats">
+            <h6><i class="bi bi-graph-up"></i> Current Conditions</h6>
+            <div class="row text-center">
+                <div class="col-4">
+                    <div class="stat-value text-danger" id="avgTemp">--</div>
+                    <div class="stat-label">Avg Temp</div>
+                </div>
+                <div class="col-4">
+                    <div class="stat-value text-primary" id="avgHumidity">--</div>
+                    <div class="stat-label">Avg Humidity</div>
+                </div>
+                <div class="col-4">
+                    <div class="stat-value text-secondary" id="sensorCount">0</div>
+                    <div class="stat-label">Sensors</div>
+                </div>
+            </div>
+            <div class="row text-center mt-2">
+                <div class="col-6">
+                    <div class="stat-value text-danger" id="highTemp">--</div>
+                    <div class="stat-label">High</div>
+                </div>
+                <div class="col-6">
+                    <div class="stat-value text-info" id="lowTemp">--</div>
+                    <div class="stat-label">Low</div>
+                </div>
+            </div>
+        </div>
+
+        <!-- Controls -->
+        <div class="sidebar-section">
+            <h6><i class="bi bi-sliders"></i> Controls</h6>
+            <div class="mb-2">
+                <label class="form-label small">Max Age</label>
+                <select class="form-select form-select-sm" id="maxAge">
+                    <option value="1">1 Hour</option>
+                    <option value="6" selected>6 Hours</option>
+                    <option value="24">24 Hours</option>
+                    <option value="72">3 Days</option>
+                </select>
+            </div>
+            <div class="d-flex gap-2">
+                <button class="btn btn-sm btn-outline-primary flex-fill" onclick="refreshData()">
+                    <i class="bi bi-arrow-clockwise"></i> Refresh
+                </button>
+                <button class="btn btn-sm btn-outline-secondary flex-fill" onclick="fitMapToSensors()">
+                    <i class="bi bi-arrows-move"></i> Fit All
+                </button>
+            </div>
+        </div>
+
+        <!-- Sensor List -->
+        <div class="sidebar-section">
+            <h6><i class="bi bi-thermometer-half"></i> Sensors (<span id="listCount">0</span>)</h6>
+            <div class="sensor-list" id="sensorList">
+                <div class="text-center text-muted py-4">
+                    <div class="spinner-border spinner-border-sm" role="status">
+                        <span class="visually-hidden">Loading...</span>
+                    </div>
+                    <p class="mt-2 small">Loading sensors...</p>
+                </div>
+            </div>
+        </div>
+
+        <!-- Legend -->
+        <div class="sidebar-section">
+            <h6><i class="bi bi-info-circle"></i> Legend</h6>
+            <div class="small">
+                <div><span class="weather-marker" style="display: inline-block; transform: scale(0.8);">72°F</span> Sensor with location</div>
+                <div class="mt-1"><i class="bi bi-geo-alt text-warning"></i> No GPS coordinates</div>
+                <div class="mt-1"><span class="text-muted">Faded</span> = Data older than 1 hour</div>
+            </div>
+        </div>
+    {% endcall %}
+</div>
+{% endblock %}
+
+{% block extra_js %}
+<!-- Leaflet JS -->
+<script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+
+<script>
+// Global state
+let map = null;
+let sensorMarkers = [];
+let sensorData = [];
+let selectedSensor = null;
+
+// Initialize the map
+function initMap() {
+    map = L.map('weatherMap').setView([39.8283, -98.5795], 4); // Center on US
+
+    L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+        attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors',
+        maxZoom: 19
+    }).addTo(map);
+}
+
+// Convert Celsius to Fahrenheit
+function celsiusToFahrenheit(celsius) {
+    return celsius * 9 / 5 + 32;
+}
+
+// Format time ago
+function formatTimeAgo(timestamp) {
+    if (!timestamp) return 'Unknown';
+    const seconds = Math.floor(Date.now() / 1000 - timestamp);
+    if (seconds < 60) return 'just now';
+    if (seconds < 3600) return Math.floor(seconds / 60) + 'm ago';
+    if (seconds < 86400) return Math.floor(seconds / 3600) + 'h ago';
+    return Math.floor(seconds / 86400) + 'd ago';
+}
+
+// Create a weather marker
+function createWeatherMarker(sensor) {
+    const tempF = celsiusToFahrenheit(sensor.temperature);
+    const isStale = (Date.now() / 1000 - sensor.timestamp) > 3600; // 1 hour
+
+    let html = `<div class="weather-marker ${isStale ? 'stale' : ''}">`;
+    html += `<div class="temp">${tempF.toFixed(1)}°F</div>`;
+    if (sensor.humidity > 0) {
+        html += `<div class="humidity">${sensor.humidity.toFixed(0)}%</div>`;
+    }
+    html += `<div class="node-name">${sensor.short_name || sensor.hex_id}</div>`;
+    html += `</div>`;
+
+    return L.divIcon({
+        className: 'weather-marker-container',
+        html: html,
+        iconSize: [80, 60],
+        iconAnchor: [40, 30]
+    });
+}
+
+// Create popup content for a sensor
+function createPopupContent(sensor) {
+    const tempF = celsiusToFahrenheit(sensor.temperature);
+    let html = `<div style="min-width: 200px;">`;
+    html += `<h6 class="mb-2">${sensor.long_name || sensor.short_name || sensor.hex_id}</h6>`;
+    html += `<table class="table table-sm table-borderless mb-0">`;
+    html += `<tr><td><i class="bi bi-thermometer-half text-danger"></i> Temperature</td><td class="fw-bold">${tempF.toFixed(1)}°F</td></tr>`;
+    if (sensor.humidity > 0) {
+        html += `<tr><td><i class="bi bi-droplet text-primary"></i> Humidity</td><td class="fw-bold">${sensor.humidity.toFixed(1)}%</td></tr>`;
+    }
+    if (sensor.pressure > 0) {
+        html += `<tr><td><i class="bi bi-speedometer2 text-secondary"></i> Pressure</td><td class="fw-bold">${sensor.pressure.toFixed(0)} hPa</td></tr>`;
+    }
+    html += `<tr><td><i class="bi bi-clock text-muted"></i> Updated</td><td>${formatTimeAgo(sensor.timestamp)}</td></tr>`;
+    if (sensor.city) {
+        html += `<tr><td><i class="bi bi-geo-alt text-success"></i> Location</td><td>${sensor.city}</td></tr>`;
+    }
+    html += `</table>`;
+    html += `<div class="mt-2"><a href="/nodes/${sensor.hex_id}" class="btn btn-sm btn-outline-primary">View Node</a></div>`;
+    html += `</div>`;
+    return html;
+}
+
+// Add markers to the map
+function updateMapMarkers() {
+    // Clear existing markers
+    sensorMarkers.forEach(marker => map.removeLayer(marker));
+    sensorMarkers = [];
+
+    // Add new markers for sensors with location
+    sensorData.filter(s => s.latitude && s.longitude).forEach(sensor => {
+        const marker = L.marker([sensor.latitude, sensor.longitude], {
+            icon: createWeatherMarker(sensor)
+        });
+
+        marker.bindPopup(createPopupContent(sensor));
+        marker.on('click', () => selectSensor(sensor));
+        marker.addTo(map);
+        sensorMarkers.push(marker);
+    });
+}
+
+// Update the sensor list in sidebar
+function updateSensorList() {
+    const listEl = document.getElementById('sensorList');
+    const countEl = document.getElementById('listCount');
+
+    if (sensorData.length === 0) {
+        listEl.innerHTML = '<div class="text-center text-muted py-4">No weather sensors found</div>';
+        countEl.textContent = '0';
+        return;
+    }
+
+    countEl.textContent = sensorData.length;
+
+    // Sort by temperature (highest first)
+    const sorted = [...sensorData].sort((a, b) => b.temperature - a.temperature);
+
+    listEl.innerHTML = sorted.map(sensor => {
+        const tempF = celsiusToFahrenheit(sensor.temperature);
+        const hasLocation = sensor.latitude && sensor.longitude;
+        const isSelected = selectedSensor && selectedSensor.node_id === sensor.node_id;
+
+        return `
+            <div class="sensor-item ${hasLocation ? '' : 'no-location'} ${isSelected ? 'selected' : ''}"
+                 onclick="selectSensor(${JSON.stringify(sensor).replace(/"/g, '&quot;')})">
+                <div class="d-flex justify-content-between align-items-start">
+                    <div>
+                        <div class="fw-bold">${sensor.short_name || sensor.hex_id}</div>
+                        <div class="sensor-meta">${formatTimeAgo(sensor.timestamp)}</div>
+                    </div>
+                    <div class="text-end">
+                        <div class="sensor-temp">${tempF.toFixed(1)}°F</div>
+                        ${sensor.humidity > 0 ? `<div class="sensor-humidity">${sensor.humidity.toFixed(0)}%</div>` : ''}
+                    </div>
+                </div>
+                ${sensor.pressure > 0 ? `<div class="sensor-pressure mt-1">${sensor.pressure.toFixed(0)} hPa</div>` : ''}
+                ${!hasLocation ? '<div class="sensor-meta text-warning"><i class="bi bi-geo-alt"></i> No GPS</div>' : ''}
+                ${sensor.city ? `<div class="sensor-meta"><i class="bi bi-pin-map"></i> ${sensor.city}</div>` : ''}
+            </div>
+        `;
+    }).join('');
+}
+
+// Update statistics
+function updateStats() {
+    const countEl = document.getElementById('sensorCount');
+    const avgTempEl = document.getElementById('avgTemp');
+    const avgHumidityEl = document.getElementById('avgHumidity');
+    const highTempEl = document.getElementById('highTemp');
+    const lowTempEl = document.getElementById('lowTemp');
+
+    countEl.textContent = sensorData.length;
+
+    if (sensorData.length === 0) {
+        avgTempEl.textContent = '--';
+        avgHumidityEl.textContent = '--';
+        highTempEl.textContent = '--';
+        lowTempEl.textContent = '--';
+        return;
+    }
+
+    const temps = sensorData.map(s => celsiusToFahrenheit(s.temperature));
+    const humidities = sensorData.filter(s => s.humidity > 0).map(s => s.humidity);
+
+    const avgTemp = temps.reduce((a, b) => a + b, 0) / temps.length;
+    avgTempEl.textContent = avgTemp.toFixed(1) + '°F';
+
+    if (humidities.length > 0) {
+        const avgHum = humidities.reduce((a, b) => a + b, 0) / humidities.length;
+        avgHumidityEl.textContent = avgHum.toFixed(0) + '%';
+    } else {
+        avgHumidityEl.textContent = '--';
+    }
+
+    highTempEl.textContent = Math.max(...temps).toFixed(1) + '°F';
+    lowTempEl.textContent = Math.min(...temps).toFixed(1) + '°F';
+}
+
+// Select a sensor
+function selectSensor(sensor) {
+    selectedSensor = sensor;
+    updateSensorList();
+
+    if (sensor.latitude && sensor.longitude) {
+        map.setView([sensor.latitude, sensor.longitude], 12);
+
+        // Find and open the marker popup
+        sensorMarkers.forEach(marker => {
+            const pos = marker.getLatLng();
+            if (Math.abs(pos.lat - sensor.latitude) < 0.0001 &&
+                Math.abs(pos.lng - sensor.longitude) < 0.0001) {
+                marker.openPopup();
+            }
+        });
+    }
+}
+
+// Fit map to show all sensors
+function fitMapToSensors() {
+    const sensorsWithLocation = sensorData.filter(s => s.latitude && s.longitude);
+    if (sensorsWithLocation.length === 0) return;
+
+    const bounds = L.latLngBounds(
+        sensorsWithLocation.map(s => [s.latitude, s.longitude])
+    );
+    map.fitBounds(bounds, { padding: [50, 50] });
+}
+
+// Fetch weather data from API
+async function fetchWeatherData() {
+    const maxAge = document.getElementById('maxAge').value;
+
+    try {
+        const response = await fetch(`/api/weather-sensors?max_age_hours=${maxAge}`);
+        if (!response.ok) throw new Error('Failed to fetch weather data');
+
+        const data = await response.json();
+        sensorData = data.sensors || [];
+
+        updateMapMarkers();
+        updateSensorList();
+        updateStats();
+
+        if (sensorData.filter(s => s.latitude && s.longitude).length > 0) {
+            fitMapToSensors();
+        }
+
+        document.getElementById('mapLoading').style.display = 'none';
+    } catch (error) {
+        console.error('Error fetching weather data:', error);
+        document.getElementById('mapLoading').style.display = 'none';
+        document.getElementById('mapError').style.display = 'flex';
+    }
+}
+
+// Refresh data
+function refreshData() {
+    document.getElementById('mapLoading').style.display = 'flex';
+    document.getElementById('mapError').style.display = 'none';
+    fetchWeatherData();
+}
+
+// Toggle sidebar
+function toggleSidebar() {
+    const sidebar = document.getElementById('sidebar');
+    sidebar.classList.toggle('collapsed');
+    setTimeout(() => map.invalidateSize(), 300);
+}
+
+// Initialize on page load
+document.addEventListener('DOMContentLoaded', function() {
+    initMap();
+    fetchWeatherData();
+
+    // Refresh on max age change
+    document.getElementById('maxAge').addEventListener('change', refreshData);
+
+    // Auto-refresh every 5 minutes
+    setInterval(fetchWeatherData, 5 * 60 * 1000);
+});
+</script>
+{% endblock %}

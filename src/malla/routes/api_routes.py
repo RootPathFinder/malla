@@ -2729,6 +2729,136 @@ def api_search_packets():
         return jsonify({"error": str(e)}), 500
 
 
+@api_bp.route("/weather-sensors")
+def api_weather_sensors():
+    """
+    Get weather/environment sensor data from all nodes with telemetry.
+
+    Query parameters:
+        - max_age_hours: Maximum age of readings in hours (default: 6)
+
+    Returns sensors with temperature, humidity, pressure data and location if available.
+    """
+    logger.info("API weather sensors endpoint accessed")
+    try:
+        from meshtastic.protobuf import mesh_pb2, telemetry_pb2
+
+        max_age_hours = request.args.get("max_age_hours", 6, type=int)
+        cutoff_time = time.time() - (max_age_hours * 3600)
+
+        conn = get_db_connection()
+        cursor = conn.cursor()
+
+        # Get recent TELEMETRY_APP packets (portnum 67) with environment data
+        cursor.execute(
+            """SELECT ph.from_node_id, ph.raw_payload, ph.timestamp,
+                      n.short_name, n.long_name
+               FROM packet_history ph
+               LEFT JOIN node_info n ON ph.from_node_id = n.node_id
+               WHERE ph.portnum = 67 AND ph.raw_payload IS NOT NULL
+               AND ph.timestamp > ?
+               ORDER BY ph.timestamp DESC LIMIT 500""",
+            (cutoff_time,),
+        )
+        telemetry_rows = cursor.fetchall()
+
+        # Parse telemetry and find environment readings
+        sensors: list[dict[str, Any]] = []
+        seen_nodes: set[int] = set()
+
+        for row in telemetry_rows:
+            node_id = row["from_node_id"]
+            if node_id in seen_nodes:
+                continue  # Only show most recent per node
+
+            try:
+                tel = telemetry_pb2.Telemetry()
+                tel.ParseFromString(row["raw_payload"])
+                if tel.HasField("environment_metrics"):
+                    env = tel.environment_metrics
+                    # Only include if has meaningful temperature data
+                    if env.temperature != 0 or env.relative_humidity != 0:
+                        seen_nodes.add(node_id)
+                        sensors.append(
+                            {
+                                "node_id": node_id,
+                                "hex_id": f"!{node_id:08x}",
+                                "short_name": row["short_name"],
+                                "long_name": row["long_name"],
+                                "temperature": env.temperature,
+                                "humidity": env.relative_humidity,
+                                "pressure": env.barometric_pressure,
+                                "timestamp": row["timestamp"],
+                                "latitude": None,
+                                "longitude": None,
+                                "city": None,
+                            }
+                        )
+            except Exception:
+                continue
+
+        # Now get position data for each sensor node
+        for sensor in sensors:
+            node_id = sensor["node_id"]
+            cursor.execute(
+                """SELECT raw_payload FROM packet_history
+                   WHERE from_node_id = ? AND portnum = 3
+                   AND raw_payload IS NOT NULL
+                   ORDER BY timestamp DESC LIMIT 1""",
+                (node_id,),
+            )
+            pos_row = cursor.fetchone()
+            if pos_row:
+                try:
+                    pos = mesh_pb2.Position()
+                    pos.ParseFromString(pos_row["raw_payload"])
+                    if pos.latitude_i != 0 and pos.longitude_i != 0:
+                        sensor["latitude"] = pos.latitude_i / 1e7
+                        sensor["longitude"] = pos.longitude_i / 1e7
+                except Exception:
+                    pass
+
+        conn.close()
+
+        # Try to get city names for sensors with location (limit API calls)
+        import json
+        import urllib.error
+        import urllib.request
+
+        for sensor in sensors[:10]:  # Limit to first 10 to avoid rate limiting
+            if sensor["latitude"] and sensor["longitude"]:
+                try:
+                    url = f"https://nominatim.openstreetmap.org/reverse?format=json&lat={sensor['latitude']}&lon={sensor['longitude']}&zoom=10"
+                    req = urllib.request.Request(
+                        url,
+                        headers={"User-Agent": "Malla/1.0 (Meshtastic Mesh Health Monitor)"}
+                    )
+                    with urllib.request.urlopen(req, timeout=2) as response:
+                        data = json.loads(response.read().decode())
+                        addr = data.get("address", {})
+                        city = (
+                            addr.get("city")
+                            or addr.get("town")
+                            or addr.get("village")
+                            or addr.get("municipality")
+                            or addr.get("county")
+                        )
+                        sensor["city"] = city
+                except Exception:
+                    pass
+
+        return safe_jsonify(
+            {
+                "sensors": sensors,
+                "count": len(sensors),
+                "max_age_hours": max_age_hours,
+            }
+        )
+    except Exception as e:
+        logger.error(f"Error in API weather sensors: {e}")
+        return jsonify({"error": str(e)}), 500
+
+
 def safe_jsonify(data, *args, **kwargs):
     """
     A drop-in replacement for Flask's jsonify() that sanitizes NaN/Inf values.

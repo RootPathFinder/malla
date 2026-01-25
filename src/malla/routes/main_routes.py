@@ -101,3 +101,14 @@ def node_health():
     except Exception as e:
         logger.error(f"Error in node health route: {e}")
         return f"Node health error: {e}", 500
+
+
+@main_bp.route("/weather-map")
+def weather_map():
+    """Mesh weather dashboard with sensor data on a map."""
+    logger.info("Weather map route accessed")
+    try:
+        return render_template("weather_map.html")
+    except Exception as e:
+        logger.error(f"Error in weather map route: {e}")
+        return f"Weather map error: {e}", 500
