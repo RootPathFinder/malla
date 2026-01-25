@@ -1040,7 +1040,7 @@ async function archiveNode(nodeId) {
     }
 
     try {
-        const response = await fetch(`/api/archive-node/${nodeId}`, {
+        const response = await fetch(`/alerts/api/archive-node/${nodeId}`, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' }
         });
