@@ -1769,6 +1769,7 @@ class AlertService:
                         "link": "/nodes",
                         "value": len(offline_infra),
                         "value_label": "nodes",
+                        "affected_nodes": [n["name"] for n in sorted(offline_infra, key=lambda x: -x["hours_offline"])[:10]],
                     }
                 )
 
@@ -1785,6 +1786,7 @@ class AlertService:
                         "link": "/nodes",
                         "value": len(offline_clients),
                         "value_label": "nodes",
+                        "affected_nodes": [n["name"] for n in sorted(offline_clients, key=lambda x: -x["hours_offline"])[:10]],
                     }
                 )
 
@@ -1848,6 +1850,7 @@ class AlertService:
                         "link": "/battery-analytics",
                         "value": "<15%",
                         "value_label": "battery",
+                        "affected_nodes": [n["name"] for n in critical_battery[:10]],
                     }
                 )
 
@@ -1864,6 +1867,7 @@ class AlertService:
                         "link": "/battery-analytics",
                         "value": "15-30%",
                         "value_label": "battery",
+                        "affected_nodes": [n["name"] for n in warning_battery[:10]],
                     }
                 )
 
@@ -1942,13 +1946,15 @@ class AlertService:
             # 5. Check for new nodes in last 24h
             cursor.execute(
                 """
-                SELECT COUNT(*) as new_nodes
+                SELECT node_id, COALESCE(long_name, short_name, printf('!%08x', node_id)) as name
                 FROM node_info
                 WHERE last_updated > ? AND COALESCE(archived, 0) = 0
+                ORDER BY last_updated DESC
                 """,
                 (now - 24 * 3600,),
             )
-            new_nodes = cursor.fetchone()["new_nodes"]
+            new_node_rows = cursor.fetchall()
+            new_nodes = len(new_node_rows)
 
             if new_nodes > 0:
                 insights.append(
@@ -1962,6 +1968,7 @@ class AlertService:
                         "link": "/nodes",
                         "value": new_nodes,
                         "value_label": "nodes",
+                        "affected_nodes": [row["name"] for row in new_node_rows[:10]],
                     }
                 )
 

@@ -609,6 +609,12 @@
                     <div class="flex-grow-1">
                         <h6 class="mb-1">${escapeHtml(insight.title)}</h6>
                         <p class="text-muted mb-2 small">${escapeHtml(insight.description)}</p>
+                        ${insight.affected_nodes && insight.affected_nodes.length > 0 ? `
+                            <div class="affected-nodes mb-2">
+                                ${insight.affected_nodes.map(node => `<span class="badge bg-secondary me-1 mb-1">${escapeHtml(node)}</span>`).join('')}
+                                ${insight.value && insight.affected_nodes.length < insight.value ? `<span class="badge bg-light text-muted me-1 mb-1">+${insight.value - insight.affected_nodes.length} more</span>` : ''}
+                            </div>
+                        ` : ''}
                         ${insight.action ? `
                             <span class="badge bg-primary">
                                 <i class="bi bi-arrow-right me-1"></i>${escapeHtml(insight.action)}

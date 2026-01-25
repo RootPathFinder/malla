@@ -5,8 +5,6 @@
 {% block head_libs %}
 <!-- Chart.js for dashboard metrics -->
 <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js" integrity="sha384-e6nUZLBkQ86NJ6TVVKAeSaK8jWa3NhkYWZFomE39AvDbQWeie9PlQqM3pmYW5d1g" crossorigin="anonymous"></script>
-<!-- Chart.js annotation plugin for current time indicator -->
-<script src="https://cdn.jsdelivr.net/npm/chartjs-plugin-annotation@3.0.1/dist/chartjs-plugin-annotation.min.js"></script>
 {% endblock head_libs %}
 
 {% block content %}
@@ -610,38 +608,56 @@ function createTimeSeriesChart(temporalData) {
         data.push(item.total_packets);
     });
 
-    // Get current hour for the vertical line annotation
+    // Get current hour for the vertical line
     const currentHour = new Date().getHours();
     const currentHour12 = currentHour === 0 ? 12 : (currentHour > 12 ? currentHour - 12 : currentHour);
     const currentAmpm = currentHour < 12 ? 'AM' : 'PM';
     const currentTimeLabel = `${currentHour12} ${currentAmpm}`;
+    const currentHourIndex = labels.indexOf(currentTimeLabel);
 
     const colors = getChartColors();
     const options = getDefaultChartOptions();
 
-    // Add annotation for current time vertical line
-    options.plugins.annotation = {
-        annotations: {
-            currentTimeLine: {
-                type: 'line',
-                xMin: currentTimeLabel,
-                xMax: currentTimeLabel,
-                borderColor: colors.danger || 'rgba(220, 53, 69, 0.8)',
-                borderWidth: 2,
-                borderDash: [5, 5],
-                label: {
-                    display: true,
-                    content: 'Now',
-                    position: 'start',
-                    backgroundColor: colors.danger || 'rgba(220, 53, 69, 0.8)',
-                    color: '#fff',
-                    font: {
-                        size: 11,
-                        weight: 'bold'
-                    },
-                    padding: 4
-                }
-            }
+    // Custom plugin to draw current time vertical line
+    const currentTimeLinePlugin = {
+        id: 'currentTimeLine',
+        afterDraw: (chart) => {
+            if (currentHourIndex === -1) return;
+
+            const ctx = chart.ctx;
+            const xAxis = chart.scales.x;
+            const yAxis = chart.scales.y;
+            const x = xAxis.getPixelForValue(currentHourIndex);
+
+            // Draw the dashed vertical line
+            ctx.save();
+            ctx.beginPath();
+            ctx.setLineDash([5, 5]);
+            ctx.strokeStyle = colors.danger || 'rgba(220, 53, 69, 0.8)';
+            ctx.lineWidth = 2;
+            ctx.moveTo(x, yAxis.top);
+            ctx.lineTo(x, yAxis.bottom);
+            ctx.stroke();
+
+            // Draw the "Now" label
+            ctx.setLineDash([]);
+            ctx.fillStyle = colors.danger || 'rgba(220, 53, 69, 0.8)';
+            const labelPadding = 4;
+            const labelText = 'Now';
+            ctx.font = 'bold 11px sans-serif';
+            const textWidth = ctx.measureText(labelText).width;
+            const labelWidth = textWidth + labelPadding * 2;
+            const labelHeight = 16;
+
+            // Draw label background
+            ctx.fillRect(x - labelWidth / 2, yAxis.top - labelHeight - 2, labelWidth, labelHeight);
+
+            // Draw label text
+            ctx.fillStyle = '#fff';
+            ctx.textAlign = 'center';
+            ctx.textBaseline = 'middle';
+            ctx.fillText(labelText, x, yAxis.top - labelHeight / 2 - 2);
+            ctx.restore();
         }
     };
 
@@ -657,7 +673,8 @@ function createTimeSeriesChart(temporalData) {
                 tension: 0.1
             }]
         },
-        options: options
+        options: options,
+        plugins: [currentTimeLinePlugin]
     });
 }
 
