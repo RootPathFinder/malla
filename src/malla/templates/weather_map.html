@@ -1,11 +1,12 @@
 {% extends "base.html" %}
-{% from "components/sidebar_macros.html" import sidebar_container, selected_details_section, controls_section, stats_section, legend_section, sidebar_styles %}
+{% from "components/sidebar_macros.html" import sidebar_container, controls_section, stats_section, legend_section, sidebar_styles %}
 
 {% block title %}Weather Map - Malla{% endblock %}
 
 {% block extra_css %}
 <!-- Leaflet CSS -->
 <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
+{{ sidebar_styles() }}
 <style>
 .footer {
     display: none !important;
@@ -92,7 +93,7 @@
 
 /* Sensor list in sidebar */
 .sensor-list {
-    max-height: 400px;
+    max-height: 300px;
     overflow-y: auto;
 }
 
@@ -150,10 +151,6 @@
     font-size: 0.75rem;
     color: #6c757d;
 }
-
-/* Legend items */
-.legend-temp-high { color: #dc3545; }
-.legend-temp-low { color: #0d6efd; }
 </style>
 {% endblock %}
 
