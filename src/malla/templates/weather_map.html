@@ -311,27 +311,125 @@ function createWeatherMarker(sensor) {
     });
 }
 
+// Draw a sparkline on a canvas element
+function drawSparkline(canvasId, data, color, isTemperature = false) {
+    setTimeout(() => {
+        const canvas = document.getElementById(canvasId);
+        if (!canvas || data.length < 2) return;
+
+        const ctx = canvas.getContext('2d');
+        const width = canvas.width;
+        const height = canvas.height;
+
+        // Convert temperature values to Fahrenheit if needed
+        let values = data.map(d => isTemperature ? celsiusToFahrenheit(d.v) : d.v);
+
+        const min = Math.min(...values);
+        const max = Math.max(...values);
+        const range = max - min || 1;
+
+        // Clear canvas
+        ctx.clearRect(0, 0, width, height);
+
+        // Draw line
+        ctx.beginPath();
+        ctx.strokeStyle = color;
+        ctx.lineWidth = 1.5;
+
+        values.forEach((val, i) => {
+            const x = (i / (values.length - 1)) * width;
+            const y = height - ((val - min) / range) * (height - 4) - 2;
+            if (i === 0) {
+                ctx.moveTo(x, y);
+            } else {
+                ctx.lineTo(x, y);
+            }
+        });
+        ctx.stroke();
+
+        // Draw current value dot
+        const lastX = width;
+        const lastY = height - ((values[values.length - 1] - min) / range) * (height - 4) - 2;
+        ctx.beginPath();
+        ctx.fillStyle = color;
+        ctx.arc(lastX - 2, lastY, 3, 0, Math.PI * 2);
+        ctx.fill();
+    }, 50);
+}
+
 // Create popup content for a sensor
 function createPopupContent(sensor) {
     const tempF = celsiusToFahrenheit(sensor.temperature);
-    let html = `<div style="min-width: 200px;">`;
+    const sparklineId = `sparkline-${sensor.node_id}`;
+    const humiditySparklineId = `humidity-sparkline-${sensor.node_id}`;
+
+    let html = `<div style="min-width: 250px;">`;
     html += `<h6 class="mb-2">${sensor.long_name || sensor.short_name || sensor.hex_id}</h6>`;
-    html += `<table class="table table-sm table-borderless mb-0">`;
-    html += `<tr><td><i class="bi bi-thermometer-half text-danger"></i> Temperature</td><td class="fw-bold">${tempF.toFixed(1)}°F</td></tr>`;
+
+    // Temperature with sparkline
+    html += `<div class="mb-2">`;
+    html += `<div class="d-flex justify-content-between align-items-center">`;
+    html += `<span><i class="bi bi-thermometer-half text-danger"></i> Temperature</span>`;
+    html += `<span class="fw-bold">${tempF.toFixed(1)}°F</span>`;
+    html += `</div>`;
+    if (sensor.temp_history && sensor.temp_history.length > 1) {
+        html += `<canvas id="${sparklineId}" width="230" height="30" style="width: 100%; height: 30px; margin-top: 4px;"></canvas>`;
+        html += `<div class="d-flex justify-content-between" style="font-size: 10px; color: #6c757d;">`;
+        const tempValues = sensor.temp_history.map(d => celsiusToFahrenheit(d.v));
+        html += `<span>${Math.min(...tempValues).toFixed(0)}°F</span>`;
+        html += `<span>24h</span>`;
+        html += `<span>${Math.max(...tempValues).toFixed(0)}°F</span>`;
+        html += `</div>`;
+    }
+    html += `</div>`;
+
+    // Humidity with sparkline
     if (sensor.humidity > 0) {
-        html += `<tr><td><i class="bi bi-droplet text-primary"></i> Humidity</td><td class="fw-bold">${sensor.humidity.toFixed(1)}%</td></tr>`;
+        html += `<div class="mb-2">`;
+        html += `<div class="d-flex justify-content-between align-items-center">`;
+        html += `<span><i class="bi bi-droplet text-primary"></i> Humidity</span>`;
+        html += `<span class="fw-bold">${sensor.humidity.toFixed(1)}%</span>`;
+        html += `</div>`;
+        if (sensor.humidity_history && sensor.humidity_history.length > 1) {
+            html += `<canvas id="${humiditySparklineId}" width="230" height="30" style="width: 100%; height: 30px; margin-top: 4px;"></canvas>`;
+            html += `<div class="d-flex justify-content-between" style="font-size: 10px; color: #6c757d;">`;
+            const humValues = sensor.humidity_history.map(d => d.v);
+            html += `<span>${Math.min(...humValues).toFixed(0)}%</span>`;
+            html += `<span>24h</span>`;
+            html += `<span>${Math.max(...humValues).toFixed(0)}%</span>`;
+            html += `</div>`;
+        }
+        html += `</div>`;
     }
+
+    // Other info
+    html += `<div class="small text-muted">`;
     if (sensor.pressure > 0) {
-        html += `<tr><td><i class="bi bi-speedometer2 text-secondary"></i> Pressure</td><td class="fw-bold">${sensor.pressure.toFixed(0)} hPa</td></tr>`;
+        html += `<div><i class="bi bi-speedometer2"></i> ${sensor.pressure.toFixed(0)} hPa</div>`;
     }
-    html += `<tr><td><i class="bi bi-clock text-muted"></i> Updated</td><td>${formatTimeAgo(sensor.timestamp)}</td></tr>`;
+    html += `<div><i class="bi bi-clock"></i> Updated ${formatTimeAgo(sensor.timestamp)}</div>`;
     if (sensor.city) {
-        html += `<tr><td><i class="bi bi-geo-alt text-success"></i> Location</td><td>${sensor.city}</td></tr>`;
+        html += `<div><i class="bi bi-geo-alt"></i> ${sensor.city}</div>`;
     }
-    html += `</table>`;
+    html += `</div>`;
+
     html += `<div class="mt-2"><a href="/nodes/${sensor.hex_id}" class="btn btn-sm btn-outline-primary">View Node</a></div>`;
     html += `</div>`;
+
     return html;
+}
+
+// Render sparklines after popup opens
+function onPopupOpen(sensor) {
+    const sparklineId = `sparkline-${sensor.node_id}`;
+    const humiditySparklineId = `humidity-sparkline-${sensor.node_id}`;
+
+    if (sensor.temp_history && sensor.temp_history.length > 1) {
+        drawSparkline(sparklineId, sensor.temp_history, '#dc3545', true);
+    }
+    if (sensor.humidity_history && sensor.humidity_history.length > 1) {
+        drawSparkline(humiditySparklineId, sensor.humidity_history, '#0d6efd', false);
+    }
 }
 
 // Add markers to the map
@@ -347,6 +445,7 @@ function updateMapMarkers() {
         });
 
         marker.bindPopup(createPopupContent(sensor));
+        marker.on('popupopen', () => onPopupOpen(sensor));
         marker.on('click', () => selectSensor(sensor));
         marker.addTo(map);
         sensorMarkers.push(marker);
@@ -497,14 +596,40 @@ function refreshData() {
 // Toggle sidebar
 function toggleSidebar() {
     const sidebar = document.getElementById('sidebar');
+    const icon = document.querySelector('#toggleSidebar i');
+    const isMobile = window.innerWidth <= 768;
+
     sidebar.classList.toggle('collapsed');
-    setTimeout(() => map.invalidateSize(), 300);
+
+    if (sidebar.classList.contains('collapsed')) {
+        if (isMobile) {
+            icon.className = 'bi bi-chevron-up';
+        } else {
+            icon.className = 'bi bi-chevron-left';
+        }
+    } else {
+        if (isMobile) {
+            icon.className = 'bi bi-chevron-down';
+        } else {
+            icon.className = 'bi bi-chevron-right';
+        }
+    }
+
+    // Trigger map resize after animation
+    setTimeout(() => {
+        if (map) {
+            map.invalidateSize();
+        }
+    }, 300);
 }
 
 // Initialize on page load
 document.addEventListener('DOMContentLoaded', function() {
     initMap();
     fetchWeatherData();
+
+    // Wire up the toggle button
+    document.getElementById('toggleSidebar').addEventListener('click', toggleSidebar);
 
     // Refresh on max age change
     document.getElementById('maxAge').addEventListener('change', refreshData);

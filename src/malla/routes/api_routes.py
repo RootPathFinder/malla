@@ -2818,6 +2818,41 @@ def api_weather_sensors():
                 except Exception:
                     pass
 
+        # Get 24-hour historical data for sparklines
+        history_cutoff = time.time() - 86400  # 24 hours
+        for sensor in sensors:
+            node_id = sensor["node_id"]
+            cursor.execute(
+                """SELECT raw_payload, timestamp FROM packet_history
+                   WHERE from_node_id = ? AND portnum = 67
+                   AND raw_payload IS NOT NULL AND timestamp > ?
+                   ORDER BY timestamp ASC LIMIT 100""",
+                (node_id, history_cutoff),
+            )
+            history_rows = cursor.fetchall()
+            temp_history = []
+            humidity_history = []
+            for hrow in history_rows:
+                try:
+                    htel = telemetry_pb2.Telemetry()
+                    htel.ParseFromString(hrow["raw_payload"])
+                    if htel.HasField("environment_metrics"):
+                        henv = htel.environment_metrics
+                        if henv.temperature != 0:
+                            temp_history.append({
+                                "t": hrow["timestamp"],
+                                "v": round(henv.temperature, 1)
+                            })
+                        if henv.relative_humidity != 0:
+                            humidity_history.append({
+                                "t": hrow["timestamp"],
+                                "v": round(henv.relative_humidity, 1)
+                            })
+                except Exception:
+                    continue
+            sensor["temp_history"] = temp_history
+            sensor["humidity_history"] = humidity_history
+
         conn.close()
 
         # Try to get city names for sensors with location (limit API calls)
