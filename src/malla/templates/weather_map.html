@@ -6,7 +6,6 @@
 {% block extra_css %}
 <!-- Leaflet CSS -->
 <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
-{{ sidebar_styles() }}
 <style>
 .footer {
     display: none !important;
@@ -152,6 +151,9 @@
     color: #6c757d;
 }
 </style>
+
+{{ sidebar_styles() }}
+
 {% endblock %}
 
 {% block content %}
