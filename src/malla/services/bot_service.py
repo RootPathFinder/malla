@@ -1948,10 +1948,38 @@ class BotService:
         utc = datetime.utcnow()
         return f"🕐 {now.strftime('%Y-%m-%d %H:%M:%S')} (UTC: {utc.strftime('%H:%M')})"
 
+    def _get_nearest_city(self, lat: float, lon: float) -> str | None:
+        """Reverse geocode coordinates to get nearest city name using Nominatim."""
+        import urllib.request
+        import urllib.error
+        import json
+
+        try:
+            # Use OpenStreetMap Nominatim for reverse geocoding
+            url = f"https://nominatim.openstreetmap.org/reverse?format=json&lat={lat}&lon={lon}&zoom=10"
+            req = urllib.request.Request(
+                url,
+                headers={"User-Agent": "Malla/1.0 (Meshtastic Mesh Health Monitor)"}
+            )
+            with urllib.request.urlopen(req, timeout=2) as response:
+                data = json.loads(response.read().decode())
+                addr = data.get("address", {})
+                # Try to get city, town, village, or county in order of preference
+                city = (
+                    addr.get("city")
+                    or addr.get("town")
+                    or addr.get("village")
+                    or addr.get("municipality")
+                    or addr.get("county")
+                )
+                return city
+        except Exception:
+            return None
+
     def _cmd_weather(self, ctx: CommandContext) -> str:
         """Handle !weather command - environment sensor data."""
         try:
-            from meshtastic.protobuf import telemetry_pb2
+            from meshtastic.protobuf import mesh_pb2, telemetry_pb2
 
             from ..database.connection import get_db_connection
 
@@ -1970,7 +1998,6 @@ class BotService:
                 (six_hours_ago,),
             )
             rows = cursor.fetchall()
-            conn.close()
 
             # Parse and find environment readings
             env_readings: list[dict] = []
@@ -1991,6 +2018,7 @@ class BotService:
                             seen_nodes.add(node_id)
                             env_readings.append(
                                 {
+                                    "node_id": node_id,
                                     "name": row["short_name"] or f"!{node_id:08x}",
                                     "temp": env.temperature,
                                     "humidity": env.relative_humidity,
@@ -2003,7 +2031,35 @@ class BotService:
                     continue
 
             if not env_readings:
+                conn.close()
                 return "🌡️ No weather sensors active"
+
+            # Look up position for each node to get city name
+            node_cities: dict[int, str | None] = {}
+            for reading in env_readings:
+                node_id = reading["node_id"]
+                # Get most recent position for this node
+                cursor.execute(
+                    """SELECT raw_payload FROM packet_history
+                       WHERE from_node_id = ? AND portnum = 3
+                       AND raw_payload IS NOT NULL
+                       ORDER BY timestamp DESC LIMIT 1""",
+                    (node_id,),
+                )
+                pos_row = cursor.fetchone()
+                if pos_row:
+                    try:
+                        pos = mesh_pb2.Position()
+                        pos.ParseFromString(pos_row["raw_payload"])
+                        if pos.latitude_i != 0 and pos.longitude_i != 0:
+                            lat = pos.latitude_i / 1e7
+                            lon = pos.longitude_i / 1e7
+                            city = self._get_nearest_city(lat, lon)
+                            node_cities[node_id] = city
+                    except Exception:
+                        pass
+
+            conn.close()
 
             lines = ["🌡️ Environment:"]
             for r in env_readings:
@@ -2019,7 +2075,9 @@ class BotService:
                 if r["pressure"] != 0:
                     parts.append(f"{r['pressure']:.0f}hPa")
                 if parts:
-                    lines.append(f"{name}: {' '.join(parts)}")
+                    city = node_cities.get(r["node_id"])
+                    location = f" ({city})" if city else ""
+                    lines.append(f"{name}{location}: {' '.join(parts)}")
 
             return "\n".join(lines) if len(lines) > 1 else "🌡️ No readings"
 
