@@ -2639,6 +2639,10 @@ class AdminService:
                 "power_measurement_enabled": module_config.telemetry.power_measurement_enabled,
                 "power_update_interval": module_config.telemetry.power_update_interval,
                 "power_screen_enabled": module_config.telemetry.power_screen_enabled,
+                "device_telemetry_enabled": module_config.telemetry.device_telemetry_enabled,
+                "health_measurement_enabled": module_config.telemetry.health_measurement_enabled,
+                "health_update_interval": module_config.telemetry.health_update_interval,
+                "health_screen_enabled": module_config.telemetry.health_screen_enabled,
             }
 
         if module_config.HasField("canned_message"):

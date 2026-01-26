@@ -714,6 +714,37 @@ TELEMETRY_MODULE_FIELDS = [
         description="Interval for power measurements (seconds)",
         unit="seconds",
     ),
+    FieldMetadata(
+        name="power_screen_enabled",
+        label="Power on Screen",
+        field_type=FieldType.BOOLEAN,
+        description="Show power data on screen",
+    ),
+    FieldMetadata(
+        name="device_telemetry_enabled",
+        label="Device Telemetry",
+        field_type=FieldType.BOOLEAN,
+        description="Enable device telemetry broadcast (battery, voltage, utilization)",
+    ),
+    FieldMetadata(
+        name="health_measurement_enabled",
+        label="Health Measurement",
+        field_type=FieldType.BOOLEAN,
+        description="Enable health sensor readings",
+    ),
+    FieldMetadata(
+        name="health_update_interval",
+        label="Health Update Interval",
+        field_type=FieldType.NUMBER,
+        description="Interval for health measurements (seconds)",
+        unit="seconds",
+    ),
+    FieldMetadata(
+        name="health_screen_enabled",
+        label="Health on Screen",
+        field_type=FieldType.BOOLEAN,
+        description="Show health data on screen",
+    ),
 ]
 
 EXTNOTIF_MODULE_FIELDS = [
