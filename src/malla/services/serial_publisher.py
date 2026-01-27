@@ -272,6 +272,23 @@ class SerialPublisher:
         self._last_admin_response: dict[str, Any] | None = None
         self._admin_response_event = threading.Event()
 
+        # Pending telemetry requests tracking
+        # Key: target_node_id (int), Value: dict with event and response data
+        self._pending_telemetry_requests: dict[int, dict[str, Any]] = {}
+        self._pending_telemetry_lock = threading.Lock()
+
+        # Telemetry request statistics tracking
+        self._telemetry_stats: dict[str, Any] = {
+            "total_requests": 0,
+            "successful_responses": 0,
+            "timeouts": 0,
+            "errors": 0,
+            "last_request_time": None,
+            "last_success_time": None,
+            "per_node_stats": {},  # Key: node_id, Value: {requests, successes, timeouts}
+        }
+        self._telemetry_stats_lock = threading.Lock()
+
     @property
     def is_connected(self) -> bool:
         """Check if connected to the node."""
@@ -420,6 +437,10 @@ class SerialPublisher:
             if port_num == "ADMIN_APP" or port_num == portnums_pb2.ADMIN_APP:
                 self._handle_admin_response(packet)
 
+            # Handle telemetry responses
+            if port_num == "TELEMETRY_APP" or port_num == portnums_pb2.TELEMETRY_APP:
+                self._handle_telemetry_response(packet)
+
         except Exception as e:
             logger.error(f"Error handling received packet: {e}")
 
@@ -455,6 +476,37 @@ class SerialPublisher:
 
         except Exception as e:
             logger.error(f"Error handling admin response: {e}")
+
+    def _handle_telemetry_response(self, packet: dict[str, Any]) -> None:
+        """Handle telemetry app responses."""
+        try:
+            from_id = packet.get("from")
+            if from_id is None:
+                from_id_str = packet.get("fromId", "")
+                if from_id_str.startswith("!"):
+                    from_id = int(from_id_str[1:], 16)
+                else:
+                    return
+
+            decoded = packet.get("decoded", {})
+            telemetry_data = decoded.get("telemetry", {})
+
+            if not telemetry_data:
+                return
+
+            # Check if this is a response to a pending request
+            with self._pending_telemetry_lock:
+                if from_id in self._pending_telemetry_requests:
+                    pending = self._pending_telemetry_requests[from_id]
+                    pending["response_data"]["telemetry"] = telemetry_data
+                    pending["response_data"]["timestamp"] = time.time()
+                    pending["response_data"]["from_node"] = from_id
+                    pending["event"].set()
+
+                    logger.debug(f"Received telemetry response from !{from_id:08x}")
+
+        except Exception as e:
+            logger.error(f"Error handling telemetry response: {e}")
 
     def get_local_node_id(self) -> int | None:
         """Get the local node ID from the connected device."""
@@ -657,6 +709,215 @@ class SerialPublisher:
             admin_message=admin_msg,
             want_response=True,
         )
+
+    def send_telemetry_request(
+        self,
+        target_node_id: int,
+        telemetry_type: str = "device_metrics",
+        timeout: float = 25.0,
+    ) -> dict[str, Any] | None:
+        """
+        Request telemetry from a target node and wait for response.
+
+        This sends a telemetry request to the target node and waits for
+        the response containing current device metrics.
+
+        Args:
+            target_node_id: The destination node ID
+            telemetry_type: Type of telemetry to request
+                           (device_metrics, environment_metrics, etc.)
+            timeout: Timeout in seconds to wait for response (default 25s for mesh)
+
+        Returns:
+            Dictionary with telemetry data if successful, None otherwise
+        """
+        from meshtastic import telemetry_pb2
+
+        if not self.is_connected:
+            logger.error("Cannot send telemetry request: not connected")
+            return None
+
+        if self._interface is None:
+            return None
+
+        try:
+            # Create telemetry request
+            telemetry = telemetry_pb2.Telemetry()
+
+            # Set the appropriate metrics type to request
+            if telemetry_type == "environment_metrics":
+                telemetry.environment_metrics.CopyFrom(
+                    telemetry_pb2.EnvironmentMetrics()
+                )
+            elif telemetry_type == "power_metrics":
+                telemetry.power_metrics.CopyFrom(telemetry_pb2.PowerMetrics())
+            elif telemetry_type == "local_stats":
+                telemetry.local_stats.CopyFrom(telemetry_pb2.LocalStats())
+            else:
+                # Default to device_metrics
+                telemetry.device_metrics.CopyFrom(telemetry_pb2.DeviceMetrics())
+
+            # Set up tracking for this request
+            response_event = threading.Event()
+            response_data: dict[str, Any] = {}
+
+            with self._pending_telemetry_lock:
+                self._pending_telemetry_requests[target_node_id] = {
+                    "event": response_event,
+                    "response_data": response_data,
+                    "telemetry_type": telemetry_type,
+                    "requested_at": time.time(),
+                }
+
+            # Track statistics
+            request_time = time.time()
+            with self._telemetry_stats_lock:
+                self._telemetry_stats["total_requests"] += 1
+                self._telemetry_stats["last_request_time"] = request_time
+
+                # Per-node stats
+                node_key = str(target_node_id)
+                if node_key not in self._telemetry_stats["per_node_stats"]:
+                    self._telemetry_stats["per_node_stats"][node_key] = {
+                        "requests": 0,
+                        "successes": 0,
+                        "timeouts": 0,
+                        "errors": 0,
+                        "last_request": None,
+                        "last_success": None,
+                    }
+                self._telemetry_stats["per_node_stats"][node_key]["requests"] += 1
+                self._telemetry_stats["per_node_stats"][node_key]["last_request"] = (
+                    request_time
+                )
+
+            try:
+                logger.info(
+                    f"Sending telemetry request to !{target_node_id:08x} "
+                    f"(type={telemetry_type}) via serial"
+                )
+
+                # Send telemetry request
+                self._interface.sendData(
+                    data=telemetry,
+                    destinationId=target_node_id,
+                    portNum=portnums_pb2.TELEMETRY_APP,
+                    wantAck=False,
+                    wantResponse=True,
+                )
+
+                # Wait for response
+                if response_event.wait(timeout=timeout):
+                    if "error" in response_data:
+                        logger.warning(
+                            f"Telemetry request failed for !{target_node_id:08x}: "
+                            f"{response_data.get('error')}"
+                        )
+                        with self._telemetry_stats_lock:
+                            self._telemetry_stats["errors"] += 1
+                            self._telemetry_stats["per_node_stats"][node_key][
+                                "errors"
+                            ] += 1
+                        return None
+
+                    logger.info(
+                        f"Telemetry request successful for !{target_node_id:08x}"
+                    )
+                    # Track success
+                    success_time = time.time()
+                    with self._telemetry_stats_lock:
+                        self._telemetry_stats["successful_responses"] += 1
+                        self._telemetry_stats["last_success_time"] = success_time
+                        self._telemetry_stats["per_node_stats"][node_key][
+                            "successes"
+                        ] += 1
+                        self._telemetry_stats["per_node_stats"][node_key][
+                            "last_success"
+                        ] = success_time
+
+                    # Include stats in response
+                    response_data["stats"] = self.get_telemetry_stats(target_node_id)
+                    return response_data
+                else:
+                    logger.warning(
+                        f"Telemetry request timeout for !{target_node_id:08x}"
+                    )
+                    with self._telemetry_stats_lock:
+                        self._telemetry_stats["timeouts"] += 1
+                        self._telemetry_stats["per_node_stats"][node_key][
+                            "timeouts"
+                        ] += 1
+                    return None
+
+            finally:
+                # Always clean up the pending request
+                with self._pending_telemetry_lock:
+                    self._pending_telemetry_requests.pop(target_node_id, None)
+
+        except Exception as e:
+            logger.error(f"Failed to send telemetry request: {e}")
+            with self._telemetry_stats_lock:
+                self._telemetry_stats["errors"] += 1
+            return None
+
+    def get_telemetry_stats(self, node_id: int | None = None) -> dict[str, Any]:
+        """
+        Get telemetry request statistics.
+
+        Args:
+            node_id: Optional node ID to get per-node stats for
+
+        Returns:
+            Dictionary with telemetry statistics
+        """
+        with self._telemetry_stats_lock:
+            if node_id is not None:
+                node_key = str(node_id)
+                node_stats = self._telemetry_stats["per_node_stats"].get(node_key, {})
+                return {
+                    "node_id": node_id,
+                    "requests": node_stats.get("requests", 0),
+                    "successes": node_stats.get("successes", 0),
+                    "timeouts": node_stats.get("timeouts", 0),
+                    "errors": node_stats.get("errors", 0),
+                    "success_rate": (
+                        node_stats.get("successes", 0)
+                        / max(node_stats.get("requests", 0), 1)
+                        * 100
+                    ),
+                    "last_request": node_stats.get("last_request"),
+                    "last_success": node_stats.get("last_success"),
+                }
+            else:
+                return {
+                    "total_requests": self._telemetry_stats["total_requests"],
+                    "successful_responses": self._telemetry_stats[
+                        "successful_responses"
+                    ],
+                    "timeouts": self._telemetry_stats["timeouts"],
+                    "errors": self._telemetry_stats["errors"],
+                    "success_rate": (
+                        self._telemetry_stats["successful_responses"]
+                        / max(self._telemetry_stats["total_requests"], 1)
+                        * 100
+                    ),
+                    "last_request_time": self._telemetry_stats["last_request_time"],
+                    "last_success_time": self._telemetry_stats["last_success_time"],
+                }
+
+    def reset_telemetry_stats(self) -> None:
+        """Reset all telemetry statistics."""
+        with self._telemetry_stats_lock:
+            self._telemetry_stats = {
+                "total_requests": 0,
+                "successful_responses": 0,
+                "timeouts": 0,
+                "errors": 0,
+                "last_request_time": None,
+                "last_success_time": None,
+                "per_node_stats": {},
+            }
+            logger.info("Telemetry statistics reset")
 
     def send_reboot(
         self,

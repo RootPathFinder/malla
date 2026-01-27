@@ -2553,12 +2553,53 @@ def api_request_live_telemetry(node_id):
                     }
                 ), 408  # Request Timeout
 
+        elif connection_type == "serial":
+            serial_publisher = get_serial_publisher()
+            if not serial_publisher.is_connected:
+                return jsonify(
+                    {
+                        "success": False,
+                        "error": "Serial not connected. Connect via Admin page first.",
+                    }
+                ), 400
+
+            result = serial_publisher.send_telemetry_request(
+                target_node_id=node_id_int,
+                telemetry_type=telemetry_type,
+                timeout=timeout,
+            )
+
+            if result:
+                return jsonify(
+                    {
+                        "success": True,
+                        "node_id": node_id_int,
+                        "hex_id": f"!{node_id_int:08x}",
+                        "telemetry": result.get("telemetry", {}),
+                        "timestamp": result.get("timestamp"),
+                        "stats": result.get("stats", {}),
+                        "live": True,
+                    }
+                )
+            else:
+                # Get stats even on failure
+                stats = serial_publisher.get_telemetry_stats(node_id_int)
+                return jsonify(
+                    {
+                        "success": False,
+                        "error": f"No response from node within {timeout}s",
+                        "node_id": node_id_int,
+                        "hex_id": f"!{node_id_int:08x}",
+                        "stats": stats,
+                    }
+                ), 408  # Request Timeout
+
         elif connection_type == "mqtt":
             # MQTT is fire-and-forget, we can't wait for response here
             return jsonify(
                 {
                     "success": False,
-                    "error": "Live telemetry requires TCP connection. "
+                    "error": "Live telemetry requires TCP or Serial connection. "
                     "MQTT cannot wait for responses.",
                 }
             ), 400
@@ -2586,8 +2627,15 @@ def api_node_telemetry_stats(node_id: str):
     try:
         node_id_int = convert_node_id(node_id)
 
-        tcp_publisher = get_tcp_publisher()
-        stats = tcp_publisher.get_telemetry_stats(node_id_int)
+        admin_service = get_admin_service()
+        connection_type = admin_service.connection_type.value
+
+        if connection_type == "serial":
+            serial_publisher = get_serial_publisher()
+            stats = serial_publisher.get_telemetry_stats(node_id_int)
+        else:
+            tcp_publisher = get_tcp_publisher()
+            stats = tcp_publisher.get_telemetry_stats(node_id_int)
 
         return jsonify(
             {
@@ -2611,30 +2659,59 @@ def api_telemetry_stats():
     Returns overall success/failure rates and per-node breakdown.
     """
     try:
-        tcp_publisher = get_tcp_publisher()
-        stats = tcp_publisher.get_telemetry_stats()
+        admin_service = get_admin_service()
+        connection_type = admin_service.connection_type.value
 
-        # Add per-node stats
-        with tcp_publisher._telemetry_stats_lock:
-            per_node = tcp_publisher._telemetry_stats.get("per_node_stats", {})
-            stats["per_node_stats"] = {}
-            for node_key, node_data in per_node.items():
-                try:
-                    node_id = int(node_key)
-                    node_total = node_data.get("requests", 0)
-                    node_successes = node_data.get("successes", 0)
-                    success_rate = (
-                        (node_successes / node_total * 100) if node_total > 0 else 0
-                    )
-                    stats["per_node_stats"][f"!{node_id:08x}"] = {
-                        "requests": node_total,
-                        "successes": node_successes,
-                        "timeouts": node_data.get("timeouts", 0),
-                        "errors": node_data.get("errors", 0),
-                        "success_rate": round(success_rate, 1),
-                    }
-                except ValueError:
-                    pass
+        if connection_type == "serial":
+            serial_publisher = get_serial_publisher()
+            stats = serial_publisher.get_telemetry_stats()
+
+            # Add per-node stats
+            with serial_publisher._telemetry_stats_lock:
+                per_node = serial_publisher._telemetry_stats.get("per_node_stats", {})
+                stats["per_node_stats"] = {}
+                for node_key, node_data in per_node.items():
+                    try:
+                        node_id = int(node_key)
+                        node_total = node_data.get("requests", 0)
+                        node_successes = node_data.get("successes", 0)
+                        success_rate = (
+                            (node_successes / node_total * 100) if node_total > 0 else 0
+                        )
+                        stats["per_node_stats"][f"!{node_id:08x}"] = {
+                            "requests": node_total,
+                            "successes": node_successes,
+                            "timeouts": node_data.get("timeouts", 0),
+                            "errors": node_data.get("errors", 0),
+                            "success_rate": round(success_rate, 1),
+                        }
+                    except ValueError:
+                        pass
+        else:
+            tcp_publisher = get_tcp_publisher()
+            stats = tcp_publisher.get_telemetry_stats()
+
+            # Add per-node stats
+            with tcp_publisher._telemetry_stats_lock:
+                per_node = tcp_publisher._telemetry_stats.get("per_node_stats", {})
+                stats["per_node_stats"] = {}
+                for node_key, node_data in per_node.items():
+                    try:
+                        node_id = int(node_key)
+                        node_total = node_data.get("requests", 0)
+                        node_successes = node_data.get("successes", 0)
+                        success_rate = (
+                            (node_successes / node_total * 100) if node_total > 0 else 0
+                        )
+                        stats["per_node_stats"][f"!{node_id:08x}"] = {
+                            "requests": node_total,
+                            "successes": node_successes,
+                            "timeouts": node_data.get("timeouts", 0),
+                            "errors": node_data.get("errors", 0),
+                            "success_rate": round(success_rate, 1),
+                        }
+                    except ValueError:
+                        pass
 
         return jsonify({"success": True, "stats": stats})
 
@@ -2647,8 +2724,15 @@ def api_telemetry_stats():
 def api_telemetry_stats_reset():
     """Reset telemetry request statistics."""
     try:
-        tcp_publisher = get_tcp_publisher()
-        tcp_publisher.reset_telemetry_stats()
+        admin_service = get_admin_service()
+        connection_type = admin_service.connection_type.value
+
+        if connection_type == "serial":
+            serial_publisher = get_serial_publisher()
+            serial_publisher.reset_telemetry_stats()
+        else:
+            tcp_publisher = get_tcp_publisher()
+            tcp_publisher.reset_telemetry_stats()
 
         return jsonify({"success": True, "message": "Telemetry statistics reset"})
 
