@@ -2280,6 +2280,11 @@ class AdminService:
                 "buzzer_gpio": config.device.buzzer_gpio,
                 "rebroadcast_mode": config.device.rebroadcast_mode,
                 "node_info_broadcast_secs": config.device.node_info_broadcast_secs,
+                "double_tap_as_button_press": config.device.double_tap_as_button_press,
+                "is_managed": config.device.is_managed,
+                "disable_triple_click": config.device.disable_triple_click,
+                "tzdef": config.device.tzdef,
+                "led_heartbeat_disabled": config.device.led_heartbeat_disabled,
             }
 
         if config.HasField("position"):
@@ -2288,6 +2293,10 @@ class AdminService:
                 "position_broadcast_smart_enabled": config.position.position_broadcast_smart_enabled,
                 "gps_enabled": config.position.gps_mode,
                 "fixed_position": config.position.fixed_position,
+                "gps_update_interval": config.position.gps_update_interval,
+                "gps_attempt_time": config.position.gps_attempt_time,
+                "broadcast_smart_minimum_distance": config.position.broadcast_smart_minimum_distance,
+                "broadcast_smart_minimum_interval_secs": config.position.broadcast_smart_minimum_interval_secs,
             }
 
         if config.HasField("power"):
@@ -2316,6 +2325,9 @@ class AdminService:
                 "compass_north_top": config.display.compass_north_top,
                 "flip_screen": config.display.flip_screen,
                 "units": config.display.units,
+                "heading_bold": config.display.heading_bold,
+                "wake_on_tap_or_motion": config.display.wake_on_tap_or_motion,
+                "use_12h_clock": config.display.use_12h_clock,
             }
 
         if config.HasField("lora"):
@@ -2331,6 +2343,12 @@ class AdminService:
                 "tx_enabled": config.lora.tx_enabled,
                 "tx_power": config.lora.tx_power,
                 "channel_num": config.lora.channel_num,
+                "override_duty_cycle": config.lora.override_duty_cycle,
+                "sx126x_rx_boosted_gain": config.lora.sx126x_rx_boosted_gain,
+                "override_frequency": config.lora.override_frequency,
+                "pa_fan_disabled": config.lora.pa_fan_disabled,
+                "ignore_mqtt": config.lora.ignore_mqtt,
+                "config_ok_to_mqtt": config.lora.config_ok_to_mqtt,
             }
 
         if config.HasField("bluetooth"):
@@ -2591,6 +2609,7 @@ class AdminService:
                 "baud": module_config.serial.baud,
                 "timeout": module_config.serial.timeout,
                 "mode": module_config.serial.mode,
+                "override_console_serial_port": module_config.serial.override_console_serial_port,
             }
 
         if module_config.HasField("external_notification"):
@@ -2609,6 +2628,7 @@ class AdminService:
                 "alert_bell_buzzer": module_config.external_notification.alert_bell_buzzer,
                 "use_pwm": module_config.external_notification.use_pwm,
                 "nag_timeout": module_config.external_notification.nag_timeout,
+                "use_i2s_as_buzzer": module_config.external_notification.use_i2s_as_buzzer,
             }
 
         if module_config.HasField("store_forward"):
@@ -2618,6 +2638,7 @@ class AdminService:
                 "records": module_config.store_forward.records,
                 "history_return_max": module_config.store_forward.history_return_max,
                 "history_return_window": module_config.store_forward.history_return_window,
+                "is_server": module_config.store_forward.is_server,
             }
 
         if module_config.HasField("range_test"):
@@ -2625,6 +2646,7 @@ class AdminService:
                 "enabled": module_config.range_test.enabled,
                 "sender": module_config.range_test.sender,
                 "save": module_config.range_test.save,
+                "clear_on_reboot": module_config.range_test.clear_on_reboot,
             }
 
         if module_config.HasField("telemetry"):
@@ -2681,6 +2703,7 @@ class AdminService:
             result["neighborinfo"] = {
                 "enabled": module_config.neighbor_info.enabled,
                 "update_interval": module_config.neighbor_info.update_interval,
+                "transmit_over_lora": module_config.neighbor_info.transmit_over_lora,
             }
 
         if module_config.HasField("ambient_lighting"):
@@ -2708,6 +2731,8 @@ class AdminService:
             result["paxcounter"] = {
                 "enabled": module_config.paxcounter.enabled,
                 "paxcounter_update_interval": module_config.paxcounter.paxcounter_update_interval,
+                "wifi_threshold": module_config.paxcounter.wifi_threshold,
+                "ble_threshold": module_config.paxcounter.ble_threshold,
             }
 
         return result
