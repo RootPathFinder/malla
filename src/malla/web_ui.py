@@ -47,36 +47,46 @@ def start_auto_archive_stale_nodes(interval_seconds=86400):
 
 
 def _auto_connect_services(cfg: AppConfig) -> None:
-    """Auto-connect admin TCP and/or start bot based on configuration."""
-    # Auto-connect admin TCP if configured
-    if cfg.admin_auto_connect and cfg.admin_connection_type == "tcp":
-        try:
-            from .services.tcp_publisher import get_tcp_publisher
+    """Auto-connect admin TCP and/or start bot based on configuration.
 
-            logger.info(
-                f"Auto-connecting admin TCP to {cfg.admin_tcp_host}:{cfg.admin_tcp_port}..."
-            )
-            tcp_publisher = get_tcp_publisher()
-            if tcp_publisher.connect():
-                logger.info("Admin TCP auto-connected successfully")
-            else:
-                logger.warning(
-                    "Admin TCP auto-connect failed - connection will need to be established manually"
+    Runs in a background thread to avoid blocking startup.
+    """
+
+    def connect_async():
+        # Auto-connect admin TCP if configured
+        if cfg.admin_auto_connect and cfg.admin_connection_type == "tcp":
+            try:
+                from .services.tcp_publisher import get_tcp_publisher
+
+                logger.info(
+                    f"Auto-connecting admin TCP to {cfg.admin_tcp_host}:{cfg.admin_tcp_port}..."
                 )
-        except Exception as e:
-            logger.error(f"Error during admin TCP auto-connect: {e}")
+                tcp_publisher = get_tcp_publisher()
+                if tcp_publisher.connect():
+                    logger.info("Admin TCP auto-connected successfully")
+                else:
+                    logger.warning(
+                        "Admin TCP auto-connect failed - connection will need to be established manually"
+                    )
+            except Exception as e:
+                logger.error(f"Error during admin TCP auto-connect: {e}")
 
-    # Auto-start bot if configured (requires TCP connection)
-    if cfg.bot_auto_start:
-        try:
-            from .services.bot_service import get_bot_service
+        # Auto-start bot if configured (requires TCP connection)
+        if cfg.bot_auto_start:
+            try:
+                from .services.bot_service import get_bot_service
 
-            logger.info("Auto-starting bot service...")
-            bot = get_bot_service()
-            bot.start()
-            logger.info("Bot service auto-started successfully")
-        except Exception as e:
-            logger.error(f"Error during bot auto-start: {e}")
+                logger.info("Auto-starting bot service...")
+                bot = get_bot_service()
+                bot.start()
+                logger.info("Bot service auto-started successfully")
+            except Exception as e:
+                logger.error(f"Error during bot auto-start: {e}")
+
+    # Run connection in background thread to avoid blocking startup
+    t = threading.Thread(target=connect_async, daemon=True, name="auto-connect")
+    t.start()
+    logger.info("Auto-connect scheduled in background thread")
 
 
 # Configure logging
