@@ -1416,22 +1416,21 @@ class AdminService:
         # Send the command using appropriate publisher
         publisher = self._get_publisher()
 
-        if conn_type == AdminConnectionType.TCP:
+        if conn_type in (AdminConnectionType.TCP, AdminConnectionType.SERIAL):
             packet_id = publisher.send_remove_node(
                 target_node_id=target_node_id,
                 node_to_remove=node_to_remove,
             )
         else:
-            # Serial connection not yet supported for this command
             AdminRepository.update_admin_log_status(
                 log_id=log_id,
                 status="failed",
-                error_message="remove_node not supported via serial connection yet",
+                error_message="remove_node requires TCP or Serial connection",
             )
             return AdminCommandResult(
                 success=False,
                 log_id=log_id,
-                error="remove_node not supported via serial connection yet",
+                error="remove_node requires TCP or Serial connection",
             )
 
         if packet_id is None:
@@ -1502,7 +1501,7 @@ class AdminService:
         # Send the command using appropriate publisher
         publisher = self._get_publisher()
 
-        if conn_type == AdminConnectionType.TCP:
+        if conn_type in (AdminConnectionType.TCP, AdminConnectionType.SERIAL):
             packet_id = publisher.send_nodedb_reset(
                 target_node_id=target_node_id,
             )
@@ -1510,12 +1509,12 @@ class AdminService:
             AdminRepository.update_admin_log_status(
                 log_id=log_id,
                 status="failed",
-                error_message="nodedb_reset not supported via serial connection yet",
+                error_message="nodedb_reset requires TCP or Serial connection",
             )
             return AdminCommandResult(
                 success=False,
                 log_id=log_id,
-                error="nodedb_reset not supported via serial connection yet",
+                error="nodedb_reset requires TCP or Serial connection",
             )
 
         if packet_id is None:
@@ -1586,7 +1585,7 @@ class AdminService:
         # Send the command using appropriate publisher
         publisher = self._get_publisher()
 
-        if conn_type == AdminConnectionType.TCP:
+        if conn_type in (AdminConnectionType.TCP, AdminConnectionType.SERIAL):
             packet_id = publisher.send_factory_reset(
                 target_node_id=target_node_id,
                 config_only=config_only,
@@ -1595,12 +1594,12 @@ class AdminService:
             AdminRepository.update_admin_log_status(
                 log_id=log_id,
                 status="failed",
-                error_message="factory_reset not supported via serial connection yet",
+                error_message="factory_reset requires TCP or Serial connection",
             )
             return AdminCommandResult(
                 success=False,
                 log_id=log_id,
-                error="factory_reset not supported via serial connection yet",
+                error="factory_reset requires TCP or Serial connection",
             )
 
         if packet_id is None:
@@ -1659,10 +1658,10 @@ class AdminService:
             )
 
         conn_type = self.connection_type
-        if conn_type != AdminConnectionType.TCP:
+        if conn_type not in (AdminConnectionType.TCP, AdminConnectionType.SERIAL):
             return AdminCommandResult(
                 success=False,
-                error="begin_edit_settings is only supported via TCP connection",
+                error="begin_edit_settings requires TCP or Serial connection",
             )
 
         # Log the command
@@ -1745,10 +1744,10 @@ class AdminService:
             )
 
         conn_type = self.connection_type
-        if conn_type != AdminConnectionType.TCP:
+        if conn_type not in (AdminConnectionType.TCP, AdminConnectionType.SERIAL):
             return AdminCommandResult(
                 success=False,
-                error="commit_edit_settings is only supported via TCP connection",
+                error="commit_edit_settings requires TCP or Serial connection",
             )
 
         # Log the command
@@ -1847,7 +1846,7 @@ class AdminService:
 
         config_type_str = config_type.name.lower()
 
-        if conn_type == AdminConnectionType.TCP:
+        if conn_type in (AdminConnectionType.TCP, AdminConnectionType.SERIAL):
             packet_id = publisher.send_set_config(
                 target_node_id=target_node_id,
                 config_type=config_type_str,
@@ -1858,12 +1857,12 @@ class AdminService:
             AdminRepository.update_admin_log_status(
                 log_id=log_id,
                 status="failed",
-                error_message="set_config not supported via MQTT",
+                error_message="set_config requires TCP or Serial connection",
             )
             return AdminCommandResult(
                 success=False,
                 log_id=log_id,
-                error="set_config is only supported via TCP connection",
+                error="set_config requires TCP or Serial connection",
             )
 
         if packet_id is None:
@@ -1980,7 +1979,7 @@ class AdminService:
 
         module_type_str = module_config_type.name.lower()
 
-        if conn_type == AdminConnectionType.TCP:
+        if conn_type in (AdminConnectionType.TCP, AdminConnectionType.SERIAL):
             packet_id = publisher.send_set_module_config(
                 target_node_id=target_node_id,
                 module_type=module_type_str,
@@ -1991,12 +1990,12 @@ class AdminService:
             AdminRepository.update_admin_log_status(
                 log_id=log_id,
                 status="failed",
-                error_message="set_module_config not supported via MQTT",
+                error_message="set_module_config requires TCP or Serial connection",
             )
             return AdminCommandResult(
                 success=False,
                 log_id=log_id,
-                error="set_module_config is only supported via TCP connection",
+                error="set_module_config requires TCP or Serial connection",
             )
 
         if packet_id is None:
@@ -2112,7 +2111,7 @@ class AdminService:
         # Send the request using appropriate publisher
         publisher = self._get_publisher()
 
-        if conn_type == AdminConnectionType.TCP:
+        if conn_type in (AdminConnectionType.TCP, AdminConnectionType.SERIAL):
             packet_id = publisher.send_set_channel(
                 target_node_id=target_node_id,
                 channel_index=channel_index,
@@ -2123,12 +2122,12 @@ class AdminService:
             AdminRepository.update_admin_log_status(
                 log_id=log_id,
                 status="failed",
-                error_message="set_channel not supported via MQTT",
+                error_message="set_channel requires TCP or Serial connection",
             )
             return AdminCommandResult(
                 success=False,
                 log_id=log_id,
-                error="set_channel is only supported via TCP connection",
+                error="set_channel requires TCP or Serial connection",
             )
 
         if packet_id is None:

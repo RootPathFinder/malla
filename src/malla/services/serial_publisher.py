@@ -710,6 +710,400 @@ class SerialPublisher:
             want_response=True,
         )
 
+    def send_begin_edit_settings(
+        self,
+        target_node_id: int,
+    ) -> int | None:
+        """
+        Begin a settings edit transaction on a target node.
+
+        This should be called before making multiple config changes.
+        The node will hold changes in memory until commit_edit_settings is called.
+
+        Args:
+            target_node_id: The target node ID
+
+        Returns:
+            Packet ID if sent successfully
+        """
+        admin_msg = admin_pb2.AdminMessage()
+        admin_msg.begin_edit_settings = True
+
+        logger.info(f"Sending begin_edit_settings to !{target_node_id:08x}")
+
+        return self.send_admin_message(
+            target_node_id=target_node_id,
+            admin_message=admin_msg,
+            want_response=True,
+        )
+
+    def send_commit_edit_settings(
+        self,
+        target_node_id: int,
+    ) -> int | None:
+        """
+        Commit a settings edit transaction on a target node.
+
+        This should be called after making config changes to apply them.
+        The node will save all pending changes to flash and apply them.
+
+        Args:
+            target_node_id: The target node ID
+
+        Returns:
+            Packet ID if sent successfully
+        """
+        admin_msg = admin_pb2.AdminMessage()
+        admin_msg.commit_edit_settings = True
+
+        logger.info(f"Sending commit_edit_settings to !{target_node_id:08x}")
+
+        return self.send_admin_message(
+            target_node_id=target_node_id,
+            admin_message=admin_msg,
+            want_response=True,
+        )
+
+    def send_set_config(
+        self,
+        target_node_id: int,
+        config_type: str,
+        config_data: dict,
+    ) -> int | None:
+        """
+        Set configuration on a target node.
+
+        Args:
+            target_node_id: The target node ID
+            config_type: The config type (device, position, etc.)
+            config_data: Dictionary of config values to set
+
+        Returns:
+            Packet ID if sent successfully
+        """
+        from meshtastic import config_pb2
+
+        admin_msg = admin_pb2.AdminMessage()
+        config = config_pb2.Config()
+
+        if config_type == "device":
+            for key, value in config_data.items():
+                if hasattr(config.device, key):
+                    setattr(config.device, key, value)
+            admin_msg.set_config.CopyFrom(config)
+
+        elif config_type == "position":
+            for key, value in config_data.items():
+                if key == "gps_enabled":
+                    config.position.gps_mode = value
+                elif hasattr(config.position, key):
+                    setattr(config.position, key, value)
+            admin_msg.set_config.CopyFrom(config)
+
+        elif config_type == "power":
+            for key, value in config_data.items():
+                if hasattr(config.power, key):
+                    setattr(config.power, key, value)
+            admin_msg.set_config.CopyFrom(config)
+
+        elif config_type == "network":
+            for key, value in config_data.items():
+                if hasattr(config.network, key):
+                    setattr(config.network, key, value)
+            admin_msg.set_config.CopyFrom(config)
+
+        elif config_type == "display":
+            for key, value in config_data.items():
+                if hasattr(config.display, key):
+                    setattr(config.display, key, value)
+            admin_msg.set_config.CopyFrom(config)
+
+        elif config_type == "lora":
+            for key, value in config_data.items():
+                if hasattr(config.lora, key):
+                    setattr(config.lora, key, value)
+            admin_msg.set_config.CopyFrom(config)
+
+        elif config_type == "bluetooth":
+            for key, value in config_data.items():
+                if hasattr(config.bluetooth, key):
+                    if key == "mode" and not isinstance(value, int):
+                        try:
+                            value = int(value)
+                        except (ValueError, TypeError):
+                            continue
+                    if key == "fixed_pin" and not isinstance(value, int):
+                        try:
+                            value = int(value)
+                        except (ValueError, TypeError):
+                            continue
+                    setattr(config.bluetooth, key, value)
+            admin_msg.set_config.CopyFrom(config)
+
+        elif config_type == "security":
+            # Filter out forbidden fields
+            FORBIDDEN_SECURITY_FIELDS = {"private_key", "public_key"}
+            config_data = {
+                k: v
+                for k, v in config_data.items()
+                if k not in FORBIDDEN_SECURITY_FIELDS
+            }
+
+            for key, value in config_data.items():
+                if hasattr(config.security, key):
+                    field = getattr(config.security, key)
+                    if hasattr(field, "extend"):
+                        field.clear()
+                        if isinstance(value, (list, tuple)):
+                            for item in value:
+                                if isinstance(item, bytes):
+                                    field.append(item)
+                                elif isinstance(item, str):
+                                    try:
+                                        field.append(bytes.fromhex(item))
+                                    except Exception:
+                                        import base64
+
+                                        try:
+                                            field.append(base64.b64decode(item))
+                                        except Exception:
+                                            pass
+                    else:
+                        setattr(config.security, key, value)
+
+            if not config_data:
+                return None
+            admin_msg.set_config.CopyFrom(config)
+
+        else:
+            logger.error(f"Unknown config type: {config_type}")
+            return None
+
+        logger.info(f"Sending set_config for {config_type} to !{target_node_id:08x}")
+
+        return self.send_admin_message(
+            target_node_id=target_node_id,
+            admin_message=admin_msg,
+            want_response=True,
+        )
+
+    def send_set_module_config(
+        self,
+        target_node_id: int,
+        module_type: str,
+        module_data: dict,
+    ) -> int | None:
+        """
+        Set module configuration on a target node.
+
+        Args:
+            target_node_id: The target node ID
+            module_type: The module type (mqtt, serial, telemetry, etc.)
+            module_data: Dictionary of module config values to set
+
+        Returns:
+            Packet ID if sent successfully
+        """
+        from meshtastic.protobuf import module_config_pb2
+
+        admin_msg = admin_pb2.AdminMessage()
+        module_config = module_config_pb2.ModuleConfig()
+
+        module_type_lower = module_type.lower()
+
+        module_map = {
+            "mqtt": "mqtt",
+            "serial": "serial",
+            "extnotif": "external_notification",
+            "storeforward": "store_forward",
+            "rangetest": "range_test",
+            "telemetry": "telemetry",
+            "cannedmsg": "canned_message",
+            "audio": "audio",
+            "remotehardware": "remote_hardware",
+            "neighborinfo": "neighbor_info",
+            "ambientlighting": "ambient_lighting",
+            "detectionsensor": "detection_sensor",
+            "paxcounter": "paxcounter",
+        }
+
+        if module_type_lower not in module_map:
+            logger.error(f"Unknown module type: {module_type}")
+            return None
+
+        module_attr = module_map[module_type_lower]
+        module_obj = getattr(module_config, module_attr)
+
+        for key, value in module_data.items():
+            if hasattr(module_obj, key):
+                setattr(module_obj, key, value)
+
+        admin_msg.set_module_config.CopyFrom(module_config)
+
+        logger.info(
+            f"Sending set_module_config for {module_type} to !{target_node_id:08x}"
+        )
+
+        return self.send_admin_message(
+            target_node_id=target_node_id,
+            admin_message=admin_msg,
+            want_response=True,
+        )
+
+    def send_set_channel(
+        self,
+        target_node_id: int,
+        channel_index: int,
+        channel_data: dict,
+    ) -> int | None:
+        """
+        Set channel configuration on a target node.
+
+        Args:
+            target_node_id: The target node ID
+            channel_index: The channel index (0-7)
+            channel_data: Dictionary of channel settings
+
+        Returns:
+            Packet ID if sent successfully
+        """
+        import base64
+
+        from meshtastic import channel_pb2
+
+        admin_msg = admin_pb2.AdminMessage()
+
+        channel = channel_pb2.Channel()
+        channel.index = channel_index
+
+        if "role" in channel_data:
+            channel.role = channel_data["role"]
+
+        if "name" in channel_data:
+            channel.settings.name = channel_data["name"]
+
+        if "psk" in channel_data:
+            psk = channel_data["psk"]
+            if isinstance(psk, bytes):
+                channel.settings.psk = psk
+            elif isinstance(psk, str):
+                try:
+                    decoded = base64.b64decode(psk)
+                    channel.settings.psk = decoded
+                except Exception:
+                    try:
+                        decoded = bytes.fromhex(psk)
+                        channel.settings.psk = decoded
+                    except Exception:
+                        channel.settings.psk = psk.encode("utf-8")
+
+        if "position_precision" in channel_data:
+            channel.settings.module_settings.position_precision = channel_data[
+                "position_precision"
+            ]
+
+        if "uplink_enabled" in channel_data:
+            channel.settings.uplink_enabled = channel_data["uplink_enabled"]
+        if "downlink_enabled" in channel_data:
+            channel.settings.downlink_enabled = channel_data["downlink_enabled"]
+
+        admin_msg.set_channel.CopyFrom(channel)
+
+        logger.info(f"Sending set_channel {channel_index} to !{target_node_id:08x}")
+
+        return self.send_admin_message(
+            target_node_id=target_node_id,
+            admin_message=admin_msg,
+            want_response=True,
+        )
+
+    def send_remove_node(
+        self,
+        target_node_id: int,
+        node_to_remove: int,
+    ) -> int | None:
+        """
+        Remove a node from the target node's nodedb.
+
+        Args:
+            target_node_id: The node to send the command to
+            node_to_remove: The node number to remove from the nodedb
+
+        Returns:
+            Packet ID if sent successfully
+        """
+        admin_msg = admin_pb2.AdminMessage()
+        admin_msg.remove_by_nodenum = node_to_remove
+
+        logger.info(
+            f"Sending remove_by_nodenum command to !{target_node_id:08x} "
+            f"to remove !{node_to_remove:08x}"
+        )
+
+        return self.send_admin_message(
+            target_node_id=target_node_id,
+            admin_message=admin_msg,
+            want_response=True,
+        )
+
+    def send_nodedb_reset(
+        self,
+        target_node_id: int,
+    ) -> int | None:
+        """
+        Reset the nodedb on the target node.
+
+        Args:
+            target_node_id: The node to reset the nodedb on
+
+        Returns:
+            Packet ID if sent successfully
+        """
+        admin_msg = admin_pb2.AdminMessage()
+        admin_msg.nodedb_reset = 1
+
+        logger.info(f"Sending nodedb_reset command to !{target_node_id:08x}")
+
+        return self.send_admin_message(
+            target_node_id=target_node_id,
+            admin_message=admin_msg,
+            want_response=True,
+        )
+
+    def send_factory_reset(
+        self,
+        target_node_id: int,
+        config_only: bool = True,
+    ) -> int | None:
+        """
+        Factory reset the target node.
+
+        Args:
+            target_node_id: The node to reset
+            config_only: If True, only reset config. If False, full factory reset.
+
+        Returns:
+            Packet ID if sent successfully
+        """
+        admin_msg = admin_pb2.AdminMessage()
+
+        if config_only:
+            admin_msg.factory_reset_config = 1
+            logger.info(
+                f"Sending factory_reset_config command to !{target_node_id:08x}"
+            )
+        else:
+            admin_msg.factory_reset_device = 1
+            logger.info(
+                f"Sending factory_reset_device command to !{target_node_id:08x}"
+            )
+
+        return self.send_admin_message(
+            target_node_id=target_node_id,
+            admin_message=admin_msg,
+            want_response=True,
+        )
+
     def send_telemetry_request(
         self,
         target_node_id: int,
