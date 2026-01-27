@@ -139,7 +139,7 @@
     <div class="d-flex justify-content-between align-items-center mb-4">
         <div>
             <h1><i class="bi bi-diagram-3"></i> Network Dependency Analysis</h1>
-            <p class="text-muted mb-0">Analyze the impact of taking a router offline</p>
+            <p class="text-muted mb-0">Analyze the impact of taking one or more routers offline</p>
         </div>
         <div class="d-flex gap-2">
             <select class="form-select form-select-sm" id="hoursFilter" style="width: auto;">
@@ -158,8 +158,11 @@
         <!-- Left Panel: Router Selection -->
         <div class="col-lg-4 col-xl-3 mb-4">
             <div class="card">
-                <div class="card-header">
-                    <h5 class="mb-0"><i class="bi bi-router"></i> Select Router to Remove</h5>
+                <div class="card-header d-flex justify-content-between align-items-center">
+                    <h5 class="mb-0"><i class="bi bi-router"></i> Select Routers to Remove</h5>
+                    <button class="btn btn-outline-secondary btn-sm" id="clearSelectionBtn" style="display: none;" onclick="clearSelection()">
+                        <i class="bi bi-x-circle"></i> Clear
+                    </button>
                 </div>
                 <div class="card-body">
                     <div class="node-search">
@@ -191,7 +194,7 @@
                 <div class="card-body small">
                     <div class="legend-item">
                         <span class="legend-dot" style="background: #dc3545;"></span>
-                        <span>Selected router (offline)</span>
+                        <span>Selected routers (offline)</span>
                     </div>
                     <div class="legend-item">
                         <span class="legend-dot" style="background: #ffc107;"></span>
@@ -251,8 +254,8 @@
             <div class="card mb-4" id="noSelectionState">
                 <div class="card-body text-center py-5">
                     <i class="bi bi-hand-index-thumb display-4 text-muted mb-3"></i>
-                    <h5>Select a Router</h5>
-                    <p class="text-muted">Choose a router from the list to see the network impact if it goes offline.</p>
+                    <h5>Select Routers</h5>
+                    <p class="text-muted">Click routers from the list to simulate them going offline. Click again to deselect.</p>
                 </div>
             </div>
 
@@ -260,7 +263,7 @@
             <div class="card mb-4" id="graphCard" style="display: none;">
                 <div class="card-header d-flex justify-content-between align-items-center">
                     <h5 class="mb-0"><i class="bi bi-diagram-3"></i> Network Impact Visualization</h5>
-                    <span class="badge bg-secondary" id="selectedRouterName">--</span>
+                    <span class="badge bg-danger" id="selectedRouterName">--</span>
                 </div>
                 <div class="card-body p-0">
                     <div class="graph-container" id="networkGraph"></div>
@@ -300,7 +303,7 @@
 <script>
 // Global state
 let topologyData = null;
-let selectedRouter = null;
+let selectedRouters = new Set();  // Support multiple selections
 let simulation = null;
 
 // Router roles to filter by
@@ -367,9 +370,9 @@ function renderRouterList() {
     }
 
     listEl.innerHTML = nodes.map(node => `
-        <div class="node-item ${selectedRouter?.node_id === node.node_id ? 'selected' : ''}"
+        <div class="node-item ${selectedRouters.has(node.node_id) ? 'selected' : ''}"
              data-node-id="${node.node_id}"
-             onclick="selectRouter(${node.node_id})">
+             onclick="toggleRouter(${node.node_id})">
             <div class="d-flex justify-content-between align-items-start">
                 <div>
                     <div class="node-name">${node.name} ${getRoleBadge(node)}</div>
@@ -400,30 +403,73 @@ function filterRouters() {
     });
 }
 
-// Select a router and calculate impact
-function selectRouter(nodeId) {
-    selectedRouter = topologyData.nodes.find(n => n.node_id === nodeId);
+// Toggle router selection (multi-select)
+function toggleRouter(nodeId) {
+    if (selectedRouters.has(nodeId)) {
+        selectedRouters.delete(nodeId);
+    } else {
+        selectedRouters.add(nodeId);
+    }
 
-    if (!selectedRouter) return;
-
-    // Update UI
+    // Update UI selection state
     document.querySelectorAll('.node-item').forEach(item => {
-        item.classList.toggle('selected', parseInt(item.dataset.nodeId) === nodeId);
+        item.classList.toggle('selected', selectedRouters.has(parseInt(item.dataset.nodeId)));
     });
+
+    // Update clear button visibility
+    document.getElementById('clearSelectionBtn').style.display = selectedRouters.size > 0 ? '' : 'none';
+
+    if (selectedRouters.size === 0) {
+        // No selection - show placeholder
+        document.getElementById('noSelectionState').style.display = 'block';
+        document.getElementById('impactSummary').style.display = 'none';
+        document.getElementById('graphCard').style.display = 'none';
+        document.getElementById('affectedNodesSection').style.display = 'none';
+        return;
+    }
+
+    // Get selected router names for display
+    const selectedNames = topologyData.nodes
+        .filter(n => selectedRouters.has(n.node_id))
+        .map(n => n.name);
 
     document.getElementById('noSelectionState').style.display = 'none';
     document.getElementById('impactSummary').style.display = 'flex';
     document.getElementById('graphCard').style.display = 'block';
     document.getElementById('affectedNodesSection').style.display = 'flex';
-    document.getElementById('selectedRouterName').textContent = selectedRouter.name;
 
-    // Calculate impact
-    calculateImpact(nodeId);
+    // Show count and names
+    const label = selectedRouters.size === 1
+        ? selectedNames[0]
+        : `${selectedRouters.size} routers offline`;
+    document.getElementById('selectedRouterName').textContent = label;
+    document.getElementById('selectedRouterName').title = selectedNames.join(', ');
+
+    // Calculate impact for all selected routers
+    calculateImpact(selectedRouters);
 }
 
-// Calculate network impact when a router is removed
-function calculateImpact(removedNodeId) {
+// Clear all selections
+function clearSelection() {
+    selectedRouters.clear();
+
+    document.querySelectorAll('.node-item').forEach(item => {
+        item.classList.remove('selected');
+    });
+
+    document.getElementById('clearSelectionBtn').style.display = 'none';
+    document.getElementById('noSelectionState').style.display = 'block';
+    document.getElementById('impactSummary').style.display = 'none';
+    document.getElementById('graphCard').style.display = 'none';
+    document.getElementById('affectedNodesSection').style.display = 'none';
+}
+
+// Calculate network impact when routers are removed
+function calculateImpact(removedNodeIds) {
     if (!topologyData) return;
+
+    // Convert to Set if not already
+    const removedSet = removedNodeIds instanceof Set ? removedNodeIds : new Set([removedNodeIds]);
 
     const nodes = topologyData.nodes;
     const edges = topologyData.edges;
@@ -431,15 +477,15 @@ function calculateImpact(removedNodeId) {
     // Build adjacency list for the original network
     const originalGraph = buildGraph(nodes, edges);
 
-    // Build adjacency list without the removed node
+    // Build adjacency list without the removed nodes
     const modifiedEdges = edges.filter(e =>
-        e.node_a !== removedNodeId && e.node_b !== removedNodeId
+        !removedSet.has(e.node_a) && !removedSet.has(e.node_b)
     );
-    const modifiedGraph = buildGraph(nodes.filter(n => n.node_id !== removedNodeId), modifiedEdges);
+    const modifiedGraph = buildGraph(nodes.filter(n => !removedSet.has(n.node_id)), modifiedEdges);
 
-    // Count lost links
+    // Count lost links (links connected to any removed node)
     const linksLost = edges.filter(e =>
-        e.node_a === removedNodeId || e.node_b === removedNodeId
+        removedSet.has(e.node_a) || removedSet.has(e.node_b)
     ).length;
 
     // Find connected components in the modified graph
@@ -455,7 +501,7 @@ function calculateImpact(removedNodeId) {
     const unaffectedNodes = [];
 
     nodes.forEach(node => {
-        if (node.node_id === removedNodeId) return;
+        if (removedSet.has(node.node_id)) return;  // Skip removed nodes
 
         if (!mainComponentSet.has(node.node_id)) {
             // Node is in a disconnected component
@@ -465,11 +511,14 @@ function calculateImpact(removedNodeId) {
             const originalNeighbors = originalGraph[node.node_id] || [];
             const modifiedNeighbors = modifiedGraph[node.node_id] || [];
 
-            if (originalNeighbors.includes(removedNodeId) && modifiedNeighbors.length < originalNeighbors.length - 1) {
-                // Lost more than just the direct connection (indirect paths affected)
+            // Count how many removed nodes this node was connected to
+            const lostConnections = originalNeighbors.filter(n => removedSet.has(n)).length;
+
+            if (lostConnections > 0 && modifiedNeighbors.length < originalNeighbors.length - lostConnections) {
+                // Lost more than just direct connections (indirect paths affected)
                 degradedNodes.push(node);
-            } else if (originalNeighbors.includes(removedNodeId)) {
-                // Only lost direct connection to removed node
+            } else if (lostConnections > 0) {
+                // Only lost direct connections to removed nodes
                 degradedNodes.push(node);
             } else {
                 unaffectedNodes.push(node);
@@ -478,7 +527,7 @@ function calculateImpact(removedNodeId) {
     });
 
     // Calculate impact score (0-100)
-    const totalNodes = nodes.length - 1; // Exclude the removed node
+    const totalNodes = nodes.length - removedSet.size; // Exclude the removed nodes
     const impactScore = totalNodes > 0
         ? Math.round((isolatedNodes.length * 2 + degradedNodes.length) / (totalNodes * 2) * 100)
         : 0;
@@ -496,7 +545,7 @@ function calculateImpact(removedNodeId) {
     renderAffectedNodes(isolatedNodes, degradedNodes);
 
     // Render network graph
-    renderNetworkGraph(nodes, edges, removedNodeId, isolatedNodes, degradedNodes);
+    renderNetworkGraph(nodes, edges, removedSet, isolatedNodes, degradedNodes);
 }
 
 // Build adjacency list from nodes and edges
@@ -587,12 +636,15 @@ function renderAffectedNodes(isolated, degraded) {
 }
 
 // Render D3 network graph
-function renderNetworkGraph(nodes, edges, removedNodeId, isolatedNodes, degradedNodes) {
+function renderNetworkGraph(nodes, edges, removedNodeIds, isolatedNodes, degradedNodes) {
     const container = document.getElementById('networkGraph');
     container.innerHTML = '';
 
     const width = container.clientWidth;
     const height = container.clientHeight;
+
+    // Convert to Set if not already
+    const removedSet = removedNodeIds instanceof Set ? removedNodeIds : new Set([removedNodeIds]);
 
     const isolatedIds = new Set(isolatedNodes.map(n => n.node_id));
     const degradedIds = new Set(degradedNodes.map(n => n.node_id));
@@ -602,7 +654,7 @@ function renderNetworkGraph(nodes, edges, removedNodeId, isolatedNodes, degraded
         id: n.node_id,
         name: n.name,
         hex_id: n.hex_id,
-        isRemoved: n.node_id === removedNodeId,
+        isRemoved: removedSet.has(n.node_id),
         isIsolated: isolatedIds.has(n.node_id),
         isDegraded: degradedIds.has(n.node_id)
     }));
@@ -610,7 +662,7 @@ function renderNetworkGraph(nodes, edges, removedNodeId, isolatedNodes, degraded
     const linkData = edges.map(e => ({
         source: e.node_a,
         target: e.node_b,
-        isAffected: e.node_a === removedNodeId || e.node_b === removedNodeId
+        isAffected: removedSet.has(e.node_a) || removedSet.has(e.node_b)
     }));
 
     // Create SVG
@@ -718,7 +770,8 @@ function renderNetworkGraph(nodes, edges, removedNodeId, isolatedNodes, degraded
 
 // Refresh data
 function refreshData() {
-    selectedRouter = null;
+    selectedRouters.clear();
+    document.getElementById('clearSelectionBtn').style.display = 'none';
     document.getElementById('noSelectionState').style.display = 'block';
     document.getElementById('impactSummary').style.display = 'none';
     document.getElementById('graphCard').style.display = 'none';
