@@ -3602,10 +3602,14 @@
                 if (isTimeout || isPkiError) {
                     retryButton = `
                         <div class="mt-2">
-                            <button class="btn btn-sm btn-outline-warning" onclick="clearPkiCacheAndRetry('${nodeId}')">
-                                <i class="bi bi-arrow-repeat"></i> Clear PKI Cache & Retry
+                            <button class="btn btn-sm btn-outline-warning" onclick="clearPkiCacheAndRetry('${nodeId}', false)">
+                                <i class="bi bi-arrow-repeat"></i> Clear Cache & Retry
                             </button>
-                            <small class="text-muted ms-2">Clears cached session keys and retries admin test</small>
+                            <button class="btn btn-sm btn-outline-danger ms-2" onclick="clearPkiCacheAndRetry('${nodeId}', true)"
+                                    title="Also removes stale node entry from gateway's nodedb">
+                                <i class="bi bi-trash"></i> Full Reset & Retry
+                            </button>
+                            <small class="text-muted ms-2 d-block mt-1">Full Reset also clears the stale node from gateway's nodedb</small>
                         </div>`;
                 }
 
@@ -3623,18 +3627,22 @@
     }
 
     // Clear PKI cache for a node and retry admin test
-    async function clearPkiCacheAndRetry(nodeId) {
+    // If removeFromNodedb is true, also remove the stale node from gateway's nodedb
+    async function clearPkiCacheAndRetry(nodeId, removeFromNodedb = false) {
         const resultDiv = document.getElementById('testNodeResult');
 
         resultDiv.classList.remove('alert-success', 'alert-warning', 'alert-danger');
         resultDiv.classList.add('alert-info');
-        resultDiv.innerHTML = `<i class="bi bi-hourglass-split"></i> Resetting admin state for node ${nodeId}...`;
+        const actionText = removeFromNodedb ? 'Full reset' : 'Resetting admin state';
+        resultDiv.innerHTML = `<i class="bi bi-hourglass-split"></i> ${actionText} for node ${nodeId}...`;
 
         try {
             // Step 1: Reset all admin state (clears PKI cache AND removes DB entry)
+            // Optionally also remove from gateway's nodedb
             const resetResponse = await fetch(`/api/admin/node/${encodeURIComponent(nodeId)}/reset`, {
                 method: 'POST',
-                headers: { 'Content-Type': 'application/json' }
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ remove_from_nodedb: removeFromNodedb })
             });
             const resetData = await resetResponse.json();
 
@@ -3645,6 +3653,7 @@
             const clearedItems = [];
             if (resetData.session_passkey_cleared) clearedItems.push('PKI cache');
             if (resetData.db_entry_removed) clearedItems.push('database entry');
+            if (resetData.removed_from_gateway_nodedb) clearedItems.push('gateway nodedb entry');
             const clearedMsg = clearedItems.length > 0 ? `Cleared: ${clearedItems.join(', ')}. ` : '';
 
             resultDiv.innerHTML = `<i class="bi bi-hourglass-split"></i> ${clearedMsg}Retrying admin test...`;

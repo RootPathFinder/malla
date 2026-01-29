@@ -216,8 +216,12 @@ def api_reset_node_admin_state(node_id: str):
     This clears:
     1. The cached session passkey (PKI cache)
     2. The administrable_nodes database entry
+    3. Optionally removes the node from the gateway's nodedb
 
     After reset, the node will need to be re-tested for admin access.
+
+    Request body (optional):
+        remove_from_nodedb: bool - If true, also remove node from gateway's nodedb
     """
     try:
         from ..database.admin_repository import AdminRepository
@@ -226,10 +230,15 @@ def api_reset_node_admin_state(node_id: str):
         node_id_int = convert_node_id(node_id)
         node_hex = f"!{node_id_int:08x}"
 
+        # Check if we should also remove from gateway's nodedb
+        data = request.get_json() or {}
+        remove_from_nodedb = data.get("remove_from_nodedb", False)
+
         results = {
             "node_id": node_hex,
             "session_passkey_cleared": False,
             "db_entry_removed": False,
+            "removed_from_gateway_nodedb": False,
         }
 
         # Step 1: Clear the session passkey cache
@@ -241,10 +250,32 @@ def api_reset_node_admin_state(node_id: str):
         removed = AdminRepository.remove_administrable_node(node_id_int)
         results["db_entry_removed"] = removed
 
+        # Step 3: Optionally remove from gateway's nodedb
+        if remove_from_nodedb:
+            try:
+                admin_service = get_admin_service()
+                gateway_id = admin_service.gateway_node_id
+                if gateway_id:
+                    remove_result = admin_service.remove_node(
+                        target_node_id=gateway_id,
+                        node_to_remove=node_id_int,
+                    )
+                    results["removed_from_gateway_nodedb"] = remove_result.success
+                    if not remove_result.success:
+                        results["nodedb_error"] = remove_result.error
+                else:
+                    results["nodedb_error"] = "No gateway configured"
+            except Exception as nodedb_err:
+                results["nodedb_error"] = str(nodedb_err)
+                logger.warning(
+                    f"Failed to remove node from gateway nodedb: {nodedb_err}"
+                )
+
         logger.info(
             f"Reset admin state for node {node_hex}: "
             f"passkey_cleared={results['session_passkey_cleared']}, "
-            f"db_removed={results['db_entry_removed']}"
+            f"db_removed={results['db_entry_removed']}, "
+            f"nodedb_removed={results['removed_from_gateway_nodedb']}"
         )
 
         return jsonify(
