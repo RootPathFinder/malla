@@ -192,6 +192,46 @@
             </select>
         </div>
 
+        <!-- Coverage Analysis (shown only when a node is selected) -->
+        <div class="sidebar-section" id="coverageSection" style="display: none;">
+            <h6><i class="bi bi-broadcast"></i> Coverage Analysis</h6>
+            <div class="small text-muted mb-2">Estimate line-of-sight coverage from nodes. Add multiple nodes to see collective coverage.</div>
+            <div class="mb-2">
+                <label class="form-label small mb-1" id="coverageRadiusLabel">Analysis Radius (30dB LoRa ~10mi)</label>
+                <select class="form-select form-select-sm" id="coverageRadius">
+                    <!-- Options populated dynamically based on unit preference -->
+                </select>
+            </div>
+            <div class="mb-2">
+                <label class="form-label small mb-1">Resolution</label>
+                <select class="form-select form-select-sm" id="coverageResolution">
+                    <option value="24">Fast (24 rays)</option>
+                    <option value="36" selected>Normal (36 rays)</option>
+                    <option value="72">High (72 rays)</option>
+                </select>
+            </div>
+            <div class="mb-2">
+                <label class="form-label small mb-1">Antenna Height</label>
+                <div class="input-group input-group-sm">
+                    <input type="number" class="form-control" id="antennaHeight" value="10" min="1" max="100">
+                    <span class="input-group-text">m</span>
+                </div>
+            </div>
+            <div class="d-flex gap-1 mb-2">
+                <button class="btn btn-success btn-sm flex-fill" id="addCoverageBtn" onclick="addNodeCoverage()">
+                    <i class="bi bi-plus-circle"></i> Add Node
+                </button>
+                <button class="btn btn-outline-danger btn-sm" id="clearAllCoverageBtn" onclick="clearAllCoverage()" style="display: none;" title="Clear all coverage">
+                    <i class="bi bi-trash"></i>
+                </button>
+            </div>
+            <div id="coverageNodesList" class="mb-2" style="display: none;">
+                <label class="form-label small mb-1">Coverage Nodes</label>
+                <div id="coverageNodesContainer" class="small"></div>
+            </div>
+            <div id="coverageStatus" class="small mt-2" style="display: none;"></div>
+        </div>
+
         {% set map_legend_items = [
             {"type": "span", "class": "role-color-indicator", "style": "background-color: #007bff;", "content": "", "text": "Client"},
             {"type": "span", "class": "role-color-indicator", "style": "background-color: #28a745;", "content": "", "text": "Router"},
@@ -408,6 +448,68 @@
     opacity: 0.9;
 }
 
+/* Coverage analysis styles */
+.coverage-overlay {
+    fill-opacity: 0.3;
+    stroke-width: 2;
+    stroke-opacity: 0.7;
+}
+
+.coverage-visible {
+    fill: #28a745;
+    stroke: #1e7e34;
+}
+
+.coverage-partial {
+    fill: #ffc107;
+    stroke: #d39e00;
+}
+
+.coverage-blocked {
+    fill: #dc3545;
+    stroke: #bd2130;
+}
+
+#coverageStatus .spinner-border-sm {
+    width: 1rem;
+    height: 1rem;
+}
+
+.coverage-node-item {
+    display: flex;
+    align-items: center;
+    padding: 0.25rem 0.5rem;
+    margin-bottom: 0.25rem;
+    border-radius: 0.25rem;
+    background: var(--bs-tertiary-bg);
+}
+
+.coverage-node-color {
+    width: 12px;
+    height: 12px;
+    border-radius: 50%;
+    margin-right: 0.5rem;
+    border: 1px solid rgba(0,0,0,0.2);
+}
+
+.coverage-node-name {
+    flex: 1;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.coverage-node-remove {
+    cursor: pointer;
+    opacity: 0.6;
+    padding: 0 0.25rem;
+}
+
+.coverage-node-remove:hover {
+    opacity: 1;
+    color: var(--bs-danger);
+}
+
 /* Additional mobile adjustments specific to map */
 @media (max-width: 768px) {
     .map-container {
@@ -513,6 +615,7 @@ document.addEventListener('DOMContentLoaded', function() {
             // Listen for temperature unit changes
             window.addEventListener('temperatureUnitChanged', function(event) {
                 updateMapDisplay();
+                updateCoverageRadiusOptions();
             });
         } else {
             setTimeout(waitForJQuery, 50);
@@ -718,6 +821,9 @@ function initializeInterface() {
 
     // Load channels on interface init
     loadPrimaryChannels();
+
+    // Initialize coverage radius options based on unit preference
+    updateCoverageRadiusOptions();
 
     // Trigger change events for all form fields to initialize them based on default values
     const formFields = document.querySelectorAll('#locationFilterForm select, #locationFilterForm input');
@@ -1197,6 +1303,9 @@ function selectNode(node) {
     // Show hop depth controls
     document.getElementById('hopDepthSection').style.display = 'block';
 
+    // Show coverage analysis section
+    document.getElementById('coverageSection').style.display = 'block';
+
     // Update node list selection
     updateNodeListSelection();
 
@@ -1285,6 +1394,10 @@ function clearNodeSelection() {
     document.getElementById('hopDepthSection').style.display = 'none';
     currentHopDepth = 1;
     document.getElementById('hopDepthSelect').value = '1';
+
+    // Hide coverage section but DON'T clear coverage (for multi-node support)
+    document.getElementById('coverageSection').style.display = 'none';
+    // Note: Coverage is intentionally preserved when deselecting nodes
 
     // Clear search result highlights
     document.querySelectorAll('.search-result-item').forEach(item => {
@@ -2023,6 +2136,458 @@ function drawHopNetwork(skipFit = false) {
 // Show line of sight analysis for a link between two nodes (redirects to new page)
 function showLineOfSight(fromNodeId, toNodeId) {
     window.open(`/line-of-sight?from=${fromNodeId}&to=${toNodeId}`, '_blank');
+}
+
+// ==================== Coverage Analysis ====================
+
+// Multi-node coverage tracking
+let coverageLayers = {}; // { nodeId: { layer, color, name } }
+let coverageCalculationInProgress = false;
+let coverageColorIndex = 0;
+
+// Coverage radius options - values stored in km internally
+// Display adapts based on temperature unit preference (F = miles, C = km)
+const coverageRadiusOptionsKm = [
+    { km: 5, label_km: '5 km (urban/hilly)', label_mi: '3 mi (urban/hilly)' },
+    { km: 10, label_km: '10 km (suburban)', label_mi: '6 mi (suburban)' },
+    { km: 15, label_km: '15 km (typical 30dB)', label_mi: '10 mi (typical 30dB)', default: true },
+    { km: 20, label_km: '20 km (good LOS)', label_mi: '12 mi (good LOS)' },
+    { km: 30, label_km: '30 km (elevated)', label_mi: '19 mi (elevated)' },
+    { km: 50, label_km: '50 km (high sites)', label_mi: '31 mi (high sites)' },
+];
+
+// Update coverage radius dropdown based on unit preference
+function updateCoverageRadiusOptions() {
+    const select = document.getElementById('coverageRadius');
+    const label = document.getElementById('coverageRadiusLabel');
+    if (!select) return;
+
+    const tempUnit = localStorage.getItem('malla-temperature-unit') || 'C';
+    const useImperial = (tempUnit === 'F');
+
+    // Preserve current selection if possible
+    const currentValue = select.value;
+
+    select.innerHTML = '';
+    coverageRadiusOptionsKm.forEach(opt => {
+        const option = document.createElement('option');
+        option.value = opt.km; // Always store km internally
+        option.textContent = useImperial ? opt.label_mi : opt.label_km;
+        if (opt.default) option.selected = true;
+        select.appendChild(option);
+    });
+
+    // Restore previous selection if it exists
+    if (currentValue) {
+        select.value = currentValue;
+    }
+
+    // Update label
+    if (label) {
+        label.textContent = useImperial
+            ? 'Analysis Radius (30dB LoRa ~10mi)'
+            : 'Analysis Radius (30dB LoRa ~15km)';
+    }
+}
+
+// Color palette for different node coverage areas (easily distinguishable)
+const coverageColors = [
+    { fill: '#28a745', stroke: '#1e7e34', name: 'Green' },
+    { fill: '#007bff', stroke: '#0056b3', name: 'Blue' },
+    { fill: '#e83e8c', stroke: '#c21766', name: 'Pink' },
+    { fill: '#fd7e14', stroke: '#dc6502', name: 'Orange' },
+    { fill: '#6f42c1', stroke: '#5a32a3', name: 'Purple' },
+    { fill: '#20c997', stroke: '#1aa179', name: 'Teal' },
+    { fill: '#ffc107', stroke: '#d39e00', name: 'Yellow' },
+    { fill: '#17a2b8', stroke: '#117a8b', name: 'Cyan' },
+];
+
+// Add coverage for the currently selected node (multi-node support)
+async function addNodeCoverage() {
+    if (!selectedNodeId || coverageCalculationInProgress) return;
+
+    // Check if this node already has coverage
+    if (coverageLayers[selectedNodeId]) {
+        showCoverageStatus('error', 'This node already has coverage displayed');
+        return;
+    }
+
+    const node = nodeData.find(n => n.node_id === selectedNodeId);
+    if (!node || !node.latitude || !node.longitude) {
+        showCoverageStatus('error', 'Selected node has no location data');
+        return;
+    }
+
+    const radiusKm = parseInt(document.getElementById('coverageRadius').value);
+    const numRays = parseInt(document.getElementById('coverageResolution').value);
+    const antennaHeight = parseFloat(document.getElementById('antennaHeight').value) || 10;
+
+    // Use node altitude if available, otherwise use 0
+    const nodeAltitude = node.altitude || 0;
+    const observerHeight = nodeAltitude + antennaHeight;
+
+    coverageCalculationInProgress = true;
+    document.getElementById('addCoverageBtn').disabled = true;
+    showCoverageStatus('loading', `Calculating coverage for ${node.display_name}...`);
+
+    try {
+        // Get next color
+        const colorSet = coverageColors[coverageColorIndex % coverageColors.length];
+        coverageColorIndex++;
+
+        // Generate sample points along rays from the node
+        const coveragePolygons = await calculateViewshed(
+            node.latitude,
+            node.longitude,
+            observerHeight,
+            radiusKm,
+            numRays
+        );
+
+        // Draw coverage on map
+        const layer = drawNodeCoverageOverlay(node, coveragePolygons, colorSet);
+
+        if (layer) {
+            coverageLayers[selectedNodeId] = {
+                layer: layer,
+                color: colorSet,
+                name: node.display_name,
+                nodeId: selectedNodeId
+            };
+
+            updateCoverageNodesList();
+            document.getElementById('clearAllCoverageBtn').style.display = 'block';
+            showCoverageStatus('success', `Added coverage for ${node.display_name}`);
+        }
+
+    } catch (error) {
+        console.error('Coverage calculation error:', error);
+        showCoverageStatus('error', `Error: ${error.message}`);
+    } finally {
+        coverageCalculationInProgress = false;
+        document.getElementById('addCoverageBtn').disabled = false;
+    }
+}
+
+// Legacy single-node function (redirects to multi-node)
+async function calculateCoverage() {
+    await addNodeCoverage();
+}
+
+// Calculate viewshed using radial elevation sampling
+async function calculateViewshed(centerLat, centerLon, observerHeight, radiusKm, numRays) {
+    const visibleSectors = [];
+    const blockedSectors = [];
+
+    const samplesPerRay = 20; // Number of elevation samples per ray
+    const earthRadius = 6371; // km
+
+    // Process rays in batches to avoid overwhelming the API
+    const batchSize = 8;
+    const angleStep = 360 / numRays;
+
+    for (let batchStart = 0; batchStart < numRays; batchStart += batchSize) {
+        const batchPromises = [];
+
+        for (let i = batchStart; i < Math.min(batchStart + batchSize, numRays); i++) {
+            const angle = i * angleStep;
+            batchPromises.push(analyzeRay(centerLat, centerLon, observerHeight, angle, radiusKm, samplesPerRay));
+        }
+
+        const batchResults = await Promise.all(batchPromises);
+
+        batchResults.forEach((result, idx) => {
+            const angle = (batchStart + idx) * angleStep;
+            const nextAngle = angle + angleStep;
+
+            if (result.visibleDistance > 0) {
+                visibleSectors.push({
+                    startAngle: angle,
+                    endAngle: nextAngle,
+                    distance: result.visibleDistance,
+                    centerLat,
+                    centerLon
+                });
+            }
+
+            if (result.blockedDistance > 0 && result.blockedDistance < radiusKm) {
+                blockedSectors.push({
+                    startAngle: angle,
+                    endAngle: nextAngle,
+                    innerDistance: result.visibleDistance,
+                    outerDistance: radiusKm,
+                    centerLat,
+                    centerLon
+                });
+            }
+        });
+
+        // Update progress
+        const progress = Math.round((batchStart + batchSize) / numRays * 100);
+        showCoverageStatus('loading', `Analyzing terrain... ${Math.min(progress, 100)}%`);
+
+        // Small delay between batches to be nice to the API
+        if (batchStart + batchSize < numRays) {
+            await new Promise(resolve => setTimeout(resolve, 100));
+        }
+    }
+
+    return { visible: visibleSectors, blocked: blockedSectors };
+}
+
+// Analyze a single ray for line-of-sight visibility
+async function analyzeRay(centerLat, centerLon, observerHeight, angleDeg, maxDistanceKm, numSamples) {
+    const angleRad = angleDeg * Math.PI / 180;
+    const earthRadius = 6371;
+
+    // Generate sample points along the ray
+    const points = [];
+    for (let i = 1; i <= numSamples; i++) {
+        const distance = (i / numSamples) * maxDistanceKm;
+        const point = destinationPoint(centerLat, centerLon, distance, angleDeg);
+        points.push({ ...point, distance });
+    }
+
+    // Fetch elevation for all points
+    const elevations = await fetchElevationsForPoints(points);
+
+    // Check line of sight for each point
+    let visibleDistance = maxDistanceKm;
+    let blockedDistance = 0;
+    let maxAngle = -Infinity;
+
+    for (let i = 0; i < points.length; i++) {
+        const point = points[i];
+        const elevation = elevations[i] || 0;
+
+        // Calculate the angle from observer to this point
+        // Account for Earth curvature
+        const curvatureDrop = (point.distance * point.distance) / (2 * earthRadius) * 1000; // meters
+        const effectiveElevation = elevation - curvatureDrop;
+
+        // Angle in radians from horizontal
+        const verticalAngle = Math.atan2(effectiveElevation - observerHeight, point.distance * 1000);
+
+        if (verticalAngle > maxAngle) {
+            maxAngle = verticalAngle;
+        } else {
+            // This point is blocked by something closer
+            if (blockedDistance === 0) {
+                blockedDistance = point.distance;
+                visibleDistance = points[i - 1]?.distance || 0;
+            }
+        }
+    }
+
+    return { visibleDistance, blockedDistance };
+}
+
+// Calculate destination point given start, distance, and bearing
+function destinationPoint(lat, lon, distanceKm, bearingDeg) {
+    const R = 6371; // Earth radius in km
+    const d = distanceKm / R;
+    const brng = bearingDeg * Math.PI / 180;
+    const lat1 = lat * Math.PI / 180;
+    const lon1 = lon * Math.PI / 180;
+
+    const lat2 = Math.asin(
+        Math.sin(lat1) * Math.cos(d) +
+        Math.cos(lat1) * Math.sin(d) * Math.cos(brng)
+    );
+
+    const lon2 = lon1 + Math.atan2(
+        Math.sin(brng) * Math.sin(d) * Math.cos(lat1),
+        Math.cos(d) - Math.sin(lat1) * Math.sin(lat2)
+    );
+
+    return {
+        latitude: lat2 * 180 / Math.PI,
+        longitude: lon2 * 180 / Math.PI
+    };
+}
+
+// Fetch elevations for a batch of points using DEM Net API
+async function fetchElevationsForPoints(points) {
+    if (points.length === 0) return [];
+
+    try {
+        // Build line request for elevation API
+        // The API supports line queries which is more efficient
+        const startPoint = points[0];
+        const endPoint = points[points.length - 1];
+
+        const url = `https://api.elevationapi.com/api/Elevation/line/${startPoint.latitude.toFixed(6)},${startPoint.longitude.toFixed(6)}/${endPoint.latitude.toFixed(6)},${endPoint.longitude.toFixed(6)}?samples=${points.length}`;
+
+        const response = await fetch(url);
+        if (!response.ok) {
+            console.warn('Elevation API error, using fallback');
+            return points.map(() => 0);
+        }
+
+        const data = await response.json();
+
+        if (data.geoPoints && Array.isArray(data.geoPoints)) {
+            return data.geoPoints.map(p => p.elevation || 0);
+        }
+
+        return points.map(() => 0);
+
+    } catch (error) {
+        console.warn('Failed to fetch elevations:', error);
+        return points.map(() => 0);
+    }
+}
+
+// Draw coverage overlay for a specific node
+function drawNodeCoverageOverlay(node, coveragePolygons, colorSet) {
+    const visibleCoords = [];
+
+    // Build polygon from visible sectors
+    coveragePolygons.visible.forEach(sector => {
+        const arcPoints = generateArcPoints(
+            sector.centerLat,
+            sector.centerLon,
+            sector.distance,
+            sector.startAngle,
+            sector.endAngle,
+            5 // points per arc
+        );
+        visibleCoords.push(...arcPoints);
+    });
+
+    if (visibleCoords.length > 2) {
+        const layerGroup = L.layerGroup();
+
+        // Draw as a filled polygon
+        const polygon = L.polygon(visibleCoords, {
+            color: colorSet.stroke,
+            fillColor: colorSet.fill,
+            fillOpacity: 0.2,
+            weight: 2,
+            opacity: 0.6
+        });
+
+        polygon.bindPopup(`
+            <strong>${node.display_name}</strong><br>
+            <span style="color: ${colorSet.fill};">■</span> Coverage Area<br>
+            <small class="text-muted">Estimated line-of-sight coverage</small>
+        `);
+
+        layerGroup.addLayer(polygon);
+        layerGroup.addTo(map);
+
+        return layerGroup;
+    }
+
+    return null;
+}
+
+// Legacy function for backward compatibility
+function drawCoverageOverlay(coveragePolygons) {
+    const node = nodeData.find(n => n.node_id === selectedNodeId);
+    if (node) {
+        const colorSet = coverageColors[0];
+        drawNodeCoverageOverlay(node, coveragePolygons, colorSet);
+    }
+}
+
+// Generate points along an arc
+function generateArcPoints(centerLat, centerLon, radiusKm, startAngle, endAngle, numPoints) {
+    const points = [];
+    const angleStep = (endAngle - startAngle) / numPoints;
+
+    for (let i = 0; i <= numPoints; i++) {
+        const angle = startAngle + i * angleStep;
+        const point = destinationPoint(centerLat, centerLon, radiusKm, angle);
+        points.push([point.latitude, point.longitude]);
+    }
+
+    return points;
+}
+
+// Update the list of nodes with coverage displayed
+function updateCoverageNodesList() {
+    const container = document.getElementById('coverageNodesContainer');
+    const listSection = document.getElementById('coverageNodesList');
+
+    const nodeIds = Object.keys(coverageLayers);
+
+    if (nodeIds.length === 0) {
+        listSection.style.display = 'none';
+        return;
+    }
+
+    listSection.style.display = 'block';
+
+    container.innerHTML = nodeIds.map(nodeId => {
+        const info = coverageLayers[nodeId];
+        return `
+            <div class="coverage-node-item">
+                <span class="coverage-node-color" style="background-color: ${info.color.fill};"></span>
+                <span class="coverage-node-name" title="${info.name}">${info.name}</span>
+                <span class="coverage-node-remove" onclick="removeNodeCoverage(${nodeId})" title="Remove coverage">
+                    <i class="bi bi-x"></i>
+                </span>
+            </div>
+        `;
+    }).join('');
+}
+
+// Remove coverage for a specific node
+function removeNodeCoverage(nodeId) {
+    if (coverageLayers[nodeId]) {
+        map.removeLayer(coverageLayers[nodeId].layer);
+        delete coverageLayers[nodeId];
+        updateCoverageNodesList();
+
+        if (Object.keys(coverageLayers).length === 0) {
+            document.getElementById('clearAllCoverageBtn').style.display = 'none';
+            document.getElementById('coverageStatus').style.display = 'none';
+        }
+    }
+}
+
+// Clear all coverage overlays
+function clearAllCoverage() {
+    Object.keys(coverageLayers).forEach(nodeId => {
+        map.removeLayer(coverageLayers[nodeId].layer);
+    });
+    coverageLayers = {};
+    coverageColorIndex = 0;
+    updateCoverageNodesList();
+    document.getElementById('clearAllCoverageBtn').style.display = 'none';
+    document.getElementById('coverageStatus').style.display = 'none';
+}
+
+// Legacy function for backward compatibility
+function clearCoverage() {
+    clearAllCoverage();
+}
+
+// Show coverage status message
+function showCoverageStatus(type, message) {
+    const statusDiv = document.getElementById('coverageStatus');
+    statusDiv.style.display = 'block';
+
+    let icon = '';
+    let colorClass = '';
+
+    switch (type) {
+        case 'loading':
+            icon = '<span class="spinner-border spinner-border-sm me-1"></span>';
+            colorClass = 'text-primary';
+            break;
+        case 'success':
+            icon = '<i class="bi bi-check-circle me-1"></i>';
+            colorClass = 'text-success';
+            break;
+        case 'error':
+            icon = '<i class="bi bi-exclamation-triangle me-1"></i>';
+            colorClass = 'text-danger';
+            break;
+    }
+
+    statusDiv.innerHTML = `<span class="${colorClass}">${icon}${message}</span>`;
 }
 
 </script>
