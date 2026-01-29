@@ -3594,8 +3594,23 @@
                     </button>`;
             } else {
                 resultDiv.classList.add('alert-warning');
+                const errorMsg = data.error || 'Node did not respond. It may not have this server\'s public key configured.';
+                const isTimeout = errorMsg.toLowerCase().includes('timeout');
+                const isPkiError = errorMsg.toLowerCase().includes('pki') || errorMsg.toLowerCase().includes('key') || errorMsg.toLowerCase().includes('session');
+
+                let retryButton = '';
+                if (isTimeout || isPkiError) {
+                    retryButton = `
+                        <div class="mt-2">
+                            <button class="btn btn-sm btn-outline-warning" onclick="clearPkiCacheAndRetry('${nodeId}')">
+                                <i class="bi bi-arrow-repeat"></i> Clear PKI Cache & Retry
+                            </button>
+                            <small class="text-muted ms-2">Clears cached session keys and retries admin test</small>
+                        </div>`;
+                }
+
                 resultDiv.innerHTML = `<i class="bi bi-exclamation-triangle"></i> <strong>Not Administrable</strong><br>
-                    ${data.error || 'Node did not respond. It may not have this server\'s public key configured.'}`;
+                    ${errorMsg}${retryButton}`;
             }
         } catch (error) {
             resultDiv.classList.remove('d-none');
@@ -3604,6 +3619,64 @@
         } finally {
             btn.disabled = false;
             btn.innerHTML = '<i class="bi bi-lightning"></i> Test';
+        }
+    }
+
+    // Clear PKI cache for a node and retry admin test
+    async function clearPkiCacheAndRetry(nodeId) {
+        const resultDiv = document.getElementById('testNodeResult');
+
+        resultDiv.classList.remove('alert-success', 'alert-warning', 'alert-danger');
+        resultDiv.classList.add('alert-info');
+        resultDiv.innerHTML = `<i class="bi bi-hourglass-split"></i> Clearing PKI cache for node ${nodeId}...`;
+
+        try {
+            // Step 1: Clear the session passkey cache for this node
+            const clearResponse = await fetch('/api/admin/session-passkeys/clear', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ node_id: nodeId })
+            });
+            const clearData = await clearResponse.json();
+
+            if (clearData.error) {
+                throw new Error(clearData.error);
+            }
+
+            resultDiv.innerHTML = `<i class="bi bi-hourglass-split"></i> PKI cache cleared. Retrying admin test...`;
+
+            // Step 2: Wait a moment for the cache to clear
+            await new Promise(resolve => setTimeout(resolve, 500));
+
+            // Step 3: Retry the admin test
+            const testResponse = await fetch(`/api/admin/node/${encodeURIComponent(nodeId)}/test`, {
+                method: 'POST'
+            });
+            const testData = await testResponse.json();
+
+            resultDiv.classList.remove('alert-info');
+
+            if (testData.success && testData.administrable) {
+                resultDiv.classList.add('alert-success');
+                resultDiv.innerHTML = `<i class="bi bi-check-circle"></i> <strong>Success after PKI reset!</strong>
+                    Node ${testData.hex_id || nodeId} is now administrable.
+                    <button class="btn btn-sm btn-outline-success ms-2" onclick="location.reload()">
+                        <i class="bi bi-arrow-clockwise"></i> Refresh Page
+                    </button>`;
+            } else {
+                resultDiv.classList.add('alert-warning');
+                const errorMsg = testData.error || 'Still not responding after PKI cache clear.';
+                resultDiv.innerHTML = `<i class="bi bi-exclamation-triangle"></i> <strong>Still Not Administrable</strong><br>
+                    ${errorMsg}<br>
+                    <small class="text-muted mt-2 d-block">
+                        The node may need its admin keys reconfigured, or it may be unreachable.
+                        Try connecting directly to the node via USB/Bluetooth to verify its admin key settings.
+                    </small>`;
+            }
+        } catch (error) {
+            resultDiv.classList.remove('alert-info');
+            resultDiv.classList.add('alert-danger');
+            resultDiv.innerHTML = `<i class="bi bi-x-circle"></i> Error clearing PKI cache: ${error.message}`;
         }
     }
 
