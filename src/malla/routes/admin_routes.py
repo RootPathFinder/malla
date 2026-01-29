@@ -207,6 +207,58 @@ def api_clear_session_passkeys():
         return jsonify({"error": str(e)}), 500
 
 
+@admin_bp.route("/api/admin/node/<node_id>/reset", methods=["POST"])
+def api_reset_node_admin_state(node_id: str):
+    """
+    Reset all admin state for a node (PKI cache and database entry).
+
+    Use this when a node has been factory reset or had its keys changed.
+    This clears:
+    1. The cached session passkey (PKI cache)
+    2. The administrable_nodes database entry
+
+    After reset, the node will need to be re-tested for admin access.
+    """
+    try:
+        from ..database.admin_repository import AdminRepository
+
+        # Convert node_id to int if hex format
+        node_id_int = convert_node_id(node_id)
+        node_hex = f"!{node_id_int:08x}"
+
+        results = {
+            "node_id": node_hex,
+            "session_passkey_cleared": False,
+            "db_entry_removed": False,
+        }
+
+        # Step 1: Clear the session passkey cache
+        publisher = get_tcp_publisher()
+        cleared = publisher.clear_session_passkey(node_id_int)
+        results["session_passkey_cleared"] = cleared > 0
+
+        # Step 2: Remove from administrable_nodes database
+        removed = AdminRepository.remove_administrable_node(node_id_int)
+        results["db_entry_removed"] = removed
+
+        logger.info(
+            f"Reset admin state for node {node_hex}: "
+            f"passkey_cleared={results['session_passkey_cleared']}, "
+            f"db_removed={results['db_entry_removed']}"
+        )
+
+        return jsonify(
+            {
+                "success": True,
+                "message": f"Admin state reset for {node_hex}",
+                **results,
+            }
+        )
+    except Exception as e:
+        logger.error(f"Error resetting node admin state: {e}")
+        return jsonify({"error": str(e)}), 500
+
+
 @admin_bp.route("/api/admin/gateway", methods=["POST"])
 def api_set_gateway():
     """Set the gateway node for admin operations."""

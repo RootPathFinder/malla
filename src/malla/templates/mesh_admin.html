@@ -3628,24 +3628,28 @@
 
         resultDiv.classList.remove('alert-success', 'alert-warning', 'alert-danger');
         resultDiv.classList.add('alert-info');
-        resultDiv.innerHTML = `<i class="bi bi-hourglass-split"></i> Clearing PKI cache for node ${nodeId}...`;
+        resultDiv.innerHTML = `<i class="bi bi-hourglass-split"></i> Resetting admin state for node ${nodeId}...`;
 
         try {
-            // Step 1: Clear the session passkey cache for this node
-            const clearResponse = await fetch('/api/admin/session-passkeys/clear', {
+            // Step 1: Reset all admin state (clears PKI cache AND removes DB entry)
+            const resetResponse = await fetch(`/api/admin/node/${encodeURIComponent(nodeId)}/reset`, {
                 method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ node_id: nodeId })
+                headers: { 'Content-Type': 'application/json' }
             });
-            const clearData = await clearResponse.json();
+            const resetData = await resetResponse.json();
 
-            if (clearData.error) {
-                throw new Error(clearData.error);
+            if (resetData.error) {
+                throw new Error(resetData.error);
             }
 
-            resultDiv.innerHTML = `<i class="bi bi-hourglass-split"></i> PKI cache cleared. Retrying admin test...`;
+            const clearedItems = [];
+            if (resetData.session_passkey_cleared) clearedItems.push('PKI cache');
+            if (resetData.db_entry_removed) clearedItems.push('database entry');
+            const clearedMsg = clearedItems.length > 0 ? `Cleared: ${clearedItems.join(', ')}. ` : '';
 
-            // Step 2: Wait a moment for the cache to clear
+            resultDiv.innerHTML = `<i class="bi bi-hourglass-split"></i> ${clearedMsg}Retrying admin test...`;
+
+            // Step 2: Wait a moment for changes to take effect
             await new Promise(resolve => setTimeout(resolve, 500));
 
             // Step 3: Retry the admin test
@@ -3658,14 +3662,14 @@
 
             if (testData.success && testData.administrable) {
                 resultDiv.classList.add('alert-success');
-                resultDiv.innerHTML = `<i class="bi bi-check-circle"></i> <strong>Success after PKI reset!</strong>
+                resultDiv.innerHTML = `<i class="bi bi-check-circle"></i> <strong>Success after reset!</strong>
                     Node ${testData.hex_id || nodeId} is now administrable.
                     <button class="btn btn-sm btn-outline-success ms-2" onclick="location.reload()">
                         <i class="bi bi-arrow-clockwise"></i> Refresh Page
                     </button>`;
             } else {
                 resultDiv.classList.add('alert-warning');
-                const errorMsg = testData.error || 'Still not responding after PKI cache clear.';
+                const errorMsg = testData.error || 'Still not responding after admin state reset.';
                 resultDiv.innerHTML = `<i class="bi bi-exclamation-triangle"></i> <strong>Still Not Administrable</strong><br>
                     ${errorMsg}<br>
                     <small class="text-muted mt-2 d-block">
@@ -3676,7 +3680,7 @@
         } catch (error) {
             resultDiv.classList.remove('alert-info');
             resultDiv.classList.add('alert-danger');
-            resultDiv.innerHTML = `<i class="bi bi-x-circle"></i> Error clearing PKI cache: ${error.message}`;
+            resultDiv.innerHTML = `<i class="bi bi-x-circle"></i> Error resetting admin state: ${error.message}`;
         }
     }
 
