@@ -5,11 +5,40 @@ Database connection management for Meshtastic Mesh Health Web UI.
 import logging
 import os
 import sqlite3
+import sys
 
 # Prefer configuration loader over environment variables
 from malla.config import get_config
 
 logger = logging.getLogger(__name__)
+
+
+def _safe_log_error(message: str) -> None:
+    """Log an error safely, suppressing errors during Python shutdown."""
+    if sys.is_finalizing():
+        return
+    old_raise = logging.raiseExceptions
+    try:
+        logging.raiseExceptions = False
+        logger.error(message)
+    except (ValueError, OSError, AttributeError):
+        pass
+    finally:
+        logging.raiseExceptions = old_raise
+
+
+def _safe_log_warning(message: str) -> None:
+    """Log a warning safely, suppressing errors during Python shutdown."""
+    if sys.is_finalizing():
+        return
+    old_raise = logging.raiseExceptions
+    try:
+        logging.raiseExceptions = False
+        logger.warning(message)
+    except (ValueError, OSError, AttributeError):
+        pass
+    finally:
+        logging.raiseExceptions = old_raise
 
 
 def get_db_connection() -> sqlite3.Connection:
@@ -61,11 +90,11 @@ def get_db_connection() -> sqlite3.Connection:
         try:
             _ensure_schema_migrations(cursor)
         except Exception as e:
-            logger.warning(f"Schema migration check failed: {e}")
+            _safe_log_warning(f"Schema migration check failed: {e}")
 
         return conn
     except Exception as e:
-        logger.error(f"Failed to connect to database: {e}")
+        _safe_log_error(f"Failed to connect to database: {e}")
         raise
 
 
@@ -107,7 +136,7 @@ def init_database() -> None:
         )
 
     except Exception as e:
-        logger.error(f"Database initialization failed: {e}")
+        _safe_log_error(f"Database initialization failed: {e}")
         # Don't raise the exception - let the app start anyway
         # The database might not exist yet or be created by another process
 

@@ -3,6 +3,7 @@ Background service for periodic power type detection and monitoring.
 """
 
 import logging
+import sys
 import threading
 import time
 
@@ -14,6 +15,30 @@ logger = logging.getLogger(__name__)
 _monitor_thread = None
 _monitor_stop_event = threading.Event()
 _monitor_interval_seconds = 1800  # Default: run every 30 minutes
+
+
+def _safe_log(level: int, message: str) -> None:
+    """
+    Safely log a message, handling the case where logging is shutting down.
+
+    During Python interpreter shutdown, the logging module may have closed
+    its handlers, causing "I/O operation on closed file" errors.
+    We also temporarily disable the logger's error handler to prevent
+    the logging module from printing its own error messages.
+    """
+    if sys.is_finalizing():
+        return
+
+    # Temporarily suppress logging errors during shutdown
+    old_raiseExceptions = logging.raiseExceptions
+    try:
+        logging.raiseExceptions = False
+        logger.log(level, message)
+    except (ValueError, OSError, AttributeError):
+        # Logging system is shutting down, silently ignore
+        pass
+    finally:
+        logging.raiseExceptions = old_raiseExceptions
 
 
 def start_power_monitor(interval_seconds: int = 1800) -> None:
@@ -44,14 +69,14 @@ def stop_power_monitor() -> None:
     global _monitor_thread
 
     if _monitor_thread is None or not _monitor_thread.is_alive():
-        logger.debug("Power monitor thread not running")
+        _safe_log(logging.DEBUG, "Power monitor thread not running")
         return
 
-    logger.info("Stopping power monitor thread...")
+    _safe_log(logging.INFO, "Stopping power monitor thread...")
     _monitor_stop_event.set()
     _monitor_thread.join(timeout=5)
     _monitor_thread = None
-    logger.info("Power monitor thread stopped")
+    _safe_log(logging.INFO, "Power monitor thread stopped")
 
 
 def _power_monitor_worker() -> None:
@@ -59,28 +84,31 @@ def _power_monitor_worker() -> None:
     Background worker that periodically detects and updates power types.
     Runs every 30 minutes by default (configurable).
     """
-    logger.info("Power monitor worker started")
+    _safe_log(logging.INFO, "Power monitor worker started")
 
     # Run shortly after startup (after a brief delay for system to stabilize)
     time.sleep(30)  # Wait 30 seconds after startup
 
     while not _monitor_stop_event.is_set():
         try:
-            logger.info("Running scheduled power type detection...")
+            _safe_log(logging.INFO, "Running scheduled power type detection...")
             results = BatteryAnalyticsRepository.detect_and_update_power_types()
 
             total_updated = sum(results.values())
             if total_updated > 0:
-                logger.info(
-                    f"Power type detection complete: {results} ({total_updated} nodes updated)"
+                _safe_log(
+                    logging.INFO,
+                    f"Power type detection complete: {results} ({total_updated} nodes updated)",
                 )
             else:
-                logger.debug("Power type detection complete: no updates needed")
+                _safe_log(
+                    logging.DEBUG, "Power type detection complete: no updates needed"
+                )
 
         except Exception as e:
-            logger.error(f"Error in power monitor worker: {e}", exc_info=True)
+            _safe_log(logging.ERROR, f"Error in power monitor worker: {e}")
 
         # Wait for next interval or stop signal
         _monitor_stop_event.wait(_monitor_interval_seconds)
 
-    logger.info("Power monitor worker stopped")
+    _safe_log(logging.INFO, "Power monitor worker stopped")

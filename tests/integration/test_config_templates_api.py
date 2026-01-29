@@ -12,9 +12,9 @@ class TestConfigTemplateAPI:
 
     @pytest.mark.integration
     @pytest.mark.api
-    def test_get_templates_empty(self, client):
+    def test_get_templates_empty(self, operator_client):
         """Test getting templates when none exist."""
-        response = client.get("/api/admin/templates")
+        response = operator_client.get("/api/admin/templates")
         assert response.status_code == 200
 
         data = response.get_json()
@@ -24,9 +24,9 @@ class TestConfigTemplateAPI:
 
     @pytest.mark.integration
     @pytest.mark.api
-    def test_create_template(self, client):
+    def test_create_template(self, operator_client):
         """Test creating a new configuration template."""
-        response = client.post(
+        response = operator_client.post(
             "/api/admin/templates",
             json={
                 "name": "Test LoRa Config",
@@ -44,9 +44,9 @@ class TestConfigTemplateAPI:
 
     @pytest.mark.integration
     @pytest.mark.api
-    def test_create_template_missing_name(self, client):
+    def test_create_template_missing_name(self, operator_client):
         """Test creating a template without a name fails."""
-        response = client.post(
+        response = operator_client.post(
             "/api/admin/templates",
             json={
                 "template_type": "lora",
@@ -61,9 +61,9 @@ class TestConfigTemplateAPI:
 
     @pytest.mark.integration
     @pytest.mark.api
-    def test_create_template_invalid_type(self, client):
+    def test_create_template_invalid_type(self, operator_client):
         """Test creating a template with invalid type fails."""
-        response = client.post(
+        response = operator_client.post(
             "/api/admin/templates",
             json={
                 "name": "Invalid Type Template",
@@ -79,10 +79,10 @@ class TestConfigTemplateAPI:
 
     @pytest.mark.integration
     @pytest.mark.api
-    def test_get_template_by_id(self, client):
+    def test_get_template_by_id(self, operator_client):
         """Test getting a specific template by ID."""
         # First create a template
-        create_response = client.post(
+        create_response = operator_client.post(
             "/api/admin/templates",
             json={
                 "name": "Get By ID Test",
@@ -94,7 +94,7 @@ class TestConfigTemplateAPI:
         template_id = create_response.get_json()["template_id"]
 
         # Now get it
-        response = client.get(f"/api/admin/templates/{template_id}")
+        response = operator_client.get(f"/api/admin/templates/{template_id}")
         assert response.status_code == 200
 
         data = response.get_json()
@@ -104,9 +104,9 @@ class TestConfigTemplateAPI:
 
     @pytest.mark.integration
     @pytest.mark.api
-    def test_get_template_not_found(self, client):
+    def test_get_template_not_found(self, operator_client):
         """Test getting a non-existent template returns 404."""
-        response = client.get("/api/admin/templates/99999")
+        response = operator_client.get("/api/admin/templates/99999")
         assert response.status_code == 404
 
         data = response.get_json()
@@ -114,10 +114,10 @@ class TestConfigTemplateAPI:
 
     @pytest.mark.integration
     @pytest.mark.api
-    def test_update_template(self, client):
+    def test_update_template(self, operator_client):
         """Test updating an existing template."""
         # Create a template
-        create_response = client.post(
+        create_response = operator_client.post(
             "/api/admin/templates",
             json={
                 "name": "Update Test Original",
@@ -128,7 +128,7 @@ class TestConfigTemplateAPI:
         template_id = create_response.get_json()["template_id"]
 
         # Update it
-        response = client.put(
+        response = operator_client.put(
             f"/api/admin/templates/{template_id}",
             json={
                 "name": "Update Test Modified",
@@ -142,17 +142,17 @@ class TestConfigTemplateAPI:
         assert data["success"] is True
 
         # Verify the update
-        get_response = client.get(f"/api/admin/templates/{template_id}")
+        get_response = operator_client.get(f"/api/admin/templates/{template_id}")
         updated = get_response.get_json()
         assert updated["name"] == "Update Test Modified"
         assert updated["description"] == "Updated description"
 
     @pytest.mark.integration
     @pytest.mark.api
-    def test_delete_template(self, client):
+    def test_delete_template(self, operator_client):
         """Test deleting a template."""
         # Create a template
-        create_response = client.post(
+        create_response = operator_client.post(
             "/api/admin/templates",
             json={
                 "name": "Delete Test",
@@ -163,22 +163,22 @@ class TestConfigTemplateAPI:
         template_id = create_response.get_json()["template_id"]
 
         # Delete it
-        response = client.delete(f"/api/admin/templates/{template_id}")
+        response = operator_client.delete(f"/api/admin/templates/{template_id}")
         assert response.status_code == 200
 
         data = response.get_json()
         assert data["success"] is True
 
         # Verify deletion
-        get_response = client.get(f"/api/admin/templates/{template_id}")
+        get_response = operator_client.get(f"/api/admin/templates/{template_id}")
         assert get_response.status_code == 404
 
     @pytest.mark.integration
     @pytest.mark.api
-    def test_get_templates_with_type_filter(self, client):
+    def test_get_templates_with_type_filter(self, operator_client):
         """Test filtering templates by type."""
         # Create templates of different types
-        client.post(
+        operator_client.post(
             "/api/admin/templates",
             json={
                 "name": "Filter Test Lora",
@@ -186,7 +186,7 @@ class TestConfigTemplateAPI:
                 "config_data": {"region": "US"},
             },
         )
-        client.post(
+        operator_client.post(
             "/api/admin/templates",
             json={
                 "name": "Filter Test Device",
@@ -196,7 +196,7 @@ class TestConfigTemplateAPI:
         )
 
         # Filter by lora type
-        response = client.get("/api/admin/templates?type=lora")
+        response = operator_client.get("/api/admin/templates?type=lora")
         assert response.status_code == 200
 
         data = response.get_json()
@@ -210,10 +210,10 @@ class TestConfigTemplateDeploymentAPI:
 
     @pytest.mark.integration
     @pytest.mark.api
-    def test_deploy_template_no_nodes(self, client):
+    def test_deploy_template_no_nodes(self, operator_client):
         """Test deploying a template with no nodes selected."""
         # Create a template
-        create_response = client.post(
+        create_response = operator_client.post(
             "/api/admin/templates",
             json={
                 "name": "Deploy Test",
@@ -224,7 +224,7 @@ class TestConfigTemplateDeploymentAPI:
         template_id = create_response.get_json()["template_id"]
 
         # Try to deploy with no nodes
-        response = client.post(
+        response = operator_client.post(
             f"/api/admin/templates/{template_id}/deploy",
             json={"node_ids": []},
         )
@@ -235,9 +235,9 @@ class TestConfigTemplateDeploymentAPI:
 
     @pytest.mark.integration
     @pytest.mark.api
-    def test_deploy_template_not_found(self, client):
+    def test_deploy_template_not_found(self, operator_client):
         """Test deploying a non-existent template."""
-        response = client.post(
+        response = operator_client.post(
             "/api/admin/templates/99999/deploy",
             json={"node_ids": [12345678]},
         )
@@ -245,9 +245,9 @@ class TestConfigTemplateDeploymentAPI:
 
     @pytest.mark.integration
     @pytest.mark.api
-    def test_get_deployment_history_empty(self, client):
+    def test_get_deployment_history_empty(self, operator_client):
         """Test getting deployment history when empty."""
-        response = client.get("/api/admin/deployments")
+        response = operator_client.get("/api/admin/deployments")
         assert response.status_code == 200
 
         data = response.get_json()
@@ -261,9 +261,9 @@ class TestExtractTemplateFromNode:
 
     @pytest.mark.integration
     @pytest.mark.api
-    def test_extract_template_missing_node_id(self, client):
+    def test_extract_template_missing_node_id(self, operator_client):
         """Test extracting template without node_id fails."""
-        response = client.post(
+        response = operator_client.post(
             "/api/admin/templates/extract-from-node",
             json={"config_type": "lora"},
         )
@@ -275,9 +275,9 @@ class TestExtractTemplateFromNode:
 
     @pytest.mark.integration
     @pytest.mark.api
-    def test_extract_template_missing_config_type(self, client):
+    def test_extract_template_missing_config_type(self, operator_client):
         """Test extracting template without config_type fails."""
-        response = client.post(
+        response = operator_client.post(
             "/api/admin/templates/extract-from-node",
             json={"node_id": "12345678"},
         )
@@ -289,9 +289,9 @@ class TestExtractTemplateFromNode:
 
     @pytest.mark.integration
     @pytest.mark.api
-    def test_extract_template_invalid_config_type(self, client):
+    def test_extract_template_invalid_config_type(self, operator_client):
         """Test extracting template with invalid config_type fails."""
-        response = client.post(
+        response = operator_client.post(
             "/api/admin/templates/extract-from-node",
             json={"node_id": "12345678", "config_type": "invalid"},
         )
@@ -303,9 +303,9 @@ class TestExtractTemplateFromNode:
 
     @pytest.mark.integration
     @pytest.mark.api
-    def test_extract_template_invalid_node_id(self, client):
+    def test_extract_template_invalid_node_id(self, operator_client):
         """Test extracting template with invalid node_id format fails."""
-        response = client.post(
+        response = operator_client.post(
             "/api/admin/templates/extract-from-node",
             json={"node_id": "not-a-valid-id", "config_type": "lora"},
         )
@@ -321,10 +321,10 @@ class TestConfigTemplateSafetyValidation:
 
     @pytest.mark.integration
     @pytest.mark.api
-    def test_validate_safe_template(self, client):
+    def test_validate_safe_template(self, operator_client):
         """Test validating a safe template returns no issues."""
         # Create a safe lora template
-        create_response = client.post(
+        create_response = operator_client.post(
             "/api/admin/templates",
             json={
                 "name": "Safe LoRa Config",
@@ -335,7 +335,7 @@ class TestConfigTemplateSafetyValidation:
         template_id = create_response.get_json()["template_id"]
 
         # Validate it
-        response = client.post(f"/api/admin/templates/{template_id}/validate")
+        response = operator_client.post(f"/api/admin/templates/{template_id}/validate")
         assert response.status_code == 200
 
         data = response.get_json()
@@ -344,10 +344,10 @@ class TestConfigTemplateSafetyValidation:
 
     @pytest.mark.integration
     @pytest.mark.api
-    def test_validate_dangerous_tx_disabled(self, client):
+    def test_validate_dangerous_tx_disabled(self, operator_client):
         """Test validating template with TX disabled shows blocking issue."""
         # Create a dangerous template
-        create_response = client.post(
+        create_response = operator_client.post(
             "/api/admin/templates",
             json={
                 "name": "Dangerous LoRa Config",
@@ -358,7 +358,7 @@ class TestConfigTemplateSafetyValidation:
         template_id = create_response.get_json()["template_id"]
 
         # Validate it
-        response = client.post(f"/api/admin/templates/{template_id}/validate")
+        response = operator_client.post(f"/api/admin/templates/{template_id}/validate")
         assert response.status_code == 200
 
         data = response.get_json()
@@ -368,10 +368,10 @@ class TestConfigTemplateSafetyValidation:
 
     @pytest.mark.integration
     @pytest.mark.api
-    def test_deploy_dangerous_template_blocked(self, client):
+    def test_deploy_dangerous_template_blocked(self, operator_client):
         """Test deploying a dangerous template is blocked without force flag."""
         # Create a dangerous template
-        create_response = client.post(
+        create_response = operator_client.post(
             "/api/admin/templates",
             json={
                 "name": "Block Deploy Test",
@@ -382,7 +382,7 @@ class TestConfigTemplateSafetyValidation:
         template_id = create_response.get_json()["template_id"]
 
         # Try to deploy without force
-        response = client.post(
+        response = operator_client.post(
             f"/api/admin/templates/{template_id}/deploy",
             json={"node_ids": [12345678]},
         )
@@ -394,9 +394,9 @@ class TestConfigTemplateSafetyValidation:
 
     @pytest.mark.integration
     @pytest.mark.api
-    def test_validate_template_not_found(self, client):
+    def test_validate_template_not_found(self, operator_client):
         """Test validating non-existent template returns 404."""
-        response = client.post("/api/admin/templates/99999/validate")
+        response = operator_client.post("/api/admin/templates/99999/validate")
         assert response.status_code == 404
 
 
@@ -405,9 +405,9 @@ class TestExtractTemplateSSE:
 
     @pytest.mark.integration
     @pytest.mark.api
-    def test_extract_stream_missing_node_id(self, client):
+    def test_extract_stream_missing_node_id(self, operator_client):
         """Test SSE stream returns error when node_id is missing."""
-        response = client.get(
+        response = operator_client.get(
             "/api/admin/templates/extract-from-node/stream",
             query_string={"config_type": "lora"},
         )
@@ -431,9 +431,9 @@ class TestExtractTemplateSSE:
 
     @pytest.mark.integration
     @pytest.mark.api
-    def test_extract_stream_missing_config_type(self, client):
+    def test_extract_stream_missing_config_type(self, operator_client):
         """Test SSE stream returns error when config_type is missing."""
-        response = client.get(
+        response = operator_client.get(
             "/api/admin/templates/extract-from-node/stream",
             query_string={"node_id": "!12345678"},
         )
@@ -456,9 +456,9 @@ class TestExtractTemplateSSE:
 
     @pytest.mark.integration
     @pytest.mark.api
-    def test_extract_stream_invalid_node_id(self, client):
+    def test_extract_stream_invalid_node_id(self, operator_client):
         """Test SSE stream returns error for invalid node ID format."""
-        response = client.get(
+        response = operator_client.get(
             "/api/admin/templates/extract-from-node/stream",
             query_string={"node_id": "not-a-valid-id", "config_type": "lora"},
         )
@@ -481,9 +481,9 @@ class TestExtractTemplateSSE:
 
     @pytest.mark.integration
     @pytest.mark.api
-    def test_extract_stream_invalid_config_type(self, client):
+    def test_extract_stream_invalid_config_type(self, operator_client):
         """Test SSE stream returns error for invalid config type."""
-        response = client.get(
+        response = operator_client.get(
             "/api/admin/templates/extract-from-node/stream",
             query_string={"node_id": "!12345678", "config_type": "invalid_type"},
         )

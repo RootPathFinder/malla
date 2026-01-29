@@ -13,10 +13,10 @@ class TestAdminNodeStatusEndpoint:
 
     @pytest.mark.integration
     @pytest.mark.api
-    def test_admin_node_status_basic(self, client):
+    def test_admin_node_status_basic(self, operator_client):
         """Test basic admin node status endpoint."""
         # Use a test node ID
-        response = client.get("/api/admin/node/!12345678/status")
+        response = operator_client.get("/api/admin/node/!12345678/status")
         assert response.status_code == 200
 
         data = response.get_json()
@@ -34,9 +34,9 @@ class TestAdminNodeStatusEndpoint:
 
     @pytest.mark.integration
     @pytest.mark.api
-    def test_admin_node_status_checks_structure(self, client):
+    def test_admin_node_status_checks_structure(self, operator_client):
         """Test that checks have proper structure."""
-        response = client.get("/api/admin/node/!abcd1234/status")
+        response = operator_client.get("/api/admin/node/!abcd1234/status")
         assert response.status_code == 200
 
         data = response.get_json()
@@ -54,9 +54,9 @@ class TestAdminNodeStatusEndpoint:
 
     @pytest.mark.integration
     @pytest.mark.api
-    def test_admin_node_status_unknown_node(self, client):
+    def test_admin_node_status_unknown_node(self, operator_client):
         """Test status for a node that isn't in the administrable list."""
-        response = client.get("/api/admin/node/!00000001/status")
+        response = operator_client.get("/api/admin/node/!00000001/status")
         assert response.status_code == 200
 
         data = response.get_json()
@@ -71,9 +71,9 @@ class TestAdminNodeStatusEndpoint:
 
     @pytest.mark.integration
     @pytest.mark.api
-    def test_admin_node_status_decimal_node_id(self, client):
+    def test_admin_node_status_decimal_node_id(self, operator_client):
         """Test status endpoint with decimal node ID."""
-        response = client.get("/api/admin/node/305419896/status")
+        response = operator_client.get("/api/admin/node/305419896/status")
         assert response.status_code == 200
 
         data = response.get_json()
@@ -83,9 +83,9 @@ class TestAdminNodeStatusEndpoint:
 
     @pytest.mark.integration
     @pytest.mark.api
-    def test_admin_node_status_issues_and_suggestions(self, client):
+    def test_admin_node_status_issues_and_suggestions(self, operator_client):
         """Test that issues and suggestions are arrays."""
-        response = client.get("/api/admin/node/!12345678/status")
+        response = operator_client.get("/api/admin/node/!12345678/status")
         assert response.status_code == 200
 
         data = response.get_json()
@@ -95,9 +95,9 @@ class TestAdminNodeStatusEndpoint:
 
     @pytest.mark.integration
     @pytest.mark.api
-    def test_admin_node_status_level_values(self, client):
+    def test_admin_node_status_level_values(self, operator_client):
         """Test that status_level is one of expected values."""
-        response = client.get("/api/admin/node/!12345678/status")
+        response = operator_client.get("/api/admin/node/!12345678/status")
         assert response.status_code == 200
 
         data = response.get_json()

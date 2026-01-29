@@ -12,6 +12,8 @@ import pytest
 from flask import jsonify
 
 from malla.config import AppConfig
+from malla.models.user import UserRole
+from malla.services.auth_service import AuthService
 
 # Import the application factory
 from src.malla.web_ui import create_app
@@ -329,6 +331,55 @@ def app():
 def client(app):
     """Create a test client for the Flask application."""
     return app.test_client()
+
+
+@pytest.fixture(scope="function")
+def operator_client(app):
+    """Create a test client authenticated as an operator user.
+
+    This fixture creates a test user with OPERATOR role and logs them in,
+    returning an authenticated client that can access protected endpoints.
+    """
+    with app.app_context():
+        # Create a test operator user
+        test_user = AuthService.create_user(
+            username="test_operator",
+            password="test_password_123",
+            role=UserRole.OPERATOR,
+        )
+        if test_user is None:
+            # User may already exist from a previous test, try to get it
+            from malla.database.connection import get_db_connection
+
+            conn = get_db_connection()
+            cursor = conn.cursor()
+            cursor.execute(
+                "SELECT id FROM users WHERE username = ?", ("test_operator",)
+            )
+            row = cursor.fetchone()
+            conn.close()
+            if not row:
+                raise RuntimeError("Failed to create test operator user")
+
+    client = app.test_client()
+
+    # Log in the test user
+    response = client.post(
+        "/login",
+        data={
+            "username": "test_operator",
+            "password": "test_password_123",
+        },
+        follow_redirects=False,
+    )
+
+    # Login should redirect to dashboard
+    assert response.status_code == 302, (
+        f"Login failed with status {response.status_code}: "
+        f"{response.get_data(as_text=True)}"
+    )
+
+    return client
 
 
 class TestHelpers:

@@ -20,6 +20,7 @@ from typing import Any
 from ..database.connection import get_db_connection
 from ..database.repositories import BatteryAnalyticsRepository
 from ..utils.node_utils import get_bulk_node_names
+from ..utils.safe_logging import safe_error, safe_info
 
 logger = logging.getLogger(__name__)
 
@@ -1533,7 +1534,7 @@ class AlertService:
             cls._ensure_archived_column()
             return _execute_with_retry(_fetch_stale)
         except Exception as e:
-            logger.error(f"Error getting stale nodes: {e}")
+            safe_error(logger, f"Error getting stale nodes: {e}")
             return []
 
     @classmethod
@@ -1561,7 +1562,7 @@ class AlertService:
                 conn.commit()
                 success = cursor.rowcount > 0
                 if success:
-                    logger.info(f"Archived node {node_id}")
+                    safe_info(logger, f"Archived node {node_id}")
                 return success
             finally:
                 conn.close()
@@ -1570,7 +1571,7 @@ class AlertService:
             cls._ensure_archived_column()
             return _execute_with_retry(_archive)
         except Exception as e:
-            logger.error(f"Error archiving node: {e}")
+            safe_error(logger, f"Error archiving node: {e}")
             return False
 
     @classmethod
@@ -1631,7 +1632,9 @@ class AlertService:
             else:
                 failed.append(node)
 
-        logger.info(f"Archived {len(archived)} stale nodes, {len(failed)} failures")
+        safe_info(
+            logger, f"Archived {len(archived)} stale nodes, {len(failed)} failures"
+        )
 
         return {
             "archived_count": len(archived),

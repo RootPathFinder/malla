@@ -26,13 +26,13 @@ class TestAdminEnabledConfiguration:
 
     @pytest.mark.integration
     @pytest.mark.api
-    def test_admin_page_accessible_when_enabled(self, client):
+    def test_admin_page_accessible_when_enabled(self, operator_client):
         """Test that admin page is accessible when admin is enabled (default)."""
         # By default, admin is enabled in test configuration
         config = get_config()
         assert config.admin_enabled is True
 
-        response = client.get("/admin")
+        response = operator_client.get("/admin")
         assert response.status_code == 200
         assert b"Mesh Admin" in response.data
 
@@ -49,9 +49,9 @@ class TestAdminEnabledConfiguration:
 
     @pytest.mark.integration
     @pytest.mark.api
-    def test_admin_nodes_endpoint_when_enabled(self, client):
+    def test_admin_nodes_endpoint_when_enabled(self, operator_client):
         """Test admin nodes endpoint returns data when enabled."""
-        response = client.get("/api/admin/nodes")
+        response = operator_client.get("/api/admin/nodes")
         assert response.status_code == 200
 
         data = response.get_json()

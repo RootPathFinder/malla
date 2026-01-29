@@ -25,6 +25,7 @@ from .services.log_service import install_log_handler
 from .services.power_monitor import start_power_monitor, stop_power_monitor
 from .utils.formatting import format_node_id, format_time_ago
 from .utils.node_utils import start_cache_cleanup, stop_cache_cleanup
+from .utils.safe_logging import safe_error, safe_info
 
 
 def start_auto_archive_stale_nodes(interval_seconds=86400):
@@ -33,13 +34,14 @@ def start_auto_archive_stale_nodes(interval_seconds=86400):
     def archive_loop():
         while True:
             try:
-                logger.info("Auto-archiving stale nodes...")
+                safe_info(logger, "Auto-archiving stale nodes...")
                 result = AlertService.archive_stale_nodes()
-                logger.info(
-                    f"Auto-archived {result['archived_count']} nodes (failures: {result['failed_count']})"
+                safe_info(
+                    logger,
+                    f"Auto-archived {result['archived_count']} nodes (failures: {result['failed_count']})",
                 )
             except Exception as e:
-                logger.error(f"Error in auto-archive thread: {e}")
+                safe_error(logger, f"Error in auto-archive thread: {e}")
             time.sleep(interval_seconds)
 
     t = threading.Thread(target=archive_loop, daemon=True)
