@@ -3564,7 +3564,7 @@
 
     // Test node admin access
     async function testNodeAdmin() {
-        const nodeId = document.getElementById('testNodeInput').value.trim();
+        const nodeId = getNodeIdFromInput('testNodeInput');
         if (!nodeId) {
             alert('Please enter a node ID');
             return;
