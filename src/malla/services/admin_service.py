@@ -674,6 +674,10 @@ class AdminService:
         """
         Test if a node is administrable by requesting device metadata.
 
+        For TCP connections, this method automatically attempts recovery from
+        PKI key synchronization errors (like stale session passkeys) by
+        clearing the passkey and retrying once.
+
         Args:
             target_node_id: The node ID to test
 
@@ -704,16 +708,19 @@ class AdminService:
         # Send the request using appropriate publisher
         publisher = self._get_publisher()
 
-        # TCP publisher doesn't need from_node_id (uses local node)
+        # For TCP connections, use the recovery-enabled method
         if conn_type == AdminConnectionType.TCP:
-            packet_id = publisher.send_get_device_metadata(
+            return self._test_node_admin_tcp_with_recovery(
                 target_node_id=target_node_id,
+                publisher=publisher,
+                log_id=log_id,
             )
-        else:
-            packet_id = publisher.send_get_device_metadata(
-                target_node_id=target_node_id,
-                from_node_id=gateway_id,
-            )
+
+        # For MQTT/Serial connections, use the original method
+        packet_id = publisher.send_get_device_metadata(
+            target_node_id=target_node_id,
+            from_node_id=gateway_id,
+        )
 
         if packet_id is None:
             AdminRepository.update_admin_log_status(
@@ -811,6 +818,148 @@ class AdminService:
                 packet_id=packet_id,
                 log_id=log_id,
                 error="No response received (timeout). Node may not have this server's public key configured.",
+            )
+
+    def _test_node_admin_tcp_with_recovery(
+        self,
+        target_node_id: int,
+        publisher: Any,
+        log_id: int,
+    ) -> AdminCommandResult:
+        """
+        Test node admin via TCP with automatic PKI key recovery.
+
+        This method uses send_admin_with_recovery to automatically handle
+        stale session passkey errors by clearing the passkey and retrying.
+
+        Args:
+            target_node_id: The target node ID
+            publisher: The TCP publisher instance
+            log_id: The admin command log ID
+
+        Returns:
+            AdminCommandResult with test results
+        """
+        from meshtastic import admin_pb2
+
+        # Create the device metadata request
+        admin_msg = admin_pb2.AdminMessage()
+        admin_msg.get_device_metadata_request = True
+
+        # Use the recovery-enabled send method
+        result = publisher.send_admin_with_recovery(
+            target_node_id=target_node_id,
+            admin_message=admin_msg,
+            timeout=30.0,
+            auto_recover=True,
+        )
+
+        if result["success"]:
+            response = result["response"]
+
+            # Extract firmware version and metadata from device metadata response
+            firmware_version = None
+            device_metadata = None
+            hw_model = None
+            hw_model_name = None
+            role = None
+            has_wifi = None
+            has_bluetooth = None
+            can_shutdown = None
+            admin_msg = response.get("admin_message")
+
+            if admin_msg and hasattr(admin_msg, "HasField"):
+                try:
+                    if admin_msg.HasField("get_device_metadata_response"):
+                        meta = admin_msg.get_device_metadata_response
+                        firmware_version = meta.firmware_version
+                        hw_model = meta.hw_model
+                        hw_model_name = get_hardware_model_name(hw_model)
+                        role = meta.role
+                        has_wifi = meta.hasWifi
+                        has_bluetooth = meta.hasBluetooth
+                        can_shutdown = meta.canShutdown
+                        device_metadata = str(meta)
+
+                        recovery_msg = (
+                            " (recovered from key sync error)"
+                            if result.get("recovered")
+                            else ""
+                        )
+                        logger.info(
+                            f"Got device metadata from node {target_node_id}{recovery_msg}: "
+                            f"firmware={firmware_version}, hw_model={hw_model_name}"
+                        )
+                except Exception as e:
+                    logger.warning(f"Failed to extract device metadata: {e}")
+
+            # Mark the node as administrable since it responded
+            AdminRepository.mark_node_administrable(
+                node_id=target_node_id,
+                firmware_version=firmware_version,
+                device_metadata=device_metadata,
+                admin_channel_index=0,  # Default channel
+            )
+
+            status_msg = "success"
+            if result.get("recovered"):
+                status_msg = "success_after_recovery"
+
+            AdminRepository.update_admin_log_status(
+                log_id=log_id,
+                status=status_msg,
+                response_data=json.dumps(
+                    {
+                        "from_node": response.get("from_node"),
+                        "firmware_version": firmware_version,
+                        "hw_model": hw_model_name,
+                        "role": role,
+                        "recovered": result.get("recovered", False),
+                    }
+                ),
+            )
+            return AdminCommandResult(
+                success=True,
+                log_id=log_id,
+                response={
+                    "from_node": response.get("from_node"),
+                    "administrable": True,
+                    "firmware_version": firmware_version,
+                    "hw_model": hw_model_name,
+                    "role": role,
+                    "has_wifi": has_wifi,
+                    "has_bluetooth": has_bluetooth,
+                    "can_shutdown": can_shutdown,
+                    "recovered": result.get("recovered", False),
+                },
+            )
+        else:
+            # Handle failures
+            error_msg = result.get("error", "Unknown error")
+            error_reason = result.get("error_reason")
+            needs_key_config = result.get("needs_key_config", False)
+
+            # Determine status based on error type
+            if needs_key_config:
+                status = "key_config_required"
+            elif error_reason:
+                status = f"error_{error_reason.lower()}"
+            else:
+                status = "timeout"
+
+            AdminRepository.update_admin_log_status(
+                log_id=log_id,
+                status=status,
+                error_message=error_msg,
+            )
+            AdminRepository.update_node_status(
+                target_node_id, "error" if error_reason else "timeout"
+            )
+
+            return AdminCommandResult(
+                success=False,
+                log_id=log_id,
+                error=error_msg,
             )
 
     def get_config(

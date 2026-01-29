@@ -20,6 +20,52 @@ from ..config import get_config
 logger = logging.getLogger(__name__)
 
 
+# PKI/Session key related error codes from meshtastic.mesh_pb2.Routing.Error
+# These indicate key synchronization issues that may be recoverable
+class PKIErrorCodes:
+    """Error codes related to PKI key synchronization issues."""
+
+    NONE = "NONE"
+    NOT_AUTHORIZED = "NOT_AUTHORIZED"  # 33 - General authorization failure
+    PKI_FAILED = "PKI_FAILED"  # 34 - General PKI failure
+    PKI_UNKNOWN_PUBKEY = "PKI_UNKNOWN_PUBKEY"  # 35 - Remote node doesn't have our key
+    ADMIN_BAD_SESSION_KEY = "ADMIN_BAD_SESSION_KEY"  # 36 - Session passkey is stale
+    ADMIN_PUBLIC_KEY_UNAUTHORIZED = (
+        "ADMIN_PUBLIC_KEY_UNAUTHORIZED"  # 37 - Key not authorized for admin
+    )
+
+    # Error codes that indicate a stale session passkey that can be cleared and retried
+    RECOVERABLE_SESSION_ERRORS = {
+        "ADMIN_BAD_SESSION_KEY",
+        "PKI_FAILED",
+    }
+
+    # Error codes that indicate the node doesn't have our public key configured
+    # These require manual configuration on the remote node
+    REQUIRES_KEY_CONFIGURATION = {
+        "PKI_UNKNOWN_PUBKEY",
+        "ADMIN_PUBLIC_KEY_UNAUTHORIZED",
+        "NOT_AUTHORIZED",
+    }
+
+    @classmethod
+    def is_recoverable_session_error(cls, error_reason: str) -> bool:
+        """Check if an error indicates a stale session that can be recovered."""
+        return error_reason in cls.RECOVERABLE_SESSION_ERRORS
+
+    @classmethod
+    def is_key_configuration_error(cls, error_reason: str) -> bool:
+        """Check if an error requires manual key configuration on remote node."""
+        return error_reason in cls.REQUIRES_KEY_CONFIGURATION
+
+    @classmethod
+    def is_pki_related(cls, error_reason: str) -> bool:
+        """Check if an error is related to PKI/key synchronization."""
+        return cls.is_recoverable_session_error(
+            error_reason
+        ) or cls.is_key_configuration_error(error_reason)
+
+
 def convert_to_dict(obj: Any) -> Any:
     """
     Recursively convert protobuf messages and other objects to JSON-serializable dicts.
@@ -947,6 +993,133 @@ class TCPPublisher:
             else:
                 logger.debug(f"No session passkey found for node !{node_id:08x}")
                 return 0
+
+    def send_admin_with_recovery(
+        self,
+        target_node_id: int,
+        admin_message: admin_pb2.AdminMessage,
+        timeout: float = 30.0,
+        auto_recover: bool = True,
+    ) -> dict[str, Any]:
+        """
+        Send an admin message and handle key synchronization errors automatically.
+
+        This method detects PKI/session key errors (like ADMIN_BAD_SESSION_KEY,
+        PKI_FAILED) and attempts recovery by clearing the stale session passkey
+        and retrying the request once.
+
+        Args:
+            target_node_id: The destination node ID
+            admin_message: The admin message protobuf
+            timeout: Maximum time to wait for response in seconds
+            auto_recover: Whether to attempt automatic recovery on key errors
+
+        Returns:
+            Dict with keys:
+                - success: bool indicating if request succeeded
+                - response: The response data if successful, None otherwise
+                - error: Error message if failed, None otherwise
+                - error_reason: Specific routing error code if available
+                - recovered: bool indicating if recovery was needed and succeeded
+                - needs_key_config: bool indicating remote node needs key config
+        """
+        result: dict[str, Any] = {
+            "success": False,
+            "response": None,
+            "error": None,
+            "error_reason": None,
+            "recovered": False,
+            "needs_key_config": False,
+        }
+
+        # First attempt
+        packet_id = self.send_admin_message(
+            target_node_id=target_node_id,
+            admin_message=admin_message,
+            want_response=True,
+        )
+
+        if packet_id is None:
+            result["error"] = "Failed to send admin message"
+            return result
+
+        response = self.get_response(packet_id, timeout=timeout)
+
+        if response:
+            error_reason = response.get("error_reason", "NONE")
+
+            # Check if this is a successful response
+            if error_reason == "NONE" and not response.get("is_nak"):
+                result["success"] = True
+                result["response"] = response
+                return result
+
+            # Store the error reason for the caller
+            result["error_reason"] = error_reason
+
+            # Check if this is a recoverable session key error
+            if auto_recover and PKIErrorCodes.is_recoverable_session_error(
+                error_reason
+            ):
+                logger.warning(
+                    f"PKI session error '{error_reason}' for node !{target_node_id:08x}, "
+                    f"clearing session passkey and retrying..."
+                )
+                self.clear_session_passkey(target_node_id)
+
+                # Retry the request - need to create a fresh admin message
+                # since session_passkey was modified on the original
+                retry_packet_id = self.send_admin_message(
+                    target_node_id=target_node_id,
+                    admin_message=admin_message,
+                    want_response=True,
+                )
+
+                if retry_packet_id is not None:
+                    retry_response = self.get_response(retry_packet_id, timeout=timeout)
+
+                    if retry_response:
+                        retry_error = retry_response.get("error_reason", "NONE")
+                        if retry_error == "NONE" and not retry_response.get("is_nak"):
+                            logger.info(
+                                f"Recovery succeeded for node !{target_node_id:08x}"
+                            )
+                            result["success"] = True
+                            result["response"] = retry_response
+                            result["recovered"] = True
+                            return result
+                        else:
+                            result["error_reason"] = retry_error
+                            logger.warning(
+                                f"Recovery attempt failed with error: {retry_error}"
+                            )
+
+                result["error"] = (
+                    f"PKI key sync error: {error_reason}. "
+                    "Recovery attempt failed. Try clearing all session keys."
+                )
+                return result
+
+            # Check if this requires manual key configuration
+            if PKIErrorCodes.is_key_configuration_error(error_reason):
+                result["needs_key_config"] = True
+                result["error"] = (
+                    f"Node !{target_node_id:08x} does not have this server's "
+                    f"public key configured ({error_reason}). "
+                    "Configure the server's public key on the remote node."
+                )
+                return result
+
+            # Other routing errors
+            result["error"] = f"Routing error: {error_reason}"
+            return result
+
+        # Timeout - no response received
+        result["error"] = (
+            f"No response received (timeout after {timeout}s). "
+            "Node may be offline or unreachable."
+        )
+        return result
 
     def _get_admin_channel_index(self) -> int:
         """
