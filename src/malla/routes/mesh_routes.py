@@ -13,7 +13,6 @@ import logging
 from flask import Blueprint, jsonify, render_template, request
 
 from ..services.neighbor_service import ROUTER_ROLES, NeighborService
-from ..services.node_health_service import NodeHealthService
 from ..services.traceroute_service import TracerouteService
 
 logger = logging.getLogger(__name__)
@@ -541,48 +540,4 @@ def api_links():
 
     except Exception as e:
         logger.error(f"Error getting links: {e}", exc_info=True)
-        return jsonify({"error": str(e)}), 500
-
-
-@mesh_bp.route("/api/health-scores")
-def api_health_scores():
-    """
-    Get health scores for all nodes (for map coloring).
-
-    Query parameters:
-        hours: Number of hours to analyze (default: 24)
-
-    Returns:
-        JSON with node_id -> health_score mapping
-    """
-    try:
-        hours = request.args.get("hours", 24, type=int)
-        hours = min(max(hours, 1), 168)
-
-        # Get network health summary which includes problematic nodes
-        summary = NodeHealthService.get_network_health_summary(hours=hours)
-
-        # Build a map of node_id -> health data
-        health_map = {}
-
-        # Get all problematic nodes with their scores
-        problematic = NodeHealthService.get_problematic_nodes(hours=hours, limit=500)
-
-        for node in problematic:
-            health_map[node["node_id"]] = {
-                "health_score": node.get("health_score", 100),
-                "health_category": node.get("health_category", "unknown"),
-                "issues": node.get("issues", []),
-            }
-
-        return jsonify(
-            {
-                "health_scores": health_map,
-                "network_score": summary.get("overall_score", 0),
-                "analysis_hours": hours,
-            }
-        )
-
-    except Exception as e:
-        logger.error(f"Error getting health scores: {e}", exc_info=True)
         return jsonify({"error": str(e)}), 500

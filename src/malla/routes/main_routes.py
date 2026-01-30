@@ -92,17 +92,6 @@ def line_of_sight():
         return f"Line of sight error: {e}", 500
 
 
-@main_bp.route("/node-health")
-def node_health():
-    """Node health monitoring page."""
-    logger.info("Node health route accessed")
-    try:
-        return render_template("node_health.html")
-    except Exception as e:
-        logger.error(f"Error in node health route: {e}")
-        return f"Node health error: {e}", 500
-
-
 @main_bp.route("/weather-map")
 def weather_map():
     """Mesh weather dashboard with sensor data on a map."""
