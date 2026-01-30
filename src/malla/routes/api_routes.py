@@ -2814,6 +2814,183 @@ def api_weather_sensor_history(node_id: str):
         return jsonify({"error": str(e)}), 500
 
 
+@api_bp.route("/detection-sensors")
+@cache_response(ttl_seconds=10)
+def api_detection_sensors():
+    """
+    Get detection sensor events.
+
+    Query parameters:
+        hours: Number of hours to look back (default: 24, max: 168)
+        limit: Maximum number of events to return (default: 500)
+        node_id: Filter by specific node ID (optional)
+
+    Returns:
+        JSON with detection events and summary statistics
+    """
+    try:
+        hours = request.args.get("hours", 24, type=int)
+        hours = min(max(hours, 1), 168)  # Clamp between 1 hour and 7 days
+        limit = request.args.get("limit", 500, type=int)
+        limit = min(max(limit, 1), 2000)
+        node_id_filter = request.args.get("node_id", None)
+
+        conn = get_db_connection()
+        cursor = conn.cursor()
+
+        # Detection sensor app is portnum 10
+        detection_portnum = 10
+        cutoff_time = time.time() - (hours * 3600)
+
+        # Build query based on filters
+        if node_id_filter:
+            # Convert node_id if needed
+            node_id_int = convert_node_id(node_id_filter)
+            cursor.execute(
+                """
+                SELECT ph.id, ph.timestamp, ph.from_node_id, ph.gateway_id,
+                       ph.rssi, ph.snr, ph.hop_limit, ph.raw_payload,
+                       ni.long_name, ni.short_name, ni.latitude, ni.longitude
+                FROM packet_history ph
+                LEFT JOIN node_info ni ON ph.from_node_id = ni.node_id
+                WHERE ph.portnum = ? AND ph.timestamp > ? AND ph.from_node_id = ?
+                ORDER BY ph.timestamp DESC
+                LIMIT ?
+                """,
+                (detection_portnum, cutoff_time, node_id_int, limit),
+            )
+        else:
+            cursor.execute(
+                """
+                SELECT ph.id, ph.timestamp, ph.from_node_id, ph.gateway_id,
+                       ph.rssi, ph.snr, ph.hop_limit, ph.raw_payload,
+                       ni.long_name, ni.short_name, ni.latitude, ni.longitude
+                FROM packet_history ph
+                LEFT JOIN node_info ni ON ph.from_node_id = ni.node_id
+                WHERE ph.portnum = ? AND ph.timestamp > ?
+                ORDER BY ph.timestamp DESC
+                LIMIT ?
+                """,
+                (detection_portnum, cutoff_time, limit),
+            )
+
+        rows = cursor.fetchall()
+        conn.close()
+
+        # Process events
+        events = []
+        nodes_with_detections = set()
+        hourly_counts = {}
+
+        for row in rows:
+            (
+                packet_id,
+                timestamp,
+                from_node_id,
+                gateway_id,
+                rssi,
+                snr,
+                hop_limit,
+                raw_payload,
+                long_name,
+                short_name,
+                latitude,
+                longitude,
+            ) = row
+
+            # Parse detection sensor payload if available
+            detection_name = None
+            if raw_payload:
+                try:
+                    # Detection sensor payload is typically just a string
+                    if isinstance(raw_payload, bytes):
+                        detection_name = raw_payload.decode("utf-8", errors="replace")
+                    else:
+                        detection_name = str(raw_payload)
+                except Exception:
+                    detection_name = None
+
+            node_id_hex = f"!{from_node_id:08x}" if from_node_id else None
+            nodes_with_detections.add(from_node_id)
+
+            # Track hourly counts for charts
+            hour_key = datetime.fromtimestamp(timestamp, tz=UTC).strftime(
+                "%Y-%m-%d %H:00"
+            )
+            hourly_counts[hour_key] = hourly_counts.get(hour_key, 0) + 1
+
+            ts_iso = datetime.fromtimestamp(timestamp, tz=UTC).isoformat()
+            events.append(
+                {
+                    "id": packet_id,
+                    "timestamp": timestamp,
+                    "timestamp_iso": ts_iso,
+                    "from_node_id": from_node_id,
+                    "from_node_hex": node_id_hex,
+                    "node_name": long_name or short_name or node_id_hex or "Unknown",
+                    "short_name": short_name,
+                    "gateway_id": gateway_id,
+                    "rssi": rssi,
+                    "snr": snr,
+                    "hop_limit": hop_limit,
+                    "detection_name": detection_name,
+                    "latitude": latitude,
+                    "longitude": longitude,
+                    "has_location": latitude is not None and longitude is not None,
+                }
+            )
+
+        # Get unique sensor nodes with their info
+        sensor_nodes = []
+        if nodes_with_detections:
+            node_names = get_bulk_node_names(list(nodes_with_detections))
+            for node_id in nodes_with_detections:
+                node_hex = f"!{node_id:08x}" if node_id else None
+                event_count = sum(1 for e in events if e["from_node_id"] == node_id)
+                sensor_nodes.append(
+                    {
+                        "node_id": node_id,
+                        "node_hex": node_hex,
+                        "name": node_names.get(node_id, node_hex or "Unknown"),
+                        "event_count": event_count,
+                    }
+                )
+            # Sort by event count descending
+            sensor_nodes.sort(key=lambda x: x["event_count"], reverse=True)
+
+        # Build hourly chart data
+        hourly_chart = [
+            {"hour": k, "count": v} for k, v in sorted(hourly_counts.items())
+        ]
+
+        return safe_jsonify(
+            {
+                "events": events,
+                "total_events": len(events),
+                "unique_sensors": len(nodes_with_detections),
+                "sensor_nodes": sensor_nodes,
+                "hourly_chart": hourly_chart,
+                "hours_analyzed": hours,
+            }
+        )
+
+    except Exception as e:
+        # Handle missing table gracefully (empty database)
+        if "no such table" in str(e):
+            return safe_jsonify(
+                {
+                    "events": [],
+                    "total_events": 0,
+                    "unique_sensors": 0,
+                    "sensor_nodes": [],
+                    "hourly_chart": [],
+                    "hours_analyzed": hours if "hours" in dir() else 24,
+                }
+            )
+        logger.error(f"Error in API detection sensors: {e}", exc_info=True)
+        return jsonify({"error": str(e)}), 500
+
+
 def safe_jsonify(data, *args, **kwargs):
     """
     A drop-in replacement for Flask's jsonify() that sanitizes NaN/Inf values.

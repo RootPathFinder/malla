@@ -239,7 +239,7 @@
 
                     <!-- Monitoring dropdown (Power, Alerts, Archived) -->
                     <li class="nav-item dropdown">
-                        {% set monitoring_active = request.endpoint in ['battery.battery_analytics', 'main.weather_map', 'main.network_dependency', 'alerts.alerts_page', 'alerts.archived_nodes_page'] %}
+                        {% set monitoring_active = request.endpoint in ['battery.battery_analytics', 'main.weather_map', 'main.network_dependency', 'main.detection_sensors', 'alerts.alerts_page', 'alerts.archived_nodes_page'] %}
                         <a class="nav-link dropdown-toggle {{ 'active' if monitoring_active }}" href="#" id="monitoringDropdown" role="button" data-bs-toggle="dropdown">
                             Monitoring
                         </a>
@@ -247,6 +247,11 @@
                             <li>
                                 <a class="dropdown-item {{ 'active' if request.endpoint == 'alerts.alerts_page' }}" href="{{ url_for('alerts.alerts_page') }}">
                                     <i class="bi bi-bell"></i> Insights & Alerts
+                                </a>
+                            </li>
+                            <li>
+                                <a class="dropdown-item {{ 'active' if request.endpoint == 'main.detection_sensors' }}" href="{{ url_for('main.detection_sensors') }}">
+                                    <i class="bi bi-shield-exclamation"></i> Detection Sensors
                                 </a>
                             </li>
                             <li>

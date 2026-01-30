@@ -112,3 +112,14 @@ def network_dependency():
     except Exception as e:
         logger.error(f"Error in network dependency route: {e}")
         return f"Network dependency error: {e}", 500
+
+
+@main_bp.route("/detection-sensors")
+def detection_sensors():
+    """Detection sensor events dashboard."""
+    logger.info("Detection sensors route accessed")
+    try:
+        return render_template("detection_sensors.html")
+    except Exception as e:
+        logger.error(f"Error in detection sensors route: {e}")
+        return f"Detection sensors error: {e}", 500
