@@ -2984,7 +2984,7 @@ def api_detection_sensors():
                     "unique_sensors": 0,
                     "sensor_nodes": [],
                     "hourly_chart": [],
-                    "hours_analyzed": hours if "hours" in dir() else 24,
+                    "hours_analyzed": 24,
                 }
             )
         logger.error(f"Error in API detection sensors: {e}", exc_info=True)
