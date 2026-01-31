@@ -558,70 +558,91 @@
                     </div>
 
                     <!-- Power & Battery Charts -->
-                    <div class="row g-4 mb-4" id="power-charts-row" style="display: none;">
+                    <div class="row g-3 mb-4" id="power-charts-row" style="display: none;">
                         <div class="col-12">
-                            <h6 class="text-secondary mb-3"><i class="bi bi-battery-charging"></i> Power & Battery</h6>
+                            <h6 class="text-secondary mb-2"><i class="bi bi-battery-charging"></i> Power & Battery</h6>
                         </div>
-                        <div class="col-md-6" id="battery-chart-container" style="display: none;">
+                        <div class="col-12 col-md-6" id="battery-chart-container" style="display: none;">
                             <div class="card h-100">
-                                <div class="card-body p-3">
-                                    <div id="telemetry-chart-battery" style="height: 250px;"></div>
+                                <div class="card-header py-2">
+                                    <small class="fw-semibold">Battery Level</small>
+                                </div>
+                                <div class="card-body p-2">
+                                    <div id="telemetry-chart-battery" style="height: 220px;"></div>
                                 </div>
                             </div>
                         </div>
-                        <div class="col-md-6" id="voltage-chart-container" style="display: none;">
+                        <div class="col-12 col-md-6" id="voltage-chart-container" style="display: none;">
                             <div class="card h-100">
-                                <div class="card-body p-3">
-                                    <div id="telemetry-chart-voltage" style="height: 250px;"></div>
+                                <div class="card-header py-2">
+                                    <small class="fw-semibold">Voltage</small>
+                                </div>
+                                <div class="card-body p-2">
+                                    <div id="telemetry-chart-voltage" style="height: 220px;"></div>
                                 </div>
                             </div>
                         </div>
                     </div>
 
                     <!-- Network Charts -->
-                    <div class="row g-4 mb-4" id="network-charts-row" style="display: none;">
+                    <div class="row g-3 mb-4" id="network-charts-row" style="display: none;">
                         <div class="col-12">
-                            <h6 class="text-secondary mb-3"><i class="bi bi-wifi"></i> Network & Radio</h6>
+                            <h6 class="text-secondary mb-2"><i class="bi bi-wifi"></i> Network & Radio</h6>
                         </div>
-                        <div class="col-md-6" id="channel-util-chart-container" style="display: none;">
+                        <div class="col-12 col-md-6" id="channel-util-chart-container" style="display: none;">
                             <div class="card h-100">
-                                <div class="card-body p-3">
-                                    <div id="telemetry-chart-channel-util" style="height: 250px;"></div>
+                                <div class="card-header py-2">
+                                    <small class="fw-semibold">Channel Utilization</small>
+                                </div>
+                                <div class="card-body p-2">
+                                    <div id="telemetry-chart-channel-util" style="height: 220px;"></div>
                                 </div>
                             </div>
                         </div>
-                        <div class="col-md-6" id="air-util-chart-container" style="display: none;">
+                        <div class="col-12 col-md-6" id="air-util-chart-container" style="display: none;">
                             <div class="card h-100">
-                                <div class="card-body p-3">
-                                    <div id="telemetry-chart-air-util" style="height: 250px;"></div>
+                                <div class="card-header py-2">
+                                    <small class="fw-semibold">TX Air Utilization</small>
+                                </div>
+                                <div class="card-body p-2">
+                                    <div id="telemetry-chart-air-util" style="height: 220px;"></div>
                                 </div>
                             </div>
                         </div>
                     </div>
 
                     <!-- Environment Charts -->
-                    <div class="row g-4" id="environment-charts-row" style="display: none;">
+                    <div class="row g-3" id="environment-charts-row" style="display: none;">
                         <div class="col-12">
-                            <h6 class="text-secondary mb-3"><i class="bi bi-cloud"></i> Environment</h6>
+                            <h6 class="text-secondary mb-2"><i class="bi bi-cloud"></i> Environment</h6>
                         </div>
-                        <div class="col-md-6" id="temperature-chart-container" style="display: none;">
+                        <div class="col-12 col-md-6" id="temperature-chart-container" style="display: none;">
                             <div class="card h-100">
-                                <div class="card-body p-3">
-                                    <div id="telemetry-chart-temperature" style="height: 250px;"></div>
+                                <div class="card-header py-2">
+                                    <small class="fw-semibold" id="temperature-chart-title">Temperature</small>
+                                </div>
+                                <div class="card-body p-2">
+                                    <div id="telemetry-chart-temperature" style="height: 220px;"></div>
                                 </div>
                             </div>
                         </div>
-                        <div class="col-md-6" id="humidity-chart-container" style="display: none;">
+                        <div class="col-12 col-md-6" id="humidity-chart-container" style="display: none;">
                             <div class="card h-100">
-                                <div class="card-body p-3">
-                                    <div id="telemetry-chart-humidity" style="height: 250px;"></div>
+                                <div class="card-header py-2">
+                                    <small class="fw-semibold">Relative Humidity</small>
+                                </div>
+                                <div class="card-body p-2">
+                                    <div id="telemetry-chart-humidity" style="height: 220px;"></div>
                                 </div>
                             </div>
                         </div>
-                        <div class="col-md-6" id="pressure-chart-container" style="display: none;">
+                        <div class="col-12 col-md-6" id="pressure-chart-container" style="display: none;">
                             <div class="card h-100">
-                                <div class="card-body p-3">
-                                    <div id="telemetry-chart-pressure" style="height: 250px;"></div>
+                                <div class="card-header py-2">
+                                    <small class="fw-semibold">Barometric Pressure</small>
+                                </div>
+                                <div class="card-body p-2">
+                                    <div id="telemetry-chart-pressure" style="height: 220px;"></div>
                                 </div>
                             </div>
                         </div>
@@ -2282,28 +2303,28 @@ function updateTelemetryHistoryCharts() {
 
     // Common Plotly layout settings
     const commonLayout = {
-        margin: { t: 40, r: 30, b: 60, l: 60 },
+        margin: { t: 35, r: 15, b: 50, l: 55 },
         paper_bgcolor: 'transparent',
         plot_bgcolor: 'transparent',
         font: { color: isDarkMode ? '#e9ecef' : '#212529', size: 11 },
+        autosize: true,
         xaxis: {
             type: 'date',
             gridcolor: isDarkMode ? 'rgba(255,255,255,0.1)' : 'rgba(0,0,0,0.1)',
             tickformat: telemetryHistoryRange <= 24 ? '%H:%M' : '%b %d',
             tickangle: 0,
-            nticks: 6,
-            tickfont: { size: 10 }
+            nticks: 5,
+            tickfont: { size: 10 },
+            automargin: true
         },
         yaxis: {
             gridcolor: isDarkMode ? 'rgba(255,255,255,0.1)' : 'rgba(0,0,0,0.1)',
-            tickfont: { size: 10 }
+            tickfont: { size: 10 },
+            automargin: true
         },
         hovermode: 'x unified',
         dragmode: 'zoom',
-        modebar: {
-            orientation: 'h',
-            bgcolor: 'transparent'
-        }
+        showlegend: false
     };
 
     const commonConfig = {
@@ -2347,7 +2368,6 @@ function updateTelemetryHistoryCharts() {
 
         const layout = {
             ...commonLayout,
-            title: { text: 'Battery Level', font: { size: 13 } },
             yaxis: { ...commonLayout.yaxis, range: [0, 100], ticksuffix: '%' }
         };
 
@@ -2375,8 +2395,7 @@ function updateTelemetryHistoryCharts() {
 
         const layout = {
             ...commonLayout,
-            title: { text: 'Voltage', font: { size: 13 } },
-            yaxis: { ...commonLayout.yaxis, ticksuffix: 'V' }
+            yaxis: { ...commonLayout.yaxis, ticksuffix: ' V' }
         };
 
         Plotly.newPlot('telemetry-chart-voltage', [trace], layout, commonConfig);
@@ -2403,7 +2422,6 @@ function updateTelemetryHistoryCharts() {
 
         const layout = {
             ...commonLayout,
-            title: { text: 'Channel Utilization', font: { size: 13 } },
             yaxis: { ...commonLayout.yaxis, range: [0, 100], ticksuffix: '%' }
         };
 
@@ -2431,7 +2449,6 @@ function updateTelemetryHistoryCharts() {
 
         const layout = {
             ...commonLayout,
-            title: { text: 'TX Air Utilization', font: { size: 13 } },
             yaxis: { ...commonLayout.yaxis, range: [0, 100], ticksuffix: '%' }
         };
 
@@ -2466,9 +2483,14 @@ function updateTelemetryHistoryCharts() {
             hovertemplate: `%{y:.1f}°${isFahrenheit ? 'F' : 'C'}<extra>Temperature</extra>`
         };
 
+        // Update the HTML title with the unit
+        const tempTitle = document.getElementById('temperature-chart-title');
+        if (tempTitle) {
+            tempTitle.textContent = `Temperature (°${isFahrenheit ? 'F' : 'C'})`;
+        }
+
         const layout = {
             ...commonLayout,
-            title: { text: `Temperature (°${isFahrenheit ? 'F' : 'C'})`, font: { size: 13 } },
             yaxis: { ...commonLayout.yaxis, ticksuffix: `°${isFahrenheit ? 'F' : 'C'}` }
         };
 
@@ -2496,7 +2518,6 @@ function updateTelemetryHistoryCharts() {
 
         const layout = {
             ...commonLayout,
-            title: { text: 'Relative Humidity', font: { size: 13 } },
             yaxis: { ...commonLayout.yaxis, range: [0, 100], ticksuffix: '%' }
         };
 
@@ -2524,7 +2545,6 @@ function updateTelemetryHistoryCharts() {
 
         const layout = {
             ...commonLayout,
-            title: { text: 'Barometric Pressure', font: { size: 13 } },
             yaxis: { ...commonLayout.yaxis, ticksuffix: ' hPa' }
         };
 
