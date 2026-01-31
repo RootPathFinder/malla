@@ -504,6 +504,9 @@
             return;
         }
 
+        // Clear any loading spinner before rendering chart
+        container.innerHTML = '';
+
         const isDarkMode = document.documentElement.getAttribute('data-bs-theme') === 'dark';
 
         const trace = {

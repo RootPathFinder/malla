@@ -3016,6 +3016,247 @@ def api_detection_sensors():
         return jsonify({"error": str(e)}), 500
 
 
+@api_bp.route("/paxcounter")
+@cache_response(ttl_seconds=10)
+def api_paxcounter():
+    """
+    Get paxcounter readings.
+
+    Query parameters:
+        hours: Number of hours to look back (default: 24, max: 168)
+        limit: Maximum number of readings to return (default: 500)
+        node_id: Filter by specific node ID (optional)
+
+    Returns:
+        JSON with paxcounter readings and summary statistics
+    """
+    try:
+        hours = request.args.get("hours", 24, type=int)
+        hours = min(max(hours, 1), 168)  # Clamp between 1 hour and 7 days
+        limit = request.args.get("limit", 500, type=int)
+        limit = min(max(limit, 1), 2000)
+        node_id_filter = request.args.get("node_id", None)
+
+        conn = get_db_connection()
+        cursor = conn.cursor()
+
+        # Paxcounter app is portnum 34
+        paxcounter_portnum = 34
+        cutoff_time = time.time() - (hours * 3600)
+
+        # Build query based on filters
+        if node_id_filter:
+            node_id_int = convert_node_id(node_id_filter)
+            cursor.execute(
+                """
+                SELECT ph.id, ph.timestamp, ph.from_node_id, ph.gateway_id,
+                       ph.rssi, ph.snr, ph.hop_limit, ph.raw_payload,
+                       ni.long_name, ni.short_name
+                FROM packet_history ph
+                LEFT JOIN node_info ni ON ph.from_node_id = ni.node_id
+                WHERE ph.portnum = ? AND ph.timestamp > ? AND ph.from_node_id = ?
+                ORDER BY ph.timestamp DESC
+                LIMIT ?
+                """,
+                (paxcounter_portnum, cutoff_time, node_id_int, limit),
+            )
+        else:
+            cursor.execute(
+                """
+                SELECT ph.id, ph.timestamp, ph.from_node_id, ph.gateway_id,
+                       ph.rssi, ph.snr, ph.hop_limit, ph.raw_payload,
+                       ni.long_name, ni.short_name
+                FROM packet_history ph
+                LEFT JOIN node_info ni ON ph.from_node_id = ni.node_id
+                WHERE ph.portnum = ? AND ph.timestamp > ?
+                ORDER BY ph.timestamp DESC
+                LIMIT ?
+                """,
+                (paxcounter_portnum, cutoff_time, limit),
+            )
+
+        rows = cursor.fetchall()
+
+        # Collect unique node IDs to fetch their locations
+        node_ids_in_readings = set()
+        for row in rows:
+            if row["from_node_id"]:
+                node_ids_in_readings.add(row["from_node_id"])
+
+        # Fetch locations for these nodes
+        node_locations = {}
+        if node_ids_in_readings:
+            from ..database.repositories import LocationRepository
+
+            try:
+                locations = LocationRepository.get_node_locations(
+                    {"node_ids": list(node_ids_in_readings)}
+                )
+                for loc in locations:
+                    node_locations[loc["node_id"]] = {
+                        "latitude": loc.get("latitude"),
+                        "longitude": loc.get("longitude"),
+                    }
+            except Exception as loc_err:
+                logger.warning(f"Failed to fetch locations: {loc_err}")
+
+        conn.close()
+
+        # Process readings
+        readings = []
+        nodes_with_readings = set()
+        hourly_stats = {}  # {hour: {wifi_sum, ble_sum, count}}
+        total_wifi = 0
+        total_ble = 0
+
+        for row in rows:
+            packet_id = row["id"]
+            timestamp = row["timestamp"]
+            from_node_id = row["from_node_id"]
+            gateway_id = row["gateway_id"]
+            rssi = row["rssi"]
+            snr = row["snr"]
+            hop_limit = row["hop_limit"]
+            raw_payload = row["raw_payload"]
+            long_name = row["long_name"]
+            short_name = row["short_name"]
+
+            # Get location from separately fetched position data
+            loc = node_locations.get(from_node_id, {})
+            latitude = loc.get("latitude")
+            longitude = loc.get("longitude")
+
+            # Parse paxcounter payload
+            wifi_count = 0
+            ble_count = 0
+            uptime = 0
+            if raw_payload:
+                try:
+                    from meshtastic import paxcount_pb2
+
+                    pax = paxcount_pb2.Paxcount()
+                    pax.ParseFromString(raw_payload)
+                    wifi_count = pax.wifi if pax.wifi else 0
+                    ble_count = pax.ble if pax.ble else 0
+                    uptime = pax.uptime if pax.uptime else 0
+                except Exception:
+                    pass
+
+            node_id_hex = f"!{from_node_id:08x}" if from_node_id else None
+            nodes_with_readings.add(from_node_id)
+            total_wifi += wifi_count
+            total_ble += ble_count
+
+            # Track hourly stats for charts
+            hour_key = datetime.fromtimestamp(timestamp, tz=UTC).strftime(
+                "%Y-%m-%d %H:00"
+            )
+            if hour_key not in hourly_stats:
+                hourly_stats[hour_key] = {"wifi_sum": 0, "ble_sum": 0, "count": 0}
+            hourly_stats[hour_key]["wifi_sum"] += wifi_count
+            hourly_stats[hour_key]["ble_sum"] += ble_count
+            hourly_stats[hour_key]["count"] += 1
+
+            ts_iso = datetime.fromtimestamp(timestamp, tz=UTC).isoformat()
+            readings.append(
+                {
+                    "id": packet_id,
+                    "timestamp": timestamp,
+                    "timestamp_iso": ts_iso,
+                    "from_node_id": from_node_id,
+                    "from_node_hex": node_id_hex,
+                    "node_name": long_name or short_name or node_id_hex or "Unknown",
+                    "short_name": short_name,
+                    "gateway_id": gateway_id,
+                    "rssi": rssi,
+                    "snr": snr,
+                    "hop_limit": hop_limit,
+                    "wifi": wifi_count,
+                    "ble": ble_count,
+                    "uptime": uptime,
+                    "latitude": latitude,
+                    "longitude": longitude,
+                    "has_location": latitude is not None and longitude is not None,
+                }
+            )
+
+        # Get unique paxcounter nodes with their info
+        pax_nodes = []
+        if nodes_with_readings:
+            node_names = get_bulk_node_names(list(nodes_with_readings))
+            for node_id in nodes_with_readings:
+                node_hex = f"!{node_id:08x}" if node_id else None
+                node_readings = [r for r in readings if r["from_node_id"] == node_id]
+                reading_count = len(node_readings)
+                avg_wifi = (
+                    round(sum(r["wifi"] for r in node_readings) / reading_count)
+                    if reading_count > 0
+                    else 0
+                )
+                avg_ble = (
+                    round(sum(r["ble"] for r in node_readings) / reading_count)
+                    if reading_count > 0
+                    else 0
+                )
+                pax_nodes.append(
+                    {
+                        "node_id": node_id,
+                        "node_hex": node_hex,
+                        "name": node_names.get(node_id, node_hex or "Unknown"),
+                        "reading_count": reading_count,
+                        "avg_wifi": avg_wifi,
+                        "avg_ble": avg_ble,
+                    }
+                )
+            pax_nodes.sort(key=lambda x: x["reading_count"], reverse=True)
+
+        # Build hourly chart data with averages
+        hourly_chart = [
+            {
+                "hour": k,
+                "avg_wifi": round(v["wifi_sum"] / v["count"]) if v["count"] > 0 else 0,
+                "avg_ble": round(v["ble_sum"] / v["count"]) if v["count"] > 0 else 0,
+                "count": v["count"],
+            }
+            for k, v in sorted(hourly_stats.items())
+        ]
+
+        # Calculate overall averages
+        total_readings = len(readings)
+        avg_wifi = round(total_wifi / total_readings) if total_readings > 0 else 0
+        avg_ble = round(total_ble / total_readings) if total_readings > 0 else 0
+
+        return safe_jsonify(
+            {
+                "readings": readings,
+                "total_readings": total_readings,
+                "unique_nodes": len(nodes_with_readings),
+                "pax_nodes": pax_nodes,
+                "hourly_chart": hourly_chart,
+                "hours_analyzed": hours,
+                "avg_wifi": avg_wifi,
+                "avg_ble": avg_ble,
+            }
+        )
+
+    except Exception as e:
+        if "no such table" in str(e) or "no such column" in str(e):
+            return safe_jsonify(
+                {
+                    "readings": [],
+                    "total_readings": 0,
+                    "unique_nodes": 0,
+                    "pax_nodes": [],
+                    "hourly_chart": [],
+                    "hours_analyzed": 24,
+                    "avg_wifi": 0,
+                    "avg_ble": 0,
+                }
+            )
+        logger.error(f"Error in API paxcounter: {e}", exc_info=True)
+        return jsonify({"error": str(e)}), 500
+
+
 def safe_jsonify(data, *args, **kwargs):
     """
     A drop-in replacement for Flask's jsonify() that sanitizes NaN/Inf values.

@@ -123,3 +123,14 @@ def detection_sensors():
     except Exception as e:
         logger.error(f"Error in detection sensors route: {e}")
         return f"Detection sensors error: {e}", 500
+
+
+@main_bp.route("/paxcounter")
+def paxcounter():
+    """Paxcounter dashboard for monitoring people/device counts."""
+    logger.info("Paxcounter route accessed")
+    try:
+        return render_template("paxcounter.html")
+    except Exception as e:
+        logger.error(f"Error in paxcounter route: {e}")
+        return f"Paxcounter error: {e}", 500

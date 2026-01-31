@@ -1,0 +1,731 @@
+{% extends "base.html" %}
+
+{% block title %}Paxcounter - {{ APP_NAME }}{% endblock %}
+
+{% block head_libs %}
+<!-- Plotly.js for paxcounter charts -->
+<script src="https://cdn.plot.ly/plotly-2.30.0.min.js" integrity="sha384-H7GB7Kme/VbPI/0S4LNq7OixFNVRgRGE8kyqTntBuiXle1KBm8KWLQh/Ah6bXCYW" crossorigin="anonymous"></script>
+<!-- Leaflet for location map -->
+<link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
+<script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+{% endblock head_libs %}
+
+{% block extra_css %}
+<style>
+    .pax-card {
+        border-left: 4px solid #6f42c1;
+        margin-bottom: 0.5rem;
+        background-color: var(--bs-card-bg);
+        color: var(--bs-body-color);
+        transition: all 0.2s ease;
+    }
+
+    .pax-card:hover {
+        transform: translateX(2px);
+        box-shadow: 0 2px 8px rgba(0,0,0,0.1);
+    }
+
+    .pax-card.recent {
+        border-left-color: #198754;
+        background-color: rgba(25, 135, 84, 0.05);
+    }
+
+    .wifi-badge {
+        font-size: 0.75rem;
+        padding: 0.25rem 0.5rem;
+        border-radius: 0.25rem;
+        font-weight: 600;
+        background-color: #0d6efd;
+        color: white;
+    }
+
+    .ble-badge {
+        font-size: 0.75rem;
+        padding: 0.25rem 0.5rem;
+        border-radius: 0.25rem;
+        font-weight: 600;
+        background-color: #6f42c1;
+        color: white;
+    }
+
+    .summary-card {
+        text-align: center;
+        padding: 1.5rem;
+    }
+
+    .summary-card .count {
+        font-size: 2.5rem;
+        font-weight: bold;
+    }
+
+    .summary-card.wifi .count { color: #0d6efd; }
+    .summary-card.ble .count { color: #6f42c1; }
+    .summary-card.total .count { color: #198754; }
+    .summary-card.nodes .count { color: #fd7e14; }
+
+    .node-list-item {
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+        padding: 0.5rem 0.75rem;
+        border-bottom: 1px solid var(--bs-border-color);
+        cursor: pointer;
+        transition: background-color 0.2s;
+    }
+
+    .node-list-item:hover {
+        background-color: var(--bs-tertiary-bg);
+    }
+
+    .node-list-item:last-child {
+        border-bottom: none;
+    }
+
+    .node-list-item.active {
+        background-color: rgba(111, 66, 193, 0.1);
+        border-left: 3px solid #6f42c1;
+    }
+
+    .pax-count-badge {
+        background-color: var(--bs-secondary-bg);
+        color: var(--bs-body-color);
+        font-size: 0.75rem;
+        padding: 0.2rem 0.5rem;
+        border-radius: 1rem;
+    }
+
+    .pax-timestamp {
+        font-size: 0.8rem;
+        color: var(--bs-secondary);
+    }
+
+    .pax-meta {
+        font-size: 0.75rem;
+        color: var(--bs-secondary);
+    }
+
+    .chart-container {
+        height: 300px;
+        width: 100%;
+    }
+
+    .map-container {
+        height: 350px;
+        border-radius: 0.5rem;
+        overflow: hidden;
+    }
+
+    .filter-section {
+        background: var(--bs-tertiary-bg);
+        padding: 1rem;
+        border-radius: 0.5rem;
+        margin-bottom: 1rem;
+    }
+
+    .timeline-container {
+        max-height: 600px;
+        overflow-y: auto;
+    }
+
+    .pax-icon {
+        width: 40px;
+        height: 40px;
+        background: linear-gradient(135deg, #6f42c1, #0d6efd);
+        border-radius: 50%;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        color: white;
+        font-size: 1.2rem;
+        flex-shrink: 0;
+    }
+
+    .no-data {
+        text-align: center;
+        padding: 3rem;
+        color: var(--bs-secondary);
+    }
+
+    .no-data i {
+        font-size: 4rem;
+        margin-bottom: 1rem;
+        opacity: 0.5;
+    }
+
+    .pulse-dot {
+        width: 8px;
+        height: 8px;
+        background: #198754;
+        border-radius: 50%;
+        animation: pulse 2s infinite;
+    }
+
+    @keyframes pulse {
+        0% { transform: scale(1); opacity: 1; }
+        50% { transform: scale(1.5); opacity: 0.5; }
+        100% { transform: scale(1); opacity: 1; }
+    }
+
+    .location-badge {
+        font-size: 0.7rem;
+        padding: 0.15rem 0.4rem;
+    }
+
+    .pax-value {
+        font-size: 1.25rem;
+        font-weight: bold;
+    }
+
+    .pax-value.wifi { color: #0d6efd; }
+    .pax-value.ble { color: #6f42c1; }
+</style>
+{% endblock %}
+
+{% block content %}
+<div class="container-fluid">
+    <div class="row mb-4">
+        <div class="col">
+            <h1><i class="bi bi-person-walking"></i> Paxcounter</h1>
+            <p class="text-muted">Monitor people/device counting across your mesh network (WiFi + Bluetooth detection)</p>
+        </div>
+        <div class="col-auto">
+            <button class="btn btn-primary" id="refreshBtn" onclick="loadPaxcounterData()">
+                <i class="bi bi-arrow-clockwise"></i> Refresh
+            </button>
+        </div>
+    </div>
+
+    <!-- Filter Section -->
+    <div class="filter-section">
+        <div class="row align-items-end">
+            <div class="col-md-3">
+                <label class="form-label">Time Range</label>
+                <select class="form-select" id="hoursFilter">
+                    <option value="1">Last 1 hour</option>
+                    <option value="6">Last 6 hours</option>
+                    <option value="12">Last 12 hours</option>
+                    <option value="24" selected>Last 24 hours</option>
+                    <option value="48">Last 48 hours</option>
+                    <option value="168">Last 7 days</option>
+                </select>
+            </div>
+            <div class="col-md-3">
+                <label class="form-label">Paxcounter Node</label>
+                <select class="form-select" id="nodeFilter">
+                    <option value="">All Nodes</option>
+                    <!-- Populated dynamically -->
+                </select>
+            </div>
+            <div class="col-md-3">
+                <label class="form-label">Max Results</label>
+                <select class="form-select" id="limitFilter">
+                    <option value="100">100</option>
+                    <option value="250">250</option>
+                    <option value="500" selected>500</option>
+                    <option value="1000">1000</option>
+                </select>
+            </div>
+            <div class="col-md-3">
+                <button class="btn btn-outline-secondary w-100" onclick="loadPaxcounterData()">
+                    <i class="bi bi-funnel"></i> Apply Filters
+                </button>
+            </div>
+        </div>
+    </div>
+
+    <div class="row">
+        <!-- Left column: Summary and Nodes -->
+        <div class="col-lg-4">
+            <!-- Summary Cards -->
+            <div class="row mb-4">
+                <div class="col-6">
+                    <div class="card summary-card wifi">
+                        <div class="count" id="totalWifi">0</div>
+                        <div class="text-muted">WiFi Avg</div>
+                    </div>
+                </div>
+                <div class="col-6">
+                    <div class="card summary-card ble">
+                        <div class="count" id="totalBle">0</div>
+                        <div class="text-muted">BLE Avg</div>
+                    </div>
+                </div>
+                <div class="col-6 mt-2">
+                    <div class="card summary-card total">
+                        <div class="count" id="totalReadings">0</div>
+                        <div class="text-muted">Readings</div>
+                    </div>
+                </div>
+                <div class="col-6 mt-2">
+                    <div class="card summary-card nodes">
+                        <div class="count" id="uniqueNodes">0</div>
+                        <div class="text-muted">Nodes</div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Paxcounter Nodes List -->
+            <div class="card mb-4">
+                <div class="card-header">
+                    <i class="bi bi-cpu"></i> Paxcounter Nodes
+                </div>
+                <div class="card-body p-0">
+                    <div id="nodesList" style="max-height: 250px; overflow-y: auto;">
+                        <div class="text-center p-3 text-muted">Loading...</div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Activity Chart -->
+            <div class="card mb-4">
+                <div class="card-header">
+                    <i class="bi bi-bar-chart"></i> Pax Activity Over Time
+                </div>
+                <div class="card-body">
+                    <div class="chart-container" id="activityChart">
+                        <div class="text-center p-4">
+                            <div class="spinner-border text-primary" role="status"></div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- Right column: Map and readings log -->
+        <div class="col-lg-8">
+            <!-- Map Card -->
+            <div class="card mb-4">
+                <div class="card-header d-flex justify-content-between align-items-center">
+                    <span><i class="bi bi-geo-alt"></i> Paxcounter Locations</span>
+                    <small class="text-muted" id="mapInfo">Showing nodes with known locations</small>
+                </div>
+                <div class="card-body p-0">
+                    <div class="map-container" id="paxMap"></div>
+                </div>
+            </div>
+
+            <!-- Paxcounter Readings Timeline -->
+            <div class="card">
+                <div class="card-header d-flex justify-content-between align-items-center">
+                    <span><i class="bi bi-list-ul"></i> Paxcounter Readings</span>
+                    <div class="d-flex align-items-center gap-2">
+                        <div class="pulse-dot" id="liveDot" style="display: none;"></div>
+                        <span class="badge bg-secondary" id="readingCountBadge">0 readings</span>
+                    </div>
+                </div>
+                <div class="card-body p-0">
+                    <div class="timeline-container" id="readingsTimeline">
+                        <div class="text-center p-4">
+                            <div class="spinner-border text-primary" role="status"></div>
+                            <p class="mt-2 text-muted">Loading paxcounter readings...</p>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+{% endblock %}
+
+{% block extra_js %}
+<script>
+    let map = null;
+    let markers = [];
+    let currentData = null;
+    let selectedNode = null;
+
+    // Initialize map
+    function initMap() {
+        map = L.map('paxMap').setView([0, 0], 2);
+
+        // Use OpenStreetMap tiles
+        L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+            attribution: '&copy; OpenStreetMap contributors'
+        }).addTo(map);
+    }
+
+    // Format relative time
+    function formatRelativeTime(timestamp) {
+        const now = Date.now() / 1000;
+        const diff = now - timestamp;
+
+        if (diff < 60) return 'Just now';
+        if (diff < 3600) return `${Math.floor(diff / 60)} min ago`;
+        if (diff < 86400) return `${Math.floor(diff / 3600)} hours ago`;
+        return `${Math.floor(diff / 86400)} days ago`;
+    }
+
+    // Format timestamp
+    function formatTimestamp(timestamp) {
+        return new Date(timestamp * 1000).toLocaleString();
+    }
+
+    // Load paxcounter data
+    async function loadPaxcounterData() {
+        const hours = document.getElementById('hoursFilter').value;
+        const limit = document.getElementById('limitFilter').value;
+        const nodeId = document.getElementById('nodeFilter').value;
+
+        try {
+            let url = `/api/paxcounter?hours=${hours}&limit=${limit}`;
+            if (nodeId) {
+                url += `&node_id=${encodeURIComponent(nodeId)}`;
+            }
+
+            const response = await fetch(url);
+            if (!response.ok) throw new Error('Failed to fetch paxcounter data');
+
+            currentData = await response.json();
+            updateUI(currentData);
+        } catch (error) {
+            console.error('Error loading paxcounter data:', error);
+            document.getElementById('readingsTimeline').innerHTML = `
+                <div class="no-data">
+                    <i class="bi bi-exclamation-triangle"></i>
+                    <p>Error loading data: ${error.message}</p>
+                </div>
+            `;
+        }
+    }
+
+    // Update all UI elements
+    function updateUI(data) {
+        // Update summary cards
+        document.getElementById('totalWifi').textContent = data.avg_wifi || 0;
+        document.getElementById('totalBle').textContent = data.avg_ble || 0;
+        document.getElementById('totalReadings').textContent = data.total_readings || 0;
+        document.getElementById('uniqueNodes').textContent = data.unique_nodes || 0;
+
+        // Update reading count badge
+        document.getElementById('readingCountBadge').textContent =
+            `${data.total_readings || 0} readings`;
+
+        // Show live dot if recent data
+        const liveDot = document.getElementById('liveDot');
+        if (data.readings && data.readings.length > 0) {
+            const mostRecent = data.readings[0].timestamp;
+            const fiveMinutesAgo = Date.now() / 1000 - 300;
+            liveDot.style.display = mostRecent > fiveMinutesAgo ? 'block' : 'none';
+        }
+
+        // Update nodes list
+        updateNodesList(data.pax_nodes || []);
+
+        // Update node filter dropdown
+        updateNodeFilter(data.pax_nodes || []);
+
+        // Update timeline
+        updateTimeline(data.readings || []);
+
+        // Update chart
+        updateChart(data.hourly_chart || []);
+
+        // Update map
+        updateMap(data.readings || []);
+    }
+
+    // Update nodes list
+    function updateNodesList(nodes) {
+        const container = document.getElementById('nodesList');
+
+        if (!nodes || nodes.length === 0) {
+            container.innerHTML = `
+                <div class="text-center text-muted p-3">
+                    <i class="bi bi-cpu" style="font-size: 1.5rem;"></i>
+                    <p class="mb-0 mt-2">No paxcounter nodes found</p>
+                </div>
+            `;
+            return;
+        }
+
+        container.innerHTML = nodes.map(node => `
+            <div class="node-list-item ${selectedNode === node.node_id ? 'active' : ''}"
+                 onclick="filterByNode('${node.node_hex || node.node_id}')">
+                <div>
+                    <div class="fw-semibold">${node.name || node.node_hex || 'Unknown'}</div>
+                    <div class="pax-meta">
+                        <span class="me-2"><i class="bi bi-wifi"></i> ${node.avg_wifi || 0}</span>
+                        <span><i class="bi bi-bluetooth"></i> ${node.avg_ble || 0}</span>
+                    </div>
+                </div>
+                <span class="pax-count-badge">${node.reading_count} readings</span>
+            </div>
+        `).join('');
+    }
+
+    // Update node filter dropdown
+    function updateNodeFilter(nodes) {
+        const select = document.getElementById('nodeFilter');
+        const currentValue = select.value;
+
+        // Keep first option
+        select.innerHTML = '<option value="">All Nodes</option>';
+
+        nodes.forEach(node => {
+            const option = document.createElement('option');
+            option.value = node.node_hex || node.node_id;
+            option.textContent = node.name || node.node_hex || `Node ${node.node_id}`;
+            if (option.value === currentValue) {
+                option.selected = true;
+            }
+            select.appendChild(option);
+        });
+    }
+
+    // Filter by specific node
+    function filterByNode(nodeId) {
+        document.getElementById('nodeFilter').value = nodeId;
+        selectedNode = nodeId;
+        loadPaxcounterData();
+    }
+
+    // Update timeline with readings
+    function updateTimeline(readings) {
+        const container = document.getElementById('readingsTimeline');
+
+        if (!readings || readings.length === 0) {
+            container.innerHTML = `
+                <div class="no-data">
+                    <i class="bi bi-person-walking"></i>
+                    <p>No paxcounter readings found</p>
+                    <small class="text-muted">Try adjusting the time range or filters</small>
+                </div>
+            `;
+            return;
+        }
+
+        container.innerHTML = readings.map(reading => {
+            const isRecent = (Date.now() / 1000 - reading.timestamp) < 300;
+            const totalPax = (reading.wifi || 0) + (reading.ble || 0);
+
+            return `
+                <div class="pax-card p-3 ${isRecent ? 'recent' : ''}">
+                    <div class="d-flex align-items-start">
+                        <div class="pax-icon me-3">
+                            <i class="bi bi-person-walking"></i>
+                        </div>
+                        <div class="flex-grow-1">
+                            <div class="d-flex justify-content-between align-items-start">
+                                <div>
+                                    <strong>${reading.node_name || reading.from_node_hex || 'Unknown'}</strong>
+                                    ${reading.has_location ? '<span class="badge bg-success location-badge ms-1"><i class="bi bi-geo-alt-fill"></i></span>' : ''}
+                                </div>
+                                <span class="pax-timestamp">${formatRelativeTime(reading.timestamp)}</span>
+                            </div>
+                            <div class="mt-2">
+                                <span class="wifi-badge me-2">
+                                    <i class="bi bi-wifi"></i> WiFi: ${reading.wifi || 0}
+                                </span>
+                                <span class="ble-badge me-2">
+                                    <i class="bi bi-bluetooth"></i> BLE: ${reading.ble || 0}
+                                </span>
+                                <span class="badge bg-secondary">
+                                    Total: ${totalPax}
+                                </span>
+                            </div>
+                            <div class="pax-meta mt-1">
+                                ${reading.uptime ? `<span class="me-2"><i class="bi bi-clock"></i> Uptime: ${formatUptime(reading.uptime)}</span>` : ''}
+                                ${reading.gateway_id ? `<span class="me-2"><i class="bi bi-broadcast"></i> ${reading.gateway_id}</span>` : ''}
+                                ${reading.rssi ? `<span class="me-2">RSSI: ${reading.rssi} dBm</span>` : ''}
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            `;
+        }).join('');
+    }
+
+    // Format uptime seconds to human readable
+    function formatUptime(seconds) {
+        if (!seconds || seconds <= 0) return '0s';
+        const days = Math.floor(seconds / 86400);
+        const hours = Math.floor((seconds % 86400) / 3600);
+        const mins = Math.floor((seconds % 3600) / 60);
+
+        if (days > 0) return `${days}d ${hours}h`;
+        if (hours > 0) return `${hours}h ${mins}m`;
+        return `${mins}m`;
+    }
+
+    // Update activity chart
+    function updateChart(hourlyData) {
+        const container = document.getElementById('activityChart');
+
+        if (!hourlyData || hourlyData.length === 0) {
+            container.innerHTML = `
+                <div class="text-center text-muted p-4">
+                    <i class="bi bi-bar-chart" style="font-size: 2rem; opacity: 0.5;"></i>
+                    <p class="mt-2">No activity data to display</p>
+                </div>
+            `;
+            return;
+        }
+
+        // Clear any loading spinner before rendering chart
+        container.innerHTML = '';
+
+        const isDarkMode = document.documentElement.getAttribute('data-bs-theme') === 'dark';
+
+        const wifiTrace = {
+            x: hourlyData.map(d => d.hour),
+            y: hourlyData.map(d => d.avg_wifi || 0),
+            type: 'bar',
+            name: 'WiFi',
+            marker: {
+                color: 'rgba(13, 110, 253, 0.7)',
+                line: { color: 'rgba(13, 110, 253, 1)', width: 1 }
+            }
+        };
+
+        const bleTrace = {
+            x: hourlyData.map(d => d.hour),
+            y: hourlyData.map(d => d.avg_ble || 0),
+            type: 'bar',
+            name: 'BLE',
+            marker: {
+                color: 'rgba(111, 66, 193, 0.7)',
+                line: { color: 'rgba(111, 66, 193, 1)', width: 1 }
+            }
+        };
+
+        const layout = {
+            margin: { t: 10, r: 10, b: 50, l: 40 },
+            paper_bgcolor: 'transparent',
+            plot_bgcolor: 'transparent',
+            barmode: 'group',
+            legend: {
+                orientation: 'h',
+                y: -0.2,
+                font: { color: isDarkMode ? '#adb5bd' : '#6c757d' }
+            },
+            xaxis: {
+                tickangle: -45,
+                tickfont: { size: 10, color: isDarkMode ? '#adb5bd' : '#6c757d' },
+                gridcolor: isDarkMode ? 'rgba(255,255,255,0.1)' : 'rgba(0,0,0,0.1)'
+            },
+            yaxis: {
+                title: 'Avg Count',
+                tickfont: { color: isDarkMode ? '#adb5bd' : '#6c757d' },
+                gridcolor: isDarkMode ? 'rgba(255,255,255,0.1)' : 'rgba(0,0,0,0.1)'
+            },
+            bargap: 0.2
+        };
+
+        Plotly.newPlot(container, [wifiTrace, bleTrace], layout, { responsive: true, displayModeBar: false });
+    }
+
+    // Update map with paxcounter locations
+    function updateMap(readings) {
+        // Clear existing markers
+        markers.forEach(m => map.removeLayer(m));
+        markers = [];
+
+        // Get unique locations with their stats
+        const locationMap = new Map();
+        readings.forEach(reading => {
+            if (reading.has_location) {
+                const key = `${reading.from_node_id}`;
+                if (!locationMap.has(key)) {
+                    locationMap.set(key, {
+                        lat: reading.latitude,
+                        lng: reading.longitude,
+                        name: reading.node_name,
+                        node_hex: reading.from_node_hex,
+                        readings: [],
+                        lastReading: reading.timestamp
+                    });
+                }
+                const loc = locationMap.get(key);
+                loc.readings.push(reading);
+                if (reading.timestamp > loc.lastReading) {
+                    loc.lastReading = reading.timestamp;
+                }
+            }
+        });
+
+        if (locationMap.size === 0) {
+            document.getElementById('mapInfo').textContent = 'No nodes with known locations';
+            return;
+        }
+
+        document.getElementById('mapInfo').textContent =
+            `Showing ${locationMap.size} node${locationMap.size !== 1 ? 's' : ''} with known locations`;
+
+        const bounds = [];
+
+        locationMap.forEach((loc, key) => {
+            bounds.push([loc.lat, loc.lng]);
+
+            // Calculate averages for this location
+            const avgWifi = Math.round(loc.readings.reduce((sum, r) => sum + (r.wifi || 0), 0) / loc.readings.length);
+            const avgBle = Math.round(loc.readings.reduce((sum, r) => sum + (r.ble || 0), 0) / loc.readings.length);
+            const totalPax = avgWifi + avgBle;
+
+            // Create custom icon with count
+            const icon = L.divIcon({
+                html: `<div style="
+                    background: linear-gradient(135deg, #6f42c1, #0d6efd);
+                    color: white;
+                    border-radius: 50%;
+                    width: 36px;
+                    height: 36px;
+                    display: flex;
+                    align-items: center;
+                    justify-content: center;
+                    font-weight: bold;
+                    font-size: 12px;
+                    border: 2px solid white;
+                    box-shadow: 0 2px 4px rgba(0,0,0,0.3);
+                ">${totalPax}</div>`,
+                className: 'pax-marker',
+                iconSize: [36, 36],
+                iconAnchor: [18, 18]
+            });
+
+            const marker = L.marker([loc.lat, loc.lng], { icon })
+                .bindPopup(`
+                    <div style="min-width: 180px;">
+                        <strong>${loc.name || loc.node_hex || 'Unknown'}</strong><br>
+                        <small class="text-muted">${loc.node_hex}</small>
+                        <hr style="margin: 8px 0;">
+                        <div><i class="bi bi-wifi"></i> WiFi Avg: <strong>${avgWifi}</strong></div>
+                        <div><i class="bi bi-bluetooth"></i> BLE Avg: <strong>${avgBle}</strong></div>
+                        <div><i class="bi bi-people"></i> Total Avg: <strong>${totalPax}</strong></div>
+                        <hr style="margin: 8px 0;">
+                        <small>${loc.readings.length} readings</small><br>
+                        <small>Last: ${formatRelativeTime(loc.lastReading)}</small>
+                    </div>
+                `)
+                .addTo(map);
+
+            markers.push(marker);
+        });
+
+        // Fit map to bounds
+        if (bounds.length > 0) {
+            if (bounds.length === 1) {
+                map.setView(bounds[0], 14);
+            } else {
+                map.fitBounds(bounds, { padding: [50, 50] });
+            }
+        }
+    }
+
+    // Initialize
+    document.addEventListener('DOMContentLoaded', function() {
+        initMap();
+        loadPaxcounterData();
+
+        // Auto-refresh every 30 seconds
+        setInterval(loadPaxcounterData, 30000);
+
+        // Reload on filter changes
+        document.getElementById('hoursFilter').addEventListener('change', loadPaxcounterData);
+        document.getElementById('limitFilter').addEventListener('change', loadPaxcounterData);
+        document.getElementById('nodeFilter').addEventListener('change', function() {
+            selectedNode = this.value || null;
+            loadPaxcounterData();
+        });
+    });
+</script>
+{% endblock %}
