@@ -1,0 +1,817 @@
+{% extends "base.html" %}
+
+{% block title %}Sensor Dashboard - {{ APP_NAME }}{% endblock %}
+
+{% block head_libs %}
+<!-- Plotly.js for sensor charts -->
+<script src="https://cdn.plot.ly/plotly-2.30.0.min.js" integrity="sha384-H7GB7Kme/VbPI/0S4LNq7OixFNVRgRGE8kyqTntBuiXle1KBm8KWLQh/Ah6bXCYW" crossorigin="anonymous"></script>
+<!-- Leaflet for location map -->
+<link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
+<script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+{% endblock head_libs %}
+
+{% block extra_css %}
+<style>
+    .sensor-card {
+        border-left: 4px solid #0d6efd;
+        margin-bottom: 0.5rem;
+        background-color: var(--bs-card-bg);
+        color: var(--bs-body-color);
+        transition: all 0.2s ease;
+    }
+
+    .sensor-card:hover {
+        transform: translateX(2px);
+        box-shadow: 0 2px 8px rgba(0,0,0,0.1);
+    }
+
+    .sensor-card.recent {
+        border-left-color: #198754;
+        background-color: rgba(25, 135, 84, 0.05);
+    }
+
+    .sensor-card.detection { border-left-color: #dc3545; }
+    .sensor-card.environment { border-left-color: #198754; }
+    .sensor-card.air_quality { border-left-color: #6f42c1; }
+    .sensor-card.power { border-left-color: #fd7e14; }
+
+    .sensor-type-badge {
+        font-size: 0.7rem;
+        padding: 0.2rem 0.5rem;
+        border-radius: 0.25rem;
+        font-weight: 600;
+    }
+
+    .sensor-type-badge.detection { background-color: #dc3545; color: white; }
+    .sensor-type-badge.environment { background-color: #198754; color: white; }
+    .sensor-type-badge.air_quality { background-color: #6f42c1; color: white; }
+    .sensor-type-badge.power { background-color: #fd7e14; color: white; }
+    .sensor-type-badge.device { background-color: #0d6efd; color: white; }
+
+    .summary-card {
+        text-align: center;
+        padding: 1.25rem;
+    }
+
+    .summary-card .count {
+        font-size: 2rem;
+        font-weight: bold;
+    }
+
+    .summary-card.detection .count { color: #dc3545; }
+    .summary-card.environment .count { color: #198754; }
+    .summary-card.air_quality .count { color: #6f42c1; }
+    .summary-card.power .count { color: #fd7e14; }
+    .summary-card.total .count { color: #0d6efd; }
+
+    .node-list-item {
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+        padding: 0.5rem 0.75rem;
+        border-bottom: 1px solid var(--bs-border-color);
+        cursor: pointer;
+        transition: background-color 0.2s;
+    }
+
+    .node-list-item:hover {
+        background-color: var(--bs-tertiary-bg);
+    }
+
+    .node-list-item:last-child {
+        border-bottom: none;
+    }
+
+    .node-list-item.active {
+        background-color: rgba(13, 110, 253, 0.1);
+        border-left: 3px solid #0d6efd;
+    }
+
+    .reading-count-badge {
+        background-color: var(--bs-secondary-bg);
+        color: var(--bs-body-color);
+        font-size: 0.75rem;
+        padding: 0.2rem 0.5rem;
+        border-radius: 1rem;
+    }
+
+    .sensor-timestamp {
+        font-size: 0.8rem;
+        color: var(--bs-secondary);
+    }
+
+    .sensor-meta {
+        font-size: 0.75rem;
+        color: var(--bs-secondary);
+    }
+
+    .sensor-value {
+        font-size: 1.1rem;
+        font-weight: 600;
+    }
+
+    .chart-container {
+        height: 280px;
+        width: 100%;
+    }
+
+    .map-container {
+        height: 320px;
+        border-radius: 0.5rem;
+        overflow: hidden;
+    }
+
+    .filter-section {
+        background: var(--bs-tertiary-bg);
+        padding: 1rem;
+        border-radius: 0.5rem;
+        margin-bottom: 1rem;
+    }
+
+    .timeline-container {
+        max-height: 550px;
+        overflow-y: auto;
+    }
+
+    .sensor-icon {
+        width: 38px;
+        height: 38px;
+        border-radius: 50%;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        color: white;
+        font-size: 1.1rem;
+        flex-shrink: 0;
+    }
+
+    .sensor-icon.detection { background: linear-gradient(135deg, #dc3545, #fd7e14); }
+    .sensor-icon.environment { background: linear-gradient(135deg, #198754, #20c997); }
+    .sensor-icon.air_quality { background: linear-gradient(135deg, #6f42c1, #0d6efd); }
+    .sensor-icon.power { background: linear-gradient(135deg, #fd7e14, #ffc107); }
+    .sensor-icon.device { background: linear-gradient(135deg, #0d6efd, #0dcaf0); }
+
+    .no-data {
+        text-align: center;
+        padding: 3rem;
+        color: var(--bs-secondary);
+    }
+
+    .no-data i {
+        font-size: 4rem;
+        margin-bottom: 1rem;
+        opacity: 0.5;
+    }
+
+    .pulse-dot {
+        width: 8px;
+        height: 8px;
+        background: #198754;
+        border-radius: 50%;
+        animation: pulse 2s infinite;
+    }
+
+    @keyframes pulse {
+        0% { transform: scale(1); opacity: 1; }
+        50% { transform: scale(1.5); opacity: 0.5; }
+        100% { transform: scale(1); opacity: 1; }
+    }
+
+    .location-badge {
+        font-size: 0.7rem;
+        padding: 0.15rem 0.4rem;
+    }
+
+    .sensor-type-tabs .nav-link {
+        padding: 0.5rem 1rem;
+        font-size: 0.9rem;
+    }
+
+    .sensor-type-tabs .nav-link.active {
+        font-weight: 600;
+    }
+
+    .metric-pill {
+        display: inline-block;
+        background: var(--bs-tertiary-bg);
+        padding: 0.2rem 0.5rem;
+        border-radius: 0.5rem;
+        margin: 0.1rem;
+        font-size: 0.8rem;
+    }
+
+    .metric-pill .label {
+        color: var(--bs-secondary);
+    }
+
+    .metric-pill .value {
+        font-weight: 600;
+        margin-left: 0.25rem;
+    }
+</style>
+{% endblock %}
+
+{% block content %}
+<div class="container-fluid">
+    <div class="row mb-4">
+        <div class="col">
+            <h1><i class="bi bi-broadcast-pin"></i> Sensor Dashboard</h1>
+            <p class="text-muted">Monitor sensor data across your mesh network - detection, environment, air quality, and more</p>
+        </div>
+        <div class="col-auto">
+            <button class="btn btn-primary" id="refreshBtn" onclick="loadSensorData()">
+                <i class="bi bi-arrow-clockwise"></i> Refresh
+            </button>
+        </div>
+    </div>
+
+    <!-- Filter Section -->
+    <div class="filter-section">
+        <div class="row align-items-end">
+            <div class="col-md-2">
+                <label class="form-label">Sensor Type</label>
+                <select class="form-select" id="sensorTypeFilter">
+                    <option value="all">All Sensors</option>
+                    <option value="detection">Detection Sensor</option>
+                    <option value="environment">Environment</option>
+                    <option value="air_quality">Air Quality</option>
+                    <option value="power">Power Metrics</option>
+                </select>
+            </div>
+            <div class="col-md-2">
+                <label class="form-label">Time Range</label>
+                <select class="form-select" id="hoursFilter">
+                    <option value="1">Last 1 hour</option>
+                    <option value="6">Last 6 hours</option>
+                    <option value="12">Last 12 hours</option>
+                    <option value="24" selected>Last 24 hours</option>
+                    <option value="48">Last 48 hours</option>
+                    <option value="168">Last 7 days</option>
+                </select>
+            </div>
+            <div class="col-md-3">
+                <label class="form-label">Sensor Node</label>
+                <select class="form-select" id="nodeFilter">
+                    <option value="">All Nodes</option>
+                    <!-- Populated dynamically -->
+                </select>
+            </div>
+            <div class="col-md-2">
+                <label class="form-label">Max Results</label>
+                <select class="form-select" id="limitFilter">
+                    <option value="100">100</option>
+                    <option value="250">250</option>
+                    <option value="500" selected>500</option>
+                    <option value="1000">1000</option>
+                </select>
+            </div>
+            <div class="col-md-3">
+                <button class="btn btn-outline-secondary w-100" onclick="loadSensorData()">
+                    <i class="bi bi-funnel"></i> Apply Filters
+                </button>
+            </div>
+        </div>
+    </div>
+
+    <div class="row">
+        <!-- Left column: Summary and Nodes -->
+        <div class="col-lg-4">
+            <!-- Summary Cards -->
+            <div class="row mb-3">
+                <div class="col-6">
+                    <div class="card summary-card total">
+                        <div class="count" id="totalReadings">0</div>
+                        <div class="text-muted small">Total Readings</div>
+                    </div>
+                </div>
+                <div class="col-6">
+                    <div class="card summary-card detection">
+                        <div class="count" id="detectionCount">0</div>
+                        <div class="text-muted small">Detection</div>
+                    </div>
+                </div>
+                <div class="col-6 mt-2">
+                    <div class="card summary-card environment">
+                        <div class="count" id="environmentCount">0</div>
+                        <div class="text-muted small">Environment</div>
+                    </div>
+                </div>
+                <div class="col-6 mt-2">
+                    <div class="card summary-card air_quality">
+                        <div class="count" id="airQualityCount">0</div>
+                        <div class="text-muted small">Air Quality</div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Sensor Nodes List -->
+            <div class="card mb-3">
+                <div class="card-header">
+                    <i class="bi bi-cpu"></i> Sensor Nodes
+                    <span class="badge bg-secondary float-end" id="nodeCountBadge">0</span>
+                </div>
+                <div class="card-body p-0">
+                    <div id="nodesList" style="max-height: 220px; overflow-y: auto;">
+                        <div class="text-center p-3 text-muted">Loading...</div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Activity Chart -->
+            <div class="card mb-3">
+                <div class="card-header">
+                    <i class="bi bi-graph-up"></i> Sensor Activity
+                </div>
+                <div class="card-body p-2">
+                    <div class="chart-container" id="activityChart">
+                        <div class="text-center p-4">
+                            <div class="spinner-border text-primary" role="status"></div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- Right column: Map and readings log -->
+        <div class="col-lg-8">
+            <!-- Map Card -->
+            <div class="card mb-3">
+                <div class="card-header d-flex justify-content-between align-items-center">
+                    <span><i class="bi bi-geo-alt"></i> Sensor Locations</span>
+                    <small class="text-muted" id="mapInfo">Showing sensors with known locations</small>
+                </div>
+                <div class="card-body p-0">
+                    <div class="map-container" id="sensorMap"></div>
+                </div>
+            </div>
+
+            <!-- Sensor Readings Timeline -->
+            <div class="card">
+                <div class="card-header d-flex justify-content-between align-items-center">
+                    <span><i class="bi bi-list-ul"></i> Sensor Readings</span>
+                    <div class="d-flex align-items-center gap-2">
+                        <div class="pulse-dot" id="liveDot" style="display: none;"></div>
+                        <span class="badge bg-secondary" id="readingCountBadge">0 readings</span>
+                    </div>
+                </div>
+                <div class="card-body p-0">
+                    <div class="timeline-container" id="readingsTimeline">
+                        <div class="text-center p-4">
+                            <div class="spinner-border text-primary" role="status"></div>
+                            <p class="mt-2 text-muted">Loading sensor readings...</p>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+{% endblock %}
+
+{% block extra_js %}
+<script>
+    let map = null;
+    let markers = [];
+    let currentData = null;
+    let selectedNode = null;
+
+    // Sensor type configurations
+    const SENSOR_TYPES = {
+        detection: {
+            name: 'Detection',
+            icon: 'bi-shield-exclamation',
+            color: '#dc3545'
+        },
+        environment: {
+            name: 'Environment',
+            icon: 'bi-thermometer-half',
+            color: '#198754'
+        },
+        air_quality: {
+            name: 'Air Quality',
+            icon: 'bi-cloud-haze',
+            color: '#6f42c1'
+        },
+        power: {
+            name: 'Power',
+            icon: 'bi-battery-charging',
+            color: '#fd7e14'
+        },
+        device: {
+            name: 'Device',
+            icon: 'bi-cpu',
+            color: '#0d6efd'
+        }
+    };
+
+    // Initialize map
+    function initMap() {
+        map = L.map('sensorMap').setView([0, 0], 2);
+        L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+            attribution: '&copy; OpenStreetMap contributors'
+        }).addTo(map);
+    }
+
+    // Format relative time
+    function formatRelativeTime(timestamp) {
+        const now = Date.now() / 1000;
+        const diff = now - timestamp;
+        if (diff < 60) return 'Just now';
+        if (diff < 3600) return `${Math.floor(diff / 60)} min ago`;
+        if (diff < 86400) return `${Math.floor(diff / 3600)} hours ago`;
+        return `${Math.floor(diff / 86400)} days ago`;
+    }
+
+    // Load sensor data
+    async function loadSensorData() {
+        const sensorType = document.getElementById('sensorTypeFilter').value;
+        const hours = document.getElementById('hoursFilter').value;
+        const limit = document.getElementById('limitFilter').value;
+        const nodeId = document.getElementById('nodeFilter').value;
+
+        try {
+            let url = `/api/sensors?hours=${hours}&limit=${limit}`;
+            if (sensorType !== 'all') {
+                url += `&sensor_type=${sensorType}`;
+            }
+            if (nodeId) {
+                url += `&node_id=${encodeURIComponent(nodeId)}`;
+            }
+
+            const response = await fetch(url);
+            if (!response.ok) throw new Error('Failed to fetch sensor data');
+
+            currentData = await response.json();
+            updateUI(currentData);
+        } catch (error) {
+            console.error('Error loading sensor data:', error);
+            document.getElementById('readingsTimeline').innerHTML = `
+                <div class="no-data">
+                    <i class="bi bi-exclamation-triangle"></i>
+                    <p>Error loading data: ${error.message}</p>
+                </div>
+            `;
+        }
+    }
+
+    // Update all UI elements
+    function updateUI(data) {
+        // Update summary cards
+        document.getElementById('totalReadings').textContent = data.total_readings || 0;
+        document.getElementById('detectionCount').textContent = data.type_counts?.detection || 0;
+        document.getElementById('environmentCount').textContent = data.type_counts?.environment || 0;
+        document.getElementById('airQualityCount').textContent = data.type_counts?.air_quality || 0;
+
+        // Update reading count badge
+        document.getElementById('readingCountBadge').textContent =
+            `${data.total_readings || 0} readings`;
+        document.getElementById('nodeCountBadge').textContent = data.unique_nodes || 0;
+
+        // Show live dot if recent data
+        const liveDot = document.getElementById('liveDot');
+        if (data.readings && data.readings.length > 0) {
+            const mostRecent = data.readings[0].timestamp;
+            const fiveMinutesAgo = Date.now() / 1000 - 300;
+            liveDot.style.display = mostRecent > fiveMinutesAgo ? 'block' : 'none';
+        }
+
+        // Update nodes list
+        updateNodesList(data.sensor_nodes || []);
+
+        // Update node filter dropdown
+        updateNodeFilter(data.sensor_nodes || []);
+
+        // Update timeline
+        updateTimeline(data.readings || []);
+
+        // Update chart
+        updateChart(data.hourly_chart || []);
+
+        // Update map
+        updateMap(data.readings || []);
+    }
+
+    // Update nodes list
+    function updateNodesList(nodes) {
+        const container = document.getElementById('nodesList');
+
+        if (!nodes || nodes.length === 0) {
+            container.innerHTML = `
+                <div class="text-center text-muted p-3">
+                    <i class="bi bi-broadcast-pin" style="font-size: 1.5rem;"></i>
+                    <p class="mb-0 mt-2">No sensor nodes found</p>
+                </div>
+            `;
+            return;
+        }
+
+        container.innerHTML = nodes.map(node => {
+            const types = node.sensor_types || [];
+            const typeBadges = types.slice(0, 3).map(t =>
+                `<span class="sensor-type-badge ${t} me-1">${SENSOR_TYPES[t]?.name || t}</span>`
+            ).join('');
+
+            return `
+                <div class="node-list-item ${selectedNode === node.node_hex ? 'active' : ''}"
+                     onclick="filterByNode('${node.node_hex || node.node_id}')">
+                    <div>
+                        <div class="fw-semibold">${node.name || node.node_hex || 'Unknown'}</div>
+                        <div class="sensor-meta">${typeBadges}</div>
+                    </div>
+                    <span class="reading-count-badge">${node.reading_count}</span>
+                </div>
+            `;
+        }).join('');
+    }
+
+    // Update node filter dropdown
+    function updateNodeFilter(nodes) {
+        const select = document.getElementById('nodeFilter');
+        const currentValue = select.value;
+        select.innerHTML = '<option value="">All Nodes</option>';
+
+        nodes.forEach(node => {
+            const option = document.createElement('option');
+            option.value = node.node_hex || node.node_id;
+            option.textContent = node.name || node.node_hex || `Node ${node.node_id}`;
+            if (option.value === currentValue) option.selected = true;
+            select.appendChild(option);
+        });
+    }
+
+    // Filter by specific node
+    function filterByNode(nodeId) {
+        document.getElementById('nodeFilter').value = nodeId;
+        selectedNode = nodeId;
+        loadSensorData();
+    }
+
+    // Format sensor metrics for display
+    function formatMetrics(reading) {
+        const metrics = [];
+        const data = reading.data || {};
+
+        if (reading.sensor_type === 'detection') {
+            if (data.detection_name) {
+                metrics.push(`<span class="metric-pill"><span class="label">Event:</span><span class="value">${data.detection_name}</span></span>`);
+            }
+        } else if (reading.sensor_type === 'environment') {
+            if (data.temperature != null) metrics.push(`<span class="metric-pill"><span class="label">Temp:</span><span class="value">${data.temperature.toFixed(1)}°C</span></span>`);
+            if (data.relative_humidity != null) metrics.push(`<span class="metric-pill"><span class="label">Humidity:</span><span class="value">${data.relative_humidity.toFixed(0)}%</span></span>`);
+            if (data.barometric_pressure != null) metrics.push(`<span class="metric-pill"><span class="label">Pressure:</span><span class="value">${data.barometric_pressure.toFixed(0)} hPa</span></span>`);
+            if (data.lux != null) metrics.push(`<span class="metric-pill"><span class="label">Light:</span><span class="value">${data.lux.toFixed(0)} lux</span></span>`);
+            if (data.wind_speed != null) metrics.push(`<span class="metric-pill"><span class="label">Wind:</span><span class="value">${data.wind_speed.toFixed(1)} m/s</span></span>`);
+            if (data.radiation != null) metrics.push(`<span class="metric-pill"><span class="label">Radiation:</span><span class="value">${data.radiation.toFixed(2)} µSv/h</span></span>`);
+        } else if (reading.sensor_type === 'air_quality') {
+            if (data.pm25_standard != null) metrics.push(`<span class="metric-pill"><span class="label">PM2.5:</span><span class="value">${data.pm25_standard} µg/m³</span></span>`);
+            if (data.pm100_standard != null) metrics.push(`<span class="metric-pill"><span class="label">PM10:</span><span class="value">${data.pm100_standard} µg/m³</span></span>`);
+            if (data.co2 != null) metrics.push(`<span class="metric-pill"><span class="label">CO₂:</span><span class="value">${data.co2} ppm</span></span>`);
+            if (data.iaq != null) metrics.push(`<span class="metric-pill"><span class="label">IAQ:</span><span class="value">${data.iaq}</span></span>`);
+        } else if (reading.sensor_type === 'power') {
+            if (data.voltage != null) metrics.push(`<span class="metric-pill"><span class="label">Voltage:</span><span class="value">${data.voltage.toFixed(2)}V</span></span>`);
+            if (data.current != null) metrics.push(`<span class="metric-pill"><span class="label">Current:</span><span class="value">${data.current.toFixed(0)}mA</span></span>`);
+        }
+
+        return metrics.join('');
+    }
+
+    // Update timeline with readings
+    function updateTimeline(readings) {
+        const container = document.getElementById('readingsTimeline');
+
+        if (!readings || readings.length === 0) {
+            container.innerHTML = `
+                <div class="no-data">
+                    <i class="bi bi-broadcast-pin"></i>
+                    <p>No sensor readings found</p>
+                    <small class="text-muted">Try adjusting the time range or filters</small>
+                </div>
+            `;
+            return;
+        }
+
+        container.innerHTML = readings.map(reading => {
+            const isRecent = (Date.now() / 1000 - reading.timestamp) < 300;
+            const sensorType = reading.sensor_type || 'device';
+            const typeInfo = SENSOR_TYPES[sensorType] || SENSOR_TYPES.device;
+
+            return `
+                <div class="sensor-card p-3 ${sensorType} ${isRecent ? 'recent' : ''}">
+                    <div class="d-flex align-items-start">
+                        <div class="sensor-icon ${sensorType} me-3">
+                            <i class="bi ${typeInfo.icon}"></i>
+                        </div>
+                        <div class="flex-grow-1">
+                            <div class="d-flex justify-content-between align-items-start">
+                                <div>
+                                    <strong>${reading.node_name || reading.from_node_hex || 'Unknown'}</strong>
+                                    <span class="sensor-type-badge ${sensorType} ms-2">${typeInfo.name}</span>
+                                    ${reading.has_location ? '<span class="badge bg-success location-badge ms-1"><i class="bi bi-geo-alt-fill"></i></span>' : ''}
+                                </div>
+                                <span class="sensor-timestamp">${formatRelativeTime(reading.timestamp)}</span>
+                            </div>
+                            <div class="mt-2">
+                                ${formatMetrics(reading)}
+                            </div>
+                            <div class="sensor-meta mt-1">
+                                ${reading.gateway_id ? `<span class="me-2"><i class="bi bi-broadcast"></i> ${reading.gateway_id}</span>` : ''}
+                                ${reading.rssi ? `<span class="me-2">RSSI: ${reading.rssi} dBm</span>` : ''}
+                                ${reading.snr ? `<span class="me-2">SNR: ${reading.snr.toFixed(1)} dB</span>` : ''}
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            `;
+        }).join('');
+    }
+
+    // Update activity chart
+    function updateChart(hourlyData) {
+        const container = document.getElementById('activityChart');
+
+        if (!hourlyData || hourlyData.length === 0) {
+            container.innerHTML = `
+                <div class="text-center text-muted p-4">
+                    <i class="bi bi-graph-up" style="font-size: 2rem; opacity: 0.5;"></i>
+                    <p class="mt-2">No activity data to display</p>
+                </div>
+            `;
+            return;
+        }
+
+        container.innerHTML = '';
+        const isDarkMode = document.documentElement.getAttribute('data-bs-theme') === 'dark';
+
+        // Create traces for each sensor type
+        const traces = [];
+        const typeColors = {
+            detection: 'rgba(220, 53, 69, 0.7)',
+            environment: 'rgba(25, 135, 84, 0.7)',
+            air_quality: 'rgba(111, 66, 193, 0.7)',
+            power: 'rgba(253, 126, 20, 0.7)'
+        };
+
+        Object.keys(typeColors).forEach(type => {
+            const hasData = hourlyData.some(d => d[type] > 0);
+            if (hasData) {
+                traces.push({
+                    x: hourlyData.map(d => d.hour),
+                    y: hourlyData.map(d => d[type] || 0),
+                    type: 'bar',
+                    name: SENSOR_TYPES[type]?.name || type,
+                    marker: { color: typeColors[type] }
+                });
+            }
+        });
+
+        // If no typed data, show total
+        if (traces.length === 0) {
+            traces.push({
+                x: hourlyData.map(d => d.hour),
+                y: hourlyData.map(d => d.count || 0),
+                type: 'bar',
+                name: 'All Sensors',
+                marker: { color: 'rgba(13, 110, 253, 0.7)' }
+            });
+        }
+
+        const layout = {
+            margin: { t: 10, r: 10, b: 50, l: 35 },
+            paper_bgcolor: 'transparent',
+            plot_bgcolor: 'transparent',
+            barmode: 'stack',
+            legend: {
+                orientation: 'h',
+                y: -0.25,
+                font: { size: 10, color: isDarkMode ? '#adb5bd' : '#6c757d' }
+            },
+            xaxis: {
+                tickangle: -45,
+                tickfont: { size: 9, color: isDarkMode ? '#adb5bd' : '#6c757d' },
+                gridcolor: isDarkMode ? 'rgba(255,255,255,0.1)' : 'rgba(0,0,0,0.1)'
+            },
+            yaxis: {
+                tickfont: { size: 10, color: isDarkMode ? '#adb5bd' : '#6c757d' },
+                gridcolor: isDarkMode ? 'rgba(255,255,255,0.1)' : 'rgba(0,0,0,0.1)'
+            },
+            bargap: 0.2
+        };
+
+        Plotly.newPlot(container, traces, layout, { responsive: true, displayModeBar: false });
+    }
+
+    // Update map with sensor locations
+    function updateMap(readings) {
+        markers.forEach(m => map.removeLayer(m));
+        markers = [];
+
+        const locationMap = new Map();
+        readings.forEach(reading => {
+            if (reading.has_location) {
+                const key = `${reading.from_node_id}`;
+                if (!locationMap.has(key)) {
+                    locationMap.set(key, {
+                        lat: reading.latitude,
+                        lng: reading.longitude,
+                        name: reading.node_name,
+                        node_hex: reading.from_node_hex,
+                        types: new Set(),
+                        count: 0,
+                        lastReading: reading.timestamp
+                    });
+                }
+                const loc = locationMap.get(key);
+                loc.types.add(reading.sensor_type);
+                loc.count++;
+                if (reading.timestamp > loc.lastReading) {
+                    loc.lastReading = reading.timestamp;
+                }
+            }
+        });
+
+        if (locationMap.size === 0) {
+            document.getElementById('mapInfo').textContent = 'No sensors with known locations';
+            return;
+        }
+
+        document.getElementById('mapInfo').textContent =
+            `Showing ${locationMap.size} sensor${locationMap.size !== 1 ? 's' : ''} with known locations`;
+
+        const bounds = [];
+
+        locationMap.forEach((loc, key) => {
+            bounds.push([loc.lat, loc.lng]);
+
+            // Determine primary color based on types
+            const types = Array.from(loc.types);
+            const primaryType = types[0] || 'device';
+            const color = SENSOR_TYPES[primaryType]?.color || '#0d6efd';
+
+            const icon = L.divIcon({
+                html: `<div style="
+                    background: ${color};
+                    color: white;
+                    border-radius: 50%;
+                    width: 32px;
+                    height: 32px;
+                    display: flex;
+                    align-items: center;
+                    justify-content: center;
+                    font-weight: bold;
+                    font-size: 11px;
+                    border: 2px solid white;
+                    box-shadow: 0 2px 4px rgba(0,0,0,0.3);
+                ">${loc.count}</div>`,
+                className: 'sensor-marker',
+                iconSize: [32, 32],
+                iconAnchor: [16, 16]
+            });
+
+            const typeBadges = types.map(t =>
+                `<span class="badge" style="background:${SENSOR_TYPES[t]?.color || '#6c757d'};margin-right:2px;">${SENSOR_TYPES[t]?.name || t}</span>`
+            ).join('');
+
+            const marker = L.marker([loc.lat, loc.lng], { icon })
+                .bindPopup(`
+                    <div style="min-width: 160px;">
+                        <strong>${loc.name || loc.node_hex || 'Unknown'}</strong><br>
+                        <small class="text-muted">${loc.node_hex}</small>
+                        <hr style="margin: 6px 0;">
+                        <div style="margin-bottom:4px;">${typeBadges}</div>
+                        <small>${loc.count} readings</small><br>
+                        <small>Last: ${formatRelativeTime(loc.lastReading)}</small>
+                    </div>
+                `)
+                .addTo(map);
+
+            markers.push(marker);
+        });
+
+        if (bounds.length > 0) {
+            if (bounds.length === 1) {
+                map.setView(bounds[0], 14);
+            } else {
+                map.fitBounds(bounds, { padding: [50, 50] });
+            }
+        }
+    }
+
+    // Initialize
+    document.addEventListener('DOMContentLoaded', function() {
+        initMap();
+        loadSensorData();
+
+        // Auto-refresh every 30 seconds
+        setInterval(loadSensorData, 30000);
+
+        // Reload on filter changes
+        ['sensorTypeFilter', 'hoursFilter', 'limitFilter'].forEach(id => {
+            document.getElementById(id).addEventListener('change', loadSensorData);
+        });
+        document.getElementById('nodeFilter').addEventListener('change', function() {
+            selectedNode = this.value || null;
+            loadSensorData();
+        });
+    });
+</script>
+{% endblock %}

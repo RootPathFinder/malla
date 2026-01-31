@@ -116,13 +116,21 @@ def network_dependency():
 
 @main_bp.route("/detection-sensors")
 def detection_sensors():
-    """Detection sensor events dashboard."""
-    logger.info("Detection sensors route accessed")
+    """Redirect to sensor dashboard for backwards compatibility."""
+    from flask import redirect, url_for
+
+    return redirect(url_for("main.sensor_dashboard", sensor_type="detection"))
+
+
+@main_bp.route("/sensor-dashboard")
+def sensor_dashboard():
+    """Generic sensor dashboard for all sensor types."""
+    logger.info("Sensor dashboard route accessed")
     try:
-        return render_template("detection_sensors.html")
+        return render_template("sensor_dashboard.html")
     except Exception as e:
-        logger.error(f"Error in detection sensors route: {e}")
-        return f"Detection sensors error: {e}", 500
+        logger.error(f"Error in sensor dashboard route: {e}")
+        return f"Sensor dashboard error: {e}", 500
 
 
 @main_bp.route("/paxcounter")

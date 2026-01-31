@@ -3257,6 +3257,295 @@ def api_paxcounter():
         return jsonify({"error": str(e)}), 500
 
 
+@api_bp.route("/sensors")
+@cache_response(ttl_seconds=10)
+def api_sensors():
+    """
+    Get sensor readings from multiple sensor types.
+
+    Query parameters:
+        hours: Number of hours to look back (default: 24, max: 168)
+        limit: Maximum number of readings to return (default: 500)
+        sensor_type: Filter by type: detection, environment, air_quality, power, or all
+        node_id: Filter by specific node ID (optional)
+
+    Returns:
+        JSON with sensor readings and summary statistics
+    """
+    try:
+        hours = request.args.get("hours", 24, type=int)
+        hours = min(max(hours, 1), 168)
+        limit = request.args.get("limit", 500, type=int)
+        limit = min(max(limit, 1), 2000)
+        sensor_type = request.args.get("sensor_type", "all")
+        node_id_filter = request.args.get("node_id", None)
+
+        conn = get_db_connection()
+        cursor = conn.cursor()
+        cutoff_time = time.time() - (hours * 3600)
+
+        # Define portnums for different sensor types
+        # Detection: 10, Telemetry: 67 (contains environment, air_quality, power)
+        portnums = []
+        if sensor_type == "all":
+            portnums = [10, 67]  # Detection + Telemetry
+        elif sensor_type == "detection":
+            portnums = [10]
+        else:
+            portnums = [67]  # Environment, air_quality, power are in telemetry
+
+        placeholders = ",".join(["?"] * len(portnums))
+        params = portnums + [cutoff_time]
+
+        # Build query
+        query = f"""
+            SELECT ph.id, ph.timestamp, ph.from_node_id, ph.gateway_id,
+                   ph.rssi, ph.snr, ph.hop_limit, ph.raw_payload, ph.portnum,
+                   ni.long_name, ni.short_name
+            FROM packet_history ph
+            LEFT JOIN node_info ni ON ph.from_node_id = ni.node_id
+            WHERE ph.portnum IN ({placeholders}) AND ph.timestamp > ?
+        """
+
+        if node_id_filter:
+            node_id_int = convert_node_id(node_id_filter)
+            query += " AND ph.from_node_id = ?"
+            params.append(node_id_int)
+
+        query += " ORDER BY ph.timestamp DESC LIMIT ?"
+        params.append(limit)
+
+        cursor.execute(query, params)
+        rows = cursor.fetchall()
+
+        # Collect unique node IDs to fetch their locations
+        node_ids_in_readings = set()
+        for row in rows:
+            if row["from_node_id"]:
+                node_ids_in_readings.add(row["from_node_id"])
+
+        # Fetch locations
+        node_locations = {}
+        if node_ids_in_readings:
+            from ..database.repositories import LocationRepository
+
+            try:
+                locations = LocationRepository.get_node_locations(
+                    {"node_ids": list(node_ids_in_readings)}
+                )
+                for loc in locations:
+                    node_locations[loc["node_id"]] = {
+                        "latitude": loc.get("latitude"),
+                        "longitude": loc.get("longitude"),
+                    }
+            except Exception as loc_err:
+                logger.warning(f"Failed to fetch locations: {loc_err}")
+
+        conn.close()
+
+        # Process readings
+        readings = []
+        type_counts = {"detection": 0, "environment": 0, "air_quality": 0, "power": 0}
+        hourly_stats = {}
+        node_stats = {}
+
+        for row in rows:
+            from_node_id = row["from_node_id"]
+            timestamp = row["timestamp"]
+            portnum = row["portnum"]
+            raw_payload = row["raw_payload"]
+
+            # Determine sensor type and parse data
+            reading_type = None
+            data = {}
+
+            if portnum == 10:  # Detection sensor
+                reading_type = "detection"
+                if raw_payload:
+                    try:
+                        if isinstance(raw_payload, bytes):
+                            data["detection_name"] = raw_payload.decode(
+                                "utf-8", errors="replace"
+                            )
+                        else:
+                            data["detection_name"] = str(raw_payload)
+                    except Exception:
+                        pass
+
+            elif portnum == 67:  # Telemetry
+                if raw_payload:
+                    try:
+                        from meshtastic import telemetry_pb2
+
+                        telemetry = telemetry_pb2.Telemetry()
+                        telemetry.ParseFromString(raw_payload)
+
+                        # Check which metrics are present
+                        if telemetry.HasField("environment_metrics"):
+                            env = telemetry.environment_metrics
+                            reading_type = "environment"
+                            if env.temperature:
+                                data["temperature"] = env.temperature
+                            if env.relative_humidity:
+                                data["relative_humidity"] = env.relative_humidity
+                            if env.barometric_pressure:
+                                data["barometric_pressure"] = env.barometric_pressure
+                            if env.gas_resistance:
+                                data["gas_resistance"] = env.gas_resistance
+                            if env.iaq:
+                                data["iaq"] = env.iaq
+                            if env.lux:
+                                data["lux"] = env.lux
+                            if env.wind_speed:
+                                data["wind_speed"] = env.wind_speed
+                            if env.wind_direction:
+                                data["wind_direction"] = env.wind_direction
+                            if env.radiation:
+                                data["radiation"] = env.radiation
+
+                        elif telemetry.HasField("air_quality_metrics"):
+                            aq = telemetry.air_quality_metrics
+                            reading_type = "air_quality"
+                            if aq.pm10_standard:
+                                data["pm10_standard"] = aq.pm10_standard
+                            if aq.pm25_standard:
+                                data["pm25_standard"] = aq.pm25_standard
+                            if aq.pm100_standard:
+                                data["pm100_standard"] = aq.pm100_standard
+                            if aq.co2:
+                                data["co2"] = aq.co2
+
+                        elif telemetry.HasField("power_metrics"):
+                            pwr = telemetry.power_metrics
+                            reading_type = "power"
+                            if pwr.ch1_voltage:
+                                data["voltage"] = pwr.ch1_voltage
+                            if pwr.ch1_current:
+                                data["current"] = pwr.ch1_current
+
+                    except Exception:
+                        continue
+
+            # Skip if no valid type or filtered out
+            if not reading_type:
+                continue
+            if sensor_type != "all" and reading_type != sensor_type:
+                continue
+
+            # Update counts
+            type_counts[reading_type] = type_counts.get(reading_type, 0) + 1
+
+            # Get location
+            loc = node_locations.get(from_node_id, {})
+            latitude = loc.get("latitude")
+            longitude = loc.get("longitude")
+
+            node_id_hex = f"!{from_node_id:08x}" if from_node_id else None
+
+            # Track hourly stats
+            hour_key = datetime.fromtimestamp(timestamp, tz=UTC).strftime(
+                "%Y-%m-%d %H:00"
+            )
+            if hour_key not in hourly_stats:
+                hourly_stats[hour_key] = {
+                    "detection": 0,
+                    "environment": 0,
+                    "air_quality": 0,
+                    "power": 0,
+                    "count": 0,
+                }
+            hourly_stats[hour_key][reading_type] += 1
+            hourly_stats[hour_key]["count"] += 1
+
+            # Track node stats
+            if from_node_id not in node_stats:
+                node_stats[from_node_id] = {
+                    "node_id": from_node_id,
+                    "node_hex": node_id_hex,
+                    "name": row["long_name"] or row["short_name"] or node_id_hex,
+                    "sensor_types": set(),
+                    "reading_count": 0,
+                }
+            node_stats[from_node_id]["sensor_types"].add(reading_type)
+            node_stats[from_node_id]["reading_count"] += 1
+
+            readings.append(
+                {
+                    "id": row["id"],
+                    "timestamp": timestamp,
+                    "from_node_id": from_node_id,
+                    "from_node_hex": node_id_hex,
+                    "node_name": row["long_name"]
+                    or row["short_name"]
+                    or node_id_hex
+                    or "Unknown",
+                    "gateway_id": row["gateway_id"],
+                    "rssi": row["rssi"],
+                    "snr": row["snr"],
+                    "sensor_type": reading_type,
+                    "data": data,
+                    "latitude": latitude,
+                    "longitude": longitude,
+                    "has_location": latitude is not None and longitude is not None,
+                }
+            )
+
+        # Build sensor nodes list
+        sensor_nodes = []
+        for _node_id, stats in node_stats.items():
+            sensor_nodes.append(
+                {
+                    "node_id": stats["node_id"],
+                    "node_hex": stats["node_hex"],
+                    "name": stats["name"],
+                    "sensor_types": list(stats["sensor_types"]),
+                    "reading_count": stats["reading_count"],
+                }
+            )
+        sensor_nodes.sort(key=lambda x: x["reading_count"], reverse=True)
+
+        # Build hourly chart
+        hourly_chart = [
+            {
+                "hour": k,
+                "detection": v["detection"],
+                "environment": v["environment"],
+                "air_quality": v["air_quality"],
+                "power": v["power"],
+                "count": v["count"],
+            }
+            for k, v in sorted(hourly_stats.items())
+        ]
+
+        return safe_jsonify(
+            {
+                "readings": readings,
+                "total_readings": len(readings),
+                "unique_nodes": len(node_stats),
+                "type_counts": type_counts,
+                "sensor_nodes": sensor_nodes,
+                "hourly_chart": hourly_chart,
+                "hours_analyzed": hours,
+            }
+        )
+
+    except Exception as e:
+        if "no such table" in str(e) or "no such column" in str(e):
+            return safe_jsonify(
+                {
+                    "readings": [],
+                    "total_readings": 0,
+                    "unique_nodes": 0,
+                    "type_counts": {},
+                    "sensor_nodes": [],
+                    "hourly_chart": [],
+                    "hours_analyzed": 24,
+                }
+            )
+        logger.error(f"Error in API sensors: {e}", exc_info=True)
+        return jsonify({"error": str(e)}), 500
+
+
 def safe_jsonify(data, *args, **kwargs):
     """
     A drop-in replacement for Flask's jsonify() that sanitizes NaN/Inf values.
