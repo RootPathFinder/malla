@@ -2850,7 +2850,7 @@ def api_detection_sensors():
                 """
                 SELECT ph.id, ph.timestamp, ph.from_node_id, ph.gateway_id,
                        ph.rssi, ph.snr, ph.hop_limit, ph.raw_payload,
-                       ni.long_name, ni.short_name, ni.latitude, ni.longitude
+                       ni.long_name, ni.short_name
                 FROM packet_history ph
                 LEFT JOIN node_info ni ON ph.from_node_id = ni.node_id
                 WHERE ph.portnum = ? AND ph.timestamp > ? AND ph.from_node_id = ?
@@ -2864,7 +2864,7 @@ def api_detection_sensors():
                 """
                 SELECT ph.id, ph.timestamp, ph.from_node_id, ph.gateway_id,
                        ph.rssi, ph.snr, ph.hop_limit, ph.raw_payload,
-                       ni.long_name, ni.short_name, ni.latitude, ni.longitude
+                       ni.long_name, ni.short_name
                 FROM packet_history ph
                 LEFT JOIN node_info ni ON ph.from_node_id = ni.node_id
                 WHERE ph.portnum = ? AND ph.timestamp > ?
@@ -2875,6 +2875,30 @@ def api_detection_sensors():
             )
 
         rows = cursor.fetchall()
+
+        # Collect unique node IDs to fetch their locations
+        node_ids_in_events = set()
+        for row in rows:
+            if row["from_node_id"]:
+                node_ids_in_events.add(row["from_node_id"])
+
+        # Fetch locations for these nodes from position packets
+        node_locations = {}
+        if node_ids_in_events:
+            from ..database.repositories import LocationRepository
+
+            try:
+                locations = LocationRepository.get_node_locations(
+                    {"node_ids": list(node_ids_in_events)}
+                )
+                for loc in locations:
+                    node_locations[loc["node_id"]] = {
+                        "latitude": loc.get("latitude"),
+                        "longitude": loc.get("longitude"),
+                    }
+            except Exception as loc_err:
+                logger.warning(f"Failed to fetch locations: {loc_err}")
+
         conn.close()
 
         # Process events
@@ -2883,20 +2907,21 @@ def api_detection_sensors():
         hourly_counts = {}
 
         for row in rows:
-            (
-                packet_id,
-                timestamp,
-                from_node_id,
-                gateway_id,
-                rssi,
-                snr,
-                hop_limit,
-                raw_payload,
-                long_name,
-                short_name,
-                latitude,
-                longitude,
-            ) = row
+            packet_id = row["id"]
+            timestamp = row["timestamp"]
+            from_node_id = row["from_node_id"]
+            gateway_id = row["gateway_id"]
+            rssi = row["rssi"]
+            snr = row["snr"]
+            hop_limit = row["hop_limit"]
+            raw_payload = row["raw_payload"]
+            long_name = row["long_name"]
+            short_name = row["short_name"]
+
+            # Get location from separately fetched position data
+            loc = node_locations.get(from_node_id, {})
+            latitude = loc.get("latitude")
+            longitude = loc.get("longitude")
 
             # Parse detection sensor payload if available
             detection_name = None
