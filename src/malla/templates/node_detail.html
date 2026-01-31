@@ -535,6 +535,107 @@
                 </div>
             </div>
 
+            <!-- 7-Day Telemetry History Charts -->
+            <div class="card mb-4" id="telemetry-history-card" style="display: none;">
+                <div class="card-header">
+                    <div class="d-flex justify-content-between align-items-center flex-wrap gap-2">
+                        <div>
+                            <h5 class="mb-0"><i class="bi bi-graph-up"></i> Telemetry History</h5>
+                            <small class="text-muted">7-day trends with interactive zoom</small>
+                        </div>
+                        <div class="btn-group btn-group-sm" role="group" id="telemetry-range-selector">
+                            <button type="button" class="btn btn-outline-secondary" data-range="24">24h</button>
+                            <button type="button" class="btn btn-outline-secondary" data-range="72">3d</button>
+                            <button type="button" class="btn btn-outline-secondary active" data-range="168">7d</button>
+                        </div>
+                    </div>
+                </div>
+                <div class="card-body">
+                    <div class="small text-muted mb-3">
+                        <i class="bi bi-info-circle"></i>
+                        <strong>Tip:</strong> Click and drag to zoom into a time range. Double-click to reset zoom.
+                        Use the range buttons or hover over charts for details.
+                    </div>
+
+                    <!-- Power & Battery Charts -->
+                    <div class="row g-3 mb-4" id="power-charts-row" style="display: none;">
+                        <div class="col-12">
+                            <h6 class="text-secondary"><i class="bi bi-battery-charging"></i> Power & Battery</h6>
+                        </div>
+                        <div class="col-lg-6" id="battery-chart-container" style="display: none;">
+                            <div class="card h-100">
+                                <div class="card-body p-2">
+                                    <div id="telemetry-chart-battery" style="height: 200px;"></div>
+                                </div>
+                            </div>
+                        </div>
+                        <div class="col-lg-6" id="voltage-chart-container" style="display: none;">
+                            <div class="card h-100">
+                                <div class="card-body p-2">
+                                    <div id="telemetry-chart-voltage" style="height: 200px;"></div>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- Network Charts -->
+                    <div class="row g-3 mb-4" id="network-charts-row" style="display: none;">
+                        <div class="col-12">
+                            <h6 class="text-secondary"><i class="bi bi-wifi"></i> Network & Radio</h6>
+                        </div>
+                        <div class="col-lg-6" id="channel-util-chart-container" style="display: none;">
+                            <div class="card h-100">
+                                <div class="card-body p-2">
+                                    <div id="telemetry-chart-channel-util" style="height: 200px;"></div>
+                                </div>
+                            </div>
+                        </div>
+                        <div class="col-lg-6" id="air-util-chart-container" style="display: none;">
+                            <div class="card h-100">
+                                <div class="card-body p-2">
+                                    <div id="telemetry-chart-air-util" style="height: 200px;"></div>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- Environment Charts -->
+                    <div class="row g-3" id="environment-charts-row" style="display: none;">
+                        <div class="col-12">
+                            <h6 class="text-secondary"><i class="bi bi-cloud"></i> Environment</h6>
+                        </div>
+                        <div class="col-lg-4" id="temperature-chart-container" style="display: none;">
+                            <div class="card h-100">
+                                <div class="card-body p-2">
+                                    <div id="telemetry-chart-temperature" style="height: 200px;"></div>
+                                </div>
+                            </div>
+                        </div>
+                        <div class="col-lg-4" id="humidity-chart-container" style="display: none;">
+                            <div class="card h-100">
+                                <div class="card-body p-2">
+                                    <div id="telemetry-chart-humidity" style="height: 200px;"></div>
+                                </div>
+                            </div>
+                        </div>
+                        <div class="col-lg-4" id="pressure-chart-container" style="display: none;">
+                            <div class="card h-100">
+                                <div class="card-body p-2">
+                                    <div id="telemetry-chart-pressure" style="height: 200px;"></div>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- No data message (shown when no charts have data) -->
+                    <div id="telemetry-history-no-data" class="text-center text-muted py-4">
+                        <i class="bi bi-bar-chart" style="font-size: 2rem;"></i>
+                        <p class="mt-2 mb-0">No telemetry history available</p>
+                        <small>This node hasn't sent telemetry packets in the past 7 days</small>
+                    </div>
+                </div>
+            </div>
+
             <!-- Location History Map -->
             <div class="card mb-4" id="location-history-card" style="display: none;">
                 <div class="card-header">
@@ -1857,6 +1958,9 @@ async function loadTelemetryData() {
         // Render sparklines for metrics with history data
         renderSparklines(history);
 
+        // Render 7-day telemetry history charts
+        renderTelemetryHistoryCharts(history7d);
+
         // Update timestamps if the function is available
         if (typeof updateAllTimestamps === 'function') {
             updateAllTimestamps();
@@ -2122,6 +2226,332 @@ function hideExpandedSparkline() {
         expandedSparklineOverlay = null;
     }
 }
+
+// Store current range for telemetry history charts
+let telemetryHistoryRange = 168; // Default 7 days (168 hours)
+
+// Render interactive Plotly charts for telemetry history
+function renderTelemetryHistoryCharts(history7d) {
+    const historyCard = document.getElementById('telemetry-history-card');
+    const noDataDiv = document.getElementById('telemetry-history-no-data');
+
+    // Check if we have any data at all
+    const hasAnyData = Object.values(history7d).some(arr => arr && arr.length > 1);
+
+    if (!hasAnyData) {
+        historyCard.style.display = 'none';
+        return;
+    }
+
+    historyCard.style.display = 'block';
+    noDataDiv.style.display = 'none';
+
+    // Store the full 7-day data for range filtering
+    window.telemetryHistoryFull = history7d;
+
+    // Render charts with current range
+    updateTelemetryHistoryCharts();
+
+    // Set up range selector buttons
+    const rangeButtons = document.querySelectorAll('#telemetry-range-selector button');
+    rangeButtons.forEach(btn => {
+        btn.addEventListener('click', function() {
+            rangeButtons.forEach(b => b.classList.remove('active'));
+            this.classList.add('active');
+            telemetryHistoryRange = parseInt(this.dataset.range);
+            updateTelemetryHistoryCharts();
+        });
+    });
+}
+
+function updateTelemetryHistoryCharts() {
+    const history7d = window.telemetryHistoryFull || {};
+    const cutoffTime = Date.now() - (telemetryHistoryRange * 3600 * 1000);
+
+    // Filter data to current range
+    const filteredHistory = {};
+    Object.keys(history7d).forEach(key => {
+        if (history7d[key] && history7d[key].length > 0) {
+            filteredHistory[key] = history7d[key].filter(d => d.x >= cutoffTime);
+        }
+    });
+
+    // Detect dark mode
+    const isDarkMode = document.documentElement.getAttribute('data-bs-theme') === 'dark' ||
+                       window.matchMedia('(prefers-color-scheme: dark)').matches;
+
+    // Common Plotly layout settings
+    const commonLayout = {
+        margin: { t: 30, r: 20, b: 40, l: 50 },
+        paper_bgcolor: 'transparent',
+        plot_bgcolor: 'transparent',
+        font: { color: isDarkMode ? '#e9ecef' : '#212529', size: 11 },
+        xaxis: {
+            type: 'date',
+            gridcolor: isDarkMode ? 'rgba(255,255,255,0.1)' : 'rgba(0,0,0,0.1)',
+            tickformat: telemetryHistoryRange <= 24 ? '%H:%M' : '%m/%d %H:%M',
+            tickangle: -45
+        },
+        yaxis: {
+            gridcolor: isDarkMode ? 'rgba(255,255,255,0.1)' : 'rgba(0,0,0,0.1)'
+        },
+        hovermode: 'x unified',
+        dragmode: 'zoom'
+    };
+
+    const commonConfig = {
+        responsive: true,
+        displayModeBar: true,
+        displaylogo: false,
+        modeBarButtonsToRemove: ['select2d', 'lasso2d', 'autoScale2d'],
+        modeBarButtonsToAdd: [{
+            name: 'Reset Zoom',
+            icon: Plotly.Icons.home,
+            click: function(gd) {
+                Plotly.relayout(gd, {
+                    'xaxis.autorange': true,
+                    'yaxis.autorange': true
+                });
+            }
+        }]
+    };
+
+    // Track which sections have data
+    let hasPowerData = false;
+    let hasNetworkData = false;
+    let hasEnvironmentData = false;
+
+    // Render Battery Level chart
+    if (filteredHistory.battery_level && filteredHistory.battery_level.length > 1) {
+        hasPowerData = true;
+        document.getElementById('battery-chart-container').style.display = 'block';
+
+        const trace = {
+            x: filteredHistory.battery_level.map(d => new Date(d.x)),
+            y: filteredHistory.battery_level.map(d => d.y),
+            type: 'scatter',
+            mode: 'lines',
+            name: 'Battery',
+            line: { color: '#28a745', width: 2 },
+            fill: 'tozeroy',
+            fillcolor: 'rgba(40, 167, 69, 0.1)',
+            hovertemplate: '%{y:.0f}%<extra>Battery</extra>'
+        };
+
+        const layout = {
+            ...commonLayout,
+            title: { text: 'Battery Level', font: { size: 13 } },
+            yaxis: { ...commonLayout.yaxis, range: [0, 100], ticksuffix: '%' }
+        };
+
+        Plotly.newPlot('telemetry-chart-battery', [trace], layout, commonConfig);
+    } else {
+        document.getElementById('battery-chart-container').style.display = 'none';
+    }
+
+    // Render Voltage chart
+    if (filteredHistory.voltage && filteredHistory.voltage.length > 1) {
+        hasPowerData = true;
+        document.getElementById('voltage-chart-container').style.display = 'block';
+
+        const trace = {
+            x: filteredHistory.voltage.map(d => new Date(d.x)),
+            y: filteredHistory.voltage.map(d => d.y),
+            type: 'scatter',
+            mode: 'lines',
+            name: 'Voltage',
+            line: { color: '#ffc107', width: 2 },
+            fill: 'tozeroy',
+            fillcolor: 'rgba(255, 193, 7, 0.1)',
+            hovertemplate: '%{y:.2f}V<extra>Voltage</extra>'
+        };
+
+        const layout = {
+            ...commonLayout,
+            title: { text: 'Voltage', font: { size: 13 } },
+            yaxis: { ...commonLayout.yaxis, ticksuffix: 'V' }
+        };
+
+        Plotly.newPlot('telemetry-chart-voltage', [trace], layout, commonConfig);
+    } else {
+        document.getElementById('voltage-chart-container').style.display = 'none';
+    }
+
+    // Render Channel Utilization chart
+    if (filteredHistory.channel_utilization && filteredHistory.channel_utilization.length > 1) {
+        hasNetworkData = true;
+        document.getElementById('channel-util-chart-container').style.display = 'block';
+
+        const trace = {
+            x: filteredHistory.channel_utilization.map(d => new Date(d.x)),
+            y: filteredHistory.channel_utilization.map(d => d.y),
+            type: 'scatter',
+            mode: 'lines',
+            name: 'Channel Util',
+            line: { color: '#17a2b8', width: 2 },
+            fill: 'tozeroy',
+            fillcolor: 'rgba(23, 162, 184, 0.1)',
+            hovertemplate: '%{y:.1f}%<extra>Channel Util</extra>'
+        };
+
+        const layout = {
+            ...commonLayout,
+            title: { text: 'Channel Utilization', font: { size: 13 } },
+            yaxis: { ...commonLayout.yaxis, range: [0, 100], ticksuffix: '%' }
+        };
+
+        Plotly.newPlot('telemetry-chart-channel-util', [trace], layout, commonConfig);
+    } else {
+        document.getElementById('channel-util-chart-container').style.display = 'none';
+    }
+
+    // Render Air Util TX chart
+    if (filteredHistory.air_util_tx && filteredHistory.air_util_tx.length > 1) {
+        hasNetworkData = true;
+        document.getElementById('air-util-chart-container').style.display = 'block';
+
+        const trace = {
+            x: filteredHistory.air_util_tx.map(d => new Date(d.x)),
+            y: filteredHistory.air_util_tx.map(d => d.y),
+            type: 'scatter',
+            mode: 'lines',
+            name: 'TX Air Util',
+            line: { color: '#6c757d', width: 2 },
+            fill: 'tozeroy',
+            fillcolor: 'rgba(108, 117, 125, 0.1)',
+            hovertemplate: '%{y:.1f}%<extra>TX Air Util</extra>'
+        };
+
+        const layout = {
+            ...commonLayout,
+            title: { text: 'TX Air Utilization', font: { size: 13 } },
+            yaxis: { ...commonLayout.yaxis, range: [0, 100], ticksuffix: '%' }
+        };
+
+        Plotly.newPlot('telemetry-chart-air-util', [trace], layout, commonConfig);
+    } else {
+        document.getElementById('air-util-chart-container').style.display = 'none';
+    }
+
+    // Render Temperature chart (with unit conversion)
+    if (filteredHistory.temperature && filteredHistory.temperature.length > 1) {
+        hasEnvironmentData = true;
+        document.getElementById('temperature-chart-container').style.display = 'block';
+
+        // Check temperature unit preference
+        const unit = (typeof TemperatureToggle !== 'undefined' && TemperatureToggle.getUnit)
+            ? TemperatureToggle.getUnit() : 'C';
+        const isFahrenheit = unit === 'F';
+
+        const yData = filteredHistory.temperature.map(d => {
+            return isFahrenheit ? (d.y * 9/5) + 32 : d.y;
+        });
+
+        const trace = {
+            x: filteredHistory.temperature.map(d => new Date(d.x)),
+            y: yData,
+            type: 'scatter',
+            mode: 'lines',
+            name: 'Temperature',
+            line: { color: '#dc3545', width: 2 },
+            fill: 'tozeroy',
+            fillcolor: 'rgba(220, 53, 69, 0.1)',
+            hovertemplate: `%{y:.1f}°${isFahrenheit ? 'F' : 'C'}<extra>Temperature</extra>`
+        };
+
+        const layout = {
+            ...commonLayout,
+            title: { text: `Temperature (°${isFahrenheit ? 'F' : 'C'})`, font: { size: 13 } },
+            yaxis: { ...commonLayout.yaxis, ticksuffix: `°${isFahrenheit ? 'F' : 'C'}` }
+        };
+
+        Plotly.newPlot('telemetry-chart-temperature', [trace], layout, commonConfig);
+    } else {
+        document.getElementById('temperature-chart-container').style.display = 'none';
+    }
+
+    // Render Humidity chart
+    if (filteredHistory.relative_humidity && filteredHistory.relative_humidity.length > 1) {
+        hasEnvironmentData = true;
+        document.getElementById('humidity-chart-container').style.display = 'block';
+
+        const trace = {
+            x: filteredHistory.relative_humidity.map(d => new Date(d.x)),
+            y: filteredHistory.relative_humidity.map(d => d.y),
+            type: 'scatter',
+            mode: 'lines',
+            name: 'Humidity',
+            line: { color: '#007bff', width: 2 },
+            fill: 'tozeroy',
+            fillcolor: 'rgba(0, 123, 255, 0.1)',
+            hovertemplate: '%{y:.1f}%<extra>Humidity</extra>'
+        };
+
+        const layout = {
+            ...commonLayout,
+            title: { text: 'Relative Humidity', font: { size: 13 } },
+            yaxis: { ...commonLayout.yaxis, range: [0, 100], ticksuffix: '%' }
+        };
+
+        Plotly.newPlot('telemetry-chart-humidity', [trace], layout, commonConfig);
+    } else {
+        document.getElementById('humidity-chart-container').style.display = 'none';
+    }
+
+    // Render Barometric Pressure chart
+    if (filteredHistory.barometric_pressure && filteredHistory.barometric_pressure.length > 1) {
+        hasEnvironmentData = true;
+        document.getElementById('pressure-chart-container').style.display = 'block';
+
+        const trace = {
+            x: filteredHistory.barometric_pressure.map(d => new Date(d.x)),
+            y: filteredHistory.barometric_pressure.map(d => d.y),
+            type: 'scatter',
+            mode: 'lines',
+            name: 'Pressure',
+            line: { color: '#6610f2', width: 2 },
+            fill: 'tozeroy',
+            fillcolor: 'rgba(102, 16, 242, 0.1)',
+            hovertemplate: '%{y:.1f} hPa<extra>Pressure</extra>'
+        };
+
+        const layout = {
+            ...commonLayout,
+            title: { text: 'Barometric Pressure', font: { size: 13 } },
+            yaxis: { ...commonLayout.yaxis, ticksuffix: ' hPa' }
+        };
+
+        Plotly.newPlot('telemetry-chart-pressure', [trace], layout, commonConfig);
+    } else {
+        document.getElementById('pressure-chart-container').style.display = 'none';
+    }
+
+    // Show/hide section rows based on data availability
+    document.getElementById('power-charts-row').style.display = hasPowerData ? 'flex' : 'none';
+    document.getElementById('network-charts-row').style.display = hasNetworkData ? 'flex' : 'none';
+    document.getElementById('environment-charts-row').style.display = hasEnvironmentData ? 'flex' : 'none';
+
+    // Show no-data message if no charts were rendered
+    const noDataDiv = document.getElementById('telemetry-history-no-data');
+    noDataDiv.style.display = (hasPowerData || hasNetworkData || hasEnvironmentData) ? 'none' : 'block';
+}
+
+// Listen for temperature unit changes and update telemetry history charts
+document.addEventListener('temperatureUnitChanged', function() {
+    if (window.telemetryHistoryFull) {
+        updateTelemetryHistoryCharts();
+    }
+});
+
+// Listen for dark mode changes and re-render charts
+const darkModeObserver = new MutationObserver(function(mutations) {
+    mutations.forEach(function(mutation) {
+        if (mutation.attributeName === 'data-bs-theme' && window.telemetryHistoryFull) {
+            updateTelemetryHistoryCharts();
+        }
+    });
+});
+darkModeObserver.observe(document.documentElement, { attributes: true });
 
 function formatUptime(seconds) {
     const days = Math.floor(seconds / 86400);
