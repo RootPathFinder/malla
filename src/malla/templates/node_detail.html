@@ -558,70 +558,70 @@
                     </div>
 
                     <!-- Power & Battery Charts -->
-                    <div class="row g-3 mb-4" id="power-charts-row" style="display: none;">
+                    <div class="row g-4 mb-4" id="power-charts-row" style="display: none;">
                         <div class="col-12">
-                            <h6 class="text-secondary"><i class="bi bi-battery-charging"></i> Power & Battery</h6>
+                            <h6 class="text-secondary mb-3"><i class="bi bi-battery-charging"></i> Power & Battery</h6>
                         </div>
-                        <div class="col-lg-6" id="battery-chart-container" style="display: none;">
+                        <div class="col-md-6" id="battery-chart-container" style="display: none;">
                             <div class="card h-100">
-                                <div class="card-body p-2">
-                                    <div id="telemetry-chart-battery" style="height: 200px;"></div>
+                                <div class="card-body p-3">
+                                    <div id="telemetry-chart-battery" style="height: 250px;"></div>
                                 </div>
                             </div>
                         </div>
-                        <div class="col-lg-6" id="voltage-chart-container" style="display: none;">
+                        <div class="col-md-6" id="voltage-chart-container" style="display: none;">
                             <div class="card h-100">
-                                <div class="card-body p-2">
-                                    <div id="telemetry-chart-voltage" style="height: 200px;"></div>
+                                <div class="card-body p-3">
+                                    <div id="telemetry-chart-voltage" style="height: 250px;"></div>
                                 </div>
                             </div>
                         </div>
                     </div>
 
                     <!-- Network Charts -->
-                    <div class="row g-3 mb-4" id="network-charts-row" style="display: none;">
+                    <div class="row g-4 mb-4" id="network-charts-row" style="display: none;">
                         <div class="col-12">
-                            <h6 class="text-secondary"><i class="bi bi-wifi"></i> Network & Radio</h6>
+                            <h6 class="text-secondary mb-3"><i class="bi bi-wifi"></i> Network & Radio</h6>
                         </div>
-                        <div class="col-lg-6" id="channel-util-chart-container" style="display: none;">
+                        <div class="col-md-6" id="channel-util-chart-container" style="display: none;">
                             <div class="card h-100">
-                                <div class="card-body p-2">
-                                    <div id="telemetry-chart-channel-util" style="height: 200px;"></div>
+                                <div class="card-body p-3">
+                                    <div id="telemetry-chart-channel-util" style="height: 250px;"></div>
                                 </div>
                             </div>
                         </div>
-                        <div class="col-lg-6" id="air-util-chart-container" style="display: none;">
+                        <div class="col-md-6" id="air-util-chart-container" style="display: none;">
                             <div class="card h-100">
-                                <div class="card-body p-2">
-                                    <div id="telemetry-chart-air-util" style="height: 200px;"></div>
+                                <div class="card-body p-3">
+                                    <div id="telemetry-chart-air-util" style="height: 250px;"></div>
                                 </div>
                             </div>
                         </div>
                     </div>
 
                     <!-- Environment Charts -->
-                    <div class="row g-3" id="environment-charts-row" style="display: none;">
+                    <div class="row g-4" id="environment-charts-row" style="display: none;">
                         <div class="col-12">
-                            <h6 class="text-secondary"><i class="bi bi-cloud"></i> Environment</h6>
+                            <h6 class="text-secondary mb-3"><i class="bi bi-cloud"></i> Environment</h6>
                         </div>
-                        <div class="col-lg-4" id="temperature-chart-container" style="display: none;">
+                        <div class="col-md-6" id="temperature-chart-container" style="display: none;">
                             <div class="card h-100">
-                                <div class="card-body p-2">
-                                    <div id="telemetry-chart-temperature" style="height: 200px;"></div>
+                                <div class="card-body p-3">
+                                    <div id="telemetry-chart-temperature" style="height: 250px;"></div>
                                 </div>
                             </div>
                         </div>
-                        <div class="col-lg-4" id="humidity-chart-container" style="display: none;">
+                        <div class="col-md-6" id="humidity-chart-container" style="display: none;">
                             <div class="card h-100">
-                                <div class="card-body p-2">
-                                    <div id="telemetry-chart-humidity" style="height: 200px;"></div>
+                                <div class="card-body p-3">
+                                    <div id="telemetry-chart-humidity" style="height: 250px;"></div>
                                 </div>
                             </div>
                         </div>
-                        <div class="col-lg-4" id="pressure-chart-container" style="display: none;">
+                        <div class="col-md-6" id="pressure-chart-container" style="display: none;">
                             <div class="card h-100">
-                                <div class="card-body p-2">
-                                    <div id="telemetry-chart-pressure" style="height: 200px;"></div>
+                                <div class="card-body p-3">
+                                    <div id="telemetry-chart-pressure" style="height: 250px;"></div>
                                 </div>
                             </div>
                         </div>
@@ -2282,28 +2282,35 @@ function updateTelemetryHistoryCharts() {
 
     // Common Plotly layout settings
     const commonLayout = {
-        margin: { t: 30, r: 20, b: 40, l: 50 },
+        margin: { t: 40, r: 30, b: 60, l: 60 },
         paper_bgcolor: 'transparent',
         plot_bgcolor: 'transparent',
         font: { color: isDarkMode ? '#e9ecef' : '#212529', size: 11 },
         xaxis: {
             type: 'date',
             gridcolor: isDarkMode ? 'rgba(255,255,255,0.1)' : 'rgba(0,0,0,0.1)',
-            tickformat: telemetryHistoryRange <= 24 ? '%H:%M' : '%m/%d %H:%M',
-            tickangle: -45
+            tickformat: telemetryHistoryRange <= 24 ? '%H:%M' : '%b %d',
+            tickangle: 0,
+            nticks: 6,
+            tickfont: { size: 10 }
         },
         yaxis: {
-            gridcolor: isDarkMode ? 'rgba(255,255,255,0.1)' : 'rgba(0,0,0,0.1)'
+            gridcolor: isDarkMode ? 'rgba(255,255,255,0.1)' : 'rgba(0,0,0,0.1)',
+            tickfont: { size: 10 }
         },
         hovermode: 'x unified',
-        dragmode: 'zoom'
+        dragmode: 'zoom',
+        modebar: {
+            orientation: 'h',
+            bgcolor: 'transparent'
+        }
     };
 
     const commonConfig = {
         responsive: true,
-        displayModeBar: true,
+        displayModeBar: 'hover',
         displaylogo: false,
-        modeBarButtonsToRemove: ['select2d', 'lasso2d', 'autoScale2d'],
+        modeBarButtonsToRemove: ['select2d', 'lasso2d', 'autoScale2d', 'toImage'],
         modeBarButtonsToAdd: [{
             name: 'Reset Zoom',
             icon: Plotly.Icons.home,
