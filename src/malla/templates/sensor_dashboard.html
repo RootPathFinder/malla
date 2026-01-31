@@ -556,7 +556,7 @@
                 metrics.push(`<span class="metric-pill"><span class="label">Event:</span><span class="value">${data.detection_name}</span></span>`);
             }
         } else if (reading.sensor_type === 'environment') {
-            if (data.temperature != null) metrics.push(`<span class="metric-pill"><span class="label">Temp:</span><span class="value">${data.temperature.toFixed(1)}°C</span></span>`);
+            if (data.temperature != null) metrics.push(`<span class="metric-pill"><span class="label">Temp:</span><span class="value">${TemperatureToggle.formatTemperature(data.temperature, 1)}</span></span>`);
             if (data.relative_humidity != null) metrics.push(`<span class="metric-pill"><span class="label">Humidity:</span><span class="value">${data.relative_humidity.toFixed(0)}%</span></span>`);
             if (data.barometric_pressure != null) metrics.push(`<span class="metric-pill"><span class="label">Pressure:</span><span class="value">${data.barometric_pressure.toFixed(0)} hPa</span></span>`);
             if (data.lux != null) metrics.push(`<span class="metric-pill"><span class="label">Light:</span><span class="value">${data.lux.toFixed(0)} lux</span></span>`);
@@ -811,6 +811,13 @@
         document.getElementById('nodeFilter').addEventListener('change', function() {
             selectedNode = this.value || null;
             loadSensorData();
+        });
+
+        // Refresh timeline when temperature unit changes
+        window.addEventListener('temperatureUnitChanged', function() {
+            if (currentData && currentData.readings) {
+                updateTimeline(currentData.readings);
+            }
         });
     });
 </script>
