@@ -1898,6 +1898,20 @@ class NodeRepository:
 
             matrix_gateways.sort(key=_gateway_sort_key)
 
+            # Get firmware version from administrable_nodes table if available
+            firmware_version = None
+            try:
+                from .admin_repository import AdminRepository
+
+                admin_node = AdminRepository.get_administrable_node_details(node_id)
+                if admin_node:
+                    firmware_version = admin_node.get("firmware_version")
+            except Exception as e:
+                logger.debug(f"Could not get firmware version for node {node_id}: {e}")
+
+            # Add firmware version to node_info
+            node_info["firmware_version"] = firmware_version
+
             return {
                 "node": node_info,
                 "recent_packets": recent_packets,

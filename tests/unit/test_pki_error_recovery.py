@@ -2,7 +2,6 @@
 Unit tests for PKI error code handling and recovery functionality.
 """
 
-
 from malla.services.tcp_publisher import PKIErrorCodes
 
 

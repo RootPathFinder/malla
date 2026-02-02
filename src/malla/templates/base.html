@@ -138,6 +138,78 @@
                 font-size: 0.75rem;
             }
         }
+
+        /* Pinned Nodes Panel Styles */
+        .pinned-nodes-toggle {
+            position: fixed;
+            right: 20px;
+            bottom: 20px;
+            z-index: 1030;
+            width: 48px;
+            height: 48px;
+            border-radius: 50%;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            box-shadow: 0 4px 12px rgba(0, 0, 0, 0.15);
+            transition: transform 0.2s, box-shadow 0.2s;
+        }
+
+        .pinned-nodes-toggle:hover {
+            transform: scale(1.1);
+            box-shadow: 0 6px 16px rgba(0, 0, 0, 0.2);
+        }
+
+        .pinned-nodes-panel {
+            position: fixed;
+            right: -320px;
+            top: 56px;
+            width: 300px;
+            height: calc(100vh - 56px);
+            background: var(--bs-body-bg);
+            border-left: 1px solid var(--bs-border-color);
+            z-index: 1035;
+            transition: right 0.3s ease;
+            box-shadow: -4px 0 12px rgba(0, 0, 0, 0.1);
+            overflow-y: auto;
+        }
+
+        .pinned-nodes-panel.show {
+            right: 0;
+        }
+
+        .pinned-nodes-header {
+            background: var(--bs-tertiary-bg);
+            position: sticky;
+            top: 0;
+            z-index: 1;
+        }
+
+        .pinned-node-item {
+            transition: background 0.15s;
+        }
+
+        .pinned-node-item:hover {
+            background: var(--bs-tertiary-bg);
+        }
+
+        .pinned-node-info {
+            min-width: 0;
+        }
+
+        @media (max-width: 576px) {
+            .pinned-nodes-panel {
+                width: 100%;
+                right: -100%;
+            }
+
+            .pinned-nodes-toggle {
+                right: 12px;
+                bottom: 12px;
+                width: 44px;
+                height: 44px;
+            }
+        }
     </style>
 
     {% block extra_css %}{% endblock %}
@@ -391,6 +463,26 @@
         </div>
     </nav>
 
+    <!-- Pinned Nodes Toggle Button (floating) -->
+    <button id="pinnedNodesToggle" class="pinned-nodes-toggle btn btn-primary"
+            type="button" title="Pinned Nodes" style="display: none;">
+        <i class="bi bi-pin-angle-fill"></i>
+        <span id="pinnedNodesBadge" class="position-absolute top-0 start-100 translate-middle badge rounded-pill bg-warning text-dark" style="display: none;">
+            0
+        </span>
+    </button>
+
+    <!-- Pinned Nodes Panel (slide-out) -->
+    <div id="pinnedNodesPanel" class="pinned-nodes-panel">
+        <div class="pinned-nodes-header d-flex justify-content-between align-items-center p-3 border-bottom">
+            <h6 class="mb-0"><i class="bi bi-pin-angle-fill me-2"></i>Pinned Nodes</h6>
+            <button type="button" class="btn-close" aria-label="Close" onclick="togglePinnedNodesPanel()"></button>
+        </div>
+        <div id="pinnedNodesList" class="pinned-nodes-list">
+            <!-- Content rendered by JavaScript -->
+        </div>
+    </div>
+
     <!-- Main Content -->
     <div class="container mt-4">
         {% block content %}{% endblock %}
@@ -425,6 +517,8 @@
     <script src="{{ url_for('static', filename='js/temperature-toggle.js') }}"></script>
     <!-- Node Connection Manager (global connection state) -->
     <script src="{{ url_for('static', filename='js/node-connection-manager.js') }}"></script>
+    <!-- Pinned Nodes Manager (quick access toolbar) -->
+    <script src="{{ url_for('static', filename='js/pinned-nodes.js') }}"></script>
 
     <!-- Node tooltip functionality -->
     <script>

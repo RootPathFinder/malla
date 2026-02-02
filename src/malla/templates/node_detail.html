@@ -93,6 +93,13 @@
                 <a id="adminButton" href="/admin?node={{ node.hex_id }}" class="btn btn-sm btn-outline-info d-none ms-2" title="Administer this node">
                     <i class="bi bi-sliders"></i> Admin
                 </a>
+                <button type="button" class="btn btn-sm btn-outline-warning ms-2"
+                        data-pin-node-id="{{ node.node_id }}"
+                        data-pin-node-name="{{ node.node_name }}"
+                        data-pin-node-hex="{{ node.hex_id }}"
+                        title="Pin node">
+                    <i class="bi bi-pin-angle"></i> Pin
+                </button>
                 <button id="archiveButton" class="btn btn-sm btn-outline-warning ms-2" onclick="archiveNode({{ node.node_id }})" title="Archive this node">
                     <i class="bi bi-archive"></i> Archive
                 </button>
@@ -188,6 +195,17 @@
                                 <tr>
                                     <th>Role:</th>
                                     <td>{{ node.role }}</td>
+                                </tr>
+                                {% endif %}
+                                {% if node.firmware_version %}
+                                <tr>
+                                    <th>Firmware:</th>
+                                    <td>
+                                        <span class="badge bg-secondary">{{ node.firmware_version }}</span>
+                                        <a href="https://flasher.meshtastic.org/" target="_blank" class="ms-2 text-muted small" title="Check for updates">
+                                            <i class="bi bi-box-arrow-up-right"></i>
+                                        </a>
+                                    </td>
                                 </tr>
                                 {% endif %}
                                 {% if node.primary_channel %}
