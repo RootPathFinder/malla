@@ -140,6 +140,19 @@ def api_admin_status():
         return jsonify({"error": str(e)}), 500
 
 
+@admin_bp.route("/api/admin/firmware-stats")
+def api_firmware_stats():
+    """Get firmware version statistics for administrable nodes."""
+    try:
+        from ..database.admin_repository import AdminRepository
+
+        stats = AdminRepository.get_firmware_statistics()
+        return jsonify(stats)
+    except Exception as e:
+        logger.error(f"Error getting firmware stats: {e}")
+        return jsonify({"error": str(e)}), 500
+
+
 @admin_bp.route("/api/admin/session-passkeys")
 def api_get_session_passkeys():
     """
