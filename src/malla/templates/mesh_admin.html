@@ -1461,7 +1461,7 @@
                         </div>
 
                         <!-- Version Distribution Chart -->
-                        <div class="col-lg-6 mb-4">
+                        <div class="col-lg-6 mb-4" id="firmwareChartContainer">
                             <div class="card h-100">
                                 <div class="card-header">
                                     <i class="bi bi-pie-chart me-2"></i> Version Distribution
@@ -1473,7 +1473,7 @@
                         </div>
 
                         <!-- Hardware by Version -->
-                        <div class="col-lg-6 mb-4">
+                        <div class="col-lg-6 mb-4" id="firmwareHwContainer">
                             <div class="card h-100">
                                 <div class="card-header">
                                     <i class="bi bi-bar-chart me-2"></i> Hardware Models by Version
@@ -1487,7 +1487,7 @@
                         </div>
 
                         <!-- Nodes Table -->
-                        <div class="col-12">
+                        <div class="col-12" id="firmwareTableContainer">
                             <div class="card">
                                 <div class="card-header d-flex justify-content-between align-items-center">
                                     <span><i class="bi bi-table me-2"></i> Nodes with Firmware Info</span>
@@ -9789,19 +9789,29 @@
     async function loadFirmwareStats() {
         try {
             const response = await fetch('/api/admin/firmware-stats');
-            if (!response.ok) throw new Error('Failed to load firmware stats');
+            if (!response.ok) {
+                const errorText = await response.text();
+                console.error('Firmware stats error:', response.status, errorText);
+                throw new Error(`HTTP ${response.status}: ${response.statusText}`);
+            }
 
             const data = await response.json();
 
             // Check if we have any data
             const hasData = data.total_count > 0;
 
-            // Toggle visibility
-            document.getElementById('firmwareSummaryCards').parentElement.style.display = hasData ? '' : 'none';
-            document.querySelector('#firmware-pane .col-lg-6.mb-4').style.display = hasData ? '' : 'none';
-            document.querySelector('#firmware-pane .col-lg-6.mb-4:nth-of-type(2)').style.display = hasData ? '' : 'none';
-            document.querySelector('#firmware-pane .col-12:has(#firmwareNodesTable)').style.display = hasData ? '' : 'none';
-            document.getElementById('firmwareEmptyState').style.display = hasData ? 'none' : 'block';
+            // Toggle visibility using IDs
+            const summaryCards = document.getElementById('firmwareSummaryCards');
+            const chartContainer = document.getElementById('firmwareChartContainer');
+            const hwContainer = document.getElementById('firmwareHwContainer');
+            const tableContainer = document.getElementById('firmwareTableContainer');
+            const emptyState = document.getElementById('firmwareEmptyState');
+
+            if (summaryCards) summaryCards.parentElement.style.display = hasData ? '' : 'none';
+            if (chartContainer) chartContainer.style.display = hasData ? '' : 'none';
+            if (hwContainer) hwContainer.style.display = hasData ? '' : 'none';
+            if (tableContainer) tableContainer.style.display = hasData ? '' : 'none';
+            if (emptyState) emptyState.style.display = hasData ? 'none' : 'block';
 
             // Update tab badge
             document.getElementById('firmwareTabBadge').textContent = data.total_count || 0;
