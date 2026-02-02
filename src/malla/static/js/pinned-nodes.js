@@ -274,6 +274,174 @@
         });
     }
 
+    // =========================================================================
+    // Live Activity Popup System
+    // =========================================================================
+
+    const ACTIVITY_POLL_INTERVAL = 5000; // Poll every 5 seconds
+    const ACTIVITY_POPUP_DURATION = 20000; // Show popup for 20 seconds
+    const MAX_VISIBLE_POPUPS = 5;
+
+    let lastActivityTimestamp = Date.now() / 1000;
+    let activityPollTimer = null;
+    let activePopups = new Map(); // Track active popups by event ID
+
+    /**
+     * Show an activity popup for a node
+     * @param {Object} event - Activity event object
+     * @param {boolean} isPinned - Whether this node is pinned
+     */
+    function showActivityPopup(event, isPinned) {
+        const container = document.getElementById('nodeActivityContainer');
+        if (!container) return;
+
+        // Create unique ID for this popup
+        const popupId = `activity-${event.id || Date.now()}-${Math.random().toString(36).substr(2, 9)}`;
+
+        // Limit number of visible popups
+        if (activePopups.size >= MAX_VISIBLE_POPUPS) {
+            // Remove oldest popup
+            const oldestId = activePopups.keys().next().value;
+            removePopup(oldestId);
+        }
+
+        const nodeName = event.from_name || event.node_name || `!${(event.from_node || event.node_id || 0).toString(16).padStart(8, '0')}`;
+        const nodeId = event.from_node || event.node_id;
+        const eventType = event.type || event.portnum_name || 'Activity';
+        const timeAgo = formatTimeAgoShort(event.timestamp);
+
+        const popup = document.createElement('div');
+        popup.id = popupId;
+        popup.className = `node-activity-popup${isPinned ? ' pinned' : ''}`;
+        popup.innerHTML = `
+            <div class="activity-header">
+                ${isPinned ? '<i class="bi bi-pin-fill text-warning"></i>' : '<i class="bi bi-broadcast text-primary"></i>'}
+                <a href="/node/${nodeId}" class="activity-node-name" title="View node details">${escapeHtml(nodeName)}</a>
+                <button type="button" class="activity-close" onclick="dismissActivityPopup('${popupId}')" title="Dismiss">
+                    <i class="bi bi-x"></i>
+                </button>
+            </div>
+            <div class="activity-details">
+                <span class="activity-type">${escapeHtml(eventType)}</span>
+                <span class="activity-time">${timeAgo}</span>
+            </div>
+        `;
+
+        container.appendChild(popup);
+        activePopups.set(popupId, {
+            element: popup,
+            timer: setTimeout(() => removePopup(popupId), ACTIVITY_POPUP_DURATION)
+        });
+    }
+
+    /**
+     * Remove a popup by ID with fade animation
+     * @param {string} popupId - Popup element ID
+     */
+    function removePopup(popupId) {
+        const popupData = activePopups.get(popupId);
+        if (!popupData) return;
+
+        clearTimeout(popupData.timer);
+        popupData.element.classList.add('fading');
+
+        setTimeout(() => {
+            if (popupData.element.parentNode) {
+                popupData.element.parentNode.removeChild(popupData.element);
+            }
+            activePopups.delete(popupId);
+        }, 300);
+    }
+
+    /**
+     * Dismiss a popup (called from close button)
+     * @param {string} popupId - Popup element ID
+     */
+    function dismissActivityPopup(popupId) {
+        removePopup(popupId);
+    }
+
+    /**
+     * Format time ago in short format
+     * @param {number} timestamp - Unix timestamp
+     * @returns {string} Short time ago string
+     */
+    function formatTimeAgoShort(timestamp) {
+        const now = Math.floor(Date.now() / 1000);
+        const diff = now - Math.floor(timestamp);
+
+        if (diff < 60) return 'just now';
+        if (diff < 3600) return `${Math.floor(diff / 60)}m ago`;
+        if (diff < 86400) return `${Math.floor(diff / 3600)}h ago`;
+        return `${Math.floor(diff / 86400)}d ago`;
+    }
+
+    /**
+     * Poll for new activity from pinned nodes
+     */
+    async function pollNodeActivity() {
+        const pinnedNodes = getPinnedNodes();
+
+        // Always poll if we have any pinned nodes to show their activity
+        if (pinnedNodes.length === 0) {
+            return;
+        }
+
+        try {
+            const response = await fetch('/api/live/recent?limit=20');
+            if (!response.ok) return;
+
+            const data = await response.json();
+            const events = data.events || [];
+
+            // Filter to events newer than last check
+            const newEvents = events.filter(e => e.timestamp > lastActivityTimestamp);
+
+            if (newEvents.length > 0) {
+                lastActivityTimestamp = Math.max(...newEvents.map(e => e.timestamp));
+
+                // Get pinned node IDs for matching
+                const pinnedNodeIds = new Set(pinnedNodes.map(n => n.node_id));
+
+                // Show popups for pinned node activity (prioritize pinned)
+                newEvents.forEach(event => {
+                    const nodeId = event.from_node || event.node_id;
+                    const isPinned = pinnedNodeIds.has(nodeId);
+
+                    // Only show activity for pinned nodes
+                    if (isPinned) {
+                        showActivityPopup(event, true);
+                    }
+                });
+            }
+        } catch (error) {
+            console.debug('Activity poll error:', error);
+        }
+    }
+
+    /**
+     * Start activity polling
+     */
+    function startActivityPolling() {
+        if (activityPollTimer) return;
+
+        // Initial poll
+        pollNodeActivity();
+
+        // Set up interval
+        activityPollTimer = setInterval(pollNodeActivity, ACTIVITY_POLL_INTERVAL);
+    }
+
+    /**
+     * Stop activity polling
+     */
+    function stopActivityPolling() {
+        if (activityPollTimer) {
+            clearInterval(activityPollTimer);
+            activityPollTimer = null;
+        }
+    }
+
     // Export to global scope
     window.pinNode = pinNode;
     window.unpinNode = unpinNode;
@@ -282,11 +450,17 @@
     window.updatePinnedNodesUI = updatePinnedNodesUI;
     window.togglePinnedNodesPanel = togglePinnedNodesPanel;
     window.getPinnedNodes = getPinnedNodes;
+    window.dismissActivityPopup = dismissActivityPopup;
+    window.showActivityPopup = showActivityPopup;
 
     // Initialize when DOM is ready
     if (document.readyState === 'loading') {
-        document.addEventListener('DOMContentLoaded', initPinnedNodes);
+        document.addEventListener('DOMContentLoaded', function() {
+            initPinnedNodes();
+            startActivityPolling();
+        });
     } else {
         initPinnedNodes();
+        startActivityPolling();
     }
 })();
