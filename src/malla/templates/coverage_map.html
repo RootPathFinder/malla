@@ -1,4 +1,5 @@
 {% extends "base.html" %}
+{% from "macros.html" import node_picker %}
 
 {% block title %}Coverage Map Builder - Malla{% endblock %}
 
@@ -169,20 +170,9 @@
             <div class="card-body">
                 <!-- Add from mesh -->
                 <div class="mb-3">
-                    <label class="form-label small fw-bold">From Mesh Network</label>
-                    <div class="node-picker-container">
-                        <div class="position-relative">
-                            <input type="text" class="form-control" id="meshNodeSearch"
-                                   placeholder="Search nodes by name or ID..."
-                                   autocomplete="off">
-                            <input type="hidden" id="meshNodeSearch_value">
-                            <button type="button" class="btn btn-link position-absolute end-0 top-50 translate-middle-y p-0 me-2"
-                                    id="meshNodeClear" style="display: none;">
-                                <i class="bi bi-x-circle text-muted"></i>
-                            </button>
-                        </div>
-                        <div class="node-picker-dropdown" id="meshNodeDropdown" style="display: none;"></div>
-                    </div>
+                    {{ node_picker('mesh_node', field_id='meshNodeSearch', label='From Mesh Network',
+                                  placeholder='Search nodes by name or ID...',
+                                  required=false) }}
                     <button class="btn btn-primary btn-sm w-100 mt-2" id="addMeshNodeBtn" disabled>
                         <i class="bi bi-plus"></i> Add Selected Node
                     </button>
