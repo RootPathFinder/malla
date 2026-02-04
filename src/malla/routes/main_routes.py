@@ -92,6 +92,17 @@ def line_of_sight():
         return f"Line of sight error: {e}", 500
 
 
+@main_bp.route("/coverage-map")
+def coverage_map():
+    """Coverage map builder for multi-node RF coverage visualization."""
+    logger.info("Coverage map route accessed")
+    try:
+        return render_template("coverage_map.html")
+    except Exception as e:
+        logger.error(f"Error in coverage map route: {e}")
+        return f"Coverage map error: {e}", 500
+
+
 @main_bp.route("/weather-map")
 def weather_map():
     """Mesh weather dashboard with sensor data on a map."""

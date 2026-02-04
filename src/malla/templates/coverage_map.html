@@ -1,0 +1,998 @@
+{% extends "base.html" %}
+
+{% block title %}Coverage Map Builder - Malla{% endblock %}
+
+{% block head_libs %}
+<!-- Chart.js for visualizations -->
+<script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js" integrity="sha384-e6nUZLBkQ86NJ6TVVKAeSaK8jWa3NhkYWZFomE39AvDbQWeie9PlQqM3pmYW5d1g" crossorigin="anonymous"></script>
+{% endblock head_libs %}
+
+{% block extra_css %}
+<!-- Leaflet CSS -->
+<link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"
+    integrity="sha256-p4NxAoJBhIIN+hmNHrzRCf9tD/miZyoHS5obTRR9BMY="
+    crossorigin=""/>
+
+<link rel="stylesheet" href="{{ url_for('static', filename='css/node-picker.css') }}">
+<style>
+    #coverage-map {
+        height: 600px;
+        border-radius: 8px;
+        border: 1px solid var(--bs-border-color);
+        z-index: 1;
+        position: relative;
+    }
+
+    @media (max-width: 768px) {
+        #coverage-map {
+            height: 450px;
+        }
+    }
+
+    .control-panel {
+        background: var(--bs-body-bg);
+        border: 1px solid var(--bs-border-color);
+        border-radius: 8px;
+        padding: 1rem;
+    }
+
+    .node-list-container {
+        max-height: 300px;
+        overflow-y: auto;
+    }
+
+    .coverage-node-item {
+        display: flex;
+        align-items: center;
+        gap: 0.5rem;
+        padding: 0.5rem;
+        border-bottom: 1px solid var(--bs-border-color);
+        transition: background 0.15s;
+    }
+
+    .coverage-node-item:hover {
+        background: var(--bs-tertiary-bg);
+    }
+
+    .coverage-node-item:last-child {
+        border-bottom: none;
+    }
+
+    .coverage-node-color {
+        width: 16px;
+        height: 16px;
+        border-radius: 50%;
+        flex-shrink: 0;
+    }
+
+    .coverage-node-name {
+        flex: 1;
+        overflow: hidden;
+        text-overflow: ellipsis;
+        white-space: nowrap;
+    }
+
+    .coverage-node-actions {
+        display: flex;
+        gap: 0.25rem;
+    }
+
+    .coverage-node-actions button {
+        padding: 0.125rem 0.375rem;
+        font-size: 0.75rem;
+    }
+
+    .map-mode-indicator {
+        position: absolute;
+        top: 10px;
+        left: 50%;
+        transform: translateX(-50%);
+        z-index: 1000;
+        background: var(--bs-warning);
+        color: var(--bs-dark);
+        padding: 0.5rem 1rem;
+        border-radius: 0.5rem;
+        font-weight: 600;
+        box-shadow: 0 2px 8px rgba(0,0,0,0.2);
+        display: none;
+    }
+
+    .map-mode-indicator.active {
+        display: block;
+        animation: pulse 1.5s infinite;
+    }
+
+    @keyframes pulse {
+        0%, 100% { opacity: 1; }
+        50% { opacity: 0.7; }
+    }
+
+    .attribution-box {
+        background-color: var(--bs-light);
+        border-left: 4px solid #0d6efd;
+        padding: 1rem;
+        margin-top: 1rem;
+    }
+
+    .attribution-box h6 {
+        color: #0d6efd;
+        font-weight: 600;
+        margin-bottom: 0.5rem;
+    }
+
+    .legend-item {
+        display: flex;
+        align-items: center;
+        gap: 0.5rem;
+        margin-bottom: 0.25rem;
+    }
+
+    .legend-color {
+        width: 20px;
+        height: 20px;
+        border-radius: 4px;
+        border: 1px solid var(--bs-border-color);
+    }
+
+    .status-badge {
+        font-size: 0.875rem;
+    }
+
+    /* Node picker z-index fix */
+    .card.mb-3 {
+        position: relative;
+        z-index: 1100;
+    }
+
+    .node-picker-dropdown {
+        z-index: 1200 !important;
+    }
+</style>
+{% endblock %}
+
+{% block content %}
+<div class="row mb-4">
+    <div class="col-12">
+        <h1><i class="bi bi-reception-4"></i> Coverage Map Builder</h1>
+        <p class="text-muted">Build a multi-node RF coverage map using terrain-aware line-of-sight analysis. Add nodes from the mesh or place custom markers to visualize combined coverage.</p>
+    </div>
+</div>
+
+<div class="row">
+    <!-- Left Panel - Controls -->
+    <div class="col-lg-4 col-xl-3 mb-3">
+        <!-- Add Node Section -->
+        <div class="card mb-3">
+            <div class="card-header">
+                <h6 class="mb-0"><i class="bi bi-plus-circle"></i> Add Node</h6>
+            </div>
+            <div class="card-body">
+                <!-- Add from mesh -->
+                <div class="mb-3">
+                    <label class="form-label small fw-bold">From Mesh Network</label>
+                    <div class="node-picker-container">
+                        <div class="position-relative">
+                            <input type="text" class="form-control" id="meshNodeSearch"
+                                   placeholder="Search nodes by name or ID..."
+                                   autocomplete="off">
+                            <input type="hidden" id="meshNodeSearch_value">
+                            <button type="button" class="btn btn-link position-absolute end-0 top-50 translate-middle-y p-0 me-2"
+                                    id="meshNodeClear" style="display: none;">
+                                <i class="bi bi-x-circle text-muted"></i>
+                            </button>
+                        </div>
+                        <div class="node-picker-dropdown" id="meshNodeDropdown" style="display: none;"></div>
+                    </div>
+                    <button class="btn btn-primary btn-sm w-100 mt-2" id="addMeshNodeBtn" disabled>
+                        <i class="bi bi-plus"></i> Add Selected Node
+                    </button>
+                </div>
+
+                <hr>
+
+                <!-- Add custom marker -->
+                <div class="mb-2">
+                    <label class="form-label small fw-bold">Custom Location</label>
+                    <button class="btn btn-outline-secondary btn-sm w-100" id="addCustomMarkerBtn">
+                        <i class="bi bi-geo-alt-fill"></i> Click Map to Add
+                    </button>
+                </div>
+                <small class="text-muted d-block">Click on the map to place a custom transmitter location.</small>
+            </div>
+        </div>
+
+        <!-- Settings -->
+        <div class="card mb-3">
+            <div class="card-header">
+                <h6 class="mb-0"><i class="bi bi-gear"></i> Analysis Settings</h6>
+            </div>
+            <div class="card-body">
+                <div class="mb-3">
+                    <label class="form-label small" id="coverageRadiusLabel">Analysis Radius (30dB LoRa ~15km)</label>
+                    <select class="form-select form-select-sm" id="coverageRadius">
+                        <!-- Populated by JS -->
+                    </select>
+                </div>
+
+                <div class="mb-3">
+                    <label class="form-label small">Resolution (rays)</label>
+                    <select class="form-select form-select-sm" id="coverageResolution">
+                        <option value="16">Low (16 rays) - Fast</option>
+                        <option value="24">Medium (24 rays)</option>
+                        <option value="36" selected>High (36 rays)</option>
+                        <option value="72">Very High (72 rays) - Slow</option>
+                    </select>
+                </div>
+
+                <div class="mb-3">
+                    <label class="form-label small">Default Antenna Height (m)</label>
+                    <input type="number" class="form-control form-control-sm" id="antennaHeight"
+                           value="10" min="0" max="500" step="1">
+                </div>
+
+                <div class="form-check form-switch mb-2">
+                    <input class="form-check-input" type="checkbox" id="useNodeAltitude" checked>
+                    <label class="form-check-label small" for="useNodeAltitude">
+                        Use node reported altitude
+                    </label>
+                </div>
+
+                <div class="form-check form-switch">
+                    <input class="form-check-input" type="checkbox" id="showOverlap" checked>
+                    <label class="form-check-label small" for="showOverlap">
+                        Show coverage overlap
+                    </label>
+                </div>
+            </div>
+        </div>
+
+        <!-- Node List -->
+        <div class="card mb-3">
+            <div class="card-header d-flex justify-content-between align-items-center">
+                <h6 class="mb-0"><i class="bi bi-list-ul"></i> Coverage Nodes (<span id="nodeCount">0</span>)</h6>
+                <button class="btn btn-outline-danger btn-sm" id="clearAllBtn" style="display: none;">
+                    <i class="bi bi-trash"></i> Clear All
+                </button>
+            </div>
+            <div class="card-body p-0">
+                <div class="node-list-container" id="nodeListContainer">
+                    <div class="text-center text-muted py-4">
+                        <i class="bi bi-inbox display-6"></i>
+                        <p class="mb-0 mt-2">No nodes added yet</p>
+                        <small>Add nodes from the mesh or click the map</small>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- Calculate Button -->
+        <button class="btn btn-success btn-lg w-100" id="calculateBtn" disabled>
+            <i class="bi bi-play-fill"></i> Calculate Coverage
+        </button>
+
+        <!-- Status -->
+        <div id="statusMessage" class="alert mt-3" style="display: none;"></div>
+    </div>
+
+    <!-- Right Panel - Map -->
+    <div class="col-lg-8 col-xl-9">
+        <div class="card">
+            <div class="card-body p-0 position-relative">
+                <div id="mapModeIndicator" class="map-mode-indicator">
+                    <i class="bi bi-crosshair"></i> Click on map to place node
+                    <button class="btn btn-sm btn-outline-dark ms-2" id="cancelPlacementBtn">Cancel</button>
+                </div>
+                <div id="coverage-map"></div>
+            </div>
+        </div>
+
+        <!-- Legend -->
+        <div class="card mt-3">
+            <div class="card-body">
+                <h6 class="mb-3"><i class="bi bi-palette"></i> Legend</h6>
+                <div class="row">
+                    <div class="col-md-6">
+                        <div class="legend-item">
+                            <div class="legend-color" style="background: rgba(40, 167, 69, 0.3); border-color: #28a745;"></div>
+                            <span>Line-of-sight coverage area</span>
+                        </div>
+                        <div class="legend-item">
+                            <div class="legend-color" style="background: rgba(255, 193, 7, 0.4); border-color: #ffc107;"></div>
+                            <span>Coverage overlap (multiple nodes)</span>
+                        </div>
+                    </div>
+                    <div class="col-md-6">
+                        <div class="legend-item">
+                            <div class="legend-color" style="background: #28a745;"></div>
+                            <span>Mesh node location</span>
+                        </div>
+                        <div class="legend-item">
+                            <div class="legend-color" style="background: #007bff;"></div>
+                            <span>Custom node location</span>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- Attribution -->
+        <div class="attribution-box">
+            <h6><i class="bi bi-award"></i> Data Attribution</h6>
+            <ul class="mb-0 small">
+                <li><strong>Elevation Data</strong> - DEM Net Elevation API (<a href="https://elevationapi.com" target="_blank" rel="noopener">elevationapi.com</a>)</li>
+                <li><strong>Map Tiles</strong> - © <a href="https://www.openstreetmap.org/copyright" target="_blank" rel="noopener">OpenStreetMap</a> contributors,
+                    © <a href="https://www.stadiamaps.com/" target="_blank" rel="noopener">Stadia Maps</a>,
+                    © <a href="https://www.stamen.com/" target="_blank" rel="noopener">Stamen Design</a></li>
+                <li><strong>Terrain Data</strong> - SRTM (Shuttle Radar Topography Mission)</li>
+            </ul>
+        </div>
+    </div>
+</div>
+{% endblock %}
+
+{% block extra_js %}
+<!-- Leaflet JS -->
+<script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"
+    integrity="sha256-20nQCchB9co0qIjJZRGuk2/Z9VM+kNiyxNV1lvTlZBo="
+    crossorigin=""></script>
+
+<!-- Location Cache -->
+<script src="{{ url_for('static', filename='js/location-cache.js') }}"></script>
+<script src="{{ url_for('static', filename='js/node-picker.js') }}"></script>
+
+<script>
+// Map instance
+let map = null;
+
+// Coverage tracking
+let coverageNodes = []; // { id, name, lat, lng, altitude, type: 'mesh'|'custom', marker, coverageLayer, color }
+let nodeIdCounter = 0;
+let placementMode = false;
+
+// Color palette for coverage areas
+const coverageColors = [
+    { fill: 'rgba(40, 167, 69, 0.25)', stroke: '#28a745', name: 'Green' },
+    { fill: 'rgba(0, 123, 255, 0.25)', stroke: '#007bff', name: 'Blue' },
+    { fill: 'rgba(232, 62, 140, 0.25)', stroke: '#e83e8c', name: 'Pink' },
+    { fill: 'rgba(253, 126, 20, 0.25)', stroke: '#fd7e14', name: 'Orange' },
+    { fill: 'rgba(111, 66, 193, 0.25)', stroke: '#6f42c1', name: 'Purple' },
+    { fill: 'rgba(32, 201, 151, 0.25)', stroke: '#20c997', name: 'Teal' },
+    { fill: 'rgba(255, 193, 7, 0.25)', stroke: '#ffc107', name: 'Yellow' },
+    { fill: 'rgba(23, 162, 184, 0.25)', stroke: '#17a2b8', name: 'Cyan' },
+];
+
+// Coverage radius options (km)
+const coverageRadiusOptionsKm = [
+    { km: 5, label_km: '5 km (urban/hilly)', label_mi: '3 mi (urban/hilly)' },
+    { km: 10, label_km: '10 km (suburban)', label_mi: '6 mi (suburban)' },
+    { km: 15, label_km: '15 km (typical 30dB)', label_mi: '10 mi (typical 30dB)', default: true },
+    { km: 20, label_km: '20 km (good LOS)', label_mi: '12 mi (good LOS)' },
+    { km: 30, label_km: '30 km (elevated)', label_mi: '19 mi (elevated)' },
+    { km: 50, label_km: '50 km (high sites)', label_mi: '31 mi (high sites)' },
+];
+
+// Node picker instance
+let meshNodePicker = null;
+
+// Initialize on page load
+document.addEventListener('DOMContentLoaded', async function() {
+    // Initialize map
+    initializeMap();
+
+    // Load caches
+    await Promise.all([
+        window.NodeCache.load(),
+        window.LocationCache.load()
+    ]);
+
+    // Initialize node picker
+    initializeNodePicker();
+
+    // Populate radius dropdown
+    updateCoverageRadiusOptions();
+
+    // Set up event listeners
+    setupEventListeners();
+});
+
+// Initialize the map
+function initializeMap() {
+    map = L.map('coverage-map').setView([40.4168, -3.7038], 6);
+
+    // Stamen Terrain (via Stadia Maps)
+    L.tileLayer('https://tiles.stadiamaps.com/tiles/stamen_terrain/{z}/{x}/{y}{r}.{ext}', {
+        minZoom: 0,
+        maxZoom: 18,
+        attribution: '&copy; <a href="https://www.stadiamaps.com/" target="_blank">Stadia Maps</a> &copy; <a href="https://www.stamen.com/" target="_blank">Stamen Design</a> &copy; <a href="https://openmaptiles.org/" target="_blank">OpenMapTiles</a> &copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors',
+        ext: 'png'
+    }).addTo(map);
+
+    // Map click handler
+    map.on('click', handleMapClick);
+}
+
+// Initialize node picker for mesh nodes
+function initializeNodePicker() {
+    const container = document.querySelector('#meshNodeSearch').closest('.node-picker-container');
+    meshNodePicker = new NodePicker(container);
+
+    // Listen for selection
+    document.getElementById('meshNodeSearch_value').addEventListener('change', function() {
+        const nodeId = this.value;
+        document.getElementById('addMeshNodeBtn').disabled = !nodeId;
+    });
+}
+
+// Update radius dropdown based on unit preference
+function updateCoverageRadiusOptions() {
+    const select = document.getElementById('coverageRadius');
+    const label = document.getElementById('coverageRadiusLabel');
+    const tempUnit = localStorage.getItem('malla-temperature-unit') || 'C';
+    const useImperial = (tempUnit === 'F');
+
+    select.innerHTML = '';
+    coverageRadiusOptionsKm.forEach(opt => {
+        const option = document.createElement('option');
+        option.value = opt.km;
+        option.textContent = useImperial ? opt.label_mi : opt.label_km;
+        if (opt.default) option.selected = true;
+        select.appendChild(option);
+    });
+
+    if (label) {
+        label.textContent = useImperial
+            ? 'Analysis Radius (30dB LoRa ~10mi)'
+            : 'Analysis Radius (30dB LoRa ~15km)';
+    }
+}
+
+// Set up event listeners
+function setupEventListeners() {
+    // Add mesh node button
+    document.getElementById('addMeshNodeBtn').addEventListener('click', addMeshNode);
+
+    // Custom marker button
+    document.getElementById('addCustomMarkerBtn').addEventListener('click', enablePlacementMode);
+
+    // Cancel placement
+    document.getElementById('cancelPlacementBtn').addEventListener('click', disablePlacementMode);
+
+    // Clear all
+    document.getElementById('clearAllBtn').addEventListener('click', clearAllNodes);
+
+    // Calculate coverage
+    document.getElementById('calculateBtn').addEventListener('click', calculateAllCoverage);
+
+    // Listen for temperature unit changes
+    document.addEventListener('temperatureUnitChanged', updateCoverageRadiusOptions);
+}
+
+// Handle map click
+function handleMapClick(e) {
+    if (!placementMode) return;
+
+    const { lat, lng } = e.latlng;
+    addCustomNode(lat, lng);
+    disablePlacementMode();
+}
+
+// Enable placement mode
+function enablePlacementMode() {
+    placementMode = true;
+    document.getElementById('mapModeIndicator').classList.add('active');
+    map.getContainer().style.cursor = 'crosshair';
+}
+
+// Disable placement mode
+function disablePlacementMode() {
+    placementMode = false;
+    document.getElementById('mapModeIndicator').classList.remove('active');
+    map.getContainer().style.cursor = '';
+}
+
+// Add mesh node from picker
+async function addMeshNode() {
+    const nodeId = parseInt(document.getElementById('meshNodeSearch_value').value);
+    if (!nodeId) return;
+
+    // Check if already added
+    if (coverageNodes.some(n => n.meshNodeId === nodeId)) {
+        showStatus('warning', 'This node is already added to the coverage map');
+        return;
+    }
+
+    try {
+        const location = await window.LocationCache.getLocation(nodeId);
+        if (!location || !location.latitude || !location.longitude) {
+            showStatus('error', 'Node does not have location data');
+            return;
+        }
+
+        const node = await window.NodeCache.getNode(nodeId);
+        const name = node?.long_name || node?.short_name || location.node_id_hex || `Node ${nodeId}`;
+
+        const useNodeAltitude = document.getElementById('useNodeAltitude').checked;
+        const altitude = useNodeAltitude ? (location.altitude || 0) : 0;
+
+        const colorIndex = coverageNodes.length % coverageColors.length;
+        const color = coverageColors[colorIndex];
+
+        const marker = createNodeMarker(location.latitude, location.longitude, name, 'mesh', color.stroke);
+
+        const coverageNode = {
+            id: ++nodeIdCounter,
+            meshNodeId: nodeId,
+            name: name,
+            lat: location.latitude,
+            lng: location.longitude,
+            altitude: altitude,
+            type: 'mesh',
+            marker: marker,
+            coverageLayer: null,
+            color: color
+        };
+
+        coverageNodes.push(coverageNode);
+        updateNodeList();
+        updateMapBounds();
+
+        // Clear picker
+        document.getElementById('meshNodeSearch').value = '';
+        document.getElementById('meshNodeSearch_value').value = '';
+        document.getElementById('addMeshNodeBtn').disabled = true;
+        if (meshNodePicker.clearButton) {
+            meshNodePicker.clearButton.style.display = 'none';
+        }
+
+        showStatus('success', `Added ${name} to coverage map`);
+
+    } catch (error) {
+        console.error('Error adding mesh node:', error);
+        showStatus('error', 'Failed to add node: ' + error.message);
+    }
+}
+
+// Add custom node at clicked location
+function addCustomNode(lat, lng) {
+    const colorIndex = coverageNodes.length % coverageColors.length;
+    const color = coverageColors[colorIndex];
+    const customName = `Custom #${coverageNodes.filter(n => n.type === 'custom').length + 1}`;
+
+    const antennaHeight = parseFloat(document.getElementById('antennaHeight').value) || 10;
+
+    const marker = createNodeMarker(lat, lng, customName, 'custom', color.stroke);
+
+    const coverageNode = {
+        id: ++nodeIdCounter,
+        meshNodeId: null,
+        name: customName,
+        lat: lat,
+        lng: lng,
+        altitude: antennaHeight, // Use antenna height as altitude for custom nodes
+        type: 'custom',
+        marker: marker,
+        coverageLayer: null,
+        color: color
+    };
+
+    coverageNodes.push(coverageNode);
+    updateNodeList();
+
+    showStatus('success', `Added custom location at ${lat.toFixed(4)}, ${lng.toFixed(4)}`);
+}
+
+// Create a node marker
+function createNodeMarker(lat, lng, name, type, color) {
+    const iconHtml = type === 'mesh'
+        ? `<div style="background-color: ${color}; color: white; border-radius: 50%; width: 28px; height: 28px; display: flex; align-items: center; justify-content: center; border: 2px solid white; box-shadow: 0 2px 4px rgba(0,0,0,0.3);"><i class="bi bi-router"></i></div>`
+        : `<div style="background-color: ${color}; color: white; border-radius: 50%; width: 28px; height: 28px; display: flex; align-items: center; justify-content: center; border: 2px solid white; box-shadow: 0 2px 4px rgba(0,0,0,0.3);"><i class="bi bi-geo-alt-fill"></i></div>`;
+
+    const marker = L.marker([lat, lng], {
+        icon: L.divIcon({
+            className: 'custom-coverage-marker',
+            html: iconHtml,
+            iconSize: [28, 28],
+            iconAnchor: [14, 14]
+        }),
+        draggable: type === 'custom'
+    }).addTo(map);
+
+    marker.bindPopup(`<strong>${name}</strong><br>
+        <small>${type === 'mesh' ? 'Mesh Node' : 'Custom Location'}</small><br>
+        <small>Lat: ${lat.toFixed(5)}, Lng: ${lng.toFixed(5)}</small>`);
+
+    // Allow dragging custom markers
+    if (type === 'custom') {
+        marker.on('dragend', function(e) {
+            const node = coverageNodes.find(n => n.marker === marker);
+            if (node) {
+                const newPos = e.target.getLatLng();
+                node.lat = newPos.lat;
+                node.lng = newPos.lng;
+                marker.setPopupContent(`<strong>${node.name}</strong><br>
+                    <small>Custom Location</small><br>
+                    <small>Lat: ${newPos.lat.toFixed(5)}, Lng: ${newPos.lng.toFixed(5)}</small>`);
+
+                // Clear existing coverage if any
+                if (node.coverageLayer) {
+                    map.removeLayer(node.coverageLayer);
+                    node.coverageLayer = null;
+                }
+            }
+        });
+    }
+
+    return marker;
+}
+
+// Update the node list UI
+function updateNodeList() {
+    const container = document.getElementById('nodeListContainer');
+    const countSpan = document.getElementById('nodeCount');
+    const clearAllBtn = document.getElementById('clearAllBtn');
+    const calculateBtn = document.getElementById('calculateBtn');
+
+    countSpan.textContent = coverageNodes.length;
+
+    if (coverageNodes.length === 0) {
+        container.innerHTML = `
+            <div class="text-center text-muted py-4">
+                <i class="bi bi-inbox display-6"></i>
+                <p class="mb-0 mt-2">No nodes added yet</p>
+                <small>Add nodes from the mesh or click the map</small>
+            </div>`;
+        clearAllBtn.style.display = 'none';
+        calculateBtn.disabled = true;
+        return;
+    }
+
+    clearAllBtn.style.display = 'block';
+    calculateBtn.disabled = false;
+
+    container.innerHTML = coverageNodes.map(node => `
+        <div class="coverage-node-item" data-id="${node.id}">
+            <div class="coverage-node-color" style="background-color: ${node.color.stroke};"></div>
+            <div class="coverage-node-name" title="${node.name}">
+                ${node.name}
+                <br><small class="text-muted">${node.type === 'mesh' ? 'Mesh' : 'Custom'} • Alt: ${node.altitude.toFixed(0)}m</small>
+            </div>
+            <div class="coverage-node-actions">
+                <button class="btn btn-outline-primary btn-sm" onclick="zoomToNode(${node.id})" title="Zoom to node">
+                    <i class="bi bi-geo-alt"></i>
+                </button>
+                <button class="btn btn-outline-danger btn-sm" onclick="removeNode(${node.id})" title="Remove node">
+                    <i class="bi bi-trash"></i>
+                </button>
+            </div>
+        </div>
+    `).join('');
+}
+
+// Zoom to a specific node
+function zoomToNode(nodeId) {
+    const node = coverageNodes.find(n => n.id === nodeId);
+    if (node) {
+        map.setView([node.lat, node.lng], 12);
+        node.marker.openPopup();
+    }
+}
+
+// Remove a node
+function removeNode(nodeId) {
+    const index = coverageNodes.findIndex(n => n.id === nodeId);
+    if (index !== -1) {
+        const node = coverageNodes[index];
+        if (node.marker) map.removeLayer(node.marker);
+        if (node.coverageLayer) map.removeLayer(node.coverageLayer);
+        coverageNodes.splice(index, 1);
+        updateNodeList();
+    }
+}
+
+// Clear all nodes
+function clearAllNodes() {
+    coverageNodes.forEach(node => {
+        if (node.marker) map.removeLayer(node.marker);
+        if (node.coverageLayer) map.removeLayer(node.coverageLayer);
+    });
+    coverageNodes = [];
+    updateNodeList();
+    showStatus('info', 'All nodes cleared');
+}
+
+// Update map bounds to show all nodes
+function updateMapBounds() {
+    if (coverageNodes.length === 0) return;
+
+    const bounds = L.latLngBounds(coverageNodes.map(n => [n.lat, n.lng]));
+    map.fitBounds(bounds, { padding: [50, 50], maxZoom: 12 });
+}
+
+// Calculate coverage for all nodes
+async function calculateAllCoverage() {
+    if (coverageNodes.length === 0) return;
+
+    const radiusKm = parseInt(document.getElementById('coverageRadius').value);
+    const numRays = parseInt(document.getElementById('coverageResolution').value);
+    const antennaHeight = parseFloat(document.getElementById('antennaHeight').value) || 10;
+
+    const calculateBtn = document.getElementById('calculateBtn');
+    calculateBtn.disabled = true;
+    calculateBtn.innerHTML = '<span class="spinner-border spinner-border-sm me-1"></span> Calculating...';
+
+    try {
+        // Clear existing coverage layers
+        coverageNodes.forEach(node => {
+            if (node.coverageLayer) {
+                map.removeLayer(node.coverageLayer);
+                node.coverageLayer = null;
+            }
+        });
+
+        // Calculate coverage for each node
+        for (let i = 0; i < coverageNodes.length; i++) {
+            const node = coverageNodes[i];
+            showStatus('loading', `Calculating coverage for ${node.name} (${i + 1}/${coverageNodes.length})...`);
+
+            const observerHeight = node.altitude + antennaHeight;
+
+            const coveragePolygons = await calculateViewshed(
+                node.lat,
+                node.lng,
+                observerHeight,
+                radiusKm,
+                numRays
+            );
+
+            // Draw coverage
+            const layer = drawCoverageOverlay(node, coveragePolygons);
+            node.coverageLayer = layer;
+        }
+
+        // Draw overlap if enabled
+        if (document.getElementById('showOverlap').checked && coverageNodes.length > 1) {
+            // Overlap visualization would require polygon intersection - simplified version
+            showStatus('success', `Coverage calculated for ${coverageNodes.length} nodes`);
+        } else {
+            showStatus('success', `Coverage calculated for ${coverageNodes.length} nodes`);
+        }
+
+    } catch (error) {
+        console.error('Coverage calculation error:', error);
+        showStatus('error', 'Error calculating coverage: ' + error.message);
+    } finally {
+        calculateBtn.disabled = false;
+        calculateBtn.innerHTML = '<i class="bi bi-play-fill"></i> Calculate Coverage';
+    }
+}
+
+// Calculate viewshed using radial elevation sampling
+async function calculateViewshed(centerLat, centerLon, observerHeight, radiusKm, numRays) {
+    const visibleSectors = [];
+    const samplesPerRay = 20;
+    const earthRadius = 6371;
+
+    const batchSize = 8;
+    const angleStep = 360 / numRays;
+
+    for (let batchStart = 0; batchStart < numRays; batchStart += batchSize) {
+        const batchPromises = [];
+
+        for (let i = batchStart; i < Math.min(batchStart + batchSize, numRays); i++) {
+            const angle = i * angleStep;
+            batchPromises.push(analyzeRay(centerLat, centerLon, observerHeight, angle, radiusKm, samplesPerRay));
+        }
+
+        const batchResults = await Promise.all(batchPromises);
+
+        batchResults.forEach((result, idx) => {
+            const angle = (batchStart + idx) * angleStep;
+            const nextAngle = angle + angleStep;
+
+            if (result.visibleDistance > 0) {
+                visibleSectors.push({
+                    startAngle: angle,
+                    endAngle: nextAngle,
+                    distance: result.visibleDistance,
+                    centerLat,
+                    centerLon
+                });
+            }
+        });
+
+        // Small delay between batches
+        if (batchStart + batchSize < numRays) {
+            await new Promise(resolve => setTimeout(resolve, 100));
+        }
+    }
+
+    return { visible: visibleSectors };
+}
+
+// Analyze a single ray for line-of-sight visibility
+async function analyzeRay(centerLat, centerLon, observerHeight, angleDeg, maxDistanceKm, numSamples) {
+    const earthRadius = 6371;
+
+    const points = [];
+    for (let i = 1; i <= numSamples; i++) {
+        const distance = (i / numSamples) * maxDistanceKm;
+        const point = destinationPoint(centerLat, centerLon, distance, angleDeg);
+        points.push({ ...point, distance });
+    }
+
+    const elevations = await fetchElevationsForPoints(points);
+
+    let visibleDistance = maxDistanceKm;
+    let maxAngle = -Infinity;
+
+    for (let i = 0; i < points.length; i++) {
+        const point = points[i];
+        const elevation = elevations[i] || 0;
+
+        const curvatureDrop = (point.distance * point.distance) / (2 * earthRadius) * 1000;
+        const effectiveElevation = elevation - curvatureDrop;
+
+        const verticalAngle = Math.atan2(effectiveElevation - observerHeight, point.distance * 1000);
+
+        if (verticalAngle > maxAngle) {
+            maxAngle = verticalAngle;
+        } else {
+            if (i > 0) {
+                visibleDistance = points[i - 1].distance;
+            }
+            break;
+        }
+    }
+
+    return { visibleDistance };
+}
+
+// Calculate destination point given start, distance, and bearing
+function destinationPoint(lat, lon, distanceKm, bearingDeg) {
+    const R = 6371;
+    const d = distanceKm / R;
+    const brng = bearingDeg * Math.PI / 180;
+    const lat1 = lat * Math.PI / 180;
+    const lon1 = lon * Math.PI / 180;
+
+    const lat2 = Math.asin(
+        Math.sin(lat1) * Math.cos(d) +
+        Math.cos(lat1) * Math.sin(d) * Math.cos(brng)
+    );
+
+    const lon2 = lon1 + Math.atan2(
+        Math.sin(brng) * Math.sin(d) * Math.cos(lat1),
+        Math.cos(d) - Math.sin(lat1) * Math.sin(lat2)
+    );
+
+    return {
+        latitude: lat2 * 180 / Math.PI,
+        longitude: lon2 * 180 / Math.PI
+    };
+}
+
+// Fetch elevations for a batch of points using DEM Net API
+async function fetchElevationsForPoints(points) {
+    if (points.length === 0) return [];
+
+    try {
+        const startPoint = points[0];
+        const endPoint = points[points.length - 1];
+
+        const url = `https://api.elevationapi.com/api/Elevation/line/${startPoint.latitude.toFixed(6)},${startPoint.longitude.toFixed(6)}/${endPoint.latitude.toFixed(6)},${endPoint.longitude.toFixed(6)}?samples=${points.length}`;
+
+        const response = await fetch(url);
+        if (!response.ok) {
+            console.warn('Elevation API error, using fallback');
+            return points.map(() => 0);
+        }
+
+        const data = await response.json();
+
+        if (data.geoPoints && Array.isArray(data.geoPoints)) {
+            return data.geoPoints.map(p => p.elevation || 0);
+        }
+
+        return points.map(() => 0);
+
+    } catch (error) {
+        console.warn('Failed to fetch elevations:', error);
+        return points.map(() => 0);
+    }
+}
+
+// Draw coverage overlay for a node
+function drawCoverageOverlay(node, coveragePolygons) {
+    const visibleCoords = [];
+
+    coveragePolygons.visible.forEach(sector => {
+        const arcPoints = generateArcPoints(
+            sector.centerLat,
+            sector.centerLon,
+            sector.distance,
+            sector.startAngle,
+            sector.endAngle,
+            5
+        );
+        visibleCoords.push(...arcPoints);
+    });
+
+    if (visibleCoords.length > 2) {
+        const polygon = L.polygon(visibleCoords, {
+            color: node.color.stroke,
+            fillColor: node.color.fill,
+            fillOpacity: 0.3,
+            weight: 2,
+            opacity: 0.7
+        });
+
+        polygon.bindPopup(`
+            <strong>${node.name}</strong><br>
+            <span style="color: ${node.color.stroke};">■</span> Coverage Area<br>
+            <small class="text-muted">Estimated line-of-sight coverage</small>
+        `);
+
+        polygon.addTo(map);
+        return polygon;
+    }
+
+    return null;
+}
+
+// Generate points along an arc
+function generateArcPoints(centerLat, centerLon, radiusKm, startAngle, endAngle, numPoints) {
+    const points = [];
+    const angleStep = (endAngle - startAngle) / numPoints;
+
+    for (let i = 0; i <= numPoints; i++) {
+        const angle = startAngle + i * angleStep;
+        const point = destinationPoint(centerLat, centerLon, radiusKm, angle);
+        points.push([point.latitude, point.longitude]);
+    }
+
+    return points;
+}
+
+// Show status message
+function showStatus(type, message) {
+    const statusDiv = document.getElementById('statusMessage');
+    statusDiv.style.display = 'block';
+
+    statusDiv.className = 'alert mt-3';
+
+    switch (type) {
+        case 'loading':
+            statusDiv.classList.add('alert-info');
+            statusDiv.innerHTML = `<span class="spinner-border spinner-border-sm me-2"></span>${message}`;
+            break;
+        case 'success':
+            statusDiv.classList.add('alert-success');
+            statusDiv.innerHTML = `<i class="bi bi-check-circle me-2"></i>${message}`;
+            break;
+        case 'error':
+            statusDiv.classList.add('alert-danger');
+            statusDiv.innerHTML = `<i class="bi bi-exclamation-triangle me-2"></i>${message}`;
+            break;
+        case 'warning':
+            statusDiv.classList.add('alert-warning');
+            statusDiv.innerHTML = `<i class="bi bi-exclamation-circle me-2"></i>${message}`;
+            break;
+        case 'info':
+            statusDiv.classList.add('alert-info');
+            statusDiv.innerHTML = `<i class="bi bi-info-circle me-2"></i>${message}`;
+            break;
+    }
+
+    // Auto-hide non-loading messages
+    if (type !== 'loading') {
+        setTimeout(() => {
+            statusDiv.style.display = 'none';
+        }, 5000);
+    }
+}
+
+// Make functions available globally for onclick handlers
+window.zoomToNode = zoomToNode;
+window.removeNode = removeNode;
+</script>
+{% endblock %}

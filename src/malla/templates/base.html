@@ -376,7 +376,7 @@
 
                     <!-- Network dropdown (Traceroutes, Network Graph, Mesh Topology & Analysis) -->
                     <li class="nav-item dropdown">
-                        {% set network_active = request.endpoint in ['traceroute.traceroute', 'traceroute.traceroute_graph', 'mesh.topology_page', 'traceroute.traceroute_hops', 'gateway.gateway_compare', 'main.longest_links', 'main.line_of_sight'] %}
+                        {% set network_active = request.endpoint in ['traceroute.traceroute', 'traceroute.traceroute_graph', 'mesh.topology_page', 'traceroute.traceroute_hops', 'gateway.gateway_compare', 'main.longest_links', 'main.line_of_sight', 'main.coverage_map'] %}
                         <a class="nav-link dropdown-toggle {{ 'active' if network_active }}" href="#" id="networkDropdown" role="button" data-bs-toggle="dropdown">
                             Network
                         </a>
@@ -417,6 +417,11 @@
                             <li>
                                 <a class="dropdown-item {{ 'active' if request.endpoint == 'main.line_of_sight' }}" href="{{ url_for('main.line_of_sight') }}">
                                     <i class="bi bi-bezier"></i> Line of Sight
+                                </a>
+                            </li>
+                            <li>
+                                <a class="dropdown-item {{ 'active' if request.endpoint == 'main.coverage_map' }}" href="{{ url_for('main.coverage_map') }}">
+                                    <i class="bi bi-reception-4"></i> Coverage Map
                                 </a>
                             </li>
                         </ul>
