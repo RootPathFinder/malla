@@ -2288,8 +2288,13 @@ function renderTelemetryHistoryCharts(history7d) {
     // Store the full 7-day data for range filtering
     window.telemetryHistoryFull = history7d;
 
-    // Render charts with current range
-    updateTelemetryHistoryCharts();
+    // Use requestAnimationFrame to ensure container is visible and has dimensions
+    // before rendering charts (fixes initial load sizing issues)
+    requestAnimationFrame(() => {
+        requestAnimationFrame(() => {
+            updateTelemetryHistoryCharts();
+        });
+    });
 
     // Set up range selector buttons
     const rangeButtons = document.querySelectorAll('#telemetry-range-selector button');
@@ -2314,6 +2319,37 @@ function updateTelemetryHistoryCharts() {
             filteredHistory[key] = history7d[key].filter(d => d.x >= cutoffTime);
         }
     });
+
+    // First pass: Determine which sections have data and which charts to render
+    const hasBattery = filteredHistory.battery_level && filteredHistory.battery_level.length > 1;
+    const hasVoltage = filteredHistory.voltage && filteredHistory.voltage.length > 1;
+    const hasChannelUtil = filteredHistory.channel_utilization && filteredHistory.channel_utilization.length > 1;
+    const hasAirUtil = filteredHistory.air_util_tx && filteredHistory.air_util_tx.length > 1;
+    const hasTemperature = filteredHistory.temperature && filteredHistory.temperature.length > 1;
+    const hasHumidity = filteredHistory.relative_humidity && filteredHistory.relative_humidity.length > 1;
+    const hasPressure = filteredHistory.barometric_pressure && filteredHistory.barometric_pressure.length > 1;
+
+    const hasPowerData = hasBattery || hasVoltage;
+    const hasNetworkData = hasChannelUtil || hasAirUtil;
+    const hasEnvironmentData = hasTemperature || hasHumidity || hasPressure;
+
+    // Second pass: Show/hide containers BEFORE rendering charts
+    // This ensures Plotly can calculate correct dimensions
+    document.getElementById('power-charts-row').style.display = hasPowerData ? 'flex' : 'none';
+    document.getElementById('network-charts-row').style.display = hasNetworkData ? 'flex' : 'none';
+    document.getElementById('environment-charts-row').style.display = hasEnvironmentData ? 'flex' : 'none';
+
+    document.getElementById('battery-chart-container').style.display = hasBattery ? 'block' : 'none';
+    document.getElementById('voltage-chart-container').style.display = hasVoltage ? 'block' : 'none';
+    document.getElementById('channel-util-chart-container').style.display = hasChannelUtil ? 'block' : 'none';
+    document.getElementById('air-util-chart-container').style.display = hasAirUtil ? 'block' : 'none';
+    document.getElementById('temperature-chart-container').style.display = hasTemperature ? 'block' : 'none';
+    document.getElementById('humidity-chart-container').style.display = hasHumidity ? 'block' : 'none';
+    document.getElementById('pressure-chart-container').style.display = hasPressure ? 'block' : 'none';
+
+    // Show no-data message if no charts were rendered
+    const noDataDiv = document.getElementById('telemetry-history-no-data');
+    noDataDiv.style.display = (hasPowerData || hasNetworkData || hasEnvironmentData) ? 'none' : 'block';
 
     // Detect dark mode
     const isDarkMode = document.documentElement.getAttribute('data-bs-theme') === 'dark' ||
@@ -2362,16 +2398,10 @@ function updateTelemetryHistoryCharts() {
         }]
     };
 
-    // Track which sections have data
-    let hasPowerData = false;
-    let hasNetworkData = false;
-    let hasEnvironmentData = false;
+    // Third pass: Render the charts (containers are now visible)
 
     // Render Battery Level chart
-    if (filteredHistory.battery_level && filteredHistory.battery_level.length > 1) {
-        hasPowerData = true;
-        document.getElementById('battery-chart-container').style.display = 'block';
-
+    if (hasBattery) {
         const trace = {
             x: filteredHistory.battery_level.map(d => new Date(d.x)),
             y: filteredHistory.battery_level.map(d => d.y),
@@ -2390,15 +2420,10 @@ function updateTelemetryHistoryCharts() {
         };
 
         Plotly.newPlot('telemetry-chart-battery', [trace], layout, commonConfig);
-    } else {
-        document.getElementById('battery-chart-container').style.display = 'none';
     }
 
     // Render Voltage chart
-    if (filteredHistory.voltage && filteredHistory.voltage.length > 1) {
-        hasPowerData = true;
-        document.getElementById('voltage-chart-container').style.display = 'block';
-
+    if (hasVoltage) {
         const trace = {
             x: filteredHistory.voltage.map(d => new Date(d.x)),
             y: filteredHistory.voltage.map(d => d.y),
@@ -2417,15 +2442,10 @@ function updateTelemetryHistoryCharts() {
         };
 
         Plotly.newPlot('telemetry-chart-voltage', [trace], layout, commonConfig);
-    } else {
-        document.getElementById('voltage-chart-container').style.display = 'none';
     }
 
     // Render Channel Utilization chart
-    if (filteredHistory.channel_utilization && filteredHistory.channel_utilization.length > 1) {
-        hasNetworkData = true;
-        document.getElementById('channel-util-chart-container').style.display = 'block';
-
+    if (hasChannelUtil) {
         const trace = {
             x: filteredHistory.channel_utilization.map(d => new Date(d.x)),
             y: filteredHistory.channel_utilization.map(d => d.y),
@@ -2444,15 +2464,10 @@ function updateTelemetryHistoryCharts() {
         };
 
         Plotly.newPlot('telemetry-chart-channel-util', [trace], layout, commonConfig);
-    } else {
-        document.getElementById('channel-util-chart-container').style.display = 'none';
     }
 
     // Render Air Util TX chart
-    if (filteredHistory.air_util_tx && filteredHistory.air_util_tx.length > 1) {
-        hasNetworkData = true;
-        document.getElementById('air-util-chart-container').style.display = 'block';
-
+    if (hasAirUtil) {
         const trace = {
             x: filteredHistory.air_util_tx.map(d => new Date(d.x)),
             y: filteredHistory.air_util_tx.map(d => d.y),
@@ -2471,15 +2486,10 @@ function updateTelemetryHistoryCharts() {
         };
 
         Plotly.newPlot('telemetry-chart-air-util', [trace], layout, commonConfig);
-    } else {
-        document.getElementById('air-util-chart-container').style.display = 'none';
     }
 
     // Render Temperature chart (with unit conversion)
-    if (filteredHistory.temperature && filteredHistory.temperature.length > 1) {
-        hasEnvironmentData = true;
-        document.getElementById('temperature-chart-container').style.display = 'block';
-
+    if (hasTemperature) {
         // Check temperature unit preference
         const unit = (typeof TemperatureToggle !== 'undefined' && TemperatureToggle.getUnit)
             ? TemperatureToggle.getUnit() : 'C';
@@ -2513,15 +2523,10 @@ function updateTelemetryHistoryCharts() {
         };
 
         Plotly.newPlot('telemetry-chart-temperature', [trace], layout, commonConfig);
-    } else {
-        document.getElementById('temperature-chart-container').style.display = 'none';
     }
 
     // Render Humidity chart
-    if (filteredHistory.relative_humidity && filteredHistory.relative_humidity.length > 1) {
-        hasEnvironmentData = true;
-        document.getElementById('humidity-chart-container').style.display = 'block';
-
+    if (hasHumidity) {
         const trace = {
             x: filteredHistory.relative_humidity.map(d => new Date(d.x)),
             y: filteredHistory.relative_humidity.map(d => d.y),
@@ -2540,15 +2545,10 @@ function updateTelemetryHistoryCharts() {
         };
 
         Plotly.newPlot('telemetry-chart-humidity', [trace], layout, commonConfig);
-    } else {
-        document.getElementById('humidity-chart-container').style.display = 'none';
     }
 
     // Render Barometric Pressure chart
-    if (filteredHistory.barometric_pressure && filteredHistory.barometric_pressure.length > 1) {
-        hasEnvironmentData = true;
-        document.getElementById('pressure-chart-container').style.display = 'block';
-
+    if (hasPressure) {
         const trace = {
             x: filteredHistory.barometric_pressure.map(d => new Date(d.x)),
             y: filteredHistory.barometric_pressure.map(d => d.y),
@@ -2567,18 +2567,7 @@ function updateTelemetryHistoryCharts() {
         };
 
         Plotly.newPlot('telemetry-chart-pressure', [trace], layout, commonConfig);
-    } else {
-        document.getElementById('pressure-chart-container').style.display = 'none';
     }
-
-    // Show/hide section rows based on data availability
-    document.getElementById('power-charts-row').style.display = hasPowerData ? 'flex' : 'none';
-    document.getElementById('network-charts-row').style.display = hasNetworkData ? 'flex' : 'none';
-    document.getElementById('environment-charts-row').style.display = hasEnvironmentData ? 'flex' : 'none';
-
-    // Show no-data message if no charts were rendered
-    const noDataDiv = document.getElementById('telemetry-history-no-data');
-    noDataDiv.style.display = (hasPowerData || hasNetworkData || hasEnvironmentData) ? 'none' : 'block';
 }
 
 // Listen for temperature unit changes and update telemetry history charts
