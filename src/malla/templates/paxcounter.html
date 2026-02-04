@@ -178,6 +178,70 @@
 
     .pax-value.wifi { color: #0d6efd; }
     .pax-value.ble { color: #6f42c1; }
+
+    .stat-card {
+        padding: 1rem;
+        text-align: center;
+        border-radius: 0.5rem;
+        background: var(--bs-tertiary-bg);
+    }
+
+    .stat-card .stat-value {
+        font-size: 1.5rem;
+        font-weight: bold;
+    }
+
+    .stat-card .stat-label {
+        font-size: 0.75rem;
+        color: var(--bs-secondary);
+        text-transform: uppercase;
+    }
+
+    .stat-card.peak .stat-value { color: #dc3545; }
+    .stat-card.low .stat-value { color: #198754; }
+    .stat-card.current .stat-value { color: #0d6efd; }
+
+    .trend-indicator {
+        font-size: 0.8rem;
+        margin-left: 0.25rem;
+    }
+
+    .trend-up { color: #198754; }
+    .trend-down { color: #dc3545; }
+    .trend-stable { color: #6c757d; }
+
+    .timeseries-chart-container {
+        height: 350px;
+        width: 100%;
+    }
+
+    .comparison-chart-container {
+        height: 300px;
+        width: 100%;
+    }
+
+    .chart-hint {
+        font-size: 0.75rem;
+        color: var(--bs-secondary);
+        text-align: center;
+        margin-top: 0.25rem;
+    }
+
+    .heatmap-container {
+        height: 200px;
+        width: 100%;
+    }
+
+    .stats-row {
+        display: flex;
+        gap: 0.5rem;
+        flex-wrap: wrap;
+    }
+
+    .stats-row .stat-card {
+        flex: 1;
+        min-width: 80px;
+    }
 </style>
 {% endblock %}
 
@@ -264,6 +328,44 @@
                 </div>
             </div>
 
+            <!-- Peak/Min Statistics -->
+            <div class="card mb-4">
+                <div class="card-header">
+                    <i class="bi bi-graph-up-arrow"></i> Statistics
+                </div>
+                <div class="card-body">
+                    <div class="stats-row mb-2">
+                        <div class="stat-card peak">
+                            <div class="stat-value" id="peakTotal">--</div>
+                            <div class="stat-label">Peak Total</div>
+                        </div>
+                        <div class="stat-card low">
+                            <div class="stat-value" id="minTotal">--</div>
+                            <div class="stat-label">Min Total</div>
+                        </div>
+                    </div>
+                    <div class="stats-row mb-2">
+                        <div class="stat-card">
+                            <div class="stat-value" id="peakWifi">--</div>
+                            <div class="stat-label">Peak WiFi</div>
+                        </div>
+                        <div class="stat-card">
+                            <div class="stat-value" id="peakBle">--</div>
+                            <div class="stat-label">Peak BLE</div>
+                        </div>
+                    </div>
+                    <div class="stats-row">
+                        <div class="stat-card current">
+                            <div class="stat-value">
+                                <span id="currentTotal">--</span>
+                                <span class="trend-indicator" id="trendIndicator"></span>
+                            </div>
+                            <div class="stat-label">Latest Reading</div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
             <!-- Paxcounter Nodes List -->
             <div class="card mb-4">
                 <div class="card-header">
@@ -293,6 +395,52 @@
 
         <!-- Right column: Map and readings log -->
         <div class="col-lg-8">
+            <!-- Zoomable Time-Series Chart -->
+            <div class="card mb-4">
+                <div class="card-header d-flex justify-content-between align-items-center">
+                    <span><i class="bi bi-graph-up"></i> Total Pax Over Time</span>
+                    <div class="d-flex align-items-center gap-2">
+                        <button class="btn btn-sm btn-outline-secondary" onclick="resetTimeseriesZoom()" title="Reset zoom">
+                            <i class="bi bi-arrows-angle-expand"></i>
+                        </button>
+                        <select class="form-select form-select-sm" id="timeseriesMode" style="width: auto;">
+                            <option value="total">Total</option>
+                            <option value="split">WiFi + BLE</option>
+                            <option value="stacked">Stacked</option>
+                        </select>
+                    </div>
+                </div>
+                <div class="card-body">
+                    <div class="timeseries-chart-container" id="timeseriesChart">
+                        <div class="text-center p-4">
+                            <div class="spinner-border text-primary" role="status"></div>
+                        </div>
+                    </div>
+                    <p class="chart-hint"><i class="bi bi-hand-index"></i> Drag to zoom, double-click to reset</p>
+                </div>
+            </div>
+
+            <!-- Node Comparison Chart -->
+            <div class="card mb-4">
+                <div class="card-header d-flex justify-content-between align-items-center">
+                    <span><i class="bi bi-bar-chart-steps"></i> Node Comparison</span>
+                    <select class="form-select form-select-sm" id="comparisonMetric" style="width: auto;">
+                        <option value="total">Total Avg</option>
+                        <option value="wifi">WiFi Avg</option>
+                        <option value="ble">BLE Avg</option>
+                        <option value="readings">Reading Count</option>
+                    </select>
+                </div>
+                <div class="card-body">
+                    <div class="comparison-chart-container" id="comparisonChart">
+                        <div class="text-center p-4 text-muted">
+                            <i class="bi bi-bar-chart-steps" style="font-size: 2rem;"></i>
+                            <p>Comparison data will appear here</p>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
             <!-- Map Card -->
             <div class="card mb-4">
                 <div class="card-header d-flex justify-content-between align-items-center">
@@ -408,6 +556,9 @@
             liveDot.style.display = mostRecent > fiveMinutesAgo ? 'block' : 'none';
         }
 
+        // Update statistics
+        updateStatistics(data.readings || []);
+
         // Update nodes list
         updateNodesList(data.pax_nodes || []);
 
@@ -420,8 +571,77 @@
         // Update chart
         updateChart(data.hourly_chart || []);
 
+        // Update time-series chart
+        updateTimeseriesChart(data.readings || []);
+
+        // Update node comparison chart
+        updateComparisonChart(data.pax_nodes || []);
+
         // Update map
         updateMap(data.readings || []);
+    }
+
+    // Update peak/min statistics
+    function updateStatistics(readings) {
+        if (!readings || readings.length === 0) {
+            document.getElementById('peakTotal').textContent = '--';
+            document.getElementById('minTotal').textContent = '--';
+            document.getElementById('peakWifi').textContent = '--';
+            document.getElementById('peakBle').textContent = '--';
+            document.getElementById('currentTotal').textContent = '--';
+            document.getElementById('trendIndicator').innerHTML = '';
+            return;
+        }
+
+        // Calculate statistics
+        let peakTotal = 0, minTotal = Infinity, peakWifi = 0, peakBle = 0;
+        let peakTimestamp = null, minTimestamp = null;
+
+        readings.forEach(r => {
+            const total = (r.wifi || 0) + (r.ble || 0);
+            if (total > peakTotal) {
+                peakTotal = total;
+                peakTimestamp = r.timestamp;
+            }
+            if (total < minTotal) {
+                minTotal = total;
+                minTimestamp = r.timestamp;
+            }
+            if ((r.wifi || 0) > peakWifi) peakWifi = r.wifi;
+            if ((r.ble || 0) > peakBle) peakBle = r.ble;
+        });
+
+        if (minTotal === Infinity) minTotal = 0;
+
+        // Current (most recent) reading
+        const currentReading = readings[0];
+        const currentTotal = (currentReading.wifi || 0) + (currentReading.ble || 0);
+
+        // Calculate trend (compare recent 5 readings avg to previous 5)
+        let trendHtml = '';
+        if (readings.length >= 10) {
+            const recent5Avg = readings.slice(0, 5).reduce((sum, r) => sum + (r.wifi || 0) + (r.ble || 0), 0) / 5;
+            const prev5Avg = readings.slice(5, 10).reduce((sum, r) => sum + (r.wifi || 0) + (r.ble || 0), 0) / 5;
+            const diff = recent5Avg - prev5Avg;
+            const pctChange = prev5Avg > 0 ? Math.abs(diff / prev5Avg * 100).toFixed(0) : 0;
+
+            if (diff > 1) {
+                trendHtml = `<i class="bi bi-arrow-up-short trend-up"></i><small class="trend-up">+${pctChange}%</small>`;
+            } else if (diff < -1) {
+                trendHtml = `<i class="bi bi-arrow-down-short trend-down"></i><small class="trend-down">-${pctChange}%</small>`;
+            } else {
+                trendHtml = `<i class="bi bi-dash trend-stable"></i>`;
+            }
+        }
+
+        document.getElementById('peakTotal').textContent = peakTotal;
+        document.getElementById('peakTotal').title = peakTimestamp ? `At ${formatTimestamp(peakTimestamp)}` : '';
+        document.getElementById('minTotal').textContent = minTotal;
+        document.getElementById('minTotal').title = minTimestamp ? `At ${formatTimestamp(minTimestamp)}` : '';
+        document.getElementById('peakWifi').textContent = peakWifi;
+        document.getElementById('peakBle').textContent = peakBle;
+        document.getElementById('currentTotal').textContent = currentTotal;
+        document.getElementById('trendIndicator').innerHTML = trendHtml;
     }
 
     // Update nodes list
@@ -614,6 +834,223 @@
         Plotly.newPlot(container, [wifiTrace, bleTrace], layout, { responsive: true, displayModeBar: false });
     }
 
+    // Update zoomable time-series chart
+    function updateTimeseriesChart(readings) {
+        const container = document.getElementById('timeseriesChart');
+        const mode = document.getElementById('timeseriesMode').value;
+
+        if (!readings || readings.length === 0) {
+            container.innerHTML = `
+                <div class="text-center text-muted p-4">
+                    <i class="bi bi-graph-up" style="font-size: 2rem; opacity: 0.5;"></i>
+                    <p class="mt-2">No data available for time-series chart</p>
+                </div>
+            `;
+            return;
+        }
+
+        container.innerHTML = '';
+        const isDarkMode = document.documentElement.getAttribute('data-bs-theme') === 'dark';
+
+        // Sort readings by timestamp (oldest first for chart)
+        const sortedReadings = [...readings].sort((a, b) => a.timestamp - b.timestamp);
+
+        // Create traces based on mode
+        const traces = [];
+
+        if (mode === 'total') {
+            traces.push({
+                x: sortedReadings.map(r => new Date(r.timestamp * 1000)),
+                y: sortedReadings.map(r => (r.wifi || 0) + (r.ble || 0)),
+                type: 'scatter',
+                mode: 'lines+markers',
+                name: 'Total Pax',
+                line: { color: '#198754', width: 2 },
+                marker: { size: 4 },
+                fill: 'tozeroy',
+                fillcolor: 'rgba(25, 135, 84, 0.1)',
+                hovertemplate: '<b>%{y}</b> total<br>%{x|%b %d, %H:%M}<extra></extra>'
+            });
+        } else if (mode === 'split') {
+            traces.push({
+                x: sortedReadings.map(r => new Date(r.timestamp * 1000)),
+                y: sortedReadings.map(r => r.wifi || 0),
+                type: 'scatter',
+                mode: 'lines+markers',
+                name: 'WiFi',
+                line: { color: '#0d6efd', width: 2 },
+                marker: { size: 4 },
+                hovertemplate: '<b>%{y}</b> WiFi<br>%{x|%b %d, %H:%M}<extra></extra>'
+            });
+            traces.push({
+                x: sortedReadings.map(r => new Date(r.timestamp * 1000)),
+                y: sortedReadings.map(r => r.ble || 0),
+                type: 'scatter',
+                mode: 'lines+markers',
+                name: 'BLE',
+                line: { color: '#6f42c1', width: 2 },
+                marker: { size: 4 },
+                hovertemplate: '<b>%{y}</b> BLE<br>%{x|%b %d, %H:%M}<extra></extra>'
+            });
+        } else if (mode === 'stacked') {
+            traces.push({
+                x: sortedReadings.map(r => new Date(r.timestamp * 1000)),
+                y: sortedReadings.map(r => r.wifi || 0),
+                type: 'scatter',
+                mode: 'lines',
+                name: 'WiFi',
+                stackgroup: 'one',
+                fillcolor: 'rgba(13, 110, 253, 0.6)',
+                line: { color: '#0d6efd', width: 0 },
+                hovertemplate: '<b>%{y}</b> WiFi<extra></extra>'
+            });
+            traces.push({
+                x: sortedReadings.map(r => new Date(r.timestamp * 1000)),
+                y: sortedReadings.map(r => r.ble || 0),
+                type: 'scatter',
+                mode: 'lines',
+                name: 'BLE',
+                stackgroup: 'one',
+                fillcolor: 'rgba(111, 66, 193, 0.6)',
+                line: { color: '#6f42c1', width: 0 },
+                hovertemplate: '<b>%{y}</b> BLE<extra></extra>'
+            });
+        }
+
+        const hours = parseInt(document.getElementById('hoursFilter').value) || 24;
+        const tickformat = hours <= 24 ? '%H:%M' : '%b %d %H:%M';
+
+        const layout = {
+            margin: { t: 20, r: 20, b: 50, l: 50 },
+            paper_bgcolor: 'transparent',
+            plot_bgcolor: 'transparent',
+            showlegend: mode !== 'total',
+            legend: {
+                orientation: 'h',
+                y: 1.1,
+                font: { color: isDarkMode ? '#adb5bd' : '#6c757d' }
+            },
+            xaxis: {
+                type: 'date',
+                tickformat: tickformat,
+                tickfont: { size: 10, color: isDarkMode ? '#adb5bd' : '#6c757d' },
+                gridcolor: isDarkMode ? 'rgba(255,255,255,0.1)' : 'rgba(0,0,0,0.1)',
+                rangeslider: { visible: false }
+            },
+            yaxis: {
+                title: 'Count',
+                titlefont: { color: isDarkMode ? '#adb5bd' : '#6c757d' },
+                tickfont: { color: isDarkMode ? '#adb5bd' : '#6c757d' },
+                gridcolor: isDarkMode ? 'rgba(255,255,255,0.1)' : 'rgba(0,0,0,0.1)',
+                rangemode: 'tozero'
+            },
+            hovermode: 'x unified',
+            dragmode: 'zoom'
+        };
+
+        const config = {
+            responsive: true,
+            displayModeBar: true,
+            modeBarButtonsToRemove: ['select2d', 'lasso2d', 'autoScale2d'],
+            displaylogo: false,
+            scrollZoom: true
+        };
+
+        Plotly.newPlot(container, traces, layout, config);
+    }
+
+    // Reset timeseries chart zoom
+    function resetTimeseriesZoom() {
+        const container = document.getElementById('timeseriesChart');
+        Plotly.relayout(container, {
+            'xaxis.autorange': true,
+            'yaxis.autorange': true
+        });
+    }
+
+    // Update node comparison chart
+    function updateComparisonChart(nodes) {
+        const container = document.getElementById('comparisonChart');
+        const metric = document.getElementById('comparisonMetric').value;
+
+        if (!nodes || nodes.length === 0) {
+            container.innerHTML = `
+                <div class="text-center text-muted p-4">
+                    <i class="bi bi-bar-chart-steps" style="font-size: 2rem; opacity: 0.5;"></i>
+                    <p class="mt-2">No nodes to compare</p>
+                </div>
+            `;
+            return;
+        }
+
+        container.innerHTML = '';
+        const isDarkMode = document.documentElement.getAttribute('data-bs-theme') === 'dark';
+
+        // Sort nodes by the selected metric
+        const sortedNodes = [...nodes].sort((a, b) => {
+            if (metric === 'total') {
+                return ((b.avg_wifi || 0) + (b.avg_ble || 0)) - ((a.avg_wifi || 0) + (a.avg_ble || 0));
+            } else if (metric === 'wifi') {
+                return (b.avg_wifi || 0) - (a.avg_wifi || 0);
+            } else if (metric === 'ble') {
+                return (b.avg_ble || 0) - (a.avg_ble || 0);
+            } else {
+                return (b.reading_count || 0) - (a.reading_count || 0);
+            }
+        }).slice(0, 10); // Top 10 nodes
+
+        const labels = sortedNodes.map(n => n.name || n.node_hex || 'Unknown');
+
+        let values, colors, title;
+        if (metric === 'total') {
+            values = sortedNodes.map(n => (n.avg_wifi || 0) + (n.avg_ble || 0));
+            colors = '#198754';
+            title = 'Total Avg Pax';
+        } else if (metric === 'wifi') {
+            values = sortedNodes.map(n => n.avg_wifi || 0);
+            colors = '#0d6efd';
+            title = 'WiFi Avg';
+        } else if (metric === 'ble') {
+            values = sortedNodes.map(n => n.avg_ble || 0);
+            colors = '#6f42c1';
+            title = 'BLE Avg';
+        } else {
+            values = sortedNodes.map(n => n.reading_count || 0);
+            colors = '#fd7e14';
+            title = 'Reading Count';
+        }
+
+        const trace = {
+            x: values,
+            y: labels,
+            type: 'bar',
+            orientation: 'h',
+            marker: {
+                color: colors,
+                line: { color: colors, width: 1 }
+            },
+            hovertemplate: '<b>%{y}</b>: %{x}<extra></extra>'
+        };
+
+        const layout = {
+            margin: { t: 10, r: 20, b: 40, l: 120 },
+            paper_bgcolor: 'transparent',
+            plot_bgcolor: 'transparent',
+            xaxis: {
+                title: title,
+                titlefont: { size: 11, color: isDarkMode ? '#adb5bd' : '#6c757d' },
+                tickfont: { size: 10, color: isDarkMode ? '#adb5bd' : '#6c757d' },
+                gridcolor: isDarkMode ? 'rgba(255,255,255,0.1)' : 'rgba(0,0,0,0.1)'
+            },
+            yaxis: {
+                tickfont: { size: 10, color: isDarkMode ? '#adb5bd' : '#6c757d' },
+                automargin: true
+            }
+        };
+
+        Plotly.newPlot(container, [trace], layout, { responsive: true, displayModeBar: false });
+    }
+
     // Update map with paxcounter locations
     function updateMap(readings) {
         // Clear existing markers
@@ -725,6 +1162,19 @@
         document.getElementById('nodeFilter').addEventListener('change', function() {
             selectedNode = this.value || null;
             loadPaxcounterData();
+        });
+
+        // Chart mode changes (re-render with existing data)
+        document.getElementById('timeseriesMode').addEventListener('change', function() {
+            if (currentData && currentData.readings) {
+                updateTimeseriesChart(currentData.readings);
+            }
+        });
+
+        document.getElementById('comparisonMetric').addEventListener('change', function() {
+            if (currentData && currentData.pax_nodes) {
+                updateComparisonChart(currentData.pax_nodes);
+            }
         });
     });
 </script>
