@@ -539,7 +539,10 @@ async function addMeshNode() {
             meshNodePicker.clearButton.style.display = 'none';
         }
 
-        showStatus('success', `Added ${name} to coverage map`);
+        showStatus('success', `Added ${name} - analyzing terrain...`);
+
+        // Automatically analyze terrain for this node
+        await analyzeNodeTerrain(coverageNode.id);
 
     } catch (error) {
         console.error('Error adding mesh node:', error);
@@ -548,7 +551,7 @@ async function addMeshNode() {
 }
 
 // Add custom node at clicked location
-function addCustomNode(lat, lng) {
+async function addCustomNode(lat, lng) {
     const colorIndex = coverageNodes.length % coverageColors.length;
     const color = coverageColors[colorIndex];
     const customName = `Custom #${coverageNodes.filter(n => n.type === 'custom').length + 1}`;
@@ -573,7 +576,10 @@ function addCustomNode(lat, lng) {
     coverageNodes.push(coverageNode);
     updateNodeList();
 
-    showStatus('success', `Added custom location at ${lat.toFixed(4)}, ${lng.toFixed(4)}`);
+    showStatus('success', `Added custom location - analyzing terrain...`);
+
+    // Automatically analyze terrain for this node
+    await analyzeNodeTerrain(coverageNode.id);
 }
 
 // Create a node marker
@@ -651,10 +657,11 @@ function updateNodeList() {
                 ${node.name}
                 <br><small class="text-muted">${node.type === 'mesh' ? 'Mesh' : 'Custom'} • Alt: ${node.altitude.toFixed(0)}m</small>
                 ${node.terrainAnalysis ? `<br><span class="badge ${node.terrainAnalysis.badgeClass} badge-sm">${node.terrainAnalysis.terrainClass}</span>
-                    <small class="text-muted ms-1">TX: ${node.terrainAnalysis.suggestedTxPower}</small>` : ''}
+                    <small class="text-muted ms-1">${node.terrainAnalysis.suggestedRadiusKm}km @ ${node.terrainAnalysis.suggestedTxPower}</small>` :
+                    '<br><small class="text-muted"><i class="bi bi-hourglass-split"></i> Analyzing...</small>'}
             </div>
             <div class="coverage-node-actions">
-                <button class="btn btn-outline-info btn-sm" onclick="analyzeNodeTerrain(${node.id})" title="Analyze terrain">
+                <button class="btn btn-outline-info btn-sm" onclick="analyzeNodeTerrain(${node.id})" title="Re-analyze terrain">
                     <i class="bi bi-mountains"></i>
                 </button>
                 <button class="btn btn-outline-primary btn-sm" onclick="zoomToNode(${node.id})" title="Zoom to node">
@@ -841,6 +848,20 @@ async function analyzeRay(centerLat, centerLon, observerHeight, angleDeg, maxDis
     // Fetch elevation for all points
     const elevations = await fetchElevationsForPoints(points);
 
+    // If elevation API failed, return conservative estimate (half the max distance)
+    if (elevations === null) {
+        console.debug(`Ray ${angleDeg}°: Elevation API failed, using conservative estimate`);
+        return { visibleDistance: maxDistanceKm * 0.5 };
+    }
+
+    // Check if we got real elevation data (not all zeros)
+    const hasRealData = elevations.some(e => e !== 0);
+    if (!hasRealData) {
+        // Flat terrain or ocean - use slightly reduced coverage
+        console.debug(`Ray ${angleDeg}°: Flat/ocean terrain detected, using 80% coverage`);
+        return { visibleDistance: maxDistanceKm * 0.8 };
+    }
+
     // Check line of sight with Fresnel zone clearance for each point
     // Simulating a receiver at antenna height above terrain at each sample point
     let visibleDistance = 0;
@@ -896,6 +917,11 @@ async function analyzeRay(centerLat, centerLon, observerHeight, angleDeg, maxDis
         }
     }
 
+    // Log significant terrain blockage
+    if (visibleDistance < maxDistanceKm * 0.5) {
+        console.debug(`Ray ${angleDeg}°: Terrain blocks at ${visibleDistance.toFixed(1)}km (max: ${maxDistanceKm}km)`);
+    }
+
     return { visibleDistance };
 }
 
@@ -935,60 +961,99 @@ async function fetchElevationsForPoints(points) {
 
         const response = await fetch(url);
         if (!response.ok) {
-            console.warn('Elevation API error, using fallback');
-            return points.map(() => 0);
+            console.warn('Elevation API error:', response.status, 'using fallback elevation data');
+            // Return null to indicate API failure - caller should handle this
+            return null;
         }
 
         const data = await response.json();
 
         if (data.geoPoints && Array.isArray(data.geoPoints)) {
-            return data.geoPoints.map(p => p.elevation || 0);
+            const elevations = data.geoPoints.map(p => p.elevation || 0);
+            // Log for debugging
+            if (elevations.some(e => e !== 0)) {
+                console.debug(`Fetched ${elevations.length} elevation points, range: ${Math.min(...elevations)}m to ${Math.max(...elevations)}m`);
+            }
+            return elevations;
         }
 
-        return points.map(() => 0);
+        return null;
 
     } catch (error) {
         console.warn('Failed to fetch elevations:', error);
-        return points.map(() => 0);
+        return null;
     }
 }
 
 // Draw coverage overlay for a node
 function drawCoverageOverlay(node, coveragePolygons) {
-    const visibleCoords = [];
+    const layerGroup = L.layerGroup();
 
-    coveragePolygons.visible.forEach(sector => {
+    // Sort sectors by angle to ensure proper ordering
+    const sortedSectors = [...coveragePolygons.visible].sort((a, b) => a.startAngle - b.startAngle);
+
+    if (sortedSectors.length === 0) {
+        return null;
+    }
+
+    const centerLat = sortedSectors[0].centerLat;
+    const centerLon = sortedSectors[0].centerLon;
+
+    // Create a smooth polygon by following the coverage boundary
+    const smoothedPoints = [];
+
+    for (let i = 0; i < sortedSectors.length; i++) {
+        const sector = sortedSectors[i];
+        // Generate multiple points along each sector's arc at its visible distance
         const arcPoints = generateArcPoints(
             sector.centerLat,
             sector.centerLon,
             sector.distance,
             sector.startAngle,
             sector.endAngle,
-            5
+            3 // points per sector arc
         );
-        visibleCoords.push(...arcPoints);
-    });
+        smoothedPoints.push(...arcPoints);
+    }
 
-    if (visibleCoords.length > 2) {
-        const polygon = L.polygon(visibleCoords, {
+    if (smoothedPoints.length > 2) {
+        const polygon = L.polygon(smoothedPoints, {
             color: node.color.stroke,
             fillColor: node.color.fill,
             fillOpacity: COVERAGE_FILL_OPACITY,
             weight: COVERAGE_STROKE_WEIGHT,
-            opacity: COVERAGE_STROKE_OPACITY
+            opacity: COVERAGE_STROKE_OPACITY,
+            smoothFactor: 1
         });
 
         polygon.bindPopup(`
             <strong>${node.name}</strong><br>
             <span style="color: ${node.color.stroke};">■</span> Coverage Area<br>
-            <small class="text-muted">Estimated line-of-sight coverage</small>
+            <small class="text-muted">Line-of-sight coverage based on terrain elevation data</small>
         `);
 
-        polygon.addTo(map);
-        return polygon;
+        layerGroup.addLayer(polygon);
+
+        // Draw radial lines to show sector boundaries (every 4th sector)
+        sortedSectors.forEach((sector, idx) => {
+            if (sector.distance > 0.5 && idx % 4 === 0) {
+                const startPoint = destinationPoint(sector.centerLat, sector.centerLon, sector.distance, sector.startAngle);
+                const radialLine = L.polyline([
+                    [sector.centerLat, sector.centerLon],
+                    [startPoint.latitude, startPoint.longitude]
+                ], {
+                    color: node.color.stroke,
+                    weight: 1,
+                    opacity: 0.3,
+                    dashArray: '2,4'
+                });
+                layerGroup.addLayer(radialLine);
+            }
+        });
     }
 
-    return null;
+    layerGroup.addTo(map);
+    return layerGroup;
 }
 
 // Generate points along an arc
@@ -1103,33 +1168,39 @@ async function analyzeNodeTerrain(nodeId) {
         const nodeElevForComparison = nodeAltitude > 0 ? nodeAltitude : terrainAtNode;
         const prominence = nodeElevForComparison - avgSurrounding;
 
-        // Determine terrain classification and TX power recommendation
-        let terrainClass, badgeClass, suggestedTxPower;
+        // Determine terrain classification, TX power, and coverage radius recommendation
+        let terrainClass, badgeClass, suggestedTxPower, suggestedRadiusKm;
 
         if (prominence > 100) {
             terrainClass = 'Mountain';
             badgeClass = 'bg-success';
             suggestedTxPower = '17-20 dBm';
+            suggestedRadiusKm = 30; // Can see far from mountains
         } else if (prominence > 50) {
             terrainClass = 'Hilltop';
             badgeClass = 'bg-success';
             suggestedTxPower = '20-23 dBm';
+            suggestedRadiusKm = 20;
         } else if (prominence > 20) {
             terrainClass = 'Elevated';
             badgeClass = 'bg-info';
             suggestedTxPower = '23-27 dBm';
+            suggestedRadiusKm = 15;
         } else if (prominence > -20) {
             terrainClass = 'Level';
             badgeClass = 'bg-warning text-dark';
             suggestedTxPower = '27-30 dBm';
+            suggestedRadiusKm = 10;
         } else if (prominence > -50) {
             terrainClass = 'Low';
             badgeClass = 'bg-secondary';
             suggestedTxPower = '30 dBm';
+            suggestedRadiusKm = 5;
         } else {
             terrainClass = 'Valley';
             badgeClass = 'bg-danger';
             suggestedTxPower = '30 dBm (limited)';
+            suggestedRadiusKm = 5;
         }
 
         // Store analysis on node
@@ -1137,10 +1208,31 @@ async function analyzeNodeTerrain(nodeId) {
             terrainClass,
             badgeClass,
             suggestedTxPower,
+            suggestedRadiusKm,
             prominence,
             avgSurrounding,
             terrainAtNode
         };
+
+        // Auto-select the suggested coverage radius in the dropdown
+        const radiusSelect = document.getElementById('coverageRadius');
+        if (radiusSelect) {
+            // Find the closest matching radius option
+            const options = Array.from(radiusSelect.options);
+            let bestOption = null;
+            let bestDiff = Infinity;
+            options.forEach(opt => {
+                const optKm = parseInt(opt.value);
+                const diff = Math.abs(optKm - suggestedRadiusKm);
+                if (diff < bestDiff) {
+                    bestDiff = diff;
+                    bestOption = opt;
+                }
+            });
+            if (bestOption) {
+                radiusSelect.value = bestOption.value;
+            }
+        }
 
         // Update UI
         updateNodeList();
@@ -1152,9 +1244,10 @@ async function analyzeNodeTerrain(nodeId) {
             <hr style="margin: 5px 0;">
             <strong>Terrain:</strong> <span class="badge ${badgeClass}">${terrainClass}</span><br>
             <strong>Prominence:</strong> ${prominence > 0 ? '+' : ''}${prominence.toFixed(0)}m<br>
-            <strong>Suggested TX:</strong> ${suggestedTxPower}`);
+            <strong>Suggested TX:</strong> ${suggestedTxPower}<br>
+            <strong>Suggested Radius:</strong> ${suggestedRadiusKm} km`);
 
-        showStatus('success', `${node.name}: ${terrainClass} position (${prominence > 0 ? '+' : ''}${prominence.toFixed(0)}m) - Suggested TX: ${suggestedTxPower}`);
+        showStatus('success', `${node.name}: ${terrainClass} (${prominence > 0 ? '+' : ''}${prominence.toFixed(0)}m) → TX: ${suggestedTxPower}, Radius: ${suggestedRadiusKm}km`);
 
     } catch (error) {
         console.error('Terrain analysis failed:', error);

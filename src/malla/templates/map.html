@@ -2372,6 +2372,20 @@ async function analyzeRay(centerLat, centerLon, observerHeight, angleDeg, maxDis
     // Fetch elevation for all points
     const elevations = await fetchElevationsForPoints(points);
 
+    // If elevation API failed, return conservative estimate
+    if (elevations === null) {
+        console.debug(`Ray ${angleDeg}°: Elevation API failed, using conservative estimate`);
+        return { visibleDistance: maxDistanceKm * 0.5, blockedDistance: maxDistanceKm * 0.5 };
+    }
+
+    // Check if we got real elevation data (not all zeros)
+    const hasRealData = elevations.some(e => e !== 0);
+    if (!hasRealData) {
+        // Flat terrain or ocean - use slightly reduced coverage
+        console.debug(`Ray ${angleDeg}°: Flat/ocean terrain detected`);
+        return { visibleDistance: maxDistanceKm * 0.8, blockedDistance: 0 };
+    }
+
     // Check line of sight with Fresnel zone clearance for each point
     // Simulating a receiver at antenna height above terrain at each sample point
     let visibleDistance = 0;
@@ -2429,6 +2443,11 @@ async function analyzeRay(centerLat, centerLon, observerHeight, angleDeg, maxDis
         }
     }
 
+    // Log significant terrain blockage
+    if (visibleDistance < maxDistanceKm * 0.5) {
+        console.debug(`Ray ${angleDeg}°: Terrain blocks at ${visibleDistance.toFixed(1)}km`);
+    }
+
     return { visibleDistance, blockedDistance };
 }
 
@@ -2470,66 +2489,119 @@ async function fetchElevationsForPoints(points) {
 
         const response = await fetch(url);
         if (!response.ok) {
-            console.warn('Elevation API error, using fallback');
-            return points.map(() => 0);
+            console.warn('Elevation API error:', response.status, 'using fallback');
+            return null;
         }
 
         const data = await response.json();
 
         if (data.geoPoints && Array.isArray(data.geoPoints)) {
-            return data.geoPoints.map(p => p.elevation || 0);
+            const elevations = data.geoPoints.map(p => p.elevation || 0);
+            if (elevations.some(e => e !== 0)) {
+                console.debug(`Fetched ${elevations.length} elevation points, range: ${Math.min(...elevations)}m to ${Math.max(...elevations)}m`);
+            }
+            return elevations;
         }
 
-        return points.map(() => 0);
+        return null;
 
     } catch (error) {
         console.warn('Failed to fetch elevations:', error);
-        return points.map(() => 0);
+        return null;
     }
 }
 
 // Draw coverage overlay for a specific node
 function drawNodeCoverageOverlay(node, coveragePolygons, colorSet) {
-    const visibleCoords = [];
+    const layerGroup = L.layerGroup();
 
-    // Build polygon from visible sectors
-    coveragePolygons.visible.forEach(sector => {
-        const arcPoints = generateArcPoints(
-            sector.centerLat,
-            sector.centerLon,
-            sector.distance,
-            sector.startAngle,
-            sector.endAngle,
-            5 // points per arc
-        );
-        visibleCoords.push(...arcPoints);
-    });
+    // Sort sectors by angle to ensure proper ordering
+    const sortedSectors = [...coveragePolygons.visible].sort((a, b) => a.startAngle - b.startAngle);
 
-    if (visibleCoords.length > 2) {
-        const layerGroup = L.layerGroup();
-
-        // Draw as a filled polygon with improved visibility
-        const polygon = L.polygon(visibleCoords, {
-            color: colorSet.stroke,
-            fillColor: colorSet.fill,
-            fillOpacity: COVERAGE_FILL_OPACITY,
-            weight: COVERAGE_STROKE_WEIGHT,
-            opacity: COVERAGE_STROKE_OPACITY
-        });
-
-        polygon.bindPopup(`
-            <strong>${node.display_name}</strong><br>
-            <span style="color: ${colorSet.fill};">■</span> Coverage Area<br>
-            <small class="text-muted">Estimated line-of-sight coverage</small>
-        `);
-
-        layerGroup.addLayer(polygon);
-        layerGroup.addTo(map);
-
-        return layerGroup;
+    if (sortedSectors.length === 0) {
+        return null;
     }
 
-    return null;
+    // Build a proper radial polygon by connecting sectors
+    // We need to create an outer boundary that follows the visible distances
+    const centerLat = sortedSectors[0].centerLat;
+    const centerLon = sortedSectors[0].centerLon;
+
+    // Create outer boundary points - one point per sector at its visible distance
+    const outerPoints = [];
+
+    sortedSectors.forEach(sector => {
+        // Add point at the midpoint of this sector's arc at its visible distance
+        const midAngle = (sector.startAngle + sector.endAngle) / 2;
+        const point = destinationPoint(sector.centerLat, sector.centerLon, sector.distance, midAngle);
+        outerPoints.push([point.latitude, point.longitude]);
+    });
+
+    // Close the polygon by adding the first point at the end if needed
+    if (outerPoints.length > 2) {
+        // Create a smooth polygon by interpolating between points
+        const smoothedPoints = [];
+
+        for (let i = 0; i < sortedSectors.length; i++) {
+            const sector = sortedSectors[i];
+            // Generate multiple points along each sector's arc
+            const arcPoints = generateArcPoints(
+                sector.centerLat,
+                sector.centerLon,
+                sector.distance,
+                sector.startAngle,
+                sector.endAngle,
+                3 // points per sector arc
+            );
+            smoothedPoints.push(...arcPoints);
+        }
+
+        if (smoothedPoints.length > 2) {
+            const polygon = L.polygon(smoothedPoints, {
+                color: colorSet.stroke,
+                fillColor: colorSet.fill,
+                fillOpacity: COVERAGE_FILL_OPACITY,
+                weight: COVERAGE_STROKE_WEIGHT,
+                opacity: COVERAGE_STROKE_OPACITY,
+                smoothFactor: 1
+            });
+
+            polygon.bindPopup(`
+                <strong>${node.display_name}</strong><br>
+                <span style="color: ${colorSet.fill};">■</span> Coverage Area<br>
+                <small class="text-muted">Line-of-sight coverage based on terrain elevation data</small>
+            `);
+
+            layerGroup.addLayer(polygon);
+        }
+    }
+
+    // Also draw individual sector wedges for better visualization of terrain effects
+    // This shows where coverage is blocked vs where it extends
+    sortedSectors.forEach((sector, idx) => {
+        if (sector.distance > 0.5) { // Only draw if distance is significant
+            // Draw a thin wedge line to show the sector boundary
+            const startPoint = destinationPoint(sector.centerLat, sector.centerLon, sector.distance, sector.startAngle);
+            const endPoint = destinationPoint(sector.centerLat, sector.centerLon, sector.distance, sector.endAngle);
+
+            // Draw radial lines at sector boundaries (every 4th sector to reduce clutter)
+            if (idx % 4 === 0) {
+                const radialLine = L.polyline([
+                    [sector.centerLat, sector.centerLon],
+                    [startPoint.latitude, startPoint.longitude]
+                ], {
+                    color: colorSet.stroke,
+                    weight: 1,
+                    opacity: 0.3,
+                    dashArray: '2,4'
+                });
+                layerGroup.addLayer(radialLine);
+            }
+        }
+    });
+
+    layerGroup.addTo(map);
+    return layerGroup;
 }
 
 // Legacy function for backward compatibility
