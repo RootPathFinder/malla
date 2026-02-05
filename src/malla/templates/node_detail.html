@@ -327,10 +327,84 @@
                     <!-- Current Location Map -->
                     <div class="mt-3">
                         <div id="current-location-map" style="height: 300px; border: 1px solid #dee2e6; border-radius: 0.375rem; margin-bottom: 15px;"></div>
-                        <a href="https://www.google.com/maps?q={{ location.latitude }},{{ location.longitude }}"
-                           target="_blank" class="btn btn-sm btn-outline-primary">
-                            <i class="bi bi-map"></i> View on Google Maps
-                        </a>
+                        <div class="d-flex gap-2 flex-wrap">
+                            <a href="https://www.google.com/maps?q={{ location.latitude }},{{ location.longitude }}"
+                               target="_blank" class="btn btn-sm btn-outline-primary">
+                                <i class="bi bi-map"></i> View on Google Maps
+                            </a>
+                            <button id="analyzeTerrainBtn" class="btn btn-sm btn-outline-success" onclick="analyzeTerrainPosition()">
+                                <i class="bi bi-mountains"></i> Analyze Terrain Position
+                            </button>
+                        </div>
+                    </div>
+
+                    <!-- Terrain Analysis Results -->
+                    <div id="terrainAnalysisCard" class="mt-3" style="display: none;">
+                        <div class="card border-info">
+                            <div class="card-header bg-info bg-opacity-10">
+                                <h6 class="mb-0"><i class="bi bi-mountains"></i> Terrain Analysis & TX Power Recommendation</h6>
+                            </div>
+                            <div class="card-body">
+                                <div id="terrainAnalysisLoading" class="text-center py-3">
+                                    <div class="spinner-border spinner-border-sm text-info me-2"></div>
+                                    Analyzing surrounding terrain...
+                                </div>
+                                <div id="terrainAnalysisContent" style="display: none;">
+                                    <div class="row">
+                                        <div class="col-md-6">
+                                            <h6 class="text-muted mb-2">Terrain Position</h6>
+                                            <div id="terrainPositionBadge" class="mb-2"></div>
+                                            <table class="table table-sm">
+                                                <tr>
+                                                    <th>Node Elevation:</th>
+                                                    <td id="nodeElevationValue">-</td>
+                                                </tr>
+                                                <tr>
+                                                    <th>Terrain Elevation:</th>
+                                                    <td id="terrainElevationValue">-</td>
+                                                </tr>
+                                                <tr>
+                                                    <th>Height Above Terrain:</th>
+                                                    <td id="heightAboveTerrain">-</td>
+                                                </tr>
+                                                <tr>
+                                                    <th>Avg Surrounding Terrain:</th>
+                                                    <td id="avgSurroundingTerrain">-</td>
+                                                </tr>
+                                                <tr>
+                                                    <th>Prominence:</th>
+                                                    <td id="terrainProminence">-</td>
+                                                </tr>
+                                            </table>
+                                        </div>
+                                        <div class="col-md-6">
+                                            <h6 class="text-muted mb-2"><i class="bi bi-broadcast"></i> TX Power Recommendation</h6>
+                                            <div id="txPowerRecommendation" class="alert alert-info mb-2">
+                                                Loading...
+                                            </div>
+                                            <table class="table table-sm">
+                                                <tr>
+                                                    <th>Suggested TX Power:</th>
+                                                    <td id="suggestedTxPower">-</td>
+                                                </tr>
+                                                <tr>
+                                                    <th>Suggested Radius:</th>
+                                                    <td id="suggestedRadius">-</td>
+                                                </tr>
+                                                <tr>
+                                                    <th>Coverage Potential:</th>
+                                                    <td id="coveragePotential">-</td>
+                                                </tr>
+                                            </table>
+                                            <p class="small text-muted mb-0">
+                                                <i class="bi bi-info-circle"></i>
+                                                Based on terrain analysis. Actual coverage depends on antenna, obstructions, and local conditions.
+                                            </p>
+                                        </div>
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
                     </div>
                 </div>
             </div>
@@ -1409,6 +1483,265 @@ async function loadLocationHistoryMap() {
         cardContainer.style.display = 'block';
         locationCount.textContent = 'Error loading location data';
     }
+}
+
+// ========================= Terrain Analysis =========================
+// Analyze terrain around the node to determine if it's on a hilltop
+// and suggest appropriate TX power settings
+
+async function analyzeTerrainPosition() {
+    const terrainCard = document.getElementById('terrainAnalysisCard');
+    const loadingDiv = document.getElementById('terrainAnalysisLoading');
+    const contentDiv = document.getElementById('terrainAnalysisContent');
+    const analyzeBtn = document.getElementById('analyzeTerrainBtn');
+
+    // Get location data
+    const locationDataScript = document.getElementById('location-data');
+    if (!locationDataScript) {
+        alert('No location data available for terrain analysis');
+        return;
+    }
+
+    const location = JSON.parse(locationDataScript.textContent);
+    const nodeLat = location.latitude;
+    const nodeLon = location.longitude;
+    const nodeAltitude = location.altitude || 0;
+
+    // Show loading state
+    terrainCard.style.display = 'block';
+    loadingDiv.style.display = 'block';
+    contentDiv.style.display = 'none';
+    analyzeBtn.disabled = true;
+    analyzeBtn.innerHTML = '<span class="spinner-border spinner-border-sm me-1"></span> Analyzing...';
+
+    try {
+        // Sample terrain in 8 directions at multiple distances
+        const directions = [0, 45, 90, 135, 180, 225, 270, 315]; // N, NE, E, SE, S, SW, W, NW
+        const distances = [0.5, 1, 2, 5]; // km
+        const allElevations = [];
+        let terrainAtNode = 0;
+
+        // Fetch terrain elevation at node location
+        const nodeElevResponse = await fetch(
+            `https://api.elevationapi.com/api/Elevation?lat=${nodeLat}&lon=${nodeLon}`
+        );
+        if (nodeElevResponse.ok) {
+            const nodeElevData = await nodeElevResponse.json();
+            terrainAtNode = nodeElevData.elevation || 0;
+        }
+
+        // Sample terrain in all directions
+        for (const direction of directions) {
+            for (const distKm of distances) {
+                const point = destinationPoint(nodeLat, nodeLon, distKm, direction);
+                allElevations.push({
+                    lat: point.latitude,
+                    lon: point.longitude,
+                    distance: distKm,
+                    direction: direction
+                });
+            }
+        }
+
+        // Fetch elevations in batches
+        const elevationValues = [];
+        for (const point of allElevations) {
+            try {
+                const resp = await fetch(
+                    `https://api.elevationapi.com/api/Elevation?lat=${point.lat.toFixed(6)}&lon=${point.lon.toFixed(6)}`
+                );
+                if (resp.ok) {
+                    const data = await resp.json();
+                    elevationValues.push({
+                        ...point,
+                        elevation: data.elevation || 0
+                    });
+                }
+                // Small delay to avoid rate limiting
+                await new Promise(resolve => setTimeout(resolve, 50));
+            } catch (e) {
+                console.warn('Failed to fetch elevation for point:', point, e);
+            }
+        }
+
+        // Calculate terrain statistics
+        const surroundingElevations = elevationValues.map(p => p.elevation);
+        const avgSurrounding = surroundingElevations.length > 0
+            ? surroundingElevations.reduce((a, b) => a + b, 0) / surroundingElevations.length
+            : 0;
+        const maxSurrounding = Math.max(...surroundingElevations, 0);
+        const minSurrounding = Math.min(...surroundingElevations, terrainAtNode);
+
+        // Calculate prominence (how much higher than surroundings)
+        const nodeElevForComparison = nodeAltitude > 0 ? nodeAltitude : terrainAtNode;
+        const prominence = nodeElevForComparison - avgSurrounding;
+        const heightAboveTerrain = nodeAltitude > 0 ? nodeAltitude - terrainAtNode : 0;
+
+        // Determine terrain position classification
+        let terrainClass, terrainBadgeClass, terrainIcon;
+        if (prominence > 100) {
+            terrainClass = 'Mountain/High Hill';
+            terrainBadgeClass = 'bg-success';
+            terrainIcon = 'bi-cloud';
+        } else if (prominence > 50) {
+            terrainClass = 'Hilltop';
+            terrainBadgeClass = 'bg-success';
+            terrainIcon = 'bi-triangle-fill';
+        } else if (prominence > 20) {
+            terrainClass = 'Elevated Position';
+            terrainBadgeClass = 'bg-info';
+            terrainIcon = 'bi-arrow-up';
+        } else if (prominence > -20) {
+            terrainClass = 'Level Terrain';
+            terrainBadgeClass = 'bg-warning text-dark';
+            terrainIcon = 'bi-dash-lg';
+        } else if (prominence > -50) {
+            terrainClass = 'Low Position';
+            terrainBadgeClass = 'bg-secondary';
+            terrainIcon = 'bi-arrow-down';
+        } else {
+            terrainClass = 'Valley/Depression';
+            terrainBadgeClass = 'bg-danger';
+            terrainIcon = 'bi-chevron-double-down';
+        }
+
+        // Calculate TX power recommendation based on terrain position
+        let suggestedTxPower, suggestedRadius, coveragePotential, recommendation;
+
+        if (prominence > 100) {
+            // Mountain/high hill - excellent position, lower power ok
+            suggestedTxPower = '17-20 dBm';
+            suggestedRadius = '30-50+ km';
+            coveragePotential = 'Excellent';
+            recommendation = `
+                <strong class="text-success"><i class="bi bi-check-circle"></i> Excellent Position!</strong><br>
+                This node has exceptional prominence (${prominence.toFixed(0)}m above surroundings).
+                Consider <strong>lower TX power (17-20 dBm)</strong> to save battery and reduce interference while still achieving great range.
+                A well-placed antenna here could cover 30-50+ km in optimal conditions.
+            `;
+        } else if (prominence > 50) {
+            // Hilltop - very good position
+            suggestedTxPower = '20-23 dBm';
+            suggestedRadius = '15-30 km';
+            coveragePotential = 'Very Good';
+            recommendation = `
+                <strong class="text-success"><i class="bi bi-check-circle"></i> Very Good Hilltop Position</strong><br>
+                This node sits ${prominence.toFixed(0)}m above average terrain - ideal for a mesh relay.
+                <strong>20-23 dBm TX power</strong> should provide excellent coverage of 15-30 km.
+                Consider setting role to Router for maximum network benefit.
+            `;
+        } else if (prominence > 20) {
+            // Elevated - good position
+            suggestedTxPower = '23-27 dBm';
+            suggestedRadius = '10-20 km';
+            coveragePotential = 'Good';
+            recommendation = `
+                <strong class="text-info"><i class="bi bi-info-circle"></i> Good Elevated Position</strong><br>
+                Node is ${prominence.toFixed(0)}m above average surroundings.
+                <strong>23-27 dBm TX power</strong> recommended for 10-20 km coverage.
+                This is a solid relay position for local mesh coverage.
+            `;
+        } else if (prominence > -20) {
+            // Level terrain - average position
+            suggestedTxPower = '27-30 dBm';
+            suggestedRadius = '5-15 km';
+            coveragePotential = 'Moderate';
+            recommendation = `
+                <strong class="text-warning"><i class="bi bi-exclamation-triangle"></i> Level Terrain Position</strong><br>
+                Node is at approximately the same elevation as surrounding terrain.
+                <strong>Higher TX power (27-30 dBm)</strong> recommended to overcome terrain obstacles.
+                Consider adding antenna height or relocating to higher ground for better coverage.
+            `;
+        } else if (prominence > -50) {
+            // Low position
+            suggestedTxPower = '30 dBm (Max)';
+            suggestedRadius = '3-8 km';
+            coveragePotential = 'Limited';
+            recommendation = `
+                <strong class="text-warning"><i class="bi bi-exclamation-triangle"></i> Low Terrain Position</strong><br>
+                Node is ${Math.abs(prominence).toFixed(0)}m below average surrounding terrain.
+                <strong>Maximum TX power (30 dBm)</strong> recommended, but range will be limited by terrain.
+                Consider raising antenna height significantly or relocating to improve coverage.
+            `;
+        } else {
+            // Valley position
+            suggestedTxPower = '30 dBm (Max)';
+            suggestedRadius = '1-5 km';
+            coveragePotential = 'Poor';
+            recommendation = `
+                <strong class="text-danger"><i class="bi bi-x-circle"></i> Valley/Depression Position</strong><br>
+                Node is ${Math.abs(prominence).toFixed(0)}m below surrounding terrain - this significantly limits RF propagation.
+                Even at <strong>maximum power (30 dBm)</strong>, range will be severely limited.
+                <strong>Strongly recommend relocating</strong> to higher ground or using this as a client-only node.
+            `;
+        }
+
+        // Update UI with results
+        document.getElementById('terrainPositionBadge').innerHTML = `
+            <span class="badge ${terrainBadgeClass} fs-6">
+                <i class="bi ${terrainIcon} me-1"></i>${terrainClass}
+            </span>
+        `;
+
+        document.getElementById('nodeElevationValue').textContent =
+            nodeAltitude > 0 ? `${nodeAltitude.toFixed(0)} m (reported by node)` : 'Not reported';
+        document.getElementById('terrainElevationValue').textContent = `${terrainAtNode.toFixed(0)} m`;
+        document.getElementById('heightAboveTerrain').textContent =
+            nodeAltitude > 0 ? `${heightAboveTerrain.toFixed(0)} m` : 'Unknown';
+        document.getElementById('avgSurroundingTerrain').textContent = `${avgSurrounding.toFixed(0)} m`;
+        document.getElementById('terrainProminence').innerHTML = `
+            <strong class="${prominence > 0 ? 'text-success' : 'text-warning'}">${prominence > 0 ? '+' : ''}${prominence.toFixed(0)} m</strong>
+        `;
+
+        document.getElementById('txPowerRecommendation').innerHTML = recommendation;
+        document.getElementById('suggestedTxPower').innerHTML = `<strong>${suggestedTxPower}</strong>`;
+        document.getElementById('suggestedRadius').textContent = suggestedRadius;
+        document.getElementById('coveragePotential').innerHTML = `
+            <span class="badge ${coveragePotential === 'Excellent' || coveragePotential === 'Very Good' ? 'bg-success' :
+                                 coveragePotential === 'Good' ? 'bg-info' :
+                                 coveragePotential === 'Moderate' ? 'bg-warning text-dark' : 'bg-danger'}">${coveragePotential}</span>
+        `;
+
+        // Show results
+        loadingDiv.style.display = 'none';
+        contentDiv.style.display = 'block';
+
+    } catch (error) {
+        console.error('Terrain analysis failed:', error);
+        loadingDiv.innerHTML = `
+            <div class="text-danger">
+                <i class="bi bi-exclamation-triangle me-2"></i>
+                Failed to analyze terrain: ${error.message}
+            </div>
+        `;
+    } finally {
+        analyzeBtn.disabled = false;
+        analyzeBtn.innerHTML = '<i class="bi bi-mountains"></i> Analyze Terrain Position';
+    }
+}
+
+// Calculate destination point given start, distance, and bearing
+function destinationPoint(lat, lon, distanceKm, bearingDeg) {
+    const R = 6371; // Earth radius in km
+    const d = distanceKm / R;
+    const brng = bearingDeg * Math.PI / 180;
+    const lat1 = lat * Math.PI / 180;
+    const lon1 = lon * Math.PI / 180;
+
+    const lat2 = Math.asin(
+        Math.sin(lat1) * Math.cos(d) +
+        Math.cos(lat1) * Math.sin(d) * Math.cos(brng)
+    );
+
+    const lon2 = lon1 + Math.atan2(
+        Math.sin(brng) * Math.sin(d) * Math.cos(lat1),
+        Math.cos(d) - Math.sin(lat1) * Math.sin(lat2)
+    );
+
+    return {
+        latitude: lat2 * 180 / Math.PI,
+        longitude: lon2 * 180 / Math.PI
+    };
 }
 
 // ========================= Direct Receptions Chart =========================

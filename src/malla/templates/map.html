@@ -2190,17 +2190,22 @@ function updateCoverageRadiusOptions() {
     }
 }
 
-// Color palette for different node coverage areas (easily distinguishable)
+// Color palette for different node coverage areas (easily distinguishable, higher contrast)
 const coverageColors = [
-    { fill: '#28a745', stroke: '#1e7e34', name: 'Green' },
-    { fill: '#007bff', stroke: '#0056b3', name: 'Blue' },
-    { fill: '#e83e8c', stroke: '#c21766', name: 'Pink' },
-    { fill: '#fd7e14', stroke: '#dc6502', name: 'Orange' },
-    { fill: '#6f42c1', stroke: '#5a32a3', name: 'Purple' },
-    { fill: '#20c997', stroke: '#1aa179', name: 'Teal' },
-    { fill: '#ffc107', stroke: '#d39e00', name: 'Yellow' },
-    { fill: '#17a2b8', stroke: '#117a8b', name: 'Cyan' },
+    { fill: '#22c55e', stroke: '#15803d', name: 'Green' },    // Brighter green
+    { fill: '#3b82f6', stroke: '#1d4ed8', name: 'Blue' },     // Brighter blue
+    { fill: '#ec4899', stroke: '#be185d', name: 'Pink' },     // Brighter pink
+    { fill: '#f97316', stroke: '#c2410c', name: 'Orange' },   // Brighter orange
+    { fill: '#a855f7', stroke: '#7e22ce', name: 'Purple' },   // Brighter purple
+    { fill: '#14b8a6', stroke: '#0f766e', name: 'Teal' },     // Brighter teal
+    { fill: '#eab308', stroke: '#a16207', name: 'Yellow' },   // Brighter yellow
+    { fill: '#06b6d4', stroke: '#0e7490', name: 'Cyan' },     // Brighter cyan
 ];
+
+// Coverage fill opacity settings (higher = more visible)
+const COVERAGE_FILL_OPACITY = 0.45;
+const COVERAGE_STROKE_OPACITY = 0.9;
+const COVERAGE_STROKE_WEIGHT = 3;
 
 // Add coverage for the currently selected node (multi-node support)
 async function addNodeCoverage() {
@@ -2335,47 +2340,92 @@ async function calculateViewshed(centerLat, centerLon, observerHeight, radiusKm,
     return { visible: visibleSectors, blocked: blockedSectors };
 }
 
-// Analyze a single ray for line-of-sight visibility
+// Calculate Fresnel zone radius at a given point (same algorithm as line-of-sight tool)
+function calculateFresnelZone(distanceFromTx, distanceToRx, frequency = 915) {
+    // Fresnel zone radius in meters
+    // frequency in MHz, distances in meters
+    const wavelength = 299792458 / (frequency * 1000000); // meters
+    const d1 = distanceFromTx;
+    const d2 = distanceToRx;
+    const totalDistance = d1 + d2;
+    if (totalDistance === 0) return 0;
+    // First Fresnel zone radius: r = sqrt(n * λ * d1 * d2 / (d1 + d2))
+    // We use 60% of first Fresnel zone for practical clearance
+    const fresnelRadius = 0.6 * Math.sqrt((wavelength * d1 * d2) / totalDistance);
+    return fresnelRadius;
+}
+
+// Analyze a single ray for line-of-sight visibility with Fresnel zone clearance
+// Uses the same algorithm as the line-of-sight analysis tool for accuracy
 async function analyzeRay(centerLat, centerLon, observerHeight, angleDeg, maxDistanceKm, numSamples) {
-    const angleRad = angleDeg * Math.PI / 180;
-    const earthRadius = 6371;
+    const earthRadius = 6371; // km
+    const maxDistanceM = maxDistanceKm * 1000; // Convert to meters
 
     // Generate sample points along the ray
     const points = [];
     for (let i = 1; i <= numSamples; i++) {
         const distance = (i / numSamples) * maxDistanceKm;
         const point = destinationPoint(centerLat, centerLon, distance, angleDeg);
-        points.push({ ...point, distance });
+        points.push({ ...point, distance, distanceM: distance * 1000 });
     }
 
     // Fetch elevation for all points
     const elevations = await fetchElevationsForPoints(points);
 
-    // Check line of sight for each point
-    let visibleDistance = maxDistanceKm;
+    // Check line of sight with Fresnel zone clearance for each point
+    // Simulating a receiver at antenna height above terrain at each sample point
+    let visibleDistance = 0;
     let blockedDistance = 0;
-    let maxAngle = -Infinity;
+
+    // Assume receiver is also at same antenna height above local terrain
+    const receiverAntennaHeight = 10; // meters above ground
 
     for (let i = 0; i < points.length; i++) {
         const point = points[i];
-        const elevation = elevations[i] || 0;
+        const terrainElevation = elevations[i] || 0;
 
-        // Calculate the angle from observer to this point
-        // Account for Earth curvature
-        const curvatureDrop = (point.distance * point.distance) / (2 * earthRadius) * 1000; // meters
-        const effectiveElevation = elevation - curvatureDrop;
+        // Account for Earth curvature (drop in meters)
+        const curvatureDrop = (point.distance * point.distance) / (2 * earthRadius) * 1000;
 
-        // Angle in radians from horizontal
-        const verticalAngle = Math.atan2(effectiveElevation - observerHeight, point.distance * 1000);
+        // Effective terrain elevation accounting for Earth curvature
+        const effectiveTerrainElev = terrainElevation - curvatureDrop;
 
-        if (verticalAngle > maxAngle) {
-            maxAngle = verticalAngle;
-        } else {
-            // This point is blocked by something closer
-            if (blockedDistance === 0) {
-                blockedDistance = point.distance;
-                visibleDistance = points[i - 1]?.distance || 0;
+        // Hypothetical receiver height at this location
+        const receiverHeight = effectiveTerrainElev + receiverAntennaHeight;
+
+        // Check if line-of-sight is clear to this point
+        // by checking all intermediate points have sufficient Fresnel clearance
+        let isVisible = true;
+
+        for (let j = 1; j < i; j++) {
+            const midPoint = points[j];
+            const midTerrainElev = elevations[j] || 0;
+            const midCurvatureDrop = (midPoint.distance * midPoint.distance) / (2 * earthRadius) * 1000;
+            const effectiveMidElev = midTerrainElev - midCurvatureDrop;
+
+            // Calculate line-of-sight elevation at this intermediate point
+            const distanceRatio = midPoint.distanceM / point.distanceM;
+            const losElevation = observerHeight + (receiverHeight - observerHeight) * distanceRatio;
+
+            // Calculate required Fresnel zone clearance
+            const fresnelClearance = calculateFresnelZone(
+                midPoint.distanceM,
+                point.distanceM - midPoint.distanceM
+            );
+
+            // Check if terrain blocks the signal (including Fresnel zone)
+            const actualClearance = losElevation - effectiveMidElev;
+            if (actualClearance < fresnelClearance * 0.6) { // 60% Fresnel zone rule
+                isVisible = false;
+                break;
             }
+        }
+
+        if (isVisible) {
+            visibleDistance = point.distance;
+        } else if (blockedDistance === 0) {
+            blockedDistance = point.distance;
+            break; // Once blocked, remaining distance is also blocked
         }
     }
 
@@ -2458,13 +2508,13 @@ function drawNodeCoverageOverlay(node, coveragePolygons, colorSet) {
     if (visibleCoords.length > 2) {
         const layerGroup = L.layerGroup();
 
-        // Draw as a filled polygon
+        // Draw as a filled polygon with improved visibility
         const polygon = L.polygon(visibleCoords, {
             color: colorSet.stroke,
             fillColor: colorSet.fill,
-            fillOpacity: 0.2,
-            weight: 2,
-            opacity: 0.6
+            fillOpacity: COVERAGE_FILL_OPACITY,
+            weight: COVERAGE_STROKE_WEIGHT,
+            opacity: COVERAGE_STROKE_OPACITY
         });
 
         polygon.bindPopup(`

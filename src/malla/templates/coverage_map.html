@@ -283,21 +283,21 @@
                 <div class="row">
                     <div class="col-md-6">
                         <div class="legend-item">
-                            <div class="legend-color" style="background: rgba(40, 167, 69, 0.3); border-color: #28a745;"></div>
-                            <span>Line-of-sight coverage area</span>
+                            <div class="legend-color" style="background: rgba(34, 197, 94, 0.45); border-color: #15803d;"></div>
+                            <span>Line-of-sight coverage (Fresnel zone clear)</span>
                         </div>
                         <div class="legend-item">
-                            <div class="legend-color" style="background: rgba(255, 193, 7, 0.4); border-color: #ffc107;"></div>
+                            <div class="legend-color" style="background: rgba(234, 179, 8, 0.45); border-color: #a16207;"></div>
                             <span>Coverage overlap (multiple nodes)</span>
                         </div>
                     </div>
                     <div class="col-md-6">
                         <div class="legend-item">
-                            <div class="legend-color" style="background: #28a745;"></div>
+                            <div class="legend-color" style="background: #15803d;"></div>
                             <span>Mesh node location</span>
                         </div>
                         <div class="legend-item">
-                            <div class="legend-color" style="background: #007bff;"></div>
+                            <div class="legend-color" style="background: #1d4ed8;"></div>
                             <span>Custom node location</span>
                         </div>
                     </div>
@@ -339,17 +339,22 @@ let coverageNodes = []; // { id, name, lat, lng, altitude, type: 'mesh'|'custom'
 let nodeIdCounter = 0;
 let placementMode = false;
 
-// Color palette for coverage areas
+// Color palette for coverage areas (brighter, more visible colors)
 const coverageColors = [
-    { fill: 'rgba(40, 167, 69, 0.25)', stroke: '#28a745', name: 'Green' },
-    { fill: 'rgba(0, 123, 255, 0.25)', stroke: '#007bff', name: 'Blue' },
-    { fill: 'rgba(232, 62, 140, 0.25)', stroke: '#e83e8c', name: 'Pink' },
-    { fill: 'rgba(253, 126, 20, 0.25)', stroke: '#fd7e14', name: 'Orange' },
-    { fill: 'rgba(111, 66, 193, 0.25)', stroke: '#6f42c1', name: 'Purple' },
-    { fill: 'rgba(32, 201, 151, 0.25)', stroke: '#20c997', name: 'Teal' },
-    { fill: 'rgba(255, 193, 7, 0.25)', stroke: '#ffc107', name: 'Yellow' },
-    { fill: 'rgba(23, 162, 184, 0.25)', stroke: '#17a2b8', name: 'Cyan' },
+    { fill: 'rgba(34, 197, 94, 0.45)', stroke: '#15803d', name: 'Green' },     // Brighter green
+    { fill: 'rgba(59, 130, 246, 0.45)', stroke: '#1d4ed8', name: 'Blue' },     // Brighter blue
+    { fill: 'rgba(236, 72, 153, 0.45)', stroke: '#be185d', name: 'Pink' },     // Brighter pink
+    { fill: 'rgba(249, 115, 22, 0.45)', stroke: '#c2410c', name: 'Orange' },   // Brighter orange
+    { fill: 'rgba(168, 85, 247, 0.45)', stroke: '#7e22ce', name: 'Purple' },   // Brighter purple
+    { fill: 'rgba(20, 184, 166, 0.45)', stroke: '#0f766e', name: 'Teal' },     // Brighter teal
+    { fill: 'rgba(234, 179, 8, 0.45)', stroke: '#a16207', name: 'Yellow' },    // Brighter yellow
+    { fill: 'rgba(6, 182, 212, 0.45)', stroke: '#0e7490', name: 'Cyan' },      // Brighter cyan
 ];
+
+// Coverage styling settings
+const COVERAGE_FILL_OPACITY = 0.45;
+const COVERAGE_STROKE_OPACITY = 0.9;
+const COVERAGE_STROKE_WEIGHT = 3;
 
 // Coverage radius options (km)
 const coverageRadiusOptionsKm = [
@@ -645,8 +650,13 @@ function updateNodeList() {
             <div class="coverage-node-name" title="${node.name}">
                 ${node.name}
                 <br><small class="text-muted">${node.type === 'mesh' ? 'Mesh' : 'Custom'} • Alt: ${node.altitude.toFixed(0)}m</small>
+                ${node.terrainAnalysis ? `<br><span class="badge ${node.terrainAnalysis.badgeClass} badge-sm">${node.terrainAnalysis.terrainClass}</span>
+                    <small class="text-muted ms-1">TX: ${node.terrainAnalysis.suggestedTxPower}</small>` : ''}
             </div>
             <div class="coverage-node-actions">
+                <button class="btn btn-outline-info btn-sm" onclick="analyzeNodeTerrain(${node.id})" title="Analyze terrain">
+                    <i class="bi bi-mountains"></i>
+                </button>
                 <button class="btn btn-outline-primary btn-sm" onclick="zoomToNode(${node.id})" title="Zoom to node">
                     <i class="bi bi-geo-alt"></i>
                 </button>
@@ -799,38 +809,90 @@ async function calculateViewshed(centerLat, centerLon, observerHeight, radiusKm,
     return { visible: visibleSectors };
 }
 
-// Analyze a single ray for line-of-sight visibility
-async function analyzeRay(centerLat, centerLon, observerHeight, angleDeg, maxDistanceKm, numSamples) {
-    const earthRadius = 6371;
+// Calculate Fresnel zone radius at a given point (same algorithm as line-of-sight tool)
+function calculateFresnelZone(distanceFromTx, distanceToRx, frequency = 915) {
+    // Fresnel zone radius in meters
+    // frequency in MHz, distances in meters
+    const wavelength = 299792458 / (frequency * 1000000); // meters
+    const d1 = distanceFromTx;
+    const d2 = distanceToRx;
+    const totalDistance = d1 + d2;
+    if (totalDistance === 0) return 0;
+    // First Fresnel zone radius: r = sqrt(n * λ * d1 * d2 / (d1 + d2))
+    // We use 60% of first Fresnel zone for practical clearance
+    const fresnelRadius = 0.6 * Math.sqrt((wavelength * d1 * d2) / totalDistance);
+    return fresnelRadius;
+}
 
+// Analyze a single ray for line-of-sight visibility with Fresnel zone clearance
+// Uses the same algorithm as the line-of-sight analysis tool for accuracy
+async function analyzeRay(centerLat, centerLon, observerHeight, angleDeg, maxDistanceKm, numSamples) {
+    const earthRadius = 6371; // km
+    const maxDistanceM = maxDistanceKm * 1000; // Convert to meters
+
+    // Generate sample points along the ray
     const points = [];
     for (let i = 1; i <= numSamples; i++) {
         const distance = (i / numSamples) * maxDistanceKm;
         const point = destinationPoint(centerLat, centerLon, distance, angleDeg);
-        points.push({ ...point, distance });
+        points.push({ ...point, distance, distanceM: distance * 1000 });
     }
 
+    // Fetch elevation for all points
     const elevations = await fetchElevationsForPoints(points);
 
-    let visibleDistance = maxDistanceKm;
-    let maxAngle = -Infinity;
+    // Check line of sight with Fresnel zone clearance for each point
+    // Simulating a receiver at antenna height above terrain at each sample point
+    let visibleDistance = 0;
+
+    // Assume receiver is also at same antenna height above local terrain
+    const receiverAntennaHeight = 10; // meters above ground
 
     for (let i = 0; i < points.length; i++) {
         const point = points[i];
-        const elevation = elevations[i] || 0;
+        const terrainElevation = elevations[i] || 0;
 
+        // Account for Earth curvature (drop in meters)
         const curvatureDrop = (point.distance * point.distance) / (2 * earthRadius) * 1000;
-        const effectiveElevation = elevation - curvatureDrop;
 
-        const verticalAngle = Math.atan2(effectiveElevation - observerHeight, point.distance * 1000);
+        // Effective terrain elevation accounting for Earth curvature
+        const effectiveTerrainElev = terrainElevation - curvatureDrop;
 
-        if (verticalAngle > maxAngle) {
-            maxAngle = verticalAngle;
-        } else {
-            if (i > 0) {
-                visibleDistance = points[i - 1].distance;
+        // Hypothetical receiver height at this location
+        const receiverHeight = effectiveTerrainElev + receiverAntennaHeight;
+
+        // Check if line-of-sight is clear to this point
+        // by checking all intermediate points have sufficient Fresnel clearance
+        let isVisible = true;
+
+        for (let j = 1; j < i; j++) {
+            const midPoint = points[j];
+            const midTerrainElev = elevations[j] || 0;
+            const midCurvatureDrop = (midPoint.distance * midPoint.distance) / (2 * earthRadius) * 1000;
+            const effectiveMidElev = midTerrainElev - midCurvatureDrop;
+
+            // Calculate line-of-sight elevation at this intermediate point
+            const distanceRatio = midPoint.distanceM / point.distanceM;
+            const losElevation = observerHeight + (receiverHeight - observerHeight) * distanceRatio;
+
+            // Calculate required Fresnel zone clearance
+            const fresnelClearance = calculateFresnelZone(
+                midPoint.distanceM,
+                point.distanceM - midPoint.distanceM
+            );
+
+            // Check if terrain blocks the signal (including Fresnel zone)
+            const actualClearance = losElevation - effectiveMidElev;
+            if (actualClearance < fresnelClearance * 0.6) { // 60% Fresnel zone rule
+                isVisible = false;
+                break;
             }
-            break;
+        }
+
+        if (isVisible) {
+            visibleDistance = point.distance;
+        } else {
+            break; // Once blocked, remaining distance is also blocked
         }
     }
 
@@ -911,9 +973,9 @@ function drawCoverageOverlay(node, coveragePolygons) {
         const polygon = L.polygon(visibleCoords, {
             color: node.color.stroke,
             fillColor: node.color.fill,
-            fillOpacity: 0.3,
-            weight: 2,
-            opacity: 0.7
+            fillOpacity: COVERAGE_FILL_OPACITY,
+            weight: COVERAGE_STROKE_WEIGHT,
+            opacity: COVERAGE_STROKE_OPACITY
         });
 
         polygon.bindPopup(`
@@ -984,5 +1046,120 @@ function showStatus(type, message) {
 // Make functions available globally for onclick handlers
 window.zoomToNode = zoomToNode;
 window.removeNode = removeNode;
+window.analyzeNodeTerrain = analyzeNodeTerrain;
+
+// ========================= Terrain Analysis =========================
+// Analyze terrain around a node to determine position and suggest TX power
+
+async function analyzeNodeTerrain(nodeId) {
+    const node = coverageNodes.find(n => n.id === nodeId);
+    if (!node) return;
+
+    showStatus('loading', `Analyzing terrain for ${node.name}...`);
+
+    try {
+        const nodeLat = node.lat;
+        const nodeLon = node.lng;
+        const nodeAltitude = node.altitude || 0;
+
+        // Fetch terrain elevation at node location
+        let terrainAtNode = 0;
+        const nodeElevResponse = await fetch(
+            `https://api.elevationapi.com/api/Elevation?lat=${nodeLat}&lon=${nodeLon}`
+        );
+        if (nodeElevResponse.ok) {
+            const nodeElevData = await nodeElevResponse.json();
+            terrainAtNode = nodeElevData.elevation || 0;
+        }
+
+        // Sample terrain in 8 directions at multiple distances
+        const directions = [0, 45, 90, 135, 180, 225, 270, 315];
+        const distances = [0.5, 1, 2, 5]; // km
+        const elevationValues = [];
+
+        for (const direction of directions) {
+            for (const distKm of distances) {
+                const point = destinationPoint(nodeLat, nodeLon, distKm, direction);
+                try {
+                    const resp = await fetch(
+                        `https://api.elevationapi.com/api/Elevation?lat=${point.latitude.toFixed(6)}&lon=${point.longitude.toFixed(6)}`
+                    );
+                    if (resp.ok) {
+                        const data = await resp.json();
+                        elevationValues.push(data.elevation || 0);
+                    }
+                    await new Promise(resolve => setTimeout(resolve, 30));
+                } catch (e) {
+                    console.warn('Failed to fetch elevation:', e);
+                }
+            }
+        }
+
+        // Calculate statistics
+        const avgSurrounding = elevationValues.length > 0
+            ? elevationValues.reduce((a, b) => a + b, 0) / elevationValues.length
+            : 0;
+
+        const nodeElevForComparison = nodeAltitude > 0 ? nodeAltitude : terrainAtNode;
+        const prominence = nodeElevForComparison - avgSurrounding;
+
+        // Determine terrain classification and TX power recommendation
+        let terrainClass, badgeClass, suggestedTxPower;
+
+        if (prominence > 100) {
+            terrainClass = 'Mountain';
+            badgeClass = 'bg-success';
+            suggestedTxPower = '17-20 dBm';
+        } else if (prominence > 50) {
+            terrainClass = 'Hilltop';
+            badgeClass = 'bg-success';
+            suggestedTxPower = '20-23 dBm';
+        } else if (prominence > 20) {
+            terrainClass = 'Elevated';
+            badgeClass = 'bg-info';
+            suggestedTxPower = '23-27 dBm';
+        } else if (prominence > -20) {
+            terrainClass = 'Level';
+            badgeClass = 'bg-warning text-dark';
+            suggestedTxPower = '27-30 dBm';
+        } else if (prominence > -50) {
+            terrainClass = 'Low';
+            badgeClass = 'bg-secondary';
+            suggestedTxPower = '30 dBm';
+        } else {
+            terrainClass = 'Valley';
+            badgeClass = 'bg-danger';
+            suggestedTxPower = '30 dBm (limited)';
+        }
+
+        // Store analysis on node
+        node.terrainAnalysis = {
+            terrainClass,
+            badgeClass,
+            suggestedTxPower,
+            prominence,
+            avgSurrounding,
+            terrainAtNode
+        };
+
+        // Update UI
+        updateNodeList();
+
+        // Update marker popup with terrain info
+        node.marker.setPopupContent(`<strong>${node.name}</strong><br>
+            <small>${node.type === 'mesh' ? 'Mesh Node' : 'Custom Location'}</small><br>
+            <small>Lat: ${node.lat.toFixed(5)}, Lng: ${node.lng.toFixed(5)}</small><br>
+            <hr style="margin: 5px 0;">
+            <strong>Terrain:</strong> <span class="badge ${badgeClass}">${terrainClass}</span><br>
+            <strong>Prominence:</strong> ${prominence > 0 ? '+' : ''}${prominence.toFixed(0)}m<br>
+            <strong>Suggested TX:</strong> ${suggestedTxPower}`);
+
+        showStatus('success', `${node.name}: ${terrainClass} position (${prominence > 0 ? '+' : ''}${prominence.toFixed(0)}m) - Suggested TX: ${suggestedTxPower}`);
+
+    } catch (error) {
+        console.error('Terrain analysis failed:', error);
+        showStatus('error', `Failed to analyze terrain: ${error.message}`);
+    }
+}
 </script>
 {% endblock %}
