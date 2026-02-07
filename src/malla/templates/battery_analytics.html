@@ -108,6 +108,198 @@
         </div>
     </div>
 
+    <!-- Mesh Power Statistics Cards -->
+    <div class="row mb-4">
+        <div class="col-12">
+            <h5 class="mb-3"><i class="bi bi-lightning-charge"></i> Mesh Power Statistics</h5>
+        </div>
+        <div class="col-md-2 col-sm-4 col-6">
+            <div class="card h-100">
+                <div class="card-body card-metric text-center">
+                    <div class="metric-value text-primary">{{ mesh_power_stats.total_nodes_with_telemetry }}</div>
+                    <div class="metric-label">
+                        <i class="bi bi-broadcast"></i> Nodes
+                    </div>
+                    <small class="text-muted">Reporting telemetry</small>
+                </div>
+            </div>
+        </div>
+        <div class="col-md-2 col-sm-4 col-6">
+            <div class="card h-100">
+                <div class="card-body card-metric text-center">
+                    <div class="metric-value text-success">{{ mesh_power_stats.active_nodes_24h }}</div>
+                    <div class="metric-label">
+                        <i class="bi bi-activity"></i> Active (24h)
+                    </div>
+                    <small class="text-muted">Recent telemetry</small>
+                </div>
+            </div>
+        </div>
+        <div class="col-md-2 col-sm-4 col-6">
+            <div class="card h-100">
+                <div class="card-body card-metric text-center">
+                    {% if mesh_power_stats.avg_voltage %}
+                    <div class="metric-value
+                        {% if mesh_power_stats.avg_voltage >= 3.8 %}text-success
+                        {% elif mesh_power_stats.avg_voltage >= 3.5 %}text-warning
+                        {% else %}text-danger{% endif %}">
+                        {{ "%.2f"|format(mesh_power_stats.avg_voltage) }}V
+                    </div>
+                    {% else %}
+                    <div class="metric-value text-muted">—</div>
+                    {% endif %}
+                    <div class="metric-label">
+                        <i class="bi bi-speedometer2"></i> Avg Voltage
+                    </div>
+                    <small class="text-muted">Mesh average</small>
+                </div>
+            </div>
+        </div>
+        <div class="col-md-2 col-sm-4 col-6">
+            <div class="card h-100">
+                <div class="card-body card-metric text-center">
+                    {% if mesh_power_stats.avg_battery_level %}
+                    <div class="metric-value
+                        {% if mesh_power_stats.avg_battery_level >= 70 %}text-success
+                        {% elif mesh_power_stats.avg_battery_level >= 30 %}text-warning
+                        {% else %}text-danger{% endif %}">
+                        {{ mesh_power_stats.avg_battery_level }}%
+                    </div>
+                    {% else %}
+                    <div class="metric-value text-muted">—</div>
+                    {% endif %}
+                    <div class="metric-label">
+                        <i class="bi bi-battery-half"></i> Avg Battery
+                    </div>
+                    <small class="text-muted">Mesh average</small>
+                </div>
+            </div>
+        </div>
+        <div class="col-md-2 col-sm-4 col-6">
+            <div class="card h-100">
+                <div class="card-body card-metric text-center">
+                    {% if mesh_power_stats.avg_health_score %}
+                    <div class="metric-value
+                        {% if mesh_power_stats.avg_health_score >= 80 %}text-success
+                        {% elif mesh_power_stats.avg_health_score >= 50 %}text-warning
+                        {% else %}text-danger{% endif %}">
+                        {{ mesh_power_stats.avg_health_score }}
+                    </div>
+                    {% else %}
+                    <div class="metric-value text-muted">—</div>
+                    {% endif %}
+                    <div class="metric-label">
+                        <i class="bi bi-heart-pulse"></i> Avg Health
+                    </div>
+                    <small class="text-muted">Health score</small>
+                </div>
+            </div>
+        </div>
+        <div class="col-md-2 col-sm-4 col-6">
+            <div class="card h-100">
+                <div class="card-body card-metric text-center">
+                    <div class="metric-value text-info">{{ mesh_power_stats.data_history_days }}</div>
+                    <div class="metric-label">
+                        <i class="bi bi-calendar3"></i> Days
+                    </div>
+                    <small class="text-muted">History tracked</small>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Node Health Status Bar -->
+    <div class="row mb-4">
+        <div class="col-md-4">
+            <div class="card h-100 border-success">
+                <div class="card-body card-metric text-center">
+                    <div class="metric-value text-success">{{ mesh_power_stats.nodes_good }}</div>
+                    <div class="metric-label">
+                        <i class="bi bi-check-circle-fill"></i> Healthy Nodes
+                    </div>
+                    <small class="text-muted">Voltage ≥ 3.6V</small>
+                </div>
+            </div>
+        </div>
+        <div class="col-md-4">
+            <div class="card h-100 border-warning">
+                <div class="card-body card-metric text-center">
+                    <div class="metric-value text-warning">{{ mesh_power_stats.nodes_low }}</div>
+                    <div class="metric-label">
+                        <i class="bi bi-exclamation-triangle-fill"></i> Low Battery
+                    </div>
+                    <small class="text-muted">Voltage 3.3V - 3.6V</small>
+                </div>
+            </div>
+        </div>
+        <div class="col-md-4">
+            <div class="card h-100 border-danger">
+                <div class="card-body card-metric text-center">
+                    <div class="metric-value text-danger">{{ mesh_power_stats.nodes_critical }}</div>
+                    <div class="metric-label">
+                        <i class="bi bi-x-circle-fill"></i> Critical
+                    </div>
+                    <small class="text-muted">Voltage &lt; 3.3V</small>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Voltage Range Info -->
+    {% if mesh_power_stats.min_voltage and mesh_power_stats.max_voltage %}
+    <div class="row mb-4">
+        <div class="col">
+            <div class="card">
+                <div class="card-body">
+                    <h6>
+                        Mesh Voltage Range
+                        <i class="bi bi-info-circle" data-bs-toggle="tooltip" data-bs-placement="top"
+                           title="The voltage range across all nodes reporting telemetry. Healthy LiPo batteries operate between 3.3V (empty) and 4.2V (full)."></i>
+                    </h6>
+                    <div class="d-flex align-items-center gap-3">
+                        <div class="text-center">
+                            <small class="text-muted d-block">Lowest</small>
+                            <span class="badge {% if mesh_power_stats.min_voltage < 3.3 %}bg-danger{% elif mesh_power_stats.min_voltage < 3.6 %}bg-warning{% else %}bg-success{% endif %} fs-6">
+                                {{ "%.2f"|format(mesh_power_stats.min_voltage) }}V
+                            </span>
+                        </div>
+                        <div class="flex-grow-1">
+                            <div class="progress" style="height: 24px;">
+                                {% set voltage_range = mesh_power_stats.max_voltage - mesh_power_stats.min_voltage %}
+                                {% set min_pct = ((mesh_power_stats.min_voltage - 3.0) / 1.5 * 100)|round(1) %}
+                                {% set max_pct = ((mesh_power_stats.max_voltage - 3.0) / 1.5 * 100)|round(1) %}
+                                {% set avg_pct = ((mesh_power_stats.avg_voltage - 3.0) / 1.5 * 100)|round(1) if mesh_power_stats.avg_voltage else 50 %}
+                                <div class="progress-bar bg-gradient" role="progressbar"
+                                     style="width: {{ [100, [0, avg_pct]|max]|min }}%; background: linear-gradient(90deg, #ffc107, #28a745);">
+                                    <span class="fw-bold">{{ "%.2f"|format(mesh_power_stats.avg_voltage) }}V avg</span>
+                                </div>
+                            </div>
+                            <div class="d-flex justify-content-between mt-1">
+                                <small class="text-muted">3.0V</small>
+                                <small class="text-muted">3.3V</small>
+                                <small class="text-muted">3.6V</small>
+                                <small class="text-muted">3.9V</small>
+                                <small class="text-muted">4.2V</small>
+                            </div>
+                        </div>
+                        <div class="text-center">
+                            <small class="text-muted d-block">Highest</small>
+                            <span class="badge {% if mesh_power_stats.max_voltage >= 4.0 %}bg-success{% elif mesh_power_stats.max_voltage >= 3.6 %}bg-info{% else %}bg-warning{% endif %} fs-6">
+                                {{ "%.2f"|format(mesh_power_stats.max_voltage) }}V
+                            </span>
+                        </div>
+                    </div>
+                    <div class="text-center mt-2">
+                        <small class="text-muted">
+                            <i class="bi bi-database"></i> {{ "{:,}".format(mesh_power_stats.total_telemetry_records) }} telemetry records from {{ mesh_power_stats.nodes_with_voltage }} nodes
+                        </small>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+    {% endif %}
+
     <!-- Power Type Distribution Bar -->
     <div class="row mb-4">
         <div class="col">

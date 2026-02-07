@@ -4659,6 +4659,210 @@ class BatteryAnalyticsRepository:
             return {"solar": 0, "battery": 0, "mains": 0, "unknown": 0}
 
     @staticmethod
+    def get_mesh_power_stats() -> dict[str, Any]:
+        """Get comprehensive mesh-wide power statistics.
+
+        Returns:
+            Dictionary with mesh-wide power analytics including:
+            - Total nodes with telemetry
+            - Average battery level across all nodes
+            - Average voltage across all nodes
+            - Average health score across all nodes
+            - Nodes at critical levels
+            - Nodes at low levels
+            - Nodes in good condition
+            - Total telemetry records
+        """
+        try:
+            conn = get_db_connection()
+            cursor = conn.cursor()
+
+            # Get total nodes with any telemetry data
+            cursor.execute(
+                """
+                SELECT COUNT(DISTINCT ni.node_id) as total
+                FROM node_info ni
+                INNER JOIN telemetry_data td ON ni.node_id = td.node_id
+                WHERE td.voltage IS NOT NULL OR td.battery_level IS NOT NULL
+            """
+            )
+            total_nodes = cursor.fetchone()["total"]
+
+            # Get nodes with recent telemetry (last 24 hours)
+            recent_cutoff = time.time() - (24 * 3600)
+            cursor.execute(
+                """
+                SELECT COUNT(DISTINCT ni.node_id) as active
+                FROM node_info ni
+                INNER JOIN telemetry_data td ON ni.node_id = td.node_id
+                WHERE (td.voltage IS NOT NULL OR td.battery_level IS NOT NULL)
+                AND td.timestamp > ?
+            """,
+                (recent_cutoff,),
+            )
+            active_nodes = cursor.fetchone()["active"]
+
+            # Get average battery level (from most recent telemetry per node)
+            cursor.execute(
+                """
+                WITH latest_telemetry AS (
+                    SELECT node_id, battery_level, MAX(timestamp) as max_ts
+                    FROM telemetry_data
+                    WHERE battery_level IS NOT NULL
+                    GROUP BY node_id
+                )
+                SELECT AVG(battery_level) as avg_battery, COUNT(*) as count
+                FROM latest_telemetry
+                WHERE battery_level > 0 AND battery_level <= 100
+            """
+            )
+            battery_result = cursor.fetchone()
+            avg_battery = (
+                round(battery_result["avg_battery"], 1)
+                if battery_result["avg_battery"]
+                else None
+            )
+            nodes_with_battery = battery_result["count"]
+
+            # Get average voltage (from most recent telemetry per node)
+            cursor.execute(
+                """
+                WITH latest_telemetry AS (
+                    SELECT td.node_id, td.voltage, MAX(td.timestamp) as max_ts
+                    FROM telemetry_data td
+                    WHERE td.voltage IS NOT NULL
+                    GROUP BY td.node_id
+                )
+                SELECT AVG(voltage) as avg_voltage, MIN(voltage) as min_voltage,
+                       MAX(voltage) as max_voltage, COUNT(*) as count
+                FROM latest_telemetry
+                WHERE voltage > 0
+            """
+            )
+            voltage_result = cursor.fetchone()
+
+            # Scale voltages if needed (fractional volts -> actual volts)
+            avg_voltage = voltage_result["avg_voltage"]
+            min_voltage = voltage_result["min_voltage"]
+            max_voltage = voltage_result["max_voltage"]
+
+            if avg_voltage is not None and avg_voltage < 1:
+                avg_voltage = avg_voltage * 1000
+            if min_voltage is not None and min_voltage < 1:
+                min_voltage = min_voltage * 1000
+            if max_voltage is not None and max_voltage < 1:
+                max_voltage = max_voltage * 1000
+
+            avg_voltage = round(avg_voltage, 2) if avg_voltage else None
+            min_voltage = round(min_voltage, 2) if min_voltage else None
+            max_voltage = round(max_voltage, 2) if max_voltage else None
+            nodes_with_voltage = voltage_result["count"]
+
+            # Count nodes by status based on latest voltage
+            cursor.execute(
+                """
+                WITH latest_telemetry AS (
+                    SELECT td.node_id, td.voltage, MAX(td.timestamp) as max_ts
+                    FROM telemetry_data td
+                    WHERE td.voltage IS NOT NULL
+                    GROUP BY td.node_id
+                )
+                SELECT
+                    SUM(CASE
+                        WHEN voltage < 0.0033 OR (voltage >= 1 AND voltage < 3.3) THEN 1
+                        ELSE 0
+                    END) as critical,
+                    SUM(CASE
+                        WHEN (voltage >= 0.0033 AND voltage < 0.0036)
+                          OR (voltage >= 3.3 AND voltage < 3.6) THEN 1
+                        ELSE 0
+                    END) as low,
+                    SUM(CASE
+                        WHEN voltage >= 0.0036 OR voltage >= 3.6 THEN 1
+                        ELSE 0
+                    END) as good
+                FROM latest_telemetry
+                WHERE voltage > 0
+            """
+            )
+            status_result = cursor.fetchone()
+            nodes_critical = status_result["critical"] or 0
+            nodes_low = status_result["low"] or 0
+            nodes_good = status_result["good"] or 0
+
+            # Get total telemetry records and timespan
+            cursor.execute(
+                """
+                SELECT COUNT(*) as total, MIN(timestamp) as oldest, MAX(timestamp) as newest
+                FROM telemetry_data
+                WHERE voltage IS NOT NULL OR battery_level IS NOT NULL
+            """
+            )
+            telemetry_result = cursor.fetchone()
+            total_records = telemetry_result["total"]
+
+            # Calculate how many days of data we have
+            oldest_ts = telemetry_result["oldest"]
+            newest_ts = telemetry_result["newest"]
+            data_days = 0
+            if oldest_ts and newest_ts:
+                data_days = round((newest_ts - oldest_ts) / 86400, 1)
+
+            # Get average health score from node_info (if available)
+            cursor.execute(
+                """
+                SELECT AVG(battery_health_score) as avg_health,
+                       COUNT(*) as count
+                FROM node_info
+                WHERE battery_health_score IS NOT NULL
+            """
+            )
+            health_result = cursor.fetchone()
+            avg_health = (
+                round(health_result["avg_health"])
+                if health_result["avg_health"]
+                else None
+            )
+
+            conn.close()
+
+            return {
+                "total_nodes_with_telemetry": total_nodes,
+                "active_nodes_24h": active_nodes,
+                "avg_battery_level": avg_battery,
+                "nodes_with_battery": nodes_with_battery,
+                "avg_voltage": avg_voltage,
+                "min_voltage": min_voltage,
+                "max_voltage": max_voltage,
+                "nodes_with_voltage": nodes_with_voltage,
+                "avg_health_score": avg_health,
+                "nodes_critical": nodes_critical,
+                "nodes_low": nodes_low,
+                "nodes_good": nodes_good,
+                "total_telemetry_records": total_records,
+                "data_history_days": data_days,
+            }
+
+        except Exception as e:
+            logger.error(f"Error getting mesh power stats: {e}", exc_info=True)
+            return {
+                "total_nodes_with_telemetry": 0,
+                "active_nodes_24h": 0,
+                "avg_battery_level": None,
+                "nodes_with_battery": 0,
+                "avg_voltage": None,
+                "min_voltage": None,
+                "max_voltage": None,
+                "nodes_with_voltage": 0,
+                "avg_health_score": None,
+                "nodes_critical": 0,
+                "nodes_low": 0,
+                "nodes_good": 0,
+                "total_telemetry_records": 0,
+                "data_history_days": 0,
+            }
+
+    @staticmethod
     def get_battery_health_overview() -> list[dict[str, Any]]:
         """Get overview of all nodes with battery health information.
 
