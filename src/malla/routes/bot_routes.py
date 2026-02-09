@@ -443,3 +443,148 @@ def api_bot_toggle_command(command_name: str):
     except Exception as e:
         logger.error(f"Error toggling command: {e}")
         return jsonify({"error": str(e)}), 500
+
+
+# ============================================================================
+# API Routes - Channel Directory
+# ============================================================================
+
+
+@bot_bp.route("/api/bot/channels")
+def api_bot_channels():
+    """List all channels in the community channel directory."""
+    try:
+        from ..database.channel_directory_repository import (
+            ChannelDirectoryRepository,
+        )
+
+        active_only = request.args.get("active_only", "true").lower() == "true"
+        channels = ChannelDirectoryRepository.get_all_channels(active_only=active_only)
+
+        return jsonify({"channels": channels, "count": len(channels)})
+
+    except Exception as e:
+        logger.error(f"Error listing channel directory: {e}")
+        return jsonify({"error": str(e)}), 500
+
+
+@bot_bp.route("/api/bot/channels", methods=["POST"])
+def api_bot_add_channel():
+    """Add a channel to the directory (admin/web UI)."""
+    try:
+        from ..database.channel_directory_repository import (
+            ChannelDirectoryRepository,
+        )
+
+        data = request.get_json() or {}
+
+        channel_name = data.get("channel_name")
+        if not channel_name:
+            return jsonify({"error": "channel_name is required"}), 400
+
+        psk = data.get("psk", "AQ==")
+        description = data.get("description")
+
+        result = ChannelDirectoryRepository.add_channel(
+            channel_name=channel_name,
+            psk=psk,
+            description=description,
+            registered_by_node_id=None,
+            registered_by_name="Web UI",
+        )
+
+        if result["success"]:
+            return jsonify(result)
+        else:
+            return jsonify(result), 409
+
+    except Exception as e:
+        logger.error(f"Error adding channel: {e}")
+        return jsonify({"error": str(e)}), 500
+
+
+@bot_bp.route("/api/bot/channels/<channel_name>")
+def api_bot_channel_info(channel_name: str):
+    """Get details of a specific channel."""
+    try:
+        from ..database.channel_directory_repository import (
+            ChannelDirectoryRepository,
+        )
+
+        channel = ChannelDirectoryRepository.get_channel(channel_name)
+        if not channel:
+            return jsonify({"error": f"Channel '{channel_name}' not found"}), 404
+
+        return jsonify(channel)
+
+    except Exception as e:
+        logger.error(f"Error getting channel info: {e}")
+        return jsonify({"error": str(e)}), 500
+
+
+@bot_bp.route("/api/bot/channels/<channel_name>", methods=["PUT"])
+def api_bot_update_channel(channel_name: str):
+    """Update a channel in the directory."""
+    try:
+        from ..database.channel_directory_repository import (
+            ChannelDirectoryRepository,
+        )
+
+        data = request.get_json() or {}
+
+        result = ChannelDirectoryRepository.update_channel(
+            channel_name=channel_name,
+            psk=data.get("psk"),
+            description=data.get("description"),
+            active=data.get("active"),
+        )
+
+        if result["success"]:
+            return jsonify(result)
+        else:
+            return jsonify(result), 404
+
+    except Exception as e:
+        logger.error(f"Error updating channel: {e}")
+        return jsonify({"error": str(e)}), 500
+
+
+@bot_bp.route("/api/bot/channels/<channel_name>", methods=["DELETE"])
+def api_bot_delete_channel(channel_name: str):
+    """Remove a channel from the directory (admin/web UI)."""
+    try:
+        from ..database.channel_directory_repository import (
+            ChannelDirectoryRepository,
+        )
+
+        result = ChannelDirectoryRepository.remove_channel(
+            channel_name=channel_name,
+            requester_node_id=None,  # Admin/web UI – unrestricted
+        )
+
+        if result["success"]:
+            return jsonify(result)
+        else:
+            return jsonify(result), 404
+
+    except Exception as e:
+        logger.error(f"Error deleting channel: {e}")
+        return jsonify({"error": str(e)}), 500
+
+
+@bot_bp.route("/api/bot/channels/broadcast", methods=["POST"])
+def api_bot_broadcast_channels():
+    """Manually trigger a channel directory broadcast."""
+    try:
+        bot = get_bot_service()
+
+        if not bot.is_running:
+            return jsonify({"error": "Bot is not running"}), 400
+
+        bot._broadcast_channel_directory()
+
+        return jsonify({"success": True, "message": "Channel broadcast queued"})
+
+    except Exception as e:
+        logger.error(f"Error triggering broadcast: {e}")
+        return jsonify({"error": str(e)}), 500

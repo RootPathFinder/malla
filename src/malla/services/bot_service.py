@@ -160,6 +160,11 @@ class BotService:
         self._min_send_interval = 2.0  # Minimum seconds between sends
         self._last_send_time = 0.0
 
+        # Channel directory broadcast scheduling
+        self._broadcast_thread: threading.Thread | None = None
+        self._broadcast_interval_hours = 12  # Broadcast every 12 hours
+        self._last_broadcast_time: float = 0.0
+
         # Register built-in commands
         self._register_builtin_commands()
 
@@ -190,6 +195,19 @@ class BotService:
         self.register_command("weather", self._cmd_weather, "Environment sensors")
         self.register_command("lastseen", self._cmd_lastseen, "Node last activity")
         self.register_command("top", self._cmd_top, "Most active nodes")
+        # Channel directory commands
+        self.register_command(
+            "channels", self._cmd_channels, "List community channels"
+        )
+        self.register_command(
+            "addchannel", self._cmd_addchannel, "Register a channel"
+        )
+        self.register_command(
+            "rmchannel", self._cmd_rmchannel, "Remove your channel"
+        )
+        self.register_command(
+            "channelinfo", self._cmd_channelinfo, "Channel details"
+        )
 
     @property
     def is_enabled(self) -> bool:
@@ -257,6 +275,9 @@ class BotService:
         self._worker_thread.start()
         self._running = True
 
+        # Start channel directory broadcast thread
+        self._start_broadcast_thread()
+
         # Also enable message listening
         self.enable()
 
@@ -272,6 +293,10 @@ class BotService:
 
         self.disable()
         self._stop_event.set()
+
+        if self._broadcast_thread:
+            self._broadcast_thread.join(timeout=5.0)
+            self._broadcast_thread = None
 
         if self._worker_thread:
             self._worker_thread.join(timeout=5.0)
@@ -2131,6 +2156,259 @@ class BotService:
         except Exception as e:
             logger.error(f"Error in top: {e}", exc_info=True)
             return "Top data unavailable"
+
+    # =========================================================================
+    # Channel Directory Commands
+    # =========================================================================
+
+    def _cmd_channels(self, ctx: CommandContext) -> str:
+        """Handle !channels command - list community channels."""
+        try:
+            from ..database.channel_directory_repository import (
+                ChannelDirectoryRepository,
+            )
+
+            channels = ChannelDirectoryRepository.get_all_channels(active_only=True)
+            if not channels:
+                return "📻 No channels registered. Use !addchannel <name> <key> [desc]"
+
+            lines = [f"📻 Channels ({len(channels)}):"]
+            for ch in channels:
+                name = ch["channel_name"]
+                desc = ch.get("description") or ""
+                if desc and len(desc) > 20:
+                    desc = desc[:17] + "..."
+                if desc:
+                    lines.append(f"• {name}: {desc}")
+                else:
+                    lines.append(f"• {name}")
+
+            # Truncate to fit Meshtastic payload (~230 bytes)
+            result = "\n".join(lines)
+            if len(result) > 220:
+                result = result[:217] + "..."
+
+            return result
+        except Exception as e:
+            logger.error(f"Error in channels command: {e}", exc_info=True)
+            return "Channel list unavailable"
+
+    def _cmd_addchannel(self, ctx: CommandContext) -> str:
+        """Handle !addchannel <name> <psk> [description...] command.
+
+        Examples:
+            !addchannel Dispatches AQ== EMS/Fire dispatches
+            !addchannel Weather AQ==
+        """
+        try:
+            if len(ctx.args) < 2:
+                return "Usage: !addchannel <name> <key> [description]"
+
+            channel_name = ctx.args[0]
+            psk = ctx.args[1]
+            description = " ".join(ctx.args[2:]) if len(ctx.args) > 2 else None
+
+            # Validate channel name length
+            if len(channel_name) > 30:
+                return "Channel name too long (max 30)"
+
+            # Validate PSK is base64-ish (basic check)
+            if len(psk) < 2 or len(psk) > 48:
+                return "Invalid key (base64 expected)"
+
+            from ..database.channel_directory_repository import (
+                ChannelDirectoryRepository,
+            )
+
+            result = ChannelDirectoryRepository.add_channel(
+                channel_name=channel_name,
+                psk=psk,
+                description=description,
+                registered_by_node_id=ctx.sender_id,
+                registered_by_name=ctx.sender_name,
+            )
+
+            if result["success"]:
+                self._log_activity(
+                    "channel_registered",
+                    {
+                        "channel": channel_name,
+                        "by": ctx.sender_name or f"!{ctx.sender_id:08x}",
+                    },
+                )
+                return f"✅ Channel '{channel_name}' registered!"
+            else:
+                return f"❌ {result['error']}"
+        except Exception as e:
+            logger.error(f"Error in addchannel command: {e}", exc_info=True)
+            return "Failed to add channel"
+
+    def _cmd_rmchannel(self, ctx: CommandContext) -> str:
+        """Handle !rmchannel <name> command - remove your registered channel."""
+        try:
+            if not ctx.args:
+                return "Usage: !rmchannel <name>"
+
+            channel_name = ctx.args[0]
+
+            from ..database.channel_directory_repository import (
+                ChannelDirectoryRepository,
+            )
+
+            result = ChannelDirectoryRepository.remove_channel(
+                channel_name=channel_name,
+                requester_node_id=ctx.sender_id,
+            )
+
+            if result["success"]:
+                self._log_activity(
+                    "channel_removed",
+                    {
+                        "channel": channel_name,
+                        "by": ctx.sender_name or f"!{ctx.sender_id:08x}",
+                    },
+                )
+                return f"✅ Channel '{channel_name}' removed"
+            else:
+                return f"❌ {result['error']}"
+        except Exception as e:
+            logger.error(f"Error in rmchannel command: {e}", exc_info=True)
+            return "Failed to remove channel"
+
+    def _cmd_channelinfo(self, ctx: CommandContext) -> str:
+        """Handle !channelinfo <name> command - show channel details."""
+        try:
+            if not ctx.args:
+                return "Usage: !channelinfo <name>"
+
+            channel_name = ctx.args[0]
+
+            from ..database.channel_directory_repository import (
+                ChannelDirectoryRepository,
+            )
+
+            ch = ChannelDirectoryRepository.get_channel(channel_name)
+            if not ch:
+                return f"📻 Channel '{channel_name}' not found"
+
+            lines = [f"📻 {ch['channel_name']}"]
+
+            if ch.get("description"):
+                desc = ch["description"]
+                if len(desc) > 60:
+                    desc = desc[:57] + "..."
+                lines.append(desc)
+
+            lines.append(f"Key: {ch['psk']}")
+
+            if ch.get("registered_by_name"):
+                lines.append(f"By: {ch['registered_by_name']}")
+
+            # Show how long ago it was registered
+            age = time.time() - ch["created_at"]
+            if age < 3600:
+                age_str = f"{int(age / 60)}m ago"
+            elif age < 86400:
+                age_str = f"{int(age / 3600)}h ago"
+            else:
+                age_str = f"{int(age / 86400)}d ago"
+            lines.append(f"Added: {age_str}")
+
+            return "\n".join(lines)
+        except Exception as e:
+            logger.error(f"Error in channelinfo command: {e}", exc_info=True)
+            return "Channel info unavailable"
+
+    # =========================================================================
+    # Channel Directory Scheduled Broadcast
+    # =========================================================================
+
+    def _start_broadcast_thread(self) -> None:
+        """Start the background thread that broadcasts channel directory."""
+        if self._broadcast_thread and self._broadcast_thread.is_alive():
+            return
+
+        self._broadcast_thread = threading.Thread(
+            target=self._broadcast_loop, daemon=True, name="BotChannelBroadcast"
+        )
+        self._broadcast_thread.start()
+        logger.info("Channel directory broadcast thread started")
+
+    def _broadcast_loop(self) -> None:
+        """Background loop that broadcasts channel directory twice per day."""
+        # Wait 60 seconds after startup before first potential broadcast
+        self._stop_event.wait(timeout=60.0)
+
+        while not self._stop_event.is_set():
+            try:
+                now = time.time()
+                elapsed = now - self._last_broadcast_time
+                interval_seconds = self._broadcast_interval_hours * 3600
+
+                if elapsed >= interval_seconds:
+                    self._broadcast_channel_directory()
+                    self._last_broadcast_time = now
+
+                # Check every 5 minutes
+                self._stop_event.wait(timeout=300.0)
+            except Exception as e:
+                logger.error(
+                    f"Error in channel broadcast loop: {e}", exc_info=True
+                )
+                self._stop_event.wait(timeout=60.0)
+
+        logger.info("Channel directory broadcast thread stopped")
+
+    def _broadcast_channel_directory(self) -> None:
+        """Build and send the channel directory advertisement message."""
+        try:
+            from ..database.channel_directory_repository import (
+                ChannelDirectoryRepository,
+            )
+
+            channels = ChannelDirectoryRepository.get_all_channels(active_only=True)
+            if not channels:
+                logger.debug("No channels to broadcast")
+                return
+
+            lines = [f"📻 Channel Directory ({len(channels)}):"]
+            for ch in channels:
+                name = ch["channel_name"]
+                psk = ch["psk"]
+                desc = ch.get("description") or ""
+                if desc:
+                    if len(desc) > 25:
+                        desc = desc[:22] + "..."
+                    lines.append(f"• {name} [{psk}] - {desc}")
+                else:
+                    lines.append(f"• {name} [{psk}]")
+
+            lines.append("!channelinfo <name> for details")
+
+            message = "\n".join(lines)
+            # Truncate to fit Meshtastic payload
+            if len(message) > 220:
+                message = message[:217] + "..."
+
+            self.queue_message(
+                text=message,
+                destination=0xFFFFFFFF,  # Broadcast
+                channel_index=self._respond_channel_index,
+                priority=BotMessagePriority.LOW,
+            )
+
+            self._log_activity(
+                "channel_broadcast",
+                {"channel_count": len(channels)},
+            )
+            logger.info(
+                f"Broadcast channel directory ({len(channels)} channels)"
+            )
+
+        except Exception as e:
+            logger.error(
+                f"Error broadcasting channel directory: {e}", exc_info=True
+            )
 
 
 # Singleton accessor
