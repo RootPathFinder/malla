@@ -9,6 +9,7 @@ Provides:
 """
 
 import logging
+import time
 
 from flask import Blueprint, jsonify, render_template, request
 
@@ -540,4 +541,205 @@ def api_links():
 
     except Exception as e:
         logger.error(f"Error getting links: {e}", exc_info=True)
+        return jsonify({"error": str(e)}), 500
+
+
+@mesh_bp.route("/api/hop-stats")
+def api_hop_stats():
+    """
+    Get mesh hop configuration and statistics.
+
+    Provides an overview of:
+    - Node role distribution (routers, clients, etc.)
+    - Observed hop counts from packet data
+    - Per-node hop configuration details
+
+    Query parameters:
+        hours: Number of hours to analyze (default: 24)
+
+    Returns:
+        JSON with hop statistics and node configurations
+    """
+    try:
+        from ..database.connection import get_db_connection
+
+        hours = request.args.get("hours", 24, type=int)
+        hours = min(max(hours, 1), 720)
+
+        conn = get_db_connection()
+        cursor = conn.cursor()
+        cutoff_time = time.time() - (hours * 3600)
+
+        # Get role distribution from node_info
+        cursor.execute(
+            """
+            SELECT
+                COALESCE(role, 'UNKNOWN') as role,
+                COUNT(*) as count
+            FROM node_info
+            WHERE COALESCE(archived, 0) = 0
+            GROUP BY role
+            ORDER BY count DESC
+        """
+        )
+        role_rows = cursor.fetchall()
+        role_distribution = [
+            {"role": row["role"] or "UNKNOWN", "count": row["count"]}
+            for row in role_rows
+        ]
+
+        # Calculate totals
+        total_nodes = sum(r["count"] for r in role_distribution)
+        router_count = sum(
+            r["count"] for r in role_distribution if r["role"] in ROUTER_ROLES
+        )
+
+        # Get hop count distribution from recent packets
+        cursor.execute(
+            """
+            SELECT
+                (hop_start - hop_limit) as hop_count,
+                COUNT(*) as packet_count
+            FROM packet_history
+            WHERE timestamp >= ?
+                AND hop_start IS NOT NULL
+                AND hop_limit IS NOT NULL
+            GROUP BY hop_count
+            ORDER BY hop_count
+        """,
+            (cutoff_time,),
+        )
+        hop_rows = cursor.fetchall()
+        hop_distribution = [
+            {"hops": row["hop_count"], "count": row["packet_count"]}
+            for row in hop_rows
+            if row["hop_count"] is not None and row["hop_count"] >= 0
+        ]
+
+        # Calculate hop statistics
+        total_packets_with_hops = sum(h["count"] for h in hop_distribution)
+        direct_packets = next(
+            (h["count"] for h in hop_distribution if h["hops"] == 0), 0
+        )
+        relayed_packets = total_packets_with_hops - direct_packets
+        avg_hops = 0.0
+        max_hops_observed = 0
+        if hop_distribution:
+            weighted_sum = sum(h["hops"] * h["count"] for h in hop_distribution)
+            if total_packets_with_hops > 0:
+                avg_hops = weighted_sum / total_packets_with_hops
+            max_hops_observed = max(h["hops"] for h in hop_distribution)
+
+        # Get per-node hop behavior (nodes that relay the most)
+        cursor.execute(
+            """
+            SELECT
+                ph.from_node_id as node_id,
+                ni.long_name as node_name,
+                ni.role as role,
+                COUNT(*) as packet_count,
+                AVG(CASE WHEN ph.hop_start IS NOT NULL AND ph.hop_limit IS NOT NULL
+                    THEN ph.hop_start - ph.hop_limit ELSE NULL END) as avg_hops,
+                MAX(CASE WHEN ph.hop_start IS NOT NULL AND ph.hop_limit IS NOT NULL
+                    THEN ph.hop_start - ph.hop_limit ELSE NULL END) as max_hops
+            FROM packet_history ph
+            LEFT JOIN node_info ni ON ph.from_node_id = ni.node_id
+            WHERE ph.timestamp >= ?
+                AND ph.from_node_id IS NOT NULL
+            GROUP BY ph.from_node_id
+            HAVING packet_count >= 5
+            ORDER BY packet_count DESC
+            LIMIT 50
+        """,
+            (cutoff_time,),
+        )
+        node_rows = cursor.fetchall()
+
+        nodes_by_activity = []
+        for row in node_rows:
+            node_id = row["node_id"]
+            nodes_by_activity.append(
+                {
+                    "node_id": node_id,
+                    "hex_id": f"!{node_id:08x}" if node_id else "!00000000",
+                    "node_name": row["node_name"] or f"!{node_id:08x}",
+                    "role": row["role"] or "UNKNOWN",
+                    "is_router": row["role"] in ROUTER_ROLES if row["role"] else False,
+                    "packet_count": row["packet_count"],
+                    "avg_hops": round(row["avg_hops"], 2) if row["avg_hops"] else 0,
+                    "max_hops": row["max_hops"] or 0,
+                }
+            )
+
+        # Get relay activity (packets that have been relayed)
+        cursor.execute(
+            """
+            SELECT
+                relay_node,
+                COUNT(*) as relay_count
+            FROM packet_history
+            WHERE timestamp >= ?
+                AND relay_node IS NOT NULL
+                AND relay_node != 0
+            GROUP BY relay_node
+            ORDER BY relay_count DESC
+            LIMIT 20
+        """,
+            (cutoff_time,),
+        )
+        relay_rows = cursor.fetchall()
+
+        # Get names for relay nodes
+        relay_node_ids = [row["relay_node"] for row in relay_rows]
+        relay_names = {}
+        if relay_node_ids:
+            from ..utils.node_utils import get_bulk_node_names
+
+            relay_names = get_bulk_node_names(relay_node_ids)
+
+        top_relayers = [
+            {
+                "node_id": row["relay_node"],
+                "hex_id": f"!{row['relay_node']:08x}",
+                "node_name": relay_names.get(
+                    row["relay_node"], f"!{row['relay_node']:08x}"
+                ),
+                "relay_count": row["relay_count"],
+            }
+            for row in relay_rows
+        ]
+
+        conn.close()
+
+        return jsonify(
+            {
+                "role_distribution": role_distribution,
+                "hop_distribution": hop_distribution,
+                "nodes_by_activity": nodes_by_activity,
+                "top_relayers": top_relayers,
+                "statistics": {
+                    "total_nodes": total_nodes,
+                    "router_count": router_count,
+                    "client_count": total_nodes - router_count,
+                    "router_percentage": round(
+                        (router_count / total_nodes * 100) if total_nodes > 0 else 0, 1
+                    ),
+                    "total_packets_analyzed": total_packets_with_hops,
+                    "direct_packets": direct_packets,
+                    "relayed_packets": relayed_packets,
+                    "relay_percentage": round(
+                        (relayed_packets / total_packets_with_hops * 100)
+                        if total_packets_with_hops > 0
+                        else 0,
+                        1,
+                    ),
+                    "avg_hops": round(avg_hops, 2),
+                    "max_hops_observed": max_hops_observed,
+                },
+                "analysis_hours": hours,
+            }
+        )
+
+    except Exception as e:
+        logger.error(f"Error getting hop stats: {e}", exc_info=True)
         return jsonify({"error": str(e)}), 500
