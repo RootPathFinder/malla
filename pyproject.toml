@@ -54,6 +54,8 @@ dependencies = [
     "opentelemetry-instrumentation-system-metrics>=0.45b0",
     "astral>=3.2",  # For sunrise/sunset calculations
     "scipy>=1.11",  # For trend analysis
+    "flask-login>=0.6.0",  # User authentication
+    "bcrypt>=4.0.0",  # Password hashing
 ]
 
 [project.urls]

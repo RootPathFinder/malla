@@ -236,6 +236,11 @@
                 <i class="bi bi-activity"></i> Neighbor Stability
             </button>
         </li>
+        <li class="nav-item" role="presentation">
+            <button class="nav-link" id="hops-tab" data-bs-toggle="tab" data-bs-target="#hops-pane" type="button" role="tab">
+                <i class="bi bi-signpost-split"></i> Mesh Hops
+            </button>
+        </li>
     </ul>
 
     <div class="tab-content" id="topologyTabsContent">
@@ -334,6 +339,144 @@
                 </div>
             </div>
         </div>
+
+        <!-- Mesh Hops Analysis -->
+        <div class="tab-pane fade" id="hops-pane" role="tabpanel">
+            <!-- Hop Statistics Overview -->
+            <div class="row mb-4" id="hopStatsRow">
+                <div class="col-md-2">
+                    <div class="card stats-card h-100">
+                        <div class="card-body text-center">
+                            <div class="h3 mb-0" id="hopStatRouters">-</div>
+                            <small class="text-muted">Router Nodes</small>
+                        </div>
+                    </div>
+                </div>
+                <div class="col-md-2">
+                    <div class="card stats-card h-100">
+                        <div class="card-body text-center">
+                            <div class="h3 mb-0" id="hopStatClients">-</div>
+                            <small class="text-muted">Client Nodes</small>
+                        </div>
+                    </div>
+                </div>
+                <div class="col-md-2">
+                    <div class="card stats-card excellent h-100">
+                        <div class="card-body text-center">
+                            <div class="h3 mb-0" id="hopStatDirect">-</div>
+                            <small class="text-muted">Direct Packets</small>
+                        </div>
+                    </div>
+                </div>
+                <div class="col-md-2">
+                    <div class="card stats-card good h-100">
+                        <div class="card-body text-center">
+                            <div class="h3 mb-0" id="hopStatRelayed">-</div>
+                            <small class="text-muted">Relayed Packets</small>
+                        </div>
+                    </div>
+                </div>
+                <div class="col-md-2">
+                    <div class="card stats-card warning h-100">
+                        <div class="card-body text-center">
+                            <div class="h3 mb-0" id="hopStatAvgHops">-</div>
+                            <small class="text-muted">Avg Hop Count</small>
+                        </div>
+                    </div>
+                </div>
+                <div class="col-md-2">
+                    <div class="card stats-card h-100">
+                        <div class="card-body text-center">
+                            <div class="h3 mb-0" id="hopStatMaxHops">-</div>
+                            <small class="text-muted">Max Hops Observed</small>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <div class="row">
+                <!-- Role Distribution -->
+                <div class="col-md-4 mb-4">
+                    <div class="card h-100">
+                        <div class="card-header">
+                            <h5 class="mb-0"><i class="bi bi-pie-chart"></i> Role Distribution</h5>
+                        </div>
+                        <div class="card-body">
+                            <div id="roleDistributionList" class="list-group list-group-flush">
+                                <div class="text-center">
+                                    <div class="spinner-border spinner-border-sm" role="status"></div>
+                                    Loading...
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Hop Distribution -->
+                <div class="col-md-4 mb-4">
+                    <div class="card h-100">
+                        <div class="card-header">
+                            <h5 class="mb-0"><i class="bi bi-bar-chart"></i> Hop Distribution</h5>
+                        </div>
+                        <div class="card-body">
+                            <div id="hopDistributionList" class="list-group list-group-flush">
+                                <div class="text-center">
+                                    <div class="spinner-border spinner-border-sm" role="status"></div>
+                                    Loading...
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Top Relayers -->
+                <div class="col-md-4 mb-4">
+                    <div class="card h-100">
+                        <div class="card-header">
+                            <h5 class="mb-0"><i class="bi bi-arrow-repeat"></i> Top Relay Nodes</h5>
+                        </div>
+                        <div class="card-body">
+                            <div id="topRelayersList" class="list-group list-group-flush">
+                                <div class="text-center">
+                                    <div class="spinner-border spinner-border-sm" role="status"></div>
+                                    Loading...
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Node Activity Table -->
+            <div class="card">
+                <div class="card-header">
+                    <h5 class="mb-0"><i class="bi bi-table"></i> Node Hop Activity</h5>
+                </div>
+                <div class="card-body">
+                    <div class="table-responsive">
+                        <table class="table table-hover table-sortable" id="hopActivityTable">
+                            <thead>
+                                <tr>
+                                    <th data-sort="node_name">Node Name</th>
+                                    <th data-sort="role">Role <i class="bi bi-arrow-down-up sort-icon"></i></th>
+                                    <th data-sort="packet_count">Packets <i class="bi bi-arrow-down-up sort-icon"></i></th>
+                                    <th data-sort="avg_hops">Avg Hops <i class="bi bi-arrow-down-up sort-icon"></i></th>
+                                    <th data-sort="max_hops">Max Hops <i class="bi bi-arrow-down-up sort-icon"></i></th>
+                                </tr>
+                            </thead>
+                            <tbody id="hopActivityTableBody">
+                                <tr>
+                                    <td colspan="5" class="text-center">
+                                        <div class="spinner-border spinner-border-sm" role="status"></div>
+                                        Loading hop activity data...
+                                    </td>
+                                </tr>
+                            </tbody>
+                        </table>
+                    </div>
+                </div>
+            </div>
+        </div>
     </div>
 </div>
 
@@ -360,6 +503,7 @@
 (function() {
     let topologyData = null;
     let stabilityData = null;
+    let hopData = null;
     let currentSort = { column: 'avg_snr', direction: 'desc' };
 
     // Initialize
@@ -370,15 +514,29 @@
         document.getElementById('refreshBtn').addEventListener('click', function() {
             loadTopology();
             loadStability();
+            hopData = null;  // Force reload on next tab view
+            if (document.getElementById('hops-tab').classList.contains('active')) {
+                loadHopStats();
+            }
         });
 
-        document.getElementById('hoursFilter').addEventListener('change', loadTopology);
+        document.getElementById('hoursFilter').addEventListener('change', function() {
+            loadTopology();
+            hopData = null;  // Reset hop data when hours change
+            if (document.getElementById('hops-tab').classList.contains('active')) {
+                loadHopStats();
+            }
+        });
         document.getElementById('qualityFilter').addEventListener('change', renderLinks);
         document.getElementById('nodeSearch').addEventListener('input', debounce(filterTables, 300));
 
         // Tab change handlers
         document.getElementById('stability-tab').addEventListener('shown.bs.tab', function() {
             if (!stabilityData) loadStability();
+        });
+
+        document.getElementById('hops-tab').addEventListener('shown.bs.tab', function() {
+            if (!hopData) loadHopStats();
         });
 
         // Sortable table headers
@@ -618,6 +776,7 @@
         if (tableId === 'linksTable') renderLinks();
         else if (tableId === 'nodesTable') renderNodes();
         else if (tableId === 'stabilityTable') renderStability();
+        else if (tableId === 'hopActivityTable') renderHopActivityTable();
     }
 
     function filterTables() {
@@ -683,13 +842,202 @@
     }
 
     function formatTimeAgo(timestamp) {
+        if (!timestamp) return 'Unknown';
         const now = Date.now() / 1000;
         const diff = now - timestamp;
 
+        if (diff < 0) return 'Unknown';  // Future timestamp
         if (diff < 60) return 'Just now';
         if (diff < 3600) return Math.floor(diff / 60) + 'm ago';
         if (diff < 86400) return Math.floor(diff / 3600) + 'h ago';
-        return Math.floor(diff / 86400) + 'd ago';
+        if (diff < 604800) return Math.floor(diff / 86400) + 'd ago';  // Less than 7 days
+        return 'Over ' + Math.floor(diff / 604800) + 'w ago';
+    }
+
+    // Hop statistics functions
+    async function loadHopStats() {
+        const hours = document.getElementById('hoursFilter').value;
+
+        try {
+            const response = await fetch(`/mesh/api/hop-stats?hours=${hours}`);
+            hopData = await response.json();
+            renderHopStats();
+        } catch (error) {
+            console.error('Failed to load hop stats:', error);
+            document.getElementById('hopActivityTableBody').innerHTML =
+                '<tr><td colspan="5" class="text-center text-danger">Failed to load hop data</td></tr>';
+        }
+    }
+
+    function renderHopStats() {
+        if (!hopData) return;
+
+        const stats = hopData.statistics;
+
+        // Update statistics cards
+        document.getElementById('hopStatRouters').textContent = stats.router_count;
+        document.getElementById('hopStatClients').textContent = stats.client_count;
+        document.getElementById('hopStatDirect').textContent = stats.direct_packets.toLocaleString();
+        document.getElementById('hopStatRelayed').textContent = stats.relayed_packets.toLocaleString();
+        document.getElementById('hopStatAvgHops').textContent = stats.avg_hops;
+        document.getElementById('hopStatMaxHops').textContent = stats.max_hops_observed;
+
+        // Render role distribution
+        renderRoleDistribution();
+
+        // Render hop distribution
+        renderHopDistribution();
+
+        // Render top relayers
+        renderTopRelayers();
+
+        // Render node activity table
+        renderHopActivityTable();
+    }
+
+    function renderRoleDistribution() {
+        const container = document.getElementById('roleDistributionList');
+        const roles = hopData.role_distribution;
+
+        if (!roles || roles.length === 0) {
+            container.innerHTML = '<div class="text-muted text-center">No role data available</div>';
+            return;
+        }
+
+        const totalNodes = hopData.statistics.total_nodes;
+        const roleColors = {
+            'ROUTER': 'success',
+            'ROUTER_CLIENT': 'info',
+            'ROUTER_LATE': 'success',
+            'REPEATER': 'warning',
+            'CLIENT': 'primary',
+            'CLIENT_MUTE': 'secondary',
+            'CLIENT_HIDDEN': 'secondary',
+            'SENSOR': 'pink',
+            'TAK': 'dark',
+            'TAK_TRACKER': 'dark',
+            'LOST_AND_FOUND': 'secondary',
+            'UNKNOWN': 'danger'
+        };
+
+        container.innerHTML = roles.map(role => {
+            const percentage = totalNodes > 0 ? ((role.count / totalNodes) * 100).toFixed(1) : 0;
+            const colorClass = roleColors[role.role] || 'secondary';
+            return `
+                <div class="list-group-item d-flex justify-content-between align-items-center py-2">
+                    <div>
+                        <span class="badge bg-${colorClass} me-2">${role.role}</span>
+                    </div>
+                    <div class="text-end">
+                        <strong>${role.count}</strong>
+                        <small class="text-muted">(${percentage}%)</small>
+                    </div>
+                </div>
+            `;
+        }).join('');
+    }
+
+    function renderHopDistribution() {
+        const container = document.getElementById('hopDistributionList');
+        const hops = hopData.hop_distribution;
+
+        if (!hops || hops.length === 0) {
+            container.innerHTML = '<div class="text-muted text-center">No hop data available</div>';
+            return;
+        }
+
+        const totalPackets = hopData.statistics.total_packets_analyzed;
+        const maxCount = Math.max(...hops.map(h => h.count));
+
+        container.innerHTML = hops.map(hop => {
+            const percentage = totalPackets > 0 ? ((hop.count / totalPackets) * 100).toFixed(1) : 0;
+            const barWidth = maxCount > 0 ? (hop.count / maxCount * 100) : 0;
+            const hopLabel = hop.hops === 0 ? 'Direct (0 hops)' : `${hop.hops} hop${hop.hops > 1 ? 's' : ''}`;
+            const colorClass = hop.hops === 0 ? 'success' : (hop.hops <= 2 ? 'info' : 'warning');
+
+            return `
+                <div class="list-group-item py-2">
+                    <div class="d-flex justify-content-between mb-1">
+                        <span>${hopLabel}</span>
+                        <span><strong>${hop.count.toLocaleString()}</strong> <small class="text-muted">(${percentage}%)</small></span>
+                    </div>
+                    <div class="progress" style="height: 6px;">
+                        <div class="progress-bar bg-${colorClass}" role="progressbar" style="width: ${barWidth}%"></div>
+                    </div>
+                </div>
+            `;
+        }).join('');
+    }
+
+    function renderTopRelayers() {
+        const container = document.getElementById('topRelayersList');
+        const relayers = hopData.top_relayers;
+
+        if (!relayers || relayers.length === 0) {
+            container.innerHTML = '<div class="text-muted text-center">No relay data available</div>';
+            return;
+        }
+
+        const maxCount = relayers.length > 0 ? relayers[0].relay_count : 0;
+
+        container.innerHTML = relayers.slice(0, 10).map((relayer, index) => {
+            const barWidth = maxCount > 0 ? (relayer.relay_count / maxCount * 100) : 0;
+            return `
+                <div class="list-group-item py-2">
+                    <div class="d-flex justify-content-between mb-1">
+                        <span>
+                            <span class="badge bg-secondary me-1">#${index + 1}</span>
+                            <a href="/node/${relayer.node_id}" class="node-link">${relayer.node_name}</a>
+                        </span>
+                        <strong>${relayer.relay_count.toLocaleString()}</strong>
+                    </div>
+                    <div class="progress" style="height: 4px;">
+                        <div class="progress-bar bg-primary" role="progressbar" style="width: ${barWidth}%"></div>
+                    </div>
+                </div>
+            `;
+        }).join('');
+    }
+
+    function renderHopActivityTable() {
+        const tbody = document.getElementById('hopActivityTableBody');
+        const nodes = hopData.nodes_by_activity;
+
+        if (!nodes || nodes.length === 0) {
+            tbody.innerHTML = '<tr><td colspan="5" class="text-center text-muted">No activity data available</td></tr>';
+            return;
+        }
+
+        const roleColors = {
+            'ROUTER': 'success',
+            'ROUTER_CLIENT': 'info',
+            'ROUTER_LATE': 'success',
+            'REPEATER': 'warning',
+            'CLIENT': 'primary',
+            'CLIENT_MUTE': 'secondary',
+            'UNKNOWN': 'danger'
+        };
+
+        tbody.innerHTML = nodes.map(node => {
+            const roleColor = roleColors[node.role] || 'secondary';
+            const avgHopsClass = node.avg_hops === 0 ? 'text-success' : (node.avg_hops <= 1 ? 'text-info' : 'text-warning');
+
+            return `
+                <tr>
+                    <td>
+                        <a href="/node/${node.node_id}" class="node-link">${node.node_name}</a>
+                        <br><small class="text-muted">${node.hex_id}</small>
+                    </td>
+                    <td>
+                        <span class="badge bg-${roleColor}">${node.role}</span>
+                        ${node.is_router ? '<i class="bi bi-arrow-repeat text-success ms-1" title="Router"></i>' : ''}
+                    </td>
+                    <td>${node.packet_count.toLocaleString()}</td>
+                    <td class="${avgHopsClass}">${node.avg_hops}</td>
+                    <td>${node.max_hops}</td>
+                </tr>
+            `;
+        }).join('');
     }
 })();
 </script>

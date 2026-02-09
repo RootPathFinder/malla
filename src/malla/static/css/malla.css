@@ -942,3 +942,184 @@ h1, .h1 {
 [data-bs-theme=dark] #node-connection-indicator.disconnected {
   border-color: rgba(255, 255, 255, 0.2);
 }
+
+/* ============================================================================
+   Mobile Responsive Improvements
+   ============================================================================ */
+
+/* Tablet breakpoint (768px) */
+@media (max-width: 768px) {
+  /* Reduce container padding */
+  .container {
+    padding-left: 0.75rem;
+    padding-right: 0.75rem;
+  }
+
+  /* Compact cards on mobile */
+  .card-body {
+    padding: 0.75rem;
+  }
+
+  /* Smaller metric values */
+  .metric-value {
+    font-size: 1.5rem;
+  }
+
+  /* Stack filter controls vertically */
+  .filter-controls {
+    flex-direction: column;
+    gap: 0.5rem;
+  }
+
+  /* Full-width selects on mobile */
+  .filter-controls select,
+  .filter-controls input {
+    width: 100%;
+  }
+
+  /* Reduce table font size */
+  .table {
+    font-size: 0.8rem;
+  }
+
+  /* Hide less important columns on tablets */
+  .table .d-none-tablet {
+    display: none !important;
+  }
+
+  /* Adjust navbar spacing */
+  .navbar .container {
+    padding-left: 0.5rem;
+    padding-right: 0.5rem;
+  }
+
+  /* Smaller buttons in navbar */
+  .navbar .btn-sm {
+    padding: 0.25rem 0.4rem;
+    font-size: 0.75rem;
+  }
+}
+
+/* Phone breakpoint (576px) */
+@media (max-width: 576px) {
+  /* Even more compact on phones */
+  .container {
+    padding-left: 0.5rem;
+    padding-right: 0.5rem;
+  }
+
+  /* Reduce heading sizes */
+  h1, .h1 { font-size: 1.5rem; }
+  h2, .h2 { font-size: 1.25rem; }
+  h3, .h3 { font-size: 1.1rem; }
+
+  /* Compact page headers */
+  .d-flex.justify-content-between {
+    flex-direction: column;
+    gap: 0.5rem;
+    align-items: flex-start !important;
+  }
+
+  /* Full-width buttons on phone */
+  .d-flex.justify-content-between .btn {
+    width: 100%;
+  }
+
+  /* Smaller metric cards */
+  .metric-value {
+    font-size: 1.25rem;
+  }
+
+  .metric-label {
+    font-size: 0.75rem;
+  }
+
+  /* Even smaller table text */
+  .table {
+    font-size: 0.75rem;
+  }
+
+  .table th,
+  .table td {
+    padding: 0.4rem 0.35rem;
+  }
+
+  /* Hide columns with low priority on phones */
+  .table .d-none-mobile {
+    display: none !important;
+  }
+
+  /* Truncate long text in tables */
+  .table td {
+    max-width: 120px;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  /* Stack buttons horizontally */
+  .btn-group-mobile {
+    display: flex;
+    flex-direction: column;
+    gap: 0.25rem;
+  }
+
+  /* Hide long text, show icons only */
+  .navbar .d-none-phone {
+    display: none !important;
+  }
+
+  /* Compact card headers */
+  .card-header {
+    padding: 0.5rem 0.75rem;
+  }
+
+  .card-header h5 {
+    font-size: 0.9rem;
+  }
+
+  /* Map takes more space on mobile */
+  #map-container,
+  .map-container {
+    height: 60vh !important;
+    min-height: 300px;
+  }
+
+  /* Touch-friendly buttons */
+  .btn {
+    min-height: 44px;
+    min-width: 44px;
+  }
+
+  /* Touch-friendly form controls */
+  .form-control,
+  .form-select {
+    min-height: 44px;
+    font-size: 16px; /* Prevents iOS zoom on focus */
+  }
+
+  /* Sticky action buttons on mobile */
+  .mobile-sticky-actions {
+    position: fixed;
+    bottom: 0;
+    left: 0;
+    right: 0;
+    background: var(--bs-body-bg);
+    padding: 0.75rem;
+    border-top: 1px solid var(--bs-border-color);
+    box-shadow: 0 -2px 10px rgba(0, 0, 0, 0.1);
+    z-index: 1030;
+  }
+}
+
+/* Large screens - optimize for data density */
+@media (min-width: 1400px) {
+  .container {
+    max-width: 1320px;
+  }
+
+  /* Slightly larger fonts for readability */
+  .table {
+    font-size: 0.9rem;
+  }
+}

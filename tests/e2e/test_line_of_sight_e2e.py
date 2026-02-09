@@ -21,9 +21,9 @@ class TestLineOfSightE2E:
         page.goto(test_server_url)
         page.wait_for_load_state("networkidle")
 
-        # Open Tools dropdown
-        tools_dropdown = page.locator("#toolsDropdown")
-        tools_dropdown.click()
+        # Open Network dropdown (Line of Sight is under Network menu)
+        network_dropdown = page.locator("#networkDropdown")
+        network_dropdown.click()
 
         # Click Line of Sight link
         los_link = page.locator('a[href="/line-of-sight"]')
@@ -171,14 +171,14 @@ class TestLineOfSightE2E:
         assert "elevationapi.com" in attribution_html
         assert "OpenStreetMap" in attribution_html
 
-    def test_line_of_sight_from_tools_menu(self, page: Page, test_server_url):
-        """Test opening line-of-sight from the Tools menu."""
+    def test_line_of_sight_from_network_menu(self, page: Page, test_server_url):
+        """Test opening line-of-sight from the Network menu."""
         page.goto(f"{test_server_url}/map")
         page.wait_for_load_state("networkidle")
 
-        # Open Tools dropdown
-        tools_dropdown = page.locator("#toolsDropdown")
-        tools_dropdown.click()
+        # Open Network dropdown (Line of Sight is under Network menu)
+        network_dropdown = page.locator("#networkDropdown")
+        network_dropdown.click()
 
         # Wait for dropdown to open
         page.wait_for_timeout(500)

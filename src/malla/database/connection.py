@@ -5,11 +5,40 @@ Database connection management for Meshtastic Mesh Health Web UI.
 import logging
 import os
 import sqlite3
+import sys
 
 # Prefer configuration loader over environment variables
 from malla.config import get_config
 
 logger = logging.getLogger(__name__)
+
+
+def _safe_log_error(message: str) -> None:
+    """Log an error safely, suppressing errors during Python shutdown."""
+    if sys.is_finalizing():
+        return
+    old_raise = logging.raiseExceptions
+    try:
+        logging.raiseExceptions = False
+        logger.error(message)
+    except (ValueError, OSError, AttributeError):
+        pass
+    finally:
+        logging.raiseExceptions = old_raise
+
+
+def _safe_log_warning(message: str) -> None:
+    """Log a warning safely, suppressing errors during Python shutdown."""
+    if sys.is_finalizing():
+        return
+    old_raise = logging.raiseExceptions
+    try:
+        logging.raiseExceptions = False
+        logger.warning(message)
+    except (ValueError, OSError, AttributeError):
+        pass
+    finally:
+        logging.raiseExceptions = old_raise
 
 
 def get_db_connection() -> sqlite3.Connection:
@@ -61,11 +90,11 @@ def get_db_connection() -> sqlite3.Connection:
         try:
             _ensure_schema_migrations(cursor)
         except Exception as e:
-            logger.warning(f"Schema migration check failed: {e}")
+            _safe_log_warning(f"Schema migration check failed: {e}")
 
         return conn
     except Exception as e:
-        logger.error(f"Failed to connect to database: {e}")
+        _safe_log_error(f"Failed to connect to database: {e}")
         raise
 
 
@@ -107,7 +136,7 @@ def init_database() -> None:
         )
 
     except Exception as e:
-        logger.error(f"Database initialization failed: {e}")
+        _safe_log_error(f"Database initialization failed: {e}")
         # Don't raise the exception - let the app start anyway
         # The database might not exist yet or be created by another process
 
@@ -312,3 +341,36 @@ def _ensure_schema_migrations(cursor: sqlite3.Cursor) -> None:
                 _SCHEMA_MIGRATIONS_DONE.add("node_info_archived")
             else:
                 logging.warning(f"Failed to add archived column: {exc}")
+
+    # Migration: Add scaling indexes for 1000+ node performance
+    if "scaling_indexes" not in _SCHEMA_MIGRATIONS_DONE:
+        try:
+            # Index on destination for packet filtering
+            cursor.execute(
+                "CREATE INDEX IF NOT EXISTS idx_packet_destination ON packet_history(destination)"
+            )
+            # Index on short_name for text search
+            cursor.execute(
+                "CREATE INDEX IF NOT EXISTS idx_node_short_name ON node_info(short_name)"
+            )
+            # Index on long_name for text search
+            cursor.execute(
+                "CREATE INDEX IF NOT EXISTS idx_node_long_name ON node_info(long_name)"
+            )
+            # Composite index for common packet queries
+            cursor.execute(
+                "CREATE INDEX IF NOT EXISTS idx_packet_from_time ON packet_history(from_node_id, timestamp DESC)"
+            )
+            # Index for traceroute queries
+            cursor.execute(
+                "CREATE INDEX IF NOT EXISTS idx_packet_portnum_time ON packet_history(portnum_name, timestamp DESC)"
+            )
+            # Index for gateway queries
+            cursor.execute(
+                "CREATE INDEX IF NOT EXISTS idx_packet_gateway_time ON packet_history(gateway_id, timestamp DESC)"
+            )
+            logging.info("Added scaling indexes for 1000+ node performance")
+            _SCHEMA_MIGRATIONS_DONE.add("scaling_indexes")
+        except sqlite3.OperationalError as exc:
+            logging.warning(f"Failed to add scaling indexes: {exc}")
+            _SCHEMA_MIGRATIONS_DONE.add("scaling_indexes")

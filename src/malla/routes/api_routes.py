@@ -1665,6 +1665,11 @@ def api_nodes_data():
         if primary_channel:
             filters["primary_channel"] = primary_channel
 
+        # Include archived nodes if requested
+        include_archived = request.args.get("include_archived", "").strip()
+        if include_archived == "1":
+            filters["include_archived"] = True
+
         # Calculate offset
         offset = (page - 1) * limit
 
@@ -2033,153 +2038,6 @@ def api_channels():
     except Exception as e:
         logger.error(f"Error in API channels: {e}")
         return jsonify({"error": str(e), "channels": []}), 500
-
-
-@api_bp.route("/health/node/<node_id>")
-@cache_response(ttl_seconds=60)  # Cache for 60 seconds
-def api_node_health(node_id):
-    """API endpoint for individual node health analysis."""
-    logger.info(f"API node health endpoint accessed for node {node_id}")
-    try:
-        from ..services.node_health_service import NodeHealthService
-
-        # Convert node_id to int
-        node_id_int = convert_node_id(node_id)
-
-        # Get analysis period from query params
-        hours = request.args.get("hours", 24, type=int)
-
-        # Analyze node health
-        health_data = NodeHealthService.analyze_node_health(node_id_int, hours)
-
-        if not health_data:
-            return jsonify({"error": "Node not found or no data available"}), 404
-
-        response = safe_jsonify(health_data)
-        # Add cache headers for client-side caching
-        response.headers["Cache-Control"] = "public, max-age=60"
-        return response
-    except ValueError as e:
-        return jsonify({"error": str(e)}), 400
-    except Exception as e:
-        logger.error(f"Error in API node health: {e}")
-        return jsonify({"error": str(e)}), 500
-
-
-@api_bp.route("/health/problematic-nodes")
-@cache_response(ttl_seconds=60)  # Cache for 60 seconds
-def api_problematic_nodes():
-    """API endpoint for identifying problematic nodes in the network."""
-    logger.info("API problematic nodes endpoint accessed")
-    try:
-        from ..services.node_health_service import NodeHealthService
-
-        # Get query parameters
-        hours = request.args.get("hours", 24, type=int)
-        min_health_score = request.args.get("min_health_score", 70, type=int)
-        limit = request.args.get("limit", 50, type=int)
-
-        # Get problematic nodes
-        problematic_nodes = NodeHealthService.get_problematic_nodes(
-            hours=hours, min_health_score=min_health_score, limit=limit
-        )
-
-        response = safe_jsonify(
-            {
-                "problematic_nodes": problematic_nodes,
-                "total_count": len(problematic_nodes),
-                "filters": {
-                    "hours": hours,
-                    "min_health_score": min_health_score,
-                    "limit": limit,
-                },
-            }
-        )
-        # Add cache headers for client-side caching
-        response.headers["Cache-Control"] = "public, max-age=60"
-        return response
-    except Exception as e:
-        logger.error(f"Error in API problematic nodes: {e}")
-        return jsonify({"error": str(e)}), 500
-
-
-@api_bp.route("/health/network-summary")
-@cache_response(ttl_seconds=60)  # Cache for 60 seconds
-def api_network_health_summary():
-    """API endpoint for overall network health summary."""
-    logger.info("API network health summary endpoint accessed")
-    try:
-        from ..services.node_health_service import NodeHealthService
-
-        # Get analysis period from query params
-        hours = request.args.get("hours", 24, type=int)
-
-        # Get network health summary
-        summary = NodeHealthService.get_network_health_summary(hours)
-
-        response = safe_jsonify(summary)
-        # Add cache headers for client-side caching
-        response.headers["Cache-Control"] = "public, max-age=60"
-        return response
-    except Exception as e:
-        logger.error(f"Error in API network health summary: {e}")
-        return jsonify({"error": str(e)}), 500
-
-
-@api_bp.route("/health/uptime/<node_id>")
-@cache_response(ttl_seconds=300)  # Cache for 5 minutes
-def api_node_uptime(node_id):
-    """API endpoint for node uptime/availability data."""
-    logger.info(f"API node uptime endpoint accessed for node {node_id}")
-    try:
-        from ..services.node_health_service import NodeHealthService
-
-        # Convert node_id to int
-        node_id_int = convert_node_id(node_id)
-
-        # Get analysis period from query params (default 7 days)
-        days = request.args.get("days", 7, type=int)
-        days = min(max(days, 1), 30)  # Clamp between 1 and 30 days
-
-        # Get uptime data
-        uptime_data = NodeHealthService.get_node_uptime_data(node_id_int, days)
-
-        if not uptime_data:
-            return jsonify({"error": "Node not found or no data available"}), 404
-
-        response = safe_jsonify(uptime_data)
-        response.headers["Cache-Control"] = "public, max-age=300"
-        return response
-    except ValueError as e:
-        return jsonify({"error": str(e)}), 400
-    except Exception as e:
-        logger.error(f"Error in API node uptime: {e}")
-        return jsonify({"error": str(e)}), 500
-
-
-@api_bp.route("/health/uptime-overview")
-@cache_response(ttl_seconds=300)  # Cache for 5 minutes
-def api_network_uptime_overview():
-    """API endpoint for network-wide uptime overview."""
-    logger.info("API network uptime overview endpoint accessed")
-    try:
-        from ..services.node_health_service import NodeHealthService
-
-        # Get query parameters
-        days = request.args.get("days", 7, type=int)
-        days = min(max(days, 1), 30)
-        limit = request.args.get("limit", 50, type=int)
-        limit = min(max(limit, 10), 200)
-
-        # Get uptime overview
-        overview = NodeHealthService.get_network_uptime_overview(days, limit)
-
-        response = safe_jsonify(overview)
-        response.headers["Cache-Control"] = "public, max-age=300"
-        return response
-    except Exception as e:
-        logger.error(f"Error in API network uptime overview: {e}")
-        return jsonify({"error": str(e)}), 500
 
 
 @api_bp.route("/performance/metrics")
@@ -2721,6 +2579,970 @@ def api_search_packets():
         )
     except Exception as e:
         logger.error(f"Error in API search packets: {e}")
+        return jsonify({"error": str(e)}), 500
+
+
+@api_bp.route("/weather-sensors")
+def api_weather_sensors():
+    """
+    Get weather/environment sensor data from all nodes with telemetry.
+
+    Query parameters:
+        - max_age_hours: Maximum age of readings in hours (default: 6)
+
+    Returns sensors with temperature, humidity, pressure data and location if available.
+    """
+    logger.info("API weather sensors endpoint accessed")
+    try:
+        from meshtastic.protobuf import mesh_pb2, telemetry_pb2
+
+        max_age_hours = request.args.get("max_age_hours", 6, type=int)
+        cutoff_time = time.time() - (max_age_hours * 3600)
+
+        conn = get_db_connection()
+        cursor = conn.cursor()
+
+        # Get recent TELEMETRY_APP packets (portnum 67) with environment data
+        cursor.execute(
+            """SELECT ph.from_node_id, ph.raw_payload, ph.timestamp,
+                      n.short_name, n.long_name
+               FROM packet_history ph
+               LEFT JOIN node_info n ON ph.from_node_id = n.node_id
+               WHERE ph.portnum = 67 AND ph.raw_payload IS NOT NULL
+               AND ph.timestamp > ?
+               ORDER BY ph.timestamp DESC LIMIT 500""",
+            (cutoff_time,),
+        )
+        telemetry_rows = cursor.fetchall()
+
+        # Parse telemetry and find environment readings
+        sensors: list[dict[str, Any]] = []
+        seen_nodes: set[int] = set()
+
+        for row in telemetry_rows:
+            node_id = row["from_node_id"]
+            if node_id in seen_nodes:
+                continue  # Only show most recent per node
+
+            try:
+                tel = telemetry_pb2.Telemetry()
+                tel.ParseFromString(row["raw_payload"])
+                if tel.HasField("environment_metrics"):
+                    env = tel.environment_metrics
+                    # Only include if has meaningful temperature data
+                    if env.temperature != 0 or env.relative_humidity != 0:
+                        seen_nodes.add(node_id)
+                        sensors.append(
+                            {
+                                "node_id": node_id,
+                                "hex_id": f"!{node_id:08x}",
+                                "short_name": row["short_name"],
+                                "long_name": row["long_name"],
+                                "temperature": env.temperature,
+                                "humidity": env.relative_humidity,
+                                "pressure": env.barometric_pressure,
+                                "timestamp": row["timestamp"],
+                                "latitude": None,
+                                "longitude": None,
+                                "city": None,
+                            }
+                        )
+            except Exception:
+                continue
+
+        # Now get position data for all sensor nodes in one query
+        if sensors:
+            node_ids = [s["node_id"] for s in sensors]
+            placeholders = ",".join("?" * len(node_ids))
+            cursor.execute(
+                f"""SELECT from_node_id, raw_payload FROM packet_history
+                   WHERE from_node_id IN ({placeholders}) AND portnum = 3
+                   AND raw_payload IS NOT NULL
+                   ORDER BY timestamp DESC""",
+                node_ids,
+            )
+            position_rows = cursor.fetchall()
+
+            # Build a map of node_id -> position (only keep first/latest per node)
+            node_positions: dict[int, Any] = {}
+            for row in position_rows:
+                nid = row["from_node_id"]
+                if nid not in node_positions:
+                    node_positions[nid] = row["raw_payload"]
+
+            for sensor in sensors:
+                node_id = sensor["node_id"]
+                if node_id in node_positions:
+                    try:
+                        pos = mesh_pb2.Position()
+                        pos.ParseFromString(node_positions[node_id])
+                        if pos.latitude_i != 0 and pos.longitude_i != 0:
+                            sensor["latitude"] = pos.latitude_i / 1e7
+                            sensor["longitude"] = pos.longitude_i / 1e7
+                    except Exception:
+                        pass
+
+        # Skip 24-hour history by default (loaded on demand via separate endpoint)
+        # This significantly improves initial load time
+        include_history = request.args.get("include_history", "false").lower() == "true"
+        if include_history:
+            history_cutoff = time.time() - 86400  # 24 hours
+            for sensor in sensors:
+                node_id = sensor["node_id"]
+                cursor.execute(
+                    """SELECT raw_payload, timestamp FROM packet_history
+                       WHERE from_node_id = ? AND portnum = 67
+                       AND raw_payload IS NOT NULL AND timestamp > ?
+                       ORDER BY timestamp ASC LIMIT 100""",
+                    (node_id, history_cutoff),
+                )
+                history_rows = cursor.fetchall()
+                temp_history = []
+                humidity_history = []
+                for hrow in history_rows:
+                    try:
+                        htel = telemetry_pb2.Telemetry()
+                        htel.ParseFromString(hrow["raw_payload"])
+                        if htel.HasField("environment_metrics"):
+                            henv = htel.environment_metrics
+                            if henv.temperature != 0:
+                                temp_history.append(
+                                    {
+                                        "t": hrow["timestamp"],
+                                        "v": round(henv.temperature, 1),
+                                    }
+                                )
+                            if henv.relative_humidity != 0:
+                                humidity_history.append(
+                                    {
+                                        "t": hrow["timestamp"],
+                                        "v": round(henv.relative_humidity, 1),
+                                    }
+                                )
+                    except Exception:
+                        continue
+                sensor["temp_history"] = temp_history
+                sensor["humidity_history"] = humidity_history
+        else:
+            # Set empty history arrays for consistency
+            for sensor in sensors:
+                sensor["temp_history"] = []
+                sensor["humidity_history"] = []
+
+        conn.close()
+
+        # Note: City names are not fetched here to avoid slow external API calls.
+        # The frontend displays coordinates directly for performance.
+
+        return safe_jsonify(
+            {
+                "sensors": sensors,
+                "count": len(sensors),
+                "max_age_hours": max_age_hours,
+            }
+        )
+    except Exception as e:
+        logger.error(f"Error in API weather sensors: {e}")
+        return jsonify({"error": str(e)}), 500
+
+
+@api_bp.route("/weather-sensor-history/<node_id>")
+def api_weather_sensor_history(node_id: str):
+    """
+    Get 24-hour historical temperature/humidity data for a specific sensor.
+
+    This endpoint is used for lazy-loading sparkline history data.
+    """
+    try:
+        from meshtastic.protobuf import telemetry_pb2
+
+        # Parse node ID (can be hex like !1234abcd or decimal)
+        if node_id.startswith("!"):
+            node_id_int = int(node_id[1:], 16)
+        else:
+            node_id_int = int(node_id)
+
+        history_cutoff = time.time() - 86400  # 24 hours
+
+        conn = get_db_connection()
+        cursor = conn.cursor()
+
+        cursor.execute(
+            """SELECT raw_payload, timestamp FROM packet_history
+               WHERE from_node_id = ? AND portnum = 67
+               AND raw_payload IS NOT NULL AND timestamp > ?
+               ORDER BY timestamp ASC LIMIT 100""",
+            (node_id_int, history_cutoff),
+        )
+        history_rows = cursor.fetchall()
+        conn.close()
+
+        temp_history = []
+        humidity_history = []
+        for hrow in history_rows:
+            try:
+                htel = telemetry_pb2.Telemetry()
+                htel.ParseFromString(hrow["raw_payload"])
+                if htel.HasField("environment_metrics"):
+                    henv = htel.environment_metrics
+                    if henv.temperature != 0:
+                        temp_history.append(
+                            {
+                                "t": hrow["timestamp"],
+                                "v": round(henv.temperature, 1),
+                            }
+                        )
+                    if henv.relative_humidity != 0:
+                        humidity_history.append(
+                            {
+                                "t": hrow["timestamp"],
+                                "v": round(henv.relative_humidity, 1),
+                            }
+                        )
+            except Exception:
+                continue
+
+        return safe_jsonify(
+            {
+                "node_id": node_id,
+                "temp_history": temp_history,
+                "humidity_history": humidity_history,
+            }
+        )
+    except Exception as e:
+        logger.error(f"Error in API weather sensor history: {e}")
+        return jsonify({"error": str(e)}), 500
+
+
+@api_bp.route("/detection-sensors")
+@cache_response(ttl_seconds=10)
+def api_detection_sensors():
+    """
+    Get detection sensor events.
+
+    Query parameters:
+        hours: Number of hours to look back (default: 24, max: 168)
+        limit: Maximum number of events to return (default: 500)
+        node_id: Filter by specific node ID (optional)
+
+    Returns:
+        JSON with detection events and summary statistics
+    """
+    try:
+        hours = request.args.get("hours", 24, type=int)
+        hours = min(max(hours, 1), 168)  # Clamp between 1 hour and 7 days
+        limit = request.args.get("limit", 500, type=int)
+        limit = min(max(limit, 1), 2000)
+        node_id_filter = request.args.get("node_id", None)
+
+        conn = get_db_connection()
+        cursor = conn.cursor()
+
+        # Detection sensor app is portnum 10
+        detection_portnum = 10
+        cutoff_time = time.time() - (hours * 3600)
+
+        # Build query based on filters
+        if node_id_filter:
+            # Convert node_id if needed
+            node_id_int = convert_node_id(node_id_filter)
+            cursor.execute(
+                """
+                SELECT ph.id, ph.timestamp, ph.from_node_id, ph.gateway_id,
+                       ph.rssi, ph.snr, ph.hop_limit, ph.raw_payload,
+                       ni.long_name, ni.short_name
+                FROM packet_history ph
+                LEFT JOIN node_info ni ON ph.from_node_id = ni.node_id
+                WHERE ph.portnum = ? AND ph.timestamp > ? AND ph.from_node_id = ?
+                ORDER BY ph.timestamp DESC
+                LIMIT ?
+                """,
+                (detection_portnum, cutoff_time, node_id_int, limit),
+            )
+        else:
+            cursor.execute(
+                """
+                SELECT ph.id, ph.timestamp, ph.from_node_id, ph.gateway_id,
+                       ph.rssi, ph.snr, ph.hop_limit, ph.raw_payload,
+                       ni.long_name, ni.short_name
+                FROM packet_history ph
+                LEFT JOIN node_info ni ON ph.from_node_id = ni.node_id
+                WHERE ph.portnum = ? AND ph.timestamp > ?
+                ORDER BY ph.timestamp DESC
+                LIMIT ?
+                """,
+                (detection_portnum, cutoff_time, limit),
+            )
+
+        rows = cursor.fetchall()
+
+        # Collect unique node IDs to fetch their locations
+        node_ids_in_events = set()
+        for row in rows:
+            if row["from_node_id"]:
+                node_ids_in_events.add(row["from_node_id"])
+
+        # Fetch locations for these nodes from position packets
+        node_locations = {}
+        if node_ids_in_events:
+            from ..database.repositories import LocationRepository
+
+            try:
+                locations = LocationRepository.get_node_locations(
+                    {"node_ids": list(node_ids_in_events)}
+                )
+                for loc in locations:
+                    node_locations[loc["node_id"]] = {
+                        "latitude": loc.get("latitude"),
+                        "longitude": loc.get("longitude"),
+                    }
+            except Exception as loc_err:
+                logger.warning(f"Failed to fetch locations: {loc_err}")
+
+        conn.close()
+
+        # Process events
+        events = []
+        nodes_with_detections = set()
+        hourly_counts = {}
+
+        for row in rows:
+            packet_id = row["id"]
+            timestamp = row["timestamp"]
+            from_node_id = row["from_node_id"]
+            gateway_id = row["gateway_id"]
+            rssi = row["rssi"]
+            snr = row["snr"]
+            hop_limit = row["hop_limit"]
+            raw_payload = row["raw_payload"]
+            long_name = row["long_name"]
+            short_name = row["short_name"]
+
+            # Get location from separately fetched position data
+            loc = node_locations.get(from_node_id, {})
+            latitude = loc.get("latitude")
+            longitude = loc.get("longitude")
+
+            # Parse detection sensor payload if available
+            detection_name = None
+            if raw_payload:
+                try:
+                    # Detection sensor payload is typically just a string
+                    if isinstance(raw_payload, bytes):
+                        detection_name = raw_payload.decode("utf-8", errors="replace")
+                    else:
+                        detection_name = str(raw_payload)
+                except Exception:
+                    detection_name = None
+
+            node_id_hex = f"!{from_node_id:08x}" if from_node_id else None
+            nodes_with_detections.add(from_node_id)
+
+            # Track hourly counts for charts
+            hour_key = datetime.fromtimestamp(timestamp, tz=UTC).strftime(
+                "%Y-%m-%d %H:00"
+            )
+            hourly_counts[hour_key] = hourly_counts.get(hour_key, 0) + 1
+
+            ts_iso = datetime.fromtimestamp(timestamp, tz=UTC).isoformat()
+            events.append(
+                {
+                    "id": packet_id,
+                    "timestamp": timestamp,
+                    "timestamp_iso": ts_iso,
+                    "from_node_id": from_node_id,
+                    "from_node_hex": node_id_hex,
+                    "node_name": long_name or short_name or node_id_hex or "Unknown",
+                    "short_name": short_name,
+                    "gateway_id": gateway_id,
+                    "rssi": rssi,
+                    "snr": snr,
+                    "hop_limit": hop_limit,
+                    "detection_name": detection_name,
+                    "latitude": latitude,
+                    "longitude": longitude,
+                    "has_location": latitude is not None and longitude is not None,
+                }
+            )
+
+        # Get unique sensor nodes with their info
+        sensor_nodes = []
+        if nodes_with_detections:
+            node_names = get_bulk_node_names(list(nodes_with_detections))
+            for node_id in nodes_with_detections:
+                node_hex = f"!{node_id:08x}" if node_id else None
+                event_count = sum(1 for e in events if e["from_node_id"] == node_id)
+                sensor_nodes.append(
+                    {
+                        "node_id": node_id,
+                        "node_hex": node_hex,
+                        "name": node_names.get(node_id, node_hex or "Unknown"),
+                        "event_count": event_count,
+                    }
+                )
+            # Sort by event count descending
+            sensor_nodes.sort(key=lambda x: x["event_count"], reverse=True)
+
+        # Build hourly chart data
+        hourly_chart = [
+            {"hour": k, "count": v} for k, v in sorted(hourly_counts.items())
+        ]
+
+        return safe_jsonify(
+            {
+                "events": events,
+                "total_events": len(events),
+                "unique_sensors": len(nodes_with_detections),
+                "sensor_nodes": sensor_nodes,
+                "hourly_chart": hourly_chart,
+                "hours_analyzed": hours,
+            }
+        )
+
+    except Exception as e:
+        # Handle missing table gracefully (empty database)
+        if "no such table" in str(e):
+            return safe_jsonify(
+                {
+                    "events": [],
+                    "total_events": 0,
+                    "unique_sensors": 0,
+                    "sensor_nodes": [],
+                    "hourly_chart": [],
+                    "hours_analyzed": 24,
+                }
+            )
+        logger.error(f"Error in API detection sensors: {e}", exc_info=True)
+        return jsonify({"error": str(e)}), 500
+
+
+@api_bp.route("/paxcounter")
+@cache_response(ttl_seconds=10)
+def api_paxcounter():
+    """
+    Get paxcounter readings.
+
+    Query parameters:
+        hours: Number of hours to look back (default: 24, max: 168)
+        limit: Maximum number of readings to return (default: 500)
+        node_id: Filter by specific node ID (optional)
+
+    Returns:
+        JSON with paxcounter readings and summary statistics
+    """
+    try:
+        hours = request.args.get("hours", 24, type=int)
+        hours = min(max(hours, 1), 168)  # Clamp between 1 hour and 7 days
+        limit = request.args.get("limit", 500, type=int)
+        limit = min(max(limit, 1), 2000)
+        node_id_filter = request.args.get("node_id", None)
+
+        conn = get_db_connection()
+        cursor = conn.cursor()
+
+        # Paxcounter app is portnum 34
+        paxcounter_portnum = 34
+        cutoff_time = time.time() - (hours * 3600)
+
+        # Build query based on filters
+        if node_id_filter:
+            node_id_int = convert_node_id(node_id_filter)
+            cursor.execute(
+                """
+                SELECT ph.id, ph.timestamp, ph.from_node_id, ph.gateway_id,
+                       ph.rssi, ph.snr, ph.hop_limit, ph.raw_payload,
+                       ni.long_name, ni.short_name
+                FROM packet_history ph
+                LEFT JOIN node_info ni ON ph.from_node_id = ni.node_id
+                WHERE ph.portnum = ? AND ph.timestamp > ? AND ph.from_node_id = ?
+                ORDER BY ph.timestamp DESC
+                LIMIT ?
+                """,
+                (paxcounter_portnum, cutoff_time, node_id_int, limit),
+            )
+        else:
+            cursor.execute(
+                """
+                SELECT ph.id, ph.timestamp, ph.from_node_id, ph.gateway_id,
+                       ph.rssi, ph.snr, ph.hop_limit, ph.raw_payload,
+                       ni.long_name, ni.short_name
+                FROM packet_history ph
+                LEFT JOIN node_info ni ON ph.from_node_id = ni.node_id
+                WHERE ph.portnum = ? AND ph.timestamp > ?
+                ORDER BY ph.timestamp DESC
+                LIMIT ?
+                """,
+                (paxcounter_portnum, cutoff_time, limit),
+            )
+
+        rows = cursor.fetchall()
+
+        # Collect unique node IDs to fetch their locations
+        node_ids_in_readings = set()
+        for row in rows:
+            if row["from_node_id"]:
+                node_ids_in_readings.add(row["from_node_id"])
+
+        # Fetch locations for these nodes
+        node_locations = {}
+        if node_ids_in_readings:
+            from ..database.repositories import LocationRepository
+
+            try:
+                locations = LocationRepository.get_node_locations(
+                    {"node_ids": list(node_ids_in_readings)}
+                )
+                for loc in locations:
+                    node_locations[loc["node_id"]] = {
+                        "latitude": loc.get("latitude"),
+                        "longitude": loc.get("longitude"),
+                    }
+            except Exception as loc_err:
+                logger.warning(f"Failed to fetch locations: {loc_err}")
+
+        conn.close()
+
+        # Process readings
+        readings = []
+        nodes_with_readings = set()
+        hourly_stats = {}  # {hour: {wifi_sum, ble_sum, count}}
+        total_wifi = 0
+        total_ble = 0
+
+        for row in rows:
+            packet_id = row["id"]
+            timestamp = row["timestamp"]
+            from_node_id = row["from_node_id"]
+            gateway_id = row["gateway_id"]
+            rssi = row["rssi"]
+            snr = row["snr"]
+            hop_limit = row["hop_limit"]
+            raw_payload = row["raw_payload"]
+            long_name = row["long_name"]
+            short_name = row["short_name"]
+
+            # Get location from separately fetched position data
+            loc = node_locations.get(from_node_id, {})
+            latitude = loc.get("latitude")
+            longitude = loc.get("longitude")
+
+            # Parse paxcounter payload
+            wifi_count = 0
+            ble_count = 0
+            uptime = 0
+            if raw_payload:
+                try:
+                    from meshtastic import paxcount_pb2
+
+                    pax = paxcount_pb2.Paxcount()
+                    pax.ParseFromString(raw_payload)
+                    wifi_count = pax.wifi if pax.wifi else 0
+                    ble_count = pax.ble if pax.ble else 0
+                    uptime = pax.uptime if pax.uptime else 0
+                except Exception:
+                    pass
+
+            node_id_hex = f"!{from_node_id:08x}" if from_node_id else None
+            nodes_with_readings.add(from_node_id)
+            total_wifi += wifi_count
+            total_ble += ble_count
+
+            # Track hourly stats for charts
+            hour_key = datetime.fromtimestamp(timestamp, tz=UTC).strftime(
+                "%Y-%m-%d %H:00"
+            )
+            if hour_key not in hourly_stats:
+                hourly_stats[hour_key] = {"wifi_sum": 0, "ble_sum": 0, "count": 0}
+            hourly_stats[hour_key]["wifi_sum"] += wifi_count
+            hourly_stats[hour_key]["ble_sum"] += ble_count
+            hourly_stats[hour_key]["count"] += 1
+
+            ts_iso = datetime.fromtimestamp(timestamp, tz=UTC).isoformat()
+            readings.append(
+                {
+                    "id": packet_id,
+                    "timestamp": timestamp,
+                    "timestamp_iso": ts_iso,
+                    "from_node_id": from_node_id,
+                    "from_node_hex": node_id_hex,
+                    "node_name": long_name or short_name or node_id_hex or "Unknown",
+                    "short_name": short_name,
+                    "gateway_id": gateway_id,
+                    "rssi": rssi,
+                    "snr": snr,
+                    "hop_limit": hop_limit,
+                    "wifi": wifi_count,
+                    "ble": ble_count,
+                    "uptime": uptime,
+                    "latitude": latitude,
+                    "longitude": longitude,
+                    "has_location": latitude is not None and longitude is not None,
+                }
+            )
+
+        # Get unique paxcounter nodes with their info
+        pax_nodes = []
+        if nodes_with_readings:
+            node_names = get_bulk_node_names(list(nodes_with_readings))
+            for node_id in nodes_with_readings:
+                node_hex = f"!{node_id:08x}" if node_id else None
+                node_readings = [r for r in readings if r["from_node_id"] == node_id]
+                reading_count = len(node_readings)
+                avg_wifi = (
+                    round(sum(r["wifi"] for r in node_readings) / reading_count)
+                    if reading_count > 0
+                    else 0
+                )
+                avg_ble = (
+                    round(sum(r["ble"] for r in node_readings) / reading_count)
+                    if reading_count > 0
+                    else 0
+                )
+                pax_nodes.append(
+                    {
+                        "node_id": node_id,
+                        "node_hex": node_hex,
+                        "name": node_names.get(node_id, node_hex or "Unknown"),
+                        "reading_count": reading_count,
+                        "avg_wifi": avg_wifi,
+                        "avg_ble": avg_ble,
+                    }
+                )
+            pax_nodes.sort(key=lambda x: x["reading_count"], reverse=True)
+
+        # Build hourly chart data with averages
+        hourly_chart = [
+            {
+                "hour": k,
+                "avg_wifi": round(v["wifi_sum"] / v["count"]) if v["count"] > 0 else 0,
+                "avg_ble": round(v["ble_sum"] / v["count"]) if v["count"] > 0 else 0,
+                "count": v["count"],
+            }
+            for k, v in sorted(hourly_stats.items())
+        ]
+
+        # Calculate overall averages
+        total_readings = len(readings)
+        avg_wifi = round(total_wifi / total_readings) if total_readings > 0 else 0
+        avg_ble = round(total_ble / total_readings) if total_readings > 0 else 0
+
+        return safe_jsonify(
+            {
+                "readings": readings,
+                "total_readings": total_readings,
+                "unique_nodes": len(nodes_with_readings),
+                "pax_nodes": pax_nodes,
+                "hourly_chart": hourly_chart,
+                "hours_analyzed": hours,
+                "avg_wifi": avg_wifi,
+                "avg_ble": avg_ble,
+            }
+        )
+
+    except Exception as e:
+        if "no such table" in str(e) or "no such column" in str(e):
+            return safe_jsonify(
+                {
+                    "readings": [],
+                    "total_readings": 0,
+                    "unique_nodes": 0,
+                    "pax_nodes": [],
+                    "hourly_chart": [],
+                    "hours_analyzed": 24,
+                    "avg_wifi": 0,
+                    "avg_ble": 0,
+                }
+            )
+        logger.error(f"Error in API paxcounter: {e}", exc_info=True)
+        return jsonify({"error": str(e)}), 500
+
+
+@api_bp.route("/sensors")
+@cache_response(ttl_seconds=10)
+def api_sensors():
+    """
+    Get sensor readings from multiple sensor types.
+
+    Query parameters:
+        hours: Number of hours to look back (default: 24, max: 168)
+        limit: Maximum number of readings to return (default: 500)
+        sensor_type: Filter by type: detection, environment, air_quality, power, or all
+        node_id: Filter by specific node ID (optional)
+
+    Returns:
+        JSON with sensor readings and summary statistics
+    """
+    try:
+        hours = request.args.get("hours", 24, type=int)
+        hours = min(max(hours, 1), 168)
+        limit = request.args.get("limit", 500, type=int)
+        limit = min(max(limit, 1), 2000)
+        sensor_type = request.args.get("sensor_type", "all")
+        node_id_filter = request.args.get("node_id", None)
+
+        conn = get_db_connection()
+        cursor = conn.cursor()
+        cutoff_time = time.time() - (hours * 3600)
+
+        # Define portnums for different sensor types
+        # Detection: 10, Telemetry: 67 (contains environment, air_quality, power)
+        portnums = []
+        if sensor_type == "all":
+            portnums = [10, 67]  # Detection + Telemetry
+        elif sensor_type == "detection":
+            portnums = [10]
+        else:
+            portnums = [67]  # Environment, air_quality, power are in telemetry
+
+        placeholders = ",".join(["?"] * len(portnums))
+        params = portnums + [cutoff_time]
+
+        # Build query
+        query = f"""
+            SELECT ph.id, ph.timestamp, ph.from_node_id, ph.gateway_id,
+                   ph.rssi, ph.snr, ph.hop_limit, ph.raw_payload, ph.portnum,
+                   ni.long_name, ni.short_name
+            FROM packet_history ph
+            LEFT JOIN node_info ni ON ph.from_node_id = ni.node_id
+            WHERE ph.portnum IN ({placeholders}) AND ph.timestamp > ?
+        """
+
+        if node_id_filter:
+            node_id_int = convert_node_id(node_id_filter)
+            query += " AND ph.from_node_id = ?"
+            params.append(node_id_int)
+
+        query += " ORDER BY ph.timestamp DESC LIMIT ?"
+        params.append(limit)
+
+        cursor.execute(query, params)
+        rows = cursor.fetchall()
+
+        # Collect unique node IDs to fetch their locations
+        node_ids_in_readings = set()
+        for row in rows:
+            if row["from_node_id"]:
+                node_ids_in_readings.add(row["from_node_id"])
+
+        # Fetch locations
+        node_locations = {}
+        if node_ids_in_readings:
+            from ..database.repositories import LocationRepository
+
+            try:
+                locations = LocationRepository.get_node_locations(
+                    {"node_ids": list(node_ids_in_readings)}
+                )
+                for loc in locations:
+                    node_locations[loc["node_id"]] = {
+                        "latitude": loc.get("latitude"),
+                        "longitude": loc.get("longitude"),
+                    }
+            except Exception as loc_err:
+                logger.warning(f"Failed to fetch locations: {loc_err}")
+
+        conn.close()
+
+        # Process readings
+        readings = []
+        type_counts = {"detection": 0, "environment": 0, "air_quality": 0, "power": 0}
+        hourly_stats = {}
+        node_stats = {}
+
+        for row in rows:
+            from_node_id = row["from_node_id"]
+            timestamp = row["timestamp"]
+            portnum = row["portnum"]
+            raw_payload = row["raw_payload"]
+
+            # Determine sensor type and parse data
+            reading_type = None
+            data = {}
+
+            if portnum == 10:  # Detection sensor
+                reading_type = "detection"
+                if raw_payload:
+                    try:
+                        if isinstance(raw_payload, bytes):
+                            data["detection_name"] = raw_payload.decode(
+                                "utf-8", errors="replace"
+                            )
+                        else:
+                            data["detection_name"] = str(raw_payload)
+                    except Exception:
+                        pass
+
+            elif portnum == 67:  # Telemetry
+                if raw_payload:
+                    try:
+                        from meshtastic import telemetry_pb2
+
+                        telemetry = telemetry_pb2.Telemetry()
+                        telemetry.ParseFromString(raw_payload)
+
+                        # Check which metrics are present
+                        if telemetry.HasField("environment_metrics"):
+                            env = telemetry.environment_metrics
+                            reading_type = "environment"
+                            if env.temperature:
+                                data["temperature"] = env.temperature
+                            if env.relative_humidity:
+                                data["relative_humidity"] = env.relative_humidity
+                            if env.barometric_pressure:
+                                data["barometric_pressure"] = env.barometric_pressure
+                            if env.gas_resistance:
+                                data["gas_resistance"] = env.gas_resistance
+                            if env.iaq:
+                                data["iaq"] = env.iaq
+                            if env.lux:
+                                data["lux"] = env.lux
+                            if env.wind_speed:
+                                data["wind_speed"] = env.wind_speed
+                            if env.wind_direction:
+                                data["wind_direction"] = env.wind_direction
+                            if env.radiation:
+                                data["radiation"] = env.radiation
+
+                        elif telemetry.HasField("air_quality_metrics"):
+                            aq = telemetry.air_quality_metrics
+                            reading_type = "air_quality"
+                            if aq.pm10_standard:
+                                data["pm10_standard"] = aq.pm10_standard
+                            if aq.pm25_standard:
+                                data["pm25_standard"] = aq.pm25_standard
+                            if aq.pm100_standard:
+                                data["pm100_standard"] = aq.pm100_standard
+                            if aq.co2:
+                                data["co2"] = aq.co2
+
+                        elif telemetry.HasField("power_metrics"):
+                            pwr = telemetry.power_metrics
+                            reading_type = "power"
+                            if pwr.ch1_voltage:
+                                data["voltage"] = pwr.ch1_voltage
+                            if pwr.ch1_current:
+                                data["current"] = pwr.ch1_current
+
+                    except Exception:
+                        continue
+
+            # Skip if no valid type or filtered out
+            if not reading_type:
+                continue
+            if sensor_type != "all" and reading_type != sensor_type:
+                continue
+
+            # Update counts
+            type_counts[reading_type] = type_counts.get(reading_type, 0) + 1
+
+            # Get location
+            loc = node_locations.get(from_node_id, {})
+            latitude = loc.get("latitude")
+            longitude = loc.get("longitude")
+
+            node_id_hex = f"!{from_node_id:08x}" if from_node_id else None
+
+            # Track hourly stats
+            hour_key = datetime.fromtimestamp(timestamp, tz=UTC).strftime(
+                "%Y-%m-%d %H:00"
+            )
+            if hour_key not in hourly_stats:
+                hourly_stats[hour_key] = {
+                    "detection": 0,
+                    "environment": 0,
+                    "air_quality": 0,
+                    "power": 0,
+                    "count": 0,
+                }
+            hourly_stats[hour_key][reading_type] += 1
+            hourly_stats[hour_key]["count"] += 1
+
+            # Track node stats
+            if from_node_id not in node_stats:
+                node_stats[from_node_id] = {
+                    "node_id": from_node_id,
+                    "node_hex": node_id_hex,
+                    "name": row["long_name"] or row["short_name"] or node_id_hex,
+                    "sensor_types": set(),
+                    "reading_count": 0,
+                }
+            node_stats[from_node_id]["sensor_types"].add(reading_type)
+            node_stats[from_node_id]["reading_count"] += 1
+
+            readings.append(
+                {
+                    "id": row["id"],
+                    "timestamp": timestamp,
+                    "from_node_id": from_node_id,
+                    "from_node_hex": node_id_hex,
+                    "node_name": row["long_name"]
+                    or row["short_name"]
+                    or node_id_hex
+                    or "Unknown",
+                    "gateway_id": row["gateway_id"],
+                    "rssi": row["rssi"],
+                    "snr": row["snr"],
+                    "sensor_type": reading_type,
+                    "data": data,
+                    "latitude": latitude,
+                    "longitude": longitude,
+                    "has_location": latitude is not None and longitude is not None,
+                }
+            )
+
+        # Build sensor nodes list
+        sensor_nodes = []
+        for _node_id, stats in node_stats.items():
+            sensor_nodes.append(
+                {
+                    "node_id": stats["node_id"],
+                    "node_hex": stats["node_hex"],
+                    "name": stats["name"],
+                    "sensor_types": list(stats["sensor_types"]),
+                    "reading_count": stats["reading_count"],
+                }
+            )
+        sensor_nodes.sort(key=lambda x: x["reading_count"], reverse=True)
+
+        # Build hourly chart
+        hourly_chart = [
+            {
+                "hour": k,
+                "detection": v["detection"],
+                "environment": v["environment"],
+                "air_quality": v["air_quality"],
+                "power": v["power"],
+                "count": v["count"],
+            }
+            for k, v in sorted(hourly_stats.items())
+        ]
+
+        return safe_jsonify(
+            {
+                "readings": readings,
+                "total_readings": len(readings),
+                "unique_nodes": len(node_stats),
+                "type_counts": type_counts,
+                "sensor_nodes": sensor_nodes,
+                "hourly_chart": hourly_chart,
+                "hours_analyzed": hours,
+            }
+        )
+
+    except Exception as e:
+        if "no such table" in str(e) or "no such column" in str(e):
+            return safe_jsonify(
+                {
+                    "readings": [],
+                    "total_readings": 0,
+                    "unique_nodes": 0,
+                    "type_counts": {},
+                    "sensor_nodes": [],
+                    "hourly_chart": [],
+                    "hours_analyzed": 24,
+                }
+            )
+        logger.error(f"Error in API sensors: {e}", exc_info=True)
         return jsonify({"error": str(e)}), 500
 
 

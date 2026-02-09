@@ -189,6 +189,36 @@ DEVICE_CONFIG_FIELDS = [
         max_value=86400,
         unit="seconds",
     ),
+    FieldMetadata(
+        name="double_tap_as_button_press",
+        label="Double Tap as Button",
+        field_type=FieldType.BOOLEAN,
+        description="Treat double tap on accelerometer as button press",
+    ),
+    FieldMetadata(
+        name="is_managed",
+        label="Managed Mode",
+        field_type=FieldType.BOOLEAN,
+        description="Device is in managed mode (certain settings locked)",
+    ),
+    FieldMetadata(
+        name="disable_triple_click",
+        label="Disable Triple Click",
+        field_type=FieldType.BOOLEAN,
+        description="Disable triple-click to enable GPS",
+    ),
+    FieldMetadata(
+        name="tzdef",
+        label="Timezone Definition",
+        field_type=FieldType.TEXT,
+        description="POSIX timezone string (e.g., 'EST5EDT,M3.2.0,M11.1.0')",
+    ),
+    FieldMetadata(
+        name="led_heartbeat_disabled",
+        label="Disable LED Heartbeat",
+        field_type=FieldType.BOOLEAN,
+        description="Disable the LED heartbeat indicator",
+    ),
 ]
 
 POSITION_CONFIG_FIELDS = [
@@ -219,6 +249,42 @@ POSITION_CONFIG_FIELDS = [
         label="Fixed Position",
         field_type=FieldType.BOOLEAN,
         description="Use fixed position instead of GPS",
+    ),
+    FieldMetadata(
+        name="gps_update_interval",
+        label="GPS Update Interval",
+        field_type=FieldType.NUMBER,
+        description="How often to check GPS for new position",
+        min_value=0,
+        max_value=86400,
+        unit="seconds",
+    ),
+    FieldMetadata(
+        name="gps_attempt_time",
+        label="GPS Attempt Time",
+        field_type=FieldType.NUMBER,
+        description="How long to try to get a GPS fix",
+        min_value=0,
+        max_value=600,
+        unit="seconds",
+    ),
+    FieldMetadata(
+        name="broadcast_smart_minimum_distance",
+        label="Smart Broadcast Min Distance",
+        field_type=FieldType.NUMBER,
+        description="Minimum distance to move before sending smart position update",
+        min_value=0,
+        max_value=10000,
+        unit="meters",
+    ),
+    FieldMetadata(
+        name="broadcast_smart_minimum_interval_secs",
+        label="Smart Broadcast Min Interval",
+        field_type=FieldType.NUMBER,
+        description="Minimum time between smart position broadcasts",
+        min_value=0,
+        max_value=86400,
+        unit="seconds",
     ),
 ]
 
@@ -350,6 +416,24 @@ DISPLAY_CONFIG_FIELDS = [
         description="Unit system for display",
         enum_values=DISPLAY_UNITS_ENUM,
     ),
+    FieldMetadata(
+        name="heading_bold",
+        label="Bold Heading",
+        field_type=FieldType.BOOLEAN,
+        description="Show heading in bold",
+    ),
+    FieldMetadata(
+        name="wake_on_tap_or_motion",
+        label="Wake on Tap/Motion",
+        field_type=FieldType.BOOLEAN,
+        description="Wake device on tap or motion",
+    ),
+    FieldMetadata(
+        name="use_12h_clock",
+        label="Use 12-Hour Clock",
+        field_type=FieldType.BOOLEAN,
+        description="Display time in 12-hour format",
+    ),
 ]
 
 LORA_CONFIG_FIELDS = [
@@ -437,6 +521,45 @@ LORA_CONFIG_FIELDS = [
         description="LoRa channel number within the region",
         min_value=0,
         max_value=255,
+    ),
+    FieldMetadata(
+        name="override_duty_cycle",
+        label="Override Duty Cycle",
+        field_type=FieldType.BOOLEAN,
+        description="Override regulatory duty cycle limits (use with caution)",
+    ),
+    FieldMetadata(
+        name="sx126x_rx_boosted_gain",
+        label="RX Boosted Gain",
+        field_type=FieldType.BOOLEAN,
+        description="Use boosted gain for RX (SX126x radios)",
+    ),
+    FieldMetadata(
+        name="override_frequency",
+        label="Override Frequency",
+        field_type=FieldType.NUMBER,
+        description="Override the frequency in Hz (0 = use default)",
+        min_value=0,
+        max_value=1000000000,
+        unit="Hz",
+    ),
+    FieldMetadata(
+        name="pa_fan_disabled",
+        label="PA Fan Disabled",
+        field_type=FieldType.BOOLEAN,
+        description="Disable the PA (power amplifier) fan",
+    ),
+    FieldMetadata(
+        name="ignore_mqtt",
+        label="Ignore MQTT",
+        field_type=FieldType.BOOLEAN,
+        description="Ignore messages received via MQTT",
+    ),
+    FieldMetadata(
+        name="config_ok_to_mqtt",
+        label="Config OK to MQTT",
+        field_type=FieldType.BOOLEAN,
+        description="Allow config messages to be sent via MQTT",
     ),
 ]
 
@@ -653,6 +776,20 @@ SERIAL_MODULE_FIELDS = [
         field_type=FieldType.NUMBER,
         description="Timeout in seconds",
     ),
+    FieldMetadata(
+        name="mode",
+        label="Serial Mode",
+        field_type=FieldType.NUMBER,
+        description="Serial protocol mode (0=Default, 1=Simple, 2=Proto, etc.)",
+        min_value=0,
+        max_value=10,
+    ),
+    FieldMetadata(
+        name="override_console_serial_port",
+        label="Override Console Serial",
+        field_type=FieldType.BOOLEAN,
+        description="Override the default console serial port",
+    ),
 ]
 
 TELEMETRY_MODULE_FIELDS = [
@@ -713,6 +850,37 @@ TELEMETRY_MODULE_FIELDS = [
         field_type=FieldType.NUMBER,
         description="Interval for power measurements (seconds)",
         unit="seconds",
+    ),
+    FieldMetadata(
+        name="power_screen_enabled",
+        label="Power on Screen",
+        field_type=FieldType.BOOLEAN,
+        description="Show power data on screen",
+    ),
+    FieldMetadata(
+        name="device_telemetry_enabled",
+        label="Device Telemetry",
+        field_type=FieldType.BOOLEAN,
+        description="Enable device telemetry broadcast (battery, voltage, utilization)",
+    ),
+    FieldMetadata(
+        name="health_measurement_enabled",
+        label="Health Measurement",
+        field_type=FieldType.BOOLEAN,
+        description="Enable health sensor readings",
+    ),
+    FieldMetadata(
+        name="health_update_interval",
+        label="Health Update Interval",
+        field_type=FieldType.NUMBER,
+        description="Interval for health measurements (seconds)",
+        unit="seconds",
+    ),
+    FieldMetadata(
+        name="health_screen_enabled",
+        label="Health on Screen",
+        field_type=FieldType.BOOLEAN,
+        description="Show health data on screen",
     ),
 ]
 
@@ -796,6 +964,19 @@ EXTNOTIF_MODULE_FIELDS = [
         field_type=FieldType.BOOLEAN,
         description="Use PWM for buzzer tones",
     ),
+    FieldMetadata(
+        name="nag_timeout",
+        label="Nag Timeout",
+        field_type=FieldType.NUMBER,
+        description="Seconds between repeated notifications (0 = no nagging)",
+        unit="seconds",
+    ),
+    FieldMetadata(
+        name="use_i2s_as_buzzer",
+        label="Use I2S as Buzzer",
+        field_type=FieldType.BOOLEAN,
+        description="Use I2S output as buzzer",
+    ),
 ]
 
 STOREFORWARD_MODULE_FIELDS = [
@@ -830,6 +1011,12 @@ STOREFORWARD_MODULE_FIELDS = [
         description="Time window for history in minutes",
         unit="minutes",
     ),
+    FieldMetadata(
+        name="is_server",
+        label="Is Server",
+        field_type=FieldType.BOOLEAN,
+        description="Act as a store and forward server",
+    ),
 ]
 
 RANGETEST_MODULE_FIELDS = [
@@ -851,6 +1038,12 @@ RANGETEST_MODULE_FIELDS = [
         label="Save Results",
         field_type=FieldType.BOOLEAN,
         description="Save results to file system",
+    ),
+    FieldMetadata(
+        name="clear_on_reboot",
+        label="Clear on Reboot",
+        field_type=FieldType.BOOLEAN,
+        description="Clear saved results on reboot",
     ),
 ]
 
@@ -949,6 +1142,12 @@ NEIGHBORINFO_MODULE_FIELDS = [
         description="Interval for neighbor info updates (seconds)",
         unit="seconds",
     ),
+    FieldMetadata(
+        name="transmit_over_lora",
+        label="Transmit Over LoRa",
+        field_type=FieldType.BOOLEAN,
+        description="Broadcast neighbor info over LoRa",
+    ),
 ]
 
 AMBIENTLIGHTING_MODULE_FIELDS = [
@@ -1031,10 +1230,12 @@ DETECTIONSENSOR_MODULE_FIELDS = [
         description="GPIO pin to monitor",
     ),
     FieldMetadata(
-        name="detection_triggered_high",
-        label="Triggered High",
-        field_type=FieldType.BOOLEAN,
-        description="Detection triggers on high signal",
+        name="detection_trigger_type",
+        label="Trigger Type",
+        field_type=FieldType.NUMBER,
+        description="Detection trigger type (0=low, 1=high, 2=either)",
+        min_value=0,
+        max_value=2,
     ),
     FieldMetadata(
         name="use_pullup",
@@ -1057,6 +1258,24 @@ PAXCOUNTER_MODULE_FIELDS = [
         field_type=FieldType.NUMBER,
         description="Interval for PAX counter updates (seconds)",
         unit="seconds",
+    ),
+    FieldMetadata(
+        name="wifi_threshold",
+        label="WiFi Threshold",
+        field_type=FieldType.NUMBER,
+        description="WiFi RSSI threshold for counting",
+        min_value=-100,
+        max_value=0,
+        unit="dBm",
+    ),
+    FieldMetadata(
+        name="ble_threshold",
+        label="BLE Threshold",
+        field_type=FieldType.NUMBER,
+        description="BLE RSSI threshold for counting",
+        min_value=-100,
+        max_value=0,
+        unit="dBm",
     ),
 ]
 

@@ -20,6 +20,7 @@ from typing import Any
 from ..database.connection import get_db_connection
 from ..database.repositories import BatteryAnalyticsRepository
 from ..utils.node_utils import get_bulk_node_names
+from ..utils.safe_logging import safe_error, safe_info
 
 logger = logging.getLogger(__name__)
 
@@ -1533,7 +1534,7 @@ class AlertService:
             cls._ensure_archived_column()
             return _execute_with_retry(_fetch_stale)
         except Exception as e:
-            logger.error(f"Error getting stale nodes: {e}")
+            safe_error(logger, f"Error getting stale nodes: {e}")
             return []
 
     @classmethod
@@ -1561,7 +1562,7 @@ class AlertService:
                 conn.commit()
                 success = cursor.rowcount > 0
                 if success:
-                    logger.info(f"Archived node {node_id}")
+                    safe_info(logger, f"Archived node {node_id}")
                 return success
             finally:
                 conn.close()
@@ -1570,7 +1571,7 @@ class AlertService:
             cls._ensure_archived_column()
             return _execute_with_retry(_archive)
         except Exception as e:
-            logger.error(f"Error archiving node: {e}")
+            safe_error(logger, f"Error archiving node: {e}")
             return False
 
     @classmethod
@@ -1631,7 +1632,9 @@ class AlertService:
             else:
                 failed.append(node)
 
-        logger.info(f"Archived {len(archived)} stale nodes, {len(failed)} failures")
+        safe_info(
+            logger, f"Archived {len(archived)} stale nodes, {len(failed)} failures"
+        )
 
         return {
             "archived_count": len(archived),
@@ -1769,6 +1772,12 @@ class AlertService:
                         "link": "/nodes",
                         "value": len(offline_infra),
                         "value_label": "nodes",
+                        "affected_nodes": [
+                            n["name"]
+                            for n in sorted(
+                                offline_infra, key=lambda x: -x["hours_offline"]
+                            )[:10]
+                        ],
                     }
                 )
 
@@ -1785,6 +1794,12 @@ class AlertService:
                         "link": "/nodes",
                         "value": len(offline_clients),
                         "value_label": "nodes",
+                        "affected_nodes": [
+                            n["name"]
+                            for n in sorted(
+                                offline_clients, key=lambda x: -x["hours_offline"]
+                            )[:10]
+                        ],
                     }
                 )
 
@@ -1848,6 +1863,7 @@ class AlertService:
                         "link": "/battery-analytics",
                         "value": "<15%",
                         "value_label": "battery",
+                        "affected_nodes": [n["name"] for n in critical_battery[:10]],
                     }
                 )
 
@@ -1864,6 +1880,7 @@ class AlertService:
                         "link": "/battery-analytics",
                         "value": "15-30%",
                         "value_label": "battery",
+                        "affected_nodes": [n["name"] for n in warning_battery[:10]],
                     }
                 )
 
@@ -1939,16 +1956,18 @@ class AlertService:
                         }
                     )
 
-            # 5. Check for new nodes in last 24h
+            # 5. Check for new nodes in last 24h (truly new nodes, not just updated)
             cursor.execute(
                 """
-                SELECT COUNT(*) as new_nodes
+                SELECT node_id, COALESCE(long_name, short_name, printf('!%08x', node_id)) as name
                 FROM node_info
-                WHERE last_updated > ? AND COALESCE(archived, 0) = 0
+                WHERE first_seen > ? AND COALESCE(archived, 0) = 0
+                ORDER BY first_seen DESC
                 """,
                 (now - 24 * 3600,),
             )
-            new_nodes = cursor.fetchone()["new_nodes"]
+            new_node_rows = cursor.fetchall()
+            new_nodes = len(new_node_rows)
 
             if new_nodes > 0:
                 insights.append(
@@ -1962,6 +1981,7 @@ class AlertService:
                         "link": "/nodes",
                         "value": new_nodes,
                         "value_label": "nodes",
+                        "affected_nodes": [row["name"] for row in new_node_rows[:10]],
                     }
                 )
 

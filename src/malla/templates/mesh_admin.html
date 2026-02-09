@@ -2,6 +2,10 @@
 
 {% block title %}Mesh Admin - {{ APP_NAME }}{% endblock %}
 
+{% block head_libs %}
+<script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js" integrity="sha384-e6nUZLBkQ86NJ6TVVKAeSaK8jWa3NhkYWZFomE39AvDbQWeie9PlQqM3pmYW5d1g" crossorigin="anonymous"></script>
+{% endblock head_libs %}
+
 {% block extra_css %}
 <style>
     .admin-card {
@@ -640,6 +644,13 @@
                     <button class="nav-link" id="backups-tab" data-bs-toggle="tab"
                             data-bs-target="#backups-pane" type="button" role="tab">
                         <i class="bi bi-cloud-download"></i> Node Backups
+                    </button>
+                </li>
+                <li class="nav-item" role="presentation">
+                    <button class="nav-link" id="firmware-tab" data-bs-toggle="tab"
+                            data-bs-target="#firmware-pane" type="button" role="tab">
+                        <i class="bi bi-cpu"></i> Firmware
+                        <span class="badge bg-info" id="firmwareTabBadge">0</span>
                     </button>
                 </li>
                 <li class="nav-item" role="presentation">
@@ -1405,6 +1416,126 @@
                             <div id="noBackupSelected" class="text-center py-5 text-muted">
                                 <i class="bi bi-cloud-download" style="font-size: 3rem;"></i>
                                 <p class="mt-3">Select a backup to view its contents,<br>or create a new backup from a node.</p>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Firmware Statistics Tab -->
+                <div class="tab-pane fade" id="firmware-pane" role="tabpanel">
+                    <div class="row">
+                        <!-- Summary Cards -->
+                        <div class="col-12 mb-4">
+                            <div class="row g-3" id="firmwareSummaryCards">
+                                <div class="col-md-3">
+                                    <div class="card text-center">
+                                        <div class="card-body">
+                                            <h3 class="mb-0" id="firmwareTotalNodes">-</h3>
+                                            <small class="text-muted">Nodes with Firmware Info</small>
+                                        </div>
+                                    </div>
+                                </div>
+                                <div class="col-md-3">
+                                    <div class="card text-center">
+                                        <div class="card-body">
+                                            <h3 class="mb-0" id="firmwareUniqueVersions">-</h3>
+                                            <small class="text-muted">Unique Versions</small>
+                                        </div>
+                                    </div>
+                                </div>
+                                <div class="col-md-3">
+                                    <div class="card text-center">
+                                        <div class="card-body">
+                                            <h3 class="mb-0 text-success" id="firmwareLatestVersion">-</h3>
+                                            <small class="text-muted">Latest Version</small>
+                                        </div>
+                                    </div>
+                                </div>
+                                <div class="col-md-3">
+                                    <div class="card text-center">
+                                        <div class="card-body">
+                                            <a href="https://flasher.meshtastic.org/" target="_blank" class="btn btn-outline-primary btn-sm">
+                                                <i class="bi bi-box-arrow-up-right"></i> Meshtastic Flasher
+                                            </a>
+                                            <br><small class="text-muted mt-1 d-block">Update firmware</small>
+                                        </div>
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+
+                        <!-- Version Distribution Chart -->
+                        <div class="col-lg-6 mb-4" id="firmwareChartContainer">
+                            <div class="card h-100">
+                                <div class="card-header">
+                                    <i class="bi bi-pie-chart me-2"></i> Version Distribution
+                                </div>
+                                <div class="card-body">
+                                    <canvas id="firmwareVersionChart" height="250"></canvas>
+                                </div>
+                            </div>
+                        </div>
+
+                        <!-- Hardware by Version -->
+                        <div class="col-lg-6 mb-4" id="firmwareHwContainer">
+                            <div class="card h-100">
+                                <div class="card-header">
+                                    <i class="bi bi-bar-chart me-2"></i> Hardware Models by Version
+                                </div>
+                                <div class="card-body" id="firmwareHwByVersion" style="max-height: 300px; overflow-y: auto;">
+                                    <div class="text-center text-muted py-3">
+                                        <i class="bi bi-hourglass-split"></i> Loading...
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+
+                        <!-- Nodes Table -->
+                        <div class="col-12" id="firmwareTableContainer">
+                            <div class="card">
+                                <div class="card-header d-flex justify-content-between align-items-center">
+                                    <span><i class="bi bi-table me-2"></i> Nodes with Firmware Info</span>
+                                    <button class="btn btn-outline-primary btn-sm" onclick="loadFirmwareStats()">
+                                        <i class="bi bi-arrow-clockwise"></i> Refresh
+                                    </button>
+                                </div>
+                                <div class="card-body p-0">
+                                    <div class="table-responsive" style="max-height: 400px;">
+                                        <table class="table table-sm table-striped table-hover mb-0">
+                                            <thead class="table-light sticky-top">
+                                                <tr>
+                                                    <th>Node</th>
+                                                    <th>Firmware</th>
+                                                    <th>Hardware</th>
+                                                    <th>Last Confirmed</th>
+                                                    <th>Actions</th>
+                                                </tr>
+                                            </thead>
+                                            <tbody id="firmwareNodesTable">
+                                                <tr>
+                                                    <td colspan="5" class="text-center text-muted py-3">
+                                                        <i class="bi bi-hourglass-split"></i> Loading firmware data...
+                                                    </td>
+                                                </tr>
+                                            </tbody>
+                                        </table>
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+
+                        <!-- Empty State -->
+                        <div class="col-12" id="firmwareEmptyState" style="display: none;">
+                            <div class="text-center py-5">
+                                <i class="bi bi-cpu" style="font-size: 4rem; color: var(--bs-secondary);"></i>
+                                <h5 class="mt-3">No Firmware Data Available</h5>
+                                <p class="text-muted">
+                                    Firmware information is collected when you connect to nodes via the Admin interface.<br>
+                                    Connect to a node using Serial or TCP to record its firmware version.
+                                </p>
+                                <a href="#nodes-pane" class="btn btn-primary" onclick="document.getElementById('nodes-tab').click()">
+                                    <i class="bi bi-router"></i> Go to Administrable Nodes
+                                </a>
                             </div>
                         </div>
                     </div>
@@ -3517,6 +3648,7 @@
                 'commands': 'commands-tab',
                 'templates': 'templates-tab',
                 'backups': 'backups-tab',
+                'firmware': 'firmware-tab',
                 'jobs': 'jobs-tab',
                 'log': 'log-tab'
             };
@@ -3529,6 +3661,11 @@
                 }
             }
         }
+
+        // Load firmware stats when firmware tab is shown
+        document.getElementById('firmware-tab').addEventListener('shown.bs.tab', function() {
+            loadFirmwareStats();
+        });
     });
 
     // Set gateway node
@@ -3564,7 +3701,7 @@
 
     // Test node admin access
     async function testNodeAdmin() {
-        const nodeId = document.getElementById('testNodeInput').value.trim();
+        const nodeId = getNodeIdFromInput('testNodeInput');
         if (!nodeId) {
             alert('Please enter a node ID');
             return;
@@ -3594,8 +3731,27 @@
                     </button>`;
             } else {
                 resultDiv.classList.add('alert-warning');
+                const errorMsg = data.error || 'Node did not respond. It may not have this server\'s public key configured.';
+                const isTimeout = errorMsg.toLowerCase().includes('timeout');
+                const isPkiError = errorMsg.toLowerCase().includes('pki') || errorMsg.toLowerCase().includes('key') || errorMsg.toLowerCase().includes('session');
+
+                let retryButton = '';
+                if (isTimeout || isPkiError) {
+                    retryButton = `
+                        <div class="mt-2">
+                            <button class="btn btn-sm btn-outline-warning" onclick="clearPkiCacheAndRetry('${nodeId}', false)">
+                                <i class="bi bi-arrow-repeat"></i> Clear Cache & Retry
+                            </button>
+                            <button class="btn btn-sm btn-outline-danger ms-2" onclick="clearPkiCacheAndRetry('${nodeId}', true)"
+                                    title="Also removes stale node entry from gateway's nodedb">
+                                <i class="bi bi-trash"></i> Full Reset & Retry
+                            </button>
+                            <small class="text-muted ms-2 d-block mt-1">Full Reset also clears the stale node from gateway's nodedb</small>
+                        </div>`;
+                }
+
                 resultDiv.innerHTML = `<i class="bi bi-exclamation-triangle"></i> <strong>Not Administrable</strong><br>
-                    ${data.error || 'Node did not respond. It may not have this server\'s public key configured.'}`;
+                    ${errorMsg}${retryButton}`;
             }
         } catch (error) {
             resultDiv.classList.remove('d-none');
@@ -3604,6 +3760,73 @@
         } finally {
             btn.disabled = false;
             btn.innerHTML = '<i class="bi bi-lightning"></i> Test';
+        }
+    }
+
+    // Clear PKI cache for a node and retry admin test
+    // If removeFromNodedb is true, also remove the stale node from gateway's nodedb
+    async function clearPkiCacheAndRetry(nodeId, removeFromNodedb = false) {
+        const resultDiv = document.getElementById('testNodeResult');
+
+        resultDiv.classList.remove('alert-success', 'alert-warning', 'alert-danger');
+        resultDiv.classList.add('alert-info');
+        const actionText = removeFromNodedb ? 'Full reset' : 'Resetting admin state';
+        resultDiv.innerHTML = `<i class="bi bi-hourglass-split"></i> ${actionText} for node ${nodeId}...`;
+
+        try {
+            // Step 1: Reset all admin state (clears PKI cache AND removes DB entry)
+            // Optionally also remove from gateway's nodedb
+            const resetResponse = await fetch(`/api/admin/node/${encodeURIComponent(nodeId)}/reset`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ remove_from_nodedb: removeFromNodedb })
+            });
+            const resetData = await resetResponse.json();
+
+            if (resetData.error) {
+                throw new Error(resetData.error);
+            }
+
+            const clearedItems = [];
+            if (resetData.session_passkey_cleared) clearedItems.push('PKI cache');
+            if (resetData.db_entry_removed) clearedItems.push('database entry');
+            if (resetData.removed_from_gateway_nodedb) clearedItems.push('gateway nodedb entry');
+            const clearedMsg = clearedItems.length > 0 ? `Cleared: ${clearedItems.join(', ')}. ` : '';
+
+            resultDiv.innerHTML = `<i class="bi bi-hourglass-split"></i> ${clearedMsg}Retrying admin test...`;
+
+            // Step 2: Wait a moment for changes to take effect
+            await new Promise(resolve => setTimeout(resolve, 500));
+
+            // Step 3: Retry the admin test
+            const testResponse = await fetch(`/api/admin/node/${encodeURIComponent(nodeId)}/test`, {
+                method: 'POST'
+            });
+            const testData = await testResponse.json();
+
+            resultDiv.classList.remove('alert-info');
+
+            if (testData.success && testData.administrable) {
+                resultDiv.classList.add('alert-success');
+                resultDiv.innerHTML = `<i class="bi bi-check-circle"></i> <strong>Success after reset!</strong>
+                    Node ${testData.hex_id || nodeId} is now administrable.
+                    <button class="btn btn-sm btn-outline-success ms-2" onclick="location.reload()">
+                        <i class="bi bi-arrow-clockwise"></i> Refresh Page
+                    </button>`;
+            } else {
+                resultDiv.classList.add('alert-warning');
+                const errorMsg = testData.error || 'Still not responding after admin state reset.';
+                resultDiv.innerHTML = `<i class="bi bi-exclamation-triangle"></i> <strong>Still Not Administrable</strong><br>
+                    ${errorMsg}<br>
+                    <small class="text-muted mt-2 d-block">
+                        The node may need its admin keys reconfigured, or it may be unreachable.
+                        Try connecting directly to the node via USB/Bluetooth to verify its admin key settings.
+                    </small>`;
+            }
+        } catch (error) {
+            resultDiv.classList.remove('alert-info');
+            resultDiv.classList.add('alert-danger');
+            resultDiv.innerHTML = `<i class="bi bi-x-circle"></i> Error resetting admin state: ${error.message}`;
         }
     }
 
@@ -9558,6 +9781,212 @@
             }
         } catch (error) {
             showAlert('danger', `Error: ${error.message}`);
+        }
+    }
+
+    // ============================================================================
+    // FIRMWARE STATISTICS
+    // ============================================================================
+
+    let firmwareVersionChart = null;
+
+    async function loadFirmwareStats() {
+        try {
+            const response = await fetch('/api/admin/firmware-stats');
+            if (!response.ok) {
+                const errorText = await response.text();
+                console.error('Firmware stats error:', response.status, errorText);
+                throw new Error(`HTTP ${response.status}: ${response.statusText}`);
+            }
+
+            const data = await response.json();
+
+            // Check if we have any data
+            const hasData = data.total_count > 0;
+
+            // Toggle visibility using IDs
+            const summaryCards = document.getElementById('firmwareSummaryCards');
+            const chartContainer = document.getElementById('firmwareChartContainer');
+            const hwContainer = document.getElementById('firmwareHwContainer');
+            const tableContainer = document.getElementById('firmwareTableContainer');
+            const emptyState = document.getElementById('firmwareEmptyState');
+
+            if (summaryCards) summaryCards.parentElement.style.display = hasData ? '' : 'none';
+            if (chartContainer) chartContainer.style.display = hasData ? '' : 'none';
+            if (hwContainer) hwContainer.style.display = hasData ? '' : 'none';
+            if (tableContainer) tableContainer.style.display = hasData ? '' : 'none';
+            if (emptyState) emptyState.style.display = hasData ? 'none' : 'block';
+
+            // Update tab badge
+            document.getElementById('firmwareTabBadge').textContent = data.total_count || 0;
+
+            if (!hasData) return;
+
+            // Update summary cards
+            document.getElementById('firmwareTotalNodes').textContent = data.total_count;
+            document.getElementById('firmwareUniqueVersions').textContent = data.unique_versions;
+
+            // Find latest version (assuming semantic versioning)
+            if (data.version_distribution.length > 0) {
+                const latestVersion = data.version_distribution[0].version;
+                document.getElementById('firmwareLatestVersion').textContent = latestVersion;
+            }
+
+            // Render version distribution chart
+            renderFirmwareChart(data.version_distribution);
+
+            // Render hardware by version
+            renderHwByVersion(data.hw_by_firmware);
+
+            // Render nodes table
+            renderFirmwareNodesTable(data.nodes);
+
+        } catch (error) {
+            console.error('Error loading firmware stats:', error);
+            showAlert('danger', 'Failed to load firmware statistics');
+        }
+    }
+
+    function renderFirmwareChart(distribution) {
+        const canvas = document.getElementById('firmwareVersionChart');
+        if (!canvas) return;
+
+        const ctx = canvas.getContext('2d');
+
+        // Destroy existing chart
+        if (firmwareVersionChart) {
+            firmwareVersionChart.destroy();
+        }
+
+        const labels = distribution.map(d => d.version);
+        const counts = distribution.map(d => d.count);
+
+        // Generate colors
+        const colors = labels.map((_, i) => {
+            const hue = (i * 137.508) % 360; // Golden angle for good distribution
+            return `hsl(${hue}, 70%, 50%)`;
+        });
+
+        firmwareVersionChart = new Chart(ctx, {
+            type: 'doughnut',
+            data: {
+                labels: labels,
+                datasets: [{
+                    data: counts,
+                    backgroundColor: colors,
+                    borderWidth: 2,
+                    borderColor: getComputedStyle(document.body).getPropertyValue('--bs-body-bg') || '#fff'
+                }]
+            },
+            options: {
+                responsive: true,
+                maintainAspectRatio: false,
+                plugins: {
+                    legend: {
+                        position: 'right',
+                        labels: {
+                            color: getComputedStyle(document.body).getPropertyValue('--bs-body-color'),
+                            padding: 10,
+                            usePointStyle: true
+                        }
+                    },
+                    tooltip: {
+                        callbacks: {
+                            label: function(context) {
+                                const total = context.dataset.data.reduce((a, b) => a + b, 0);
+                                const percentage = ((context.raw / total) * 100).toFixed(1);
+                                return `${context.label}: ${context.raw} nodes (${percentage}%)`;
+                            }
+                        }
+                    }
+                }
+            }
+        });
+    }
+
+    function renderHwByVersion(hwByFirmware) {
+        const container = document.getElementById('firmwareHwByVersion');
+        if (!container) return;
+
+        if (Object.keys(hwByFirmware).length === 0) {
+            container.innerHTML = '<div class="text-center text-muted py-3">No hardware data available</div>';
+            return;
+        }
+
+        let html = '';
+        for (const [version, hwList] of Object.entries(hwByFirmware)) {
+            html += `
+                <div class="mb-3">
+                    <div class="fw-bold mb-2">
+                        <i class="bi bi-tag-fill me-1 text-primary"></i> ${escapeHtml(version)}
+                    </div>
+                    <div class="d-flex flex-wrap gap-1">
+            `;
+            for (const hw of hwList) {
+                html += `<span class="badge bg-secondary">${escapeHtml(hw.hw_model)} <span class="badge bg-light text-dark">${hw.count}</span></span>`;
+            }
+            html += '</div></div>';
+        }
+
+        container.innerHTML = html;
+    }
+
+    function renderFirmwareNodesTable(nodes) {
+        const tbody = document.getElementById('firmwareNodesTable');
+        if (!tbody) return;
+
+        if (nodes.length === 0) {
+            tbody.innerHTML = '<tr><td colspan="5" class="text-center text-muted py-3">No nodes with firmware info</td></tr>';
+            return;
+        }
+
+        let html = '';
+        for (const node of nodes) {
+            const nodeName = node.long_name || node.short_name || node.hex_id || `!${node.node_id.toString(16).padStart(8, '0')}`;
+            const lastConfirmed = node.last_confirmed ? formatTimeAgo(node.last_confirmed) : 'Unknown';
+
+            html += `
+                <tr>
+                    <td>
+                        <a href="/node/${node.node_id}" class="text-decoration-none fw-medium">${escapeHtml(nodeName)}</a>
+                        <br><small class="text-muted">${node.hex_id || ''}</small>
+                    </td>
+                    <td><span class="badge bg-info">${escapeHtml(node.firmware_version)}</span></td>
+                    <td>${node.hw_model ? `<span class="badge bg-secondary">${escapeHtml(node.hw_model)}</span>` : '<span class="text-muted">Unknown</span>'}</td>
+                    <td><small>${lastConfirmed}</small></td>
+                    <td>
+                        <div class="btn-group btn-group-sm">
+                            <a href="/node/${node.node_id}" class="btn btn-outline-primary" title="View node">
+                                <i class="bi bi-eye"></i>
+                            </a>
+                            <button class="btn btn-outline-secondary" onclick="selectNodeForConfig('${node.hex_id || '!' + node.node_id.toString(16).padStart(8, '0')}')" title="Configure node">
+                                <i class="bi bi-gear"></i>
+                            </button>
+                        </div>
+                    </td>
+                </tr>
+            `;
+        }
+
+        tbody.innerHTML = html;
+    }
+
+    function formatTimeAgo(timestamp) {
+        const now = Date.now() / 1000;
+        const diff = now - timestamp;
+
+        if (diff < 60) return 'Just now';
+        if (diff < 3600) return `${Math.floor(diff / 60)} min ago`;
+        if (diff < 86400) return `${Math.floor(diff / 3600)} hours ago`;
+        return `${Math.floor(diff / 86400)} days ago`;
+    }
+
+    function selectNodeForConfig(hexId) {
+        // Switch to commands tab and populate node selector
+        document.getElementById('commands-tab').click();
+        const nodeInput = document.getElementById('targetNodeId');
+        if (nodeInput) {
+            nodeInput.value = hexId;
         }
     }
 

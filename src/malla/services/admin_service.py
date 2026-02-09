@@ -674,6 +674,10 @@ class AdminService:
         """
         Test if a node is administrable by requesting device metadata.
 
+        For TCP connections, this method automatically attempts recovery from
+        PKI key synchronization errors (like stale session passkeys) by
+        clearing the passkey and retrying once.
+
         Args:
             target_node_id: The node ID to test
 
@@ -704,16 +708,19 @@ class AdminService:
         # Send the request using appropriate publisher
         publisher = self._get_publisher()
 
-        # TCP publisher doesn't need from_node_id (uses local node)
+        # For TCP connections, use the recovery-enabled method
         if conn_type == AdminConnectionType.TCP:
-            packet_id = publisher.send_get_device_metadata(
+            return self._test_node_admin_tcp_with_recovery(
                 target_node_id=target_node_id,
+                publisher=publisher,
+                log_id=log_id,
             )
-        else:
-            packet_id = publisher.send_get_device_metadata(
-                target_node_id=target_node_id,
-                from_node_id=gateway_id,
-            )
+
+        # For MQTT/Serial connections, use the original method
+        packet_id = publisher.send_get_device_metadata(
+            target_node_id=target_node_id,
+            from_node_id=gateway_id,
+        )
 
         if packet_id is None:
             AdminRepository.update_admin_log_status(
@@ -811,6 +818,148 @@ class AdminService:
                 packet_id=packet_id,
                 log_id=log_id,
                 error="No response received (timeout). Node may not have this server's public key configured.",
+            )
+
+    def _test_node_admin_tcp_with_recovery(
+        self,
+        target_node_id: int,
+        publisher: Any,
+        log_id: int,
+    ) -> AdminCommandResult:
+        """
+        Test node admin via TCP with automatic PKI key recovery.
+
+        This method uses send_admin_with_recovery to automatically handle
+        stale session passkey errors by clearing the passkey and retrying.
+
+        Args:
+            target_node_id: The target node ID
+            publisher: The TCP publisher instance
+            log_id: The admin command log ID
+
+        Returns:
+            AdminCommandResult with test results
+        """
+        from meshtastic import admin_pb2
+
+        # Create the device metadata request
+        admin_msg = admin_pb2.AdminMessage()
+        admin_msg.get_device_metadata_request = True
+
+        # Use the recovery-enabled send method
+        result = publisher.send_admin_with_recovery(
+            target_node_id=target_node_id,
+            admin_message=admin_msg,
+            timeout=30.0,
+            auto_recover=True,
+        )
+
+        if result["success"]:
+            response = result["response"]
+
+            # Extract firmware version and metadata from device metadata response
+            firmware_version = None
+            device_metadata = None
+            hw_model = None
+            hw_model_name = None
+            role = None
+            has_wifi = None
+            has_bluetooth = None
+            can_shutdown = None
+            admin_msg = response.get("admin_message")
+
+            if admin_msg and hasattr(admin_msg, "HasField"):
+                try:
+                    if admin_msg.HasField("get_device_metadata_response"):
+                        meta = admin_msg.get_device_metadata_response
+                        firmware_version = meta.firmware_version
+                        hw_model = meta.hw_model
+                        hw_model_name = get_hardware_model_name(hw_model)
+                        role = meta.role
+                        has_wifi = meta.hasWifi
+                        has_bluetooth = meta.hasBluetooth
+                        can_shutdown = meta.canShutdown
+                        device_metadata = str(meta)
+
+                        recovery_msg = (
+                            " (recovered from key sync error)"
+                            if result.get("recovered")
+                            else ""
+                        )
+                        logger.info(
+                            f"Got device metadata from node {target_node_id}{recovery_msg}: "
+                            f"firmware={firmware_version}, hw_model={hw_model_name}"
+                        )
+                except Exception as e:
+                    logger.warning(f"Failed to extract device metadata: {e}")
+
+            # Mark the node as administrable since it responded
+            AdminRepository.mark_node_administrable(
+                node_id=target_node_id,
+                firmware_version=firmware_version,
+                device_metadata=device_metadata,
+                admin_channel_index=0,  # Default channel
+            )
+
+            status_msg = "success"
+            if result.get("recovered"):
+                status_msg = "success_after_recovery"
+
+            AdminRepository.update_admin_log_status(
+                log_id=log_id,
+                status=status_msg,
+                response_data=json.dumps(
+                    {
+                        "from_node": response.get("from_node"),
+                        "firmware_version": firmware_version,
+                        "hw_model": hw_model_name,
+                        "role": role,
+                        "recovered": result.get("recovered", False),
+                    }
+                ),
+            )
+            return AdminCommandResult(
+                success=True,
+                log_id=log_id,
+                response={
+                    "from_node": response.get("from_node"),
+                    "administrable": True,
+                    "firmware_version": firmware_version,
+                    "hw_model": hw_model_name,
+                    "role": role,
+                    "has_wifi": has_wifi,
+                    "has_bluetooth": has_bluetooth,
+                    "can_shutdown": can_shutdown,
+                    "recovered": result.get("recovered", False),
+                },
+            )
+        else:
+            # Handle failures
+            error_msg = result.get("error", "Unknown error")
+            error_reason = result.get("error_reason")
+            needs_key_config = result.get("needs_key_config", False)
+
+            # Determine status based on error type
+            if needs_key_config:
+                status = "key_config_required"
+            elif error_reason:
+                status = f"error_{error_reason.lower()}"
+            else:
+                status = "timeout"
+
+            AdminRepository.update_admin_log_status(
+                log_id=log_id,
+                status=status,
+                error_message=error_msg,
+            )
+            AdminRepository.update_node_status(
+                target_node_id, "error" if error_reason else "timeout"
+            )
+
+            return AdminCommandResult(
+                success=False,
+                log_id=log_id,
+                error=error_msg,
             )
 
     def get_config(
@@ -1416,22 +1565,21 @@ class AdminService:
         # Send the command using appropriate publisher
         publisher = self._get_publisher()
 
-        if conn_type == AdminConnectionType.TCP:
+        if conn_type in (AdminConnectionType.TCP, AdminConnectionType.SERIAL):
             packet_id = publisher.send_remove_node(
                 target_node_id=target_node_id,
                 node_to_remove=node_to_remove,
             )
         else:
-            # Serial connection not yet supported for this command
             AdminRepository.update_admin_log_status(
                 log_id=log_id,
                 status="failed",
-                error_message="remove_node not supported via serial connection yet",
+                error_message="remove_node requires TCP or Serial connection",
             )
             return AdminCommandResult(
                 success=False,
                 log_id=log_id,
-                error="remove_node not supported via serial connection yet",
+                error="remove_node requires TCP or Serial connection",
             )
 
         if packet_id is None:
@@ -1502,7 +1650,7 @@ class AdminService:
         # Send the command using appropriate publisher
         publisher = self._get_publisher()
 
-        if conn_type == AdminConnectionType.TCP:
+        if conn_type in (AdminConnectionType.TCP, AdminConnectionType.SERIAL):
             packet_id = publisher.send_nodedb_reset(
                 target_node_id=target_node_id,
             )
@@ -1510,12 +1658,12 @@ class AdminService:
             AdminRepository.update_admin_log_status(
                 log_id=log_id,
                 status="failed",
-                error_message="nodedb_reset not supported via serial connection yet",
+                error_message="nodedb_reset requires TCP or Serial connection",
             )
             return AdminCommandResult(
                 success=False,
                 log_id=log_id,
-                error="nodedb_reset not supported via serial connection yet",
+                error="nodedb_reset requires TCP or Serial connection",
             )
 
         if packet_id is None:
@@ -1586,7 +1734,7 @@ class AdminService:
         # Send the command using appropriate publisher
         publisher = self._get_publisher()
 
-        if conn_type == AdminConnectionType.TCP:
+        if conn_type in (AdminConnectionType.TCP, AdminConnectionType.SERIAL):
             packet_id = publisher.send_factory_reset(
                 target_node_id=target_node_id,
                 config_only=config_only,
@@ -1595,12 +1743,12 @@ class AdminService:
             AdminRepository.update_admin_log_status(
                 log_id=log_id,
                 status="failed",
-                error_message="factory_reset not supported via serial connection yet",
+                error_message="factory_reset requires TCP or Serial connection",
             )
             return AdminCommandResult(
                 success=False,
                 log_id=log_id,
-                error="factory_reset not supported via serial connection yet",
+                error="factory_reset requires TCP or Serial connection",
             )
 
         if packet_id is None:
@@ -1659,10 +1807,10 @@ class AdminService:
             )
 
         conn_type = self.connection_type
-        if conn_type != AdminConnectionType.TCP:
+        if conn_type not in (AdminConnectionType.TCP, AdminConnectionType.SERIAL):
             return AdminCommandResult(
                 success=False,
-                error="begin_edit_settings is only supported via TCP connection",
+                error="begin_edit_settings requires TCP or Serial connection",
             )
 
         # Log the command
@@ -1745,10 +1893,10 @@ class AdminService:
             )
 
         conn_type = self.connection_type
-        if conn_type != AdminConnectionType.TCP:
+        if conn_type not in (AdminConnectionType.TCP, AdminConnectionType.SERIAL):
             return AdminCommandResult(
                 success=False,
-                error="commit_edit_settings is only supported via TCP connection",
+                error="commit_edit_settings requires TCP or Serial connection",
             )
 
         # Log the command
@@ -1847,7 +1995,7 @@ class AdminService:
 
         config_type_str = config_type.name.lower()
 
-        if conn_type == AdminConnectionType.TCP:
+        if conn_type in (AdminConnectionType.TCP, AdminConnectionType.SERIAL):
             packet_id = publisher.send_set_config(
                 target_node_id=target_node_id,
                 config_type=config_type_str,
@@ -1858,12 +2006,12 @@ class AdminService:
             AdminRepository.update_admin_log_status(
                 log_id=log_id,
                 status="failed",
-                error_message="set_config not supported via MQTT",
+                error_message="set_config requires TCP or Serial connection",
             )
             return AdminCommandResult(
                 success=False,
                 log_id=log_id,
-                error="set_config is only supported via TCP connection",
+                error="set_config requires TCP or Serial connection",
             )
 
         if packet_id is None:
@@ -1980,7 +2128,7 @@ class AdminService:
 
         module_type_str = module_config_type.name.lower()
 
-        if conn_type == AdminConnectionType.TCP:
+        if conn_type in (AdminConnectionType.TCP, AdminConnectionType.SERIAL):
             packet_id = publisher.send_set_module_config(
                 target_node_id=target_node_id,
                 module_type=module_type_str,
@@ -1991,12 +2139,12 @@ class AdminService:
             AdminRepository.update_admin_log_status(
                 log_id=log_id,
                 status="failed",
-                error_message="set_module_config not supported via MQTT",
+                error_message="set_module_config requires TCP or Serial connection",
             )
             return AdminCommandResult(
                 success=False,
                 log_id=log_id,
-                error="set_module_config is only supported via TCP connection",
+                error="set_module_config requires TCP or Serial connection",
             )
 
         if packet_id is None:
@@ -2112,7 +2260,7 @@ class AdminService:
         # Send the request using appropriate publisher
         publisher = self._get_publisher()
 
-        if conn_type == AdminConnectionType.TCP:
+        if conn_type in (AdminConnectionType.TCP, AdminConnectionType.SERIAL):
             packet_id = publisher.send_set_channel(
                 target_node_id=target_node_id,
                 channel_index=channel_index,
@@ -2123,12 +2271,12 @@ class AdminService:
             AdminRepository.update_admin_log_status(
                 log_id=log_id,
                 status="failed",
-                error_message="set_channel not supported via MQTT",
+                error_message="set_channel requires TCP or Serial connection",
             )
             return AdminCommandResult(
                 success=False,
                 log_id=log_id,
-                error="set_channel is only supported via TCP connection",
+                error="set_channel requires TCP or Serial connection",
             )
 
         if packet_id is None:
@@ -2280,6 +2428,11 @@ class AdminService:
                 "buzzer_gpio": config.device.buzzer_gpio,
                 "rebroadcast_mode": config.device.rebroadcast_mode,
                 "node_info_broadcast_secs": config.device.node_info_broadcast_secs,
+                "double_tap_as_button_press": config.device.double_tap_as_button_press,
+                "is_managed": config.device.is_managed,
+                "disable_triple_click": config.device.disable_triple_click,
+                "tzdef": config.device.tzdef,
+                "led_heartbeat_disabled": config.device.led_heartbeat_disabled,
             }
 
         if config.HasField("position"):
@@ -2288,6 +2441,10 @@ class AdminService:
                 "position_broadcast_smart_enabled": config.position.position_broadcast_smart_enabled,
                 "gps_enabled": config.position.gps_mode,
                 "fixed_position": config.position.fixed_position,
+                "gps_update_interval": config.position.gps_update_interval,
+                "gps_attempt_time": config.position.gps_attempt_time,
+                "broadcast_smart_minimum_distance": config.position.broadcast_smart_minimum_distance,
+                "broadcast_smart_minimum_interval_secs": config.position.broadcast_smart_minimum_interval_secs,
             }
 
         if config.HasField("power"):
@@ -2316,6 +2473,9 @@ class AdminService:
                 "compass_north_top": config.display.compass_north_top,
                 "flip_screen": config.display.flip_screen,
                 "units": config.display.units,
+                "heading_bold": config.display.heading_bold,
+                "wake_on_tap_or_motion": config.display.wake_on_tap_or_motion,
+                "use_12h_clock": config.display.use_12h_clock,
             }
 
         if config.HasField("lora"):
@@ -2331,6 +2491,12 @@ class AdminService:
                 "tx_enabled": config.lora.tx_enabled,
                 "tx_power": config.lora.tx_power,
                 "channel_num": config.lora.channel_num,
+                "override_duty_cycle": config.lora.override_duty_cycle,
+                "sx126x_rx_boosted_gain": config.lora.sx126x_rx_boosted_gain,
+                "override_frequency": config.lora.override_frequency,
+                "pa_fan_disabled": config.lora.pa_fan_disabled,
+                "ignore_mqtt": config.lora.ignore_mqtt,
+                "config_ok_to_mqtt": config.lora.config_ok_to_mqtt,
             }
 
         if config.HasField("bluetooth"):
@@ -2591,6 +2757,7 @@ class AdminService:
                 "baud": module_config.serial.baud,
                 "timeout": module_config.serial.timeout,
                 "mode": module_config.serial.mode,
+                "override_console_serial_port": module_config.serial.override_console_serial_port,
             }
 
         if module_config.HasField("external_notification"):
@@ -2609,6 +2776,7 @@ class AdminService:
                 "alert_bell_buzzer": module_config.external_notification.alert_bell_buzzer,
                 "use_pwm": module_config.external_notification.use_pwm,
                 "nag_timeout": module_config.external_notification.nag_timeout,
+                "use_i2s_as_buzzer": module_config.external_notification.use_i2s_as_buzzer,
             }
 
         if module_config.HasField("store_forward"):
@@ -2618,6 +2786,7 @@ class AdminService:
                 "records": module_config.store_forward.records,
                 "history_return_max": module_config.store_forward.history_return_max,
                 "history_return_window": module_config.store_forward.history_return_window,
+                "is_server": module_config.store_forward.is_server,
             }
 
         if module_config.HasField("range_test"):
@@ -2625,6 +2794,7 @@ class AdminService:
                 "enabled": module_config.range_test.enabled,
                 "sender": module_config.range_test.sender,
                 "save": module_config.range_test.save,
+                "clear_on_reboot": module_config.range_test.clear_on_reboot,
             }
 
         if module_config.HasField("telemetry"):
@@ -2639,6 +2809,10 @@ class AdminService:
                 "power_measurement_enabled": module_config.telemetry.power_measurement_enabled,
                 "power_update_interval": module_config.telemetry.power_update_interval,
                 "power_screen_enabled": module_config.telemetry.power_screen_enabled,
+                "device_telemetry_enabled": module_config.telemetry.device_telemetry_enabled,
+                "health_measurement_enabled": module_config.telemetry.health_measurement_enabled,
+                "health_update_interval": module_config.telemetry.health_update_interval,
+                "health_screen_enabled": module_config.telemetry.health_screen_enabled,
             }
 
         if module_config.HasField("canned_message"):
@@ -2677,6 +2851,7 @@ class AdminService:
             result["neighborinfo"] = {
                 "enabled": module_config.neighbor_info.enabled,
                 "update_interval": module_config.neighbor_info.update_interval,
+                "transmit_over_lora": module_config.neighbor_info.transmit_over_lora,
             }
 
         if module_config.HasField("ambient_lighting"):
@@ -2704,6 +2879,8 @@ class AdminService:
             result["paxcounter"] = {
                 "enabled": module_config.paxcounter.enabled,
                 "paxcounter_update_interval": module_config.paxcounter.paxcounter_update_interval,
+                "wifi_threshold": module_config.paxcounter.wifi_threshold,
+                "ble_threshold": module_config.paxcounter.ble_threshold,
             }
 
         return result

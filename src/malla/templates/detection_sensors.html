@@ -1,0 +1,694 @@
+{% extends "base.html" %}
+
+{% block title %}Detection Sensors - {{ APP_NAME }}{% endblock %}
+
+{% block head_libs %}
+<!-- Plotly.js for detection charts -->
+<script src="https://cdn.plot.ly/plotly-2.30.0.min.js" integrity="sha384-H7GB7Kme/VbPI/0S4LNq7OixFNVRgRGE8kyqTntBuiXle1KBm8KWLQh/Ah6bXCYW" crossorigin="anonymous"></script>
+<!-- Leaflet for location map -->
+<link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
+<script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+{% endblock head_libs %}
+
+{% block extra_css %}
+<style>
+    .detection-card {
+        border-left: 4px solid #0d6efd;
+        margin-bottom: 0.5rem;
+        background-color: var(--bs-card-bg);
+        color: var(--bs-body-color);
+        transition: all 0.2s ease;
+    }
+
+    .detection-card:hover {
+        transform: translateX(2px);
+        box-shadow: 0 2px 8px rgba(0,0,0,0.1);
+    }
+
+    .detection-card.recent {
+        border-left-color: #198754;
+        background-color: rgba(25, 135, 84, 0.05);
+    }
+
+    .sensor-badge {
+        font-size: 0.75rem;
+        padding: 0.25rem 0.5rem;
+        border-radius: 0.25rem;
+        font-weight: 600;
+        background-color: #0d6efd;
+        color: white;
+    }
+
+    .summary-card {
+        text-align: center;
+        padding: 1.5rem;
+    }
+
+    .summary-card .count {
+        font-size: 2.5rem;
+        font-weight: bold;
+    }
+
+    .summary-card.events .count { color: #0d6efd; }
+    .summary-card.sensors .count { color: #198754; }
+    .summary-card.recent .count { color: #ffc107; }
+
+    .sensor-list-item {
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+        padding: 0.5rem 0.75rem;
+        border-bottom: 1px solid var(--bs-border-color);
+        cursor: pointer;
+        transition: background-color 0.2s;
+    }
+
+    .sensor-list-item:hover {
+        background-color: var(--bs-tertiary-bg);
+    }
+
+    .sensor-list-item:last-child {
+        border-bottom: none;
+    }
+
+    .sensor-list-item.active {
+        background-color: rgba(13, 110, 253, 0.1);
+        border-left: 3px solid #0d6efd;
+    }
+
+    .event-count-badge {
+        background-color: var(--bs-secondary-bg);
+        color: var(--bs-body-color);
+        font-size: 0.75rem;
+        padding: 0.2rem 0.5rem;
+        border-radius: 1rem;
+    }
+
+    .detection-timestamp {
+        font-size: 0.8rem;
+        color: var(--bs-secondary);
+    }
+
+    .detection-meta {
+        font-size: 0.75rem;
+        color: var(--bs-secondary);
+    }
+
+    .chart-container {
+        height: 250px;
+        width: 100%;
+    }
+
+    .map-container {
+        height: 350px;
+        border-radius: 0.5rem;
+        overflow: hidden;
+    }
+
+    .filter-section {
+        background: var(--bs-tertiary-bg);
+        padding: 1rem;
+        border-radius: 0.5rem;
+        margin-bottom: 1rem;
+    }
+
+    .timeline-container {
+        max-height: 600px;
+        overflow-y: auto;
+    }
+
+    .detection-icon {
+        width: 40px;
+        height: 40px;
+        background: linear-gradient(135deg, #0d6efd, #0dcaf0);
+        border-radius: 50%;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        color: white;
+        font-size: 1.2rem;
+        flex-shrink: 0;
+    }
+
+    .no-events {
+        text-align: center;
+        padding: 3rem;
+        color: var(--bs-secondary);
+    }
+
+    .no-events i {
+        font-size: 4rem;
+        margin-bottom: 1rem;
+        opacity: 0.5;
+    }
+
+    .pulse-dot {
+        width: 8px;
+        height: 8px;
+        background: #198754;
+        border-radius: 50%;
+        animation: pulse 2s infinite;
+    }
+
+    @keyframes pulse {
+        0% { transform: scale(1); opacity: 1; }
+        50% { transform: scale(1.5); opacity: 0.5; }
+        100% { transform: scale(1); opacity: 1; }
+    }
+
+    .location-badge {
+        font-size: 0.7rem;
+        padding: 0.15rem 0.4rem;
+    }
+</style>
+{% endblock %}
+
+{% block content %}
+<div class="container-fluid">
+    <div class="row mb-4">
+        <div class="col">
+            <h1><i class="bi bi-shield-exclamation"></i> Detection Sensors</h1>
+            <p class="text-muted">Monitor detection sensor events across your mesh network</p>
+        </div>
+        <div class="col-auto">
+            <button class="btn btn-primary" id="refreshBtn" onclick="loadDetectionData()">
+                <i class="bi bi-arrow-clockwise"></i> Refresh
+            </button>
+        </div>
+    </div>
+
+    <!-- Filter Section -->
+    <div class="filter-section">
+        <div class="row align-items-end">
+            <div class="col-md-3">
+                <label class="form-label">Time Range</label>
+                <select class="form-select" id="hoursFilter">
+                    <option value="1">Last 1 hour</option>
+                    <option value="6">Last 6 hours</option>
+                    <option value="12">Last 12 hours</option>
+                    <option value="24" selected>Last 24 hours</option>
+                    <option value="48">Last 48 hours</option>
+                    <option value="168">Last 7 days</option>
+                </select>
+            </div>
+            <div class="col-md-3">
+                <label class="form-label">Sensor Node</label>
+                <select class="form-select" id="nodeFilter">
+                    <option value="">All Sensors</option>
+                    <!-- Populated dynamically -->
+                </select>
+            </div>
+            <div class="col-md-3">
+                <label class="form-label">Max Events</label>
+                <select class="form-select" id="limitFilter">
+                    <option value="100">100 events</option>
+                    <option value="250">250 events</option>
+                    <option value="500" selected>500 events</option>
+                    <option value="1000">1000 events</option>
+                </select>
+            </div>
+            <div class="col-md-3">
+                <button class="btn btn-outline-primary w-100" onclick="loadDetectionData()">
+                    <i class="bi bi-funnel"></i> Apply Filters
+                </button>
+            </div>
+        </div>
+    </div>
+
+    <!-- Summary Cards -->
+    <div class="row mb-4" id="summaryRow">
+        <div class="col-md-4">
+            <div class="card summary-card events">
+                <div class="count" id="totalEvents">
+                    <div class="spinner-border spinner-border-sm" role="status"></div>
+                </div>
+                <div class="text-muted">Total Detections</div>
+            </div>
+        </div>
+        <div class="col-md-4">
+            <div class="card summary-card sensors">
+                <div class="count" id="uniqueSensors">
+                    <div class="spinner-border spinner-border-sm" role="status"></div>
+                </div>
+                <div class="text-muted">Active Sensors</div>
+            </div>
+        </div>
+        <div class="col-md-4">
+            <div class="card summary-card recent">
+                <div class="count" id="recentEvents">
+                    <div class="spinner-border spinner-border-sm" role="status"></div>
+                </div>
+                <div class="text-muted">Last Hour</div>
+            </div>
+        </div>
+    </div>
+
+    <div class="row">
+        <!-- Left column: Sensors list and chart -->
+        <div class="col-lg-4">
+            <!-- Sensor Nodes Card -->
+            <div class="card mb-4">
+                <div class="card-header">
+                    <i class="bi bi-cpu"></i> Sensor Nodes
+                </div>
+                <div class="card-body p-0" id="sensorListContainer">
+                    <div class="text-center p-4">
+                        <div class="spinner-border text-primary" role="status"></div>
+                        <p class="mt-2 text-muted">Loading sensors...</p>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Activity Chart -->
+            <div class="card mb-4">
+                <div class="card-header">
+                    <i class="bi bi-bar-chart"></i> Detection Activity
+                </div>
+                <div class="card-body">
+                    <div class="chart-container" id="activityChart">
+                        <div class="text-center p-4">
+                            <div class="spinner-border text-primary" role="status"></div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- Right column: Map and event log -->
+        <div class="col-lg-8">
+            <!-- Map Card -->
+            <div class="card mb-4">
+                <div class="card-header d-flex justify-content-between align-items-center">
+                    <span><i class="bi bi-geo-alt"></i> Sensor Locations</span>
+                    <small class="text-muted" id="mapInfo">Showing sensors with known locations</small>
+                </div>
+                <div class="card-body p-0">
+                    <div class="map-container" id="sensorMap"></div>
+                </div>
+            </div>
+
+            <!-- Detection Events Timeline -->
+            <div class="card">
+                <div class="card-header d-flex justify-content-between align-items-center">
+                    <span><i class="bi bi-list-ul"></i> Detection Log</span>
+                    <div class="d-flex align-items-center gap-2">
+                        <div class="pulse-dot" id="liveDot" style="display: none;"></div>
+                        <span class="badge bg-secondary" id="eventCountBadge">0 events</span>
+                    </div>
+                </div>
+                <div class="card-body p-0">
+                    <div class="timeline-container" id="eventTimeline">
+                        <div class="text-center p-4">
+                            <div class="spinner-border text-primary" role="status"></div>
+                            <p class="mt-2 text-muted">Loading detection events...</p>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+{% endblock %}
+
+{% block extra_js %}
+<script>
+    let map = null;
+    let markers = [];
+    let currentData = null;
+    let selectedNode = null;
+
+    // Initialize map
+    function initMap() {
+        map = L.map('sensorMap').setView([0, 0], 2);
+
+        // Use OpenStreetMap tiles
+        L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+            attribution: '&copy; OpenStreetMap contributors'
+        }).addTo(map);
+    }
+
+    // Format relative time
+    function formatRelativeTime(timestamp) {
+        const now = Date.now() / 1000;
+        const diff = now - timestamp;
+
+        if (diff < 60) return 'Just now';
+        if (diff < 3600) return `${Math.floor(diff / 60)} min ago`;
+        if (diff < 86400) return `${Math.floor(diff / 3600)} hours ago`;
+        return `${Math.floor(diff / 86400)} days ago`;
+    }
+
+    // Format timestamp
+    function formatTimestamp(timestamp) {
+        return new Date(timestamp * 1000).toLocaleString();
+    }
+
+    // Load detection data
+    async function loadDetectionData() {
+        const hours = document.getElementById('hoursFilter').value;
+        const limit = document.getElementById('limitFilter').value;
+        const nodeId = document.getElementById('nodeFilter').value;
+
+        let url = `/api/detection-sensors?hours=${hours}&limit=${limit}`;
+        if (nodeId) {
+            url += `&node_id=${nodeId}`;
+        }
+
+        try {
+            const response = await fetch(url);
+            const data = await response.json();
+
+            if (data.error) {
+                showError(data.error);
+                return;
+            }
+
+            currentData = data;
+            updateUI(data);
+        } catch (error) {
+            console.error('Error loading detection data:', error);
+            showError('Failed to load detection data');
+        }
+    }
+
+    // Update all UI components
+    function updateUI(data) {
+        updateSummary(data);
+        updateSensorList(data.sensor_nodes);
+        updateEventTimeline(data.events);
+        updateChart(data.hourly_chart);
+        updateMap(data.events);
+    }
+
+    // Update summary cards
+    function updateSummary(data) {
+        document.getElementById('totalEvents').textContent = data.total_events.toLocaleString();
+        document.getElementById('uniqueSensors').textContent = data.unique_sensors;
+
+        // Count events in last hour
+        const oneHourAgo = Date.now() / 1000 - 3600;
+        const recentCount = data.events.filter(e => e.timestamp > oneHourAgo).length;
+        document.getElementById('recentEvents').textContent = recentCount;
+
+        // Show live dot if there are very recent events (last 5 minutes)
+        const fiveMinAgo = Date.now() / 1000 - 300;
+        const veryRecent = data.events.some(e => e.timestamp > fiveMinAgo);
+        document.getElementById('liveDot').style.display = veryRecent ? 'block' : 'none';
+    }
+
+    // Update sensor list
+    function updateSensorList(sensors) {
+        const container = document.getElementById('sensorListContainer');
+
+        if (!sensors || sensors.length === 0) {
+            container.innerHTML = `
+                <div class="no-events">
+                    <i class="bi bi-cpu"></i>
+                    <p>No detection sensors found</p>
+                </div>
+            `;
+            return;
+        }
+
+        // Update node filter dropdown
+        const nodeFilter = document.getElementById('nodeFilter');
+        const currentValue = nodeFilter.value;
+        nodeFilter.innerHTML = '<option value="">All Sensors</option>';
+        sensors.forEach(sensor => {
+            const option = document.createElement('option');
+            option.value = sensor.node_hex;
+            option.textContent = `${sensor.name} (${sensor.event_count})`;
+            nodeFilter.appendChild(option);
+        });
+        nodeFilter.value = currentValue;
+
+        container.innerHTML = sensors.map(sensor => `
+            <div class="sensor-list-item ${selectedNode === sensor.node_hex ? 'active' : ''}"
+                 onclick="filterByNode('${sensor.node_hex}')">
+                <div>
+                    <strong>${escapeHtml(sensor.name)}</strong>
+                    <div class="text-muted small">${sensor.node_hex}</div>
+                </div>
+                <span class="event-count-badge">${sensor.event_count}</span>
+            </div>
+        `).join('');
+    }
+
+    // Update event timeline
+    function updateEventTimeline(events) {
+        const container = document.getElementById('eventTimeline');
+        const badge = document.getElementById('eventCountBadge');
+
+        badge.textContent = `${events.length} events`;
+
+        if (!events || events.length === 0) {
+            container.innerHTML = `
+                <div class="no-events">
+                    <i class="bi bi-shield-slash"></i>
+                    <p>No detection events found</p>
+                    <small class="text-muted">Detection sensor packets will appear here when received</small>
+                </div>
+            `;
+            return;
+        }
+
+        const fiveMinAgo = Date.now() / 1000 - 300;
+
+        container.innerHTML = events.map(event => {
+            const isRecent = event.timestamp > fiveMinAgo;
+            return `
+                <div class="detection-card ${isRecent ? 'recent' : ''} p-3">
+                    <div class="d-flex gap-3">
+                        <div class="detection-icon">
+                            <i class="bi bi-shield-check"></i>
+                        </div>
+                        <div class="flex-grow-1">
+                            <div class="d-flex justify-content-between align-items-start">
+                                <div>
+                                    <h6 class="mb-1">
+                                        ${escapeHtml(event.node_name)}
+                                        ${event.detection_name ? `<span class="sensor-badge ms-2">${escapeHtml(event.detection_name)}</span>` : ''}
+                                    </h6>
+                                    <div class="detection-timestamp">
+                                        ${formatRelativeTime(event.timestamp)} &bull; ${formatTimestamp(event.timestamp)}
+                                    </div>
+                                </div>
+                                <div class="text-end">
+                                    ${event.has_location ? '<span class="badge location-badge bg-success"><i class="bi bi-geo-alt-fill"></i> Located</span>' : ''}
+                                </div>
+                            </div>
+                            <div class="detection-meta mt-2">
+                                <span class="me-3"><i class="bi bi-broadcast"></i> ${event.from_node_hex}</span>
+                                ${event.rssi ? `<span class="me-3"><i class="bi bi-reception-4"></i> RSSI: ${event.rssi} dBm</span>` : ''}
+                                ${event.snr ? `<span class="me-3">SNR: ${event.snr.toFixed(1)} dB</span>` : ''}
+                                ${event.gateway_id ? `<span><i class="bi bi-router"></i> via ${escapeHtml(event.gateway_id)}</span>` : ''}
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            `;
+        }).join('');
+    }
+
+    // Update activity chart
+    function updateChart(hourlyData) {
+        const container = document.getElementById('activityChart');
+
+        if (!hourlyData || hourlyData.length === 0) {
+            container.innerHTML = `
+                <div class="text-center text-muted p-4">
+                    <i class="bi bi-bar-chart" style="font-size: 2rem; opacity: 0.5;"></i>
+                    <p class="mt-2">No activity data to display</p>
+                </div>
+            `;
+            return;
+        }
+
+        // Clear any loading spinner before rendering chart
+        container.innerHTML = '';
+
+        const isDarkMode = document.documentElement.getAttribute('data-bs-theme') === 'dark';
+
+        const trace = {
+            x: hourlyData.map(d => d.hour),
+            y: hourlyData.map(d => d.count),
+            type: 'bar',
+            marker: {
+                color: 'rgba(13, 110, 253, 0.7)',
+                line: {
+                    color: 'rgba(13, 110, 253, 1)',
+                    width: 1
+                }
+            }
+        };
+
+        const layout = {
+            margin: { t: 10, r: 10, b: 40, l: 40 },
+            paper_bgcolor: 'transparent',
+            plot_bgcolor: 'transparent',
+            xaxis: {
+                tickangle: -45,
+                tickfont: { size: 10, color: isDarkMode ? '#adb5bd' : '#6c757d' },
+                gridcolor: isDarkMode ? 'rgba(255,255,255,0.1)' : 'rgba(0,0,0,0.1)'
+            },
+            yaxis: {
+                tickfont: { color: isDarkMode ? '#adb5bd' : '#6c757d' },
+                gridcolor: isDarkMode ? 'rgba(255,255,255,0.1)' : 'rgba(0,0,0,0.1)'
+            },
+            bargap: 0.2
+        };
+
+        Plotly.newPlot(container, [trace], layout, { responsive: true, displayModeBar: false });
+    }
+
+    // Update map with sensor locations
+    function updateMap(events) {
+        // Clear existing markers
+        markers.forEach(m => map.removeLayer(m));
+        markers = [];
+
+        // Get unique locations with their event counts
+        const locationMap = new Map();
+        events.forEach(event => {
+            if (event.has_location) {
+                const key = `${event.from_node_id}`;
+                if (!locationMap.has(key)) {
+                    locationMap.set(key, {
+                        lat: event.latitude,
+                        lng: event.longitude,
+                        name: event.node_name,
+                        node_hex: event.from_node_hex,
+                        count: 0,
+                        lastEvent: event.timestamp
+                    });
+                }
+                const loc = locationMap.get(key);
+                loc.count++;
+                if (event.timestamp > loc.lastEvent) {
+                    loc.lastEvent = event.timestamp;
+                }
+            }
+        });
+
+        if (locationMap.size === 0) {
+            document.getElementById('mapInfo').textContent = 'No sensors with known locations';
+            return;
+        }
+
+        document.getElementById('mapInfo').textContent = `${locationMap.size} sensor(s) with known locations`;
+
+        const bounds = [];
+        const fiveMinAgo = Date.now() / 1000 - 300;
+
+        locationMap.forEach((loc, key) => {
+            const isRecent = loc.lastEvent > fiveMinAgo;
+
+            // Create custom icon
+            const iconHtml = `
+                <div style="
+                    background: ${isRecent ? '#198754' : '#0d6efd'};
+                    color: white;
+                    border-radius: 50%;
+                    width: 30px;
+                    height: 30px;
+                    display: flex;
+                    align-items: center;
+                    justify-content: center;
+                    font-size: 14px;
+                    font-weight: bold;
+                    border: 2px solid white;
+                    box-shadow: 0 2px 6px rgba(0,0,0,0.3);
+                    ${isRecent ? 'animation: pulse 2s infinite;' : ''}
+                ">
+                    <i class="bi bi-shield-check"></i>
+                </div>
+            `;
+
+            const icon = L.divIcon({
+                html: iconHtml,
+                className: '',
+                iconSize: [30, 30],
+                iconAnchor: [15, 15]
+            });
+
+            const marker = L.marker([loc.lat, loc.lng], { icon })
+                .addTo(map)
+                .bindPopup(`
+                    <strong>${escapeHtml(loc.name)}</strong><br>
+                    <small>${loc.node_hex}</small><br>
+                    <hr style="margin: 0.5rem 0;">
+                    <strong>${loc.count}</strong> detection(s)<br>
+                    Last: ${formatRelativeTime(loc.lastEvent)}
+                `);
+
+            markers.push(marker);
+            bounds.push([loc.lat, loc.lng]);
+        });
+
+        // Fit map to bounds if we have locations
+        if (bounds.length > 0) {
+            if (bounds.length === 1) {
+                map.setView(bounds[0], 13);
+            } else {
+                map.fitBounds(bounds, { padding: [50, 50] });
+            }
+        }
+    }
+
+    // Filter by node
+    function filterByNode(nodeHex) {
+        if (selectedNode === nodeHex) {
+            selectedNode = null;
+            document.getElementById('nodeFilter').value = '';
+        } else {
+            selectedNode = nodeHex;
+            document.getElementById('nodeFilter').value = nodeHex;
+        }
+        loadDetectionData();
+    }
+
+    // Show error message
+    function showError(message) {
+        document.getElementById('eventTimeline').innerHTML = `
+            <div class="alert alert-danger m-3">
+                <i class="bi bi-exclamation-triangle"></i> ${escapeHtml(message)}
+            </div>
+        `;
+    }
+
+    // Escape HTML to prevent XSS
+    function escapeHtml(text) {
+        if (!text) return '';
+        const div = document.createElement('div');
+        div.textContent = text;
+        return div.innerHTML;
+    }
+
+    // Event listeners
+    document.getElementById('hoursFilter').addEventListener('change', loadDetectionData);
+    document.getElementById('nodeFilter').addEventListener('change', function() {
+        selectedNode = this.value || null;
+        loadDetectionData();
+    });
+    document.getElementById('limitFilter').addEventListener('change', loadDetectionData);
+
+    // Initialize
+    document.addEventListener('DOMContentLoaded', function() {
+        initMap();
+        loadDetectionData();
+
+        // Auto-refresh every 30 seconds
+        setInterval(loadDetectionData, 30000);
+    });
+
+    // Handle theme changes
+    const observer = new MutationObserver(function(mutations) {
+        mutations.forEach(function(mutation) {
+            if (mutation.attributeName === 'data-bs-theme' && currentData) {
+                updateChart(currentData.hourly_chart);
+            }
+        });
+    });
+    observer.observe(document.documentElement, { attributes: true });
+</script>
+{% endblock %}

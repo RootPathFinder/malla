@@ -446,6 +446,91 @@ class AdminRepository:
         return [dict(row) for row in rows]
 
     @staticmethod
+    def get_firmware_statistics() -> dict[str, Any]:
+        """
+        Get firmware version statistics for all administrable nodes.
+
+        Returns:
+            Dictionary with firmware stats including version distribution and node list
+        """
+        conn = get_db_connection()
+        cursor = conn.cursor()
+
+        # Get all nodes with firmware versions
+        cursor.execute(
+            """
+            SELECT
+                an.node_id,
+                an.firmware_version,
+                an.first_confirmed,
+                an.last_confirmed,
+                ni.hex_id,
+                ni.long_name,
+                ni.short_name,
+                ni.hw_model,
+                ni.last_updated as last_seen
+            FROM administrable_nodes an
+            LEFT JOIN node_info ni ON an.node_id = ni.node_id
+            WHERE an.firmware_version IS NOT NULL AND an.firmware_version != ''
+            ORDER BY an.firmware_version DESC, an.last_confirmed DESC
+            """
+        )
+
+        nodes_with_firmware = [dict(row) for row in cursor.fetchall()]
+
+        # Get version distribution
+        cursor.execute(
+            """
+            SELECT
+                firmware_version,
+                COUNT(*) as count
+            FROM administrable_nodes
+            WHERE firmware_version IS NOT NULL AND firmware_version != ''
+            GROUP BY firmware_version
+            ORDER BY firmware_version DESC
+            """
+        )
+
+        version_distribution = [
+            {"version": row["firmware_version"], "count": row["count"]}
+            for row in cursor.fetchall()
+        ]
+
+        # Get hardware model distribution per firmware version
+        cursor.execute(
+            """
+            SELECT
+                an.firmware_version,
+                ni.hw_model,
+                COUNT(*) as count
+            FROM administrable_nodes an
+            LEFT JOIN node_info ni ON an.node_id = ni.node_id
+            WHERE an.firmware_version IS NOT NULL AND an.firmware_version != ''
+            GROUP BY an.firmware_version, ni.hw_model
+            ORDER BY an.firmware_version DESC, count DESC
+            """
+        )
+
+        hw_by_firmware = {}
+        for row in cursor.fetchall():
+            version = row["firmware_version"]
+            if version not in hw_by_firmware:
+                hw_by_firmware[version] = []
+            hw_by_firmware[version].append(
+                {"hw_model": row["hw_model"] or "Unknown", "count": row["count"]}
+            )
+
+        conn.close()
+
+        return {
+            "nodes": nodes_with_firmware,
+            "total_count": len(nodes_with_firmware),
+            "version_distribution": version_distribution,
+            "hw_by_firmware": hw_by_firmware,
+            "unique_versions": len(version_distribution),
+        }
+
+    @staticmethod
     def get_administrable_node_details(node_id: int) -> dict[str, Any] | None:
         """
         Get details for a specific administrable node.

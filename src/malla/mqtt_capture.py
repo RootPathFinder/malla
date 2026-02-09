@@ -427,6 +427,16 @@ def init_database() -> None:
         "CREATE INDEX IF NOT EXISTS idx_node_primary_channel ON node_info(primary_channel)"
     )
 
+    # Add firmware_version column to node_info table
+    try:
+        cursor.execute("ALTER TABLE node_info ADD COLUMN firmware_version TEXT")
+        logging.info("Added firmware_version column to node_info table")
+    except sqlite3.OperationalError as e:
+        if "duplicate column name" in str(e).lower():
+            logging.debug("firmware_version column already exists")
+        else:
+            logging.warning(f"Could not add firmware_version column: {e}")
+
     # Add power monitoring columns to node_info table
     power_columns = [
         ("power_type", "TEXT DEFAULT 'unknown'"),
@@ -889,6 +899,21 @@ def log_packet_to_database(
                 parsing_error,
             ),
         )
+
+        # Auto-unarchive node if it sends a packet (node is active again)
+        if from_node_id:
+            cursor.execute(
+                """
+                UPDATE node_info
+                SET archived = 0, last_updated = ?
+                WHERE node_id = ? AND archived = 1
+                """,
+                (current_time, from_node_id),
+            )
+            if cursor.rowcount > 0:
+                logging.info(
+                    f"Auto-unarchived node {from_node_id} due to new packet activity"
+                )
 
         conn.commit()
         conn.close()

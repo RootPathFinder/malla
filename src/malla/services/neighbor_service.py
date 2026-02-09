@@ -19,6 +19,9 @@ from ..utils.node_utils import get_bulk_node_names
 
 logger = logging.getLogger(__name__)
 
+# Router roles that should be highlighted in the dependency dashboard
+ROUTER_ROLES = {"ROUTER", "ROUTER_CLIENT", "ROUTER_LATE", "REPEATER"}
+
 
 class NeighborService:
     """Service for analyzing mesh topology from NeighborInfo packets."""
@@ -193,14 +196,22 @@ class NeighborService:
 
             conn.close()
 
-            # Get node names
+            # Get node names and roles
             all_node_ids = list(nodes.keys())
             node_names = get_bulk_node_names(all_node_ids) if all_node_ids else {}
+            node_roles = (
+                NeighborService._get_bulk_node_roles(all_node_ids)
+                if all_node_ids
+                else {}
+            )
 
-            # Enhance nodes with names
+            # Enhance nodes with names and roles
             for node_id, node_data in nodes.items():
                 node_data["name"] = node_names.get(node_id, f"!{node_id:08x}")
                 node_data["hex_id"] = f"!{node_id:08x}"
+                role = node_roles.get(node_id)
+                node_data["role"] = role
+                node_data["is_router"] = role in ROUTER_ROLES if role else False
 
             # Convert edges to list format for JSON
             edge_list = []
@@ -281,6 +292,43 @@ class NeighborService:
         except Exception as e:
             logger.error(f"Error building mesh topology: {e}", exc_info=True)
             raise
+
+    @staticmethod
+    def _get_bulk_node_roles(node_ids: list[int]) -> dict[int, str | None]:
+        """
+        Get roles for multiple nodes in a single database query.
+
+        Args:
+            node_ids: List of node IDs to get roles for
+
+        Returns:
+            Dictionary mapping node_id to role (or None if not found)
+        """
+        if not node_ids:
+            return {}
+
+        try:
+            conn = get_db_connection()
+            cursor = conn.cursor()
+
+            placeholders = ",".join("?" * len(node_ids))
+            cursor.execute(
+                f"""
+                SELECT node_id, role
+                FROM node_info
+                WHERE node_id IN ({placeholders})
+            """,
+                node_ids,
+            )
+
+            results = cursor.fetchall()
+            conn.close()
+
+            return {row["node_id"]: row["role"] for row in results}
+
+        except Exception as e:
+            logger.warning(f"Failed to get bulk node roles: {e}")
+            return {}
 
     @staticmethod
     def get_neighbor_stability(

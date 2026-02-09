@@ -17,6 +17,7 @@ from ..database.job_repository import (
     JobStatus,
     JobType,
 )
+from ..utils.safe_logging import safe_error, safe_info
 from .change_registry import ChangeRegistry
 from .change_registry import ChangeType as ChangeRegistryType
 
@@ -200,7 +201,7 @@ class JobService:
 
     def _worker_loop(self) -> None:
         """Main worker loop that processes queued jobs."""
-        logger.info("Job worker loop started")
+        safe_info(logger, "Job worker loop started")
 
         while not self._stop_event.is_set():
             try:
@@ -214,10 +215,10 @@ class JobService:
                     self._stop_event.wait(timeout=2.0)
 
             except Exception as e:
-                logger.error(f"Error in job worker loop: {e}", exc_info=True)
+                safe_error(logger, f"Error in job worker loop: {e}", exc_info=True)
                 self._stop_event.wait(timeout=5.0)
 
-        logger.info("Job worker loop stopped")
+        safe_info(logger, "Job worker loop stopped")
 
     def _process_job(self, job: dict[str, Any]) -> None:
         """Process a single job."""

@@ -148,35 +148,62 @@
     const nodeId = '{{ node_id }}';
     const days = {{ days if days else 7 }};
 
-    async function loadUptime() {
-        try {
-            const response = await fetch(`/api/health/uptime/${nodeId}?days=${days}`);
-            if (!response.ok) throw new Error(`HTTP ${response.status}`);
-            const data = await response.json();
-
-            if (data.error) {
-                document.getElementById(containerId).innerHTML = `
-                    <div class="text-muted small"><i class="bi bi-exclamation-triangle"></i> ${data.error}</div>`;
-                return;
-            }
-            render(data);
-        } catch (e) {
-            document.getElementById(containerId).innerHTML = `
-                <div class="text-muted small"><i class="bi bi-exclamation-triangle"></i> Unable to load</div>`;
+    function loadUptime() {
+        // Check if telemetry data is already available from node detail page
+        if (window.telemetryHistory7d && Object.keys(window.telemetryHistory7d).length > 0) {
+            renderFromTelemetry(window.telemetryHistory7d);
+        } else {
+            // Wait a bit for telemetry data to be loaded, then check again
+            setTimeout(() => {
+                if (window.telemetryHistory7d && Object.keys(window.telemetryHistory7d).length > 0) {
+                    renderFromTelemetry(window.telemetryHistory7d);
+                } else {
+                    // Fetch telemetry history directly
+                    fetchTelemetryHistory();
+                }
+            }, 1500);
         }
     }
 
-    function render(data) {
+    async function fetchTelemetryHistory() {
+        try {
+            const response = await fetch(`/api/node/${nodeId}/telemetry/history?hours=${days * 24}`);
+            if (!response.ok) throw new Error(`HTTP ${response.status}`);
+            const data = await response.json();
+
+            if (data.error || !data.history || Object.keys(data.history).length === 0) {
+                document.getElementById(containerId).innerHTML = `
+                    <div class="text-muted small"><i class="bi bi-info-circle"></i> No telemetry data available</div>`;
+                return;
+            }
+            renderFromTelemetry(data.history);
+        } catch (e) {
+            document.getElementById(containerId).innerHTML = `
+                <div class="text-muted small"><i class="bi bi-exclamation-triangle"></i> Unable to load availability data</div>`;
+        }
+    }
+
+    function renderFromTelemetry(history) {
         const container = document.getElementById(containerId);
-        if (!data.daily_summary || data.daily_summary.length === 0) {
-            container.innerHTML = `<div class="text-muted small"><i class="bi bi-info-circle"></i> No data</div>`;
+
+        // Collect all timestamps from all metric types
+        const allTimestamps = [];
+        Object.values(history).forEach(metricData => {
+            if (Array.isArray(metricData)) {
+                metricData.forEach(point => {
+                    if (point.x) allTimestamps.push(point.x);
+                });
+            }
+        });
+
+        if (allTimestamps.length === 0) {
+            container.innerHTML = `<div class="text-muted small"><i class="bi bi-info-circle"></i> No telemetry data</div>`;
             return;
         }
 
-        // Get current date info for "today" detection
-        const now = new Date();
+        // Get timezone preference
         const tzPref = typeof getTimezonePreference === 'function' ? getTimezonePreference() : 'local';
-        const tzOption = tzPref === 'utc' ? 'UTC' : undefined;
+        const now = new Date();
 
         // Calculate today's date string based on timezone preference
         let todayStr;
@@ -185,7 +212,6 @@
             todayStr = now.toISOString().split('T')[0];
             currentHour = now.getUTCHours();
         } else {
-            // Use local timezone
             const year = now.getFullYear();
             const month = String(now.getMonth() + 1).padStart(2, '0');
             const day = String(now.getDate()).padStart(2, '0');
@@ -193,62 +219,99 @@
             currentHour = now.getHours();
         }
 
-        // Filter out future days when in local mode (API returns UTC dates)
-        // If in local mode and a day's date is after local "today", skip it
-        const filteredSummary = data.daily_summary.filter(day => {
-            return day.date <= todayStr;
-        });
+        // Build daily summary from telemetry timestamps
+        // Divide each day into 4 periods (6-hour blocks)
+        const dailySummary = [];
+        const startOfToday = tzPref === 'utc'
+            ? new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate()))
+            : new Date(now.getFullYear(), now.getMonth(), now.getDate());
+
+        for (let d = days - 1; d >= 0; d--) {
+            const dayStart = new Date(startOfToday.getTime() - d * 24 * 60 * 60 * 1000);
+            const dayEnd = new Date(dayStart.getTime() + 24 * 60 * 60 * 1000);
+
+            // Get date string for this day
+            let dateStr;
+            if (tzPref === 'utc') {
+                dateStr = dayStart.toISOString().split('T')[0];
+            } else {
+                const year = dayStart.getFullYear();
+                const month = String(dayStart.getMonth() + 1).padStart(2, '0');
+                const dayNum = String(dayStart.getDate()).padStart(2, '0');
+                dateStr = `${year}-${month}-${dayNum}`;
+            }
+
+            // Count telemetry in each 6-hour period
+            const periods = [];
+            for (let p = 0; p < 4; p++) {
+                const periodStart = dayStart.getTime() + p * 6 * 60 * 60 * 1000;
+                const periodEnd = periodStart + 6 * 60 * 60 * 1000;
+
+                const pointsInPeriod = allTimestamps.filter(ts => ts >= periodStart && ts < periodEnd);
+                const hasData = pointsInPeriod.length > 0;
+
+                periods.push({
+                    startHour: p * 6,
+                    hasData: hasData,
+                    dataPoints: pointsInPeriod.length
+                });
+            }
+
+            // Calculate day availability based on periods with data
+            const periodsWithData = periods.filter(p => p.hasData).length;
+            const uptimePct = Math.round((periodsWithData / 4) * 100);
+
+            dailySummary.push({
+                date: dateStr,
+                periods: periods,
+                uptime_percentage: uptimePct
+            });
+        }
+
+        // Calculate overall uptime percentage
+        const totalPeriods = dailySummary.reduce((sum, day) => sum + 4, 0);
+        const availablePeriods = dailySummary.reduce((sum, day) =>
+            sum + day.periods.filter(p => p.hasData).length, 0);
+        const overallUptime = Math.round((availablePeriods / totalPeriods) * 100);
+
+        // Render the visualization
+        render(dailySummary, overallUptime, todayStr, currentHour, tzPref);
+    }
+
+    function render(dailySummary, overallUptime, todayStr, currentHour, tzPref) {
+        const container = document.getElementById(containerId);
+        const tzOption = tzPref === 'utc' ? 'UTC' : undefined;
 
         // Build compact visualization - 4 blocks per day (6-hour periods)
         let html = '<div class="uptime-row"><div class="uptime-days">';
 
-        filteredSummary.forEach(day => {
+        dailySummary.forEach(day => {
             const dayDate = new Date(day.date + 'T12:00:00Z');
             const dayName = dayDate.toLocaleDateString(undefined, { weekday: 'short', timeZone: tzOption });
             const monthDay = dayDate.toLocaleDateString(undefined, { month: 'numeric', day: 'numeric', timeZone: tzOption });
             const isToday = day.date === todayStr;
 
-            // Aggregate 12 time blocks into 4 (6-hour periods)
-            const blocks = day.time_blocks || [];
-            const periods = [
-                { blocks: blocks.slice(0, 3), startHour: 0, label: '12am-6am' },
-                { blocks: blocks.slice(3, 6), startHour: 6, label: '6am-12pm' },
-                { blocks: blocks.slice(6, 9), startHour: 12, label: '12pm-6pm' },
-                { blocks: blocks.slice(9, 12), startHour: 18, label: '6pm-12am' }
-            ];
+            const periodLabels = ['12am-6am', '6am-12pm', '12pm-6pm', '6pm-12am'];
 
             html += `<div class="uptime-day${isToday ? ' today' : ''}">`;
             html += '<div class="uptime-day-blocks">';
 
-            periods.forEach(period => {
-                // Calculate period status from sub-blocks
-                let avail = 0, deg = 0, unavail = 0;
-                period.blocks.forEach(b => {
-                    if (b.status === 'available') avail++;
-                    else if (b.status === 'degraded') deg++;
-                    else unavail++;
-                });
-
+            day.periods.forEach((period, idx) => {
                 // Determine if this period is in the future (for today)
                 const isFuture = isToday && period.startHour > currentHour;
 
                 let status;
                 if (isFuture) {
                     status = 'future';
-                } else if (period.blocks.length === 0) {
-                    // No block data, use day uptime
-                    status = day.uptime_percentage >= 80 ? 'available' :
-                             day.uptime_percentage >= 50 ? 'degraded' : 'unavailable';
-                } else if (avail >= 2) {
+                } else if (period.hasData) {
                     status = 'available';
-                } else if (avail + deg >= 2) {
-                    status = 'degraded';
                 } else {
                     status = 'unavailable';
                 }
 
-                const tooltip = isFuture ? `${period.label}: Future` :
-                    `${dayName} ${monthDay} ${period.label}`;
+                const tooltip = isFuture ? `${periodLabels[idx]}: Future` :
+                    period.hasData ? `${dayName} ${monthDay} ${periodLabels[idx]}: ${period.dataPoints} telemetry points` :
+                    `${dayName} ${monthDay} ${periodLabels[idx]}: No data`;
 
                 html += `<div class="uptime-block ${status}" title="${tooltip}"></div>`;
             });
@@ -263,15 +326,14 @@
         html += '</div></div>';
 
         // Footer with percentage and legend
-        const pct = data.uptime_percentage;
+        const pct = overallUptime;
         const pctClass = pct >= 80 ? 'good' : pct >= 50 ? 'warn' : 'bad';
 
         html += `<div class="uptime-footer">`;
-        html += `<span class="uptime-pct ${pctClass}">${pct}% uptime</span>`;
+        html += `<span class="uptime-pct ${pctClass}">${pct}% availability</span>`;
         html += `<div class="uptime-legend">`;
-        html += `<span class="uptime-legend-item"><span class="uptime-legend-dot available"></span>OK</span>`;
-        html += `<span class="uptime-legend-item"><span class="uptime-legend-dot degraded"></span>Degraded</span>`;
-        html += `<span class="uptime-legend-item"><span class="uptime-legend-dot unavailable"></span>Down</span>`;
+        html += `<span class="uptime-legend-item"><span class="uptime-legend-dot available"></span>Data</span>`;
+        html += `<span class="uptime-legend-item"><span class="uptime-legend-dot unavailable"></span>No Data</span>`;
         html += `</div></div>`;
 
         container.innerHTML = html;

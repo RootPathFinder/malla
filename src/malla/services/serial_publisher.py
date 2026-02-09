@@ -272,6 +272,23 @@ class SerialPublisher:
         self._last_admin_response: dict[str, Any] | None = None
         self._admin_response_event = threading.Event()
 
+        # Pending telemetry requests tracking
+        # Key: target_node_id (int), Value: dict with event and response data
+        self._pending_telemetry_requests: dict[int, dict[str, Any]] = {}
+        self._pending_telemetry_lock = threading.Lock()
+
+        # Telemetry request statistics tracking
+        self._telemetry_stats: dict[str, Any] = {
+            "total_requests": 0,
+            "successful_responses": 0,
+            "timeouts": 0,
+            "errors": 0,
+            "last_request_time": None,
+            "last_success_time": None,
+            "per_node_stats": {},  # Key: node_id, Value: {requests, successes, timeouts}
+        }
+        self._telemetry_stats_lock = threading.Lock()
+
     @property
     def is_connected(self) -> bool:
         """Check if connected to the node."""
@@ -420,6 +437,10 @@ class SerialPublisher:
             if port_num == "ADMIN_APP" or port_num == portnums_pb2.ADMIN_APP:
                 self._handle_admin_response(packet)
 
+            # Handle telemetry responses
+            if port_num == "TELEMETRY_APP" or port_num == portnums_pb2.TELEMETRY_APP:
+                self._handle_telemetry_response(packet)
+
         except Exception as e:
             logger.error(f"Error handling received packet: {e}")
 
@@ -455,6 +476,37 @@ class SerialPublisher:
 
         except Exception as e:
             logger.error(f"Error handling admin response: {e}")
+
+    def _handle_telemetry_response(self, packet: dict[str, Any]) -> None:
+        """Handle telemetry app responses."""
+        try:
+            from_id = packet.get("from")
+            if from_id is None:
+                from_id_str = packet.get("fromId", "")
+                if from_id_str.startswith("!"):
+                    from_id = int(from_id_str[1:], 16)
+                else:
+                    return
+
+            decoded = packet.get("decoded", {})
+            telemetry_data = decoded.get("telemetry", {})
+
+            if not telemetry_data:
+                return
+
+            # Check if this is a response to a pending request
+            with self._pending_telemetry_lock:
+                if from_id in self._pending_telemetry_requests:
+                    pending = self._pending_telemetry_requests[from_id]
+                    pending["response_data"]["telemetry"] = telemetry_data
+                    pending["response_data"]["timestamp"] = time.time()
+                    pending["response_data"]["from_node"] = from_id
+                    pending["event"].set()
+
+                    logger.debug(f"Received telemetry response from !{from_id:08x}")
+
+        except Exception as e:
+            logger.error(f"Error handling telemetry response: {e}")
 
     def get_local_node_id(self) -> int | None:
         """Get the local node ID from the connected device."""
@@ -657,6 +709,609 @@ class SerialPublisher:
             admin_message=admin_msg,
             want_response=True,
         )
+
+    def send_begin_edit_settings(
+        self,
+        target_node_id: int,
+    ) -> int | None:
+        """
+        Begin a settings edit transaction on a target node.
+
+        This should be called before making multiple config changes.
+        The node will hold changes in memory until commit_edit_settings is called.
+
+        Args:
+            target_node_id: The target node ID
+
+        Returns:
+            Packet ID if sent successfully
+        """
+        admin_msg = admin_pb2.AdminMessage()
+        admin_msg.begin_edit_settings = True
+
+        logger.info(f"Sending begin_edit_settings to !{target_node_id:08x}")
+
+        return self.send_admin_message(
+            target_node_id=target_node_id,
+            admin_message=admin_msg,
+            want_response=True,
+        )
+
+    def send_commit_edit_settings(
+        self,
+        target_node_id: int,
+    ) -> int | None:
+        """
+        Commit a settings edit transaction on a target node.
+
+        This should be called after making config changes to apply them.
+        The node will save all pending changes to flash and apply them.
+
+        Args:
+            target_node_id: The target node ID
+
+        Returns:
+            Packet ID if sent successfully
+        """
+        admin_msg = admin_pb2.AdminMessage()
+        admin_msg.commit_edit_settings = True
+
+        logger.info(f"Sending commit_edit_settings to !{target_node_id:08x}")
+
+        return self.send_admin_message(
+            target_node_id=target_node_id,
+            admin_message=admin_msg,
+            want_response=True,
+        )
+
+    def send_set_config(
+        self,
+        target_node_id: int,
+        config_type: str,
+        config_data: dict,
+    ) -> int | None:
+        """
+        Set configuration on a target node.
+
+        Args:
+            target_node_id: The target node ID
+            config_type: The config type (device, position, etc.)
+            config_data: Dictionary of config values to set
+
+        Returns:
+            Packet ID if sent successfully
+        """
+        from meshtastic import config_pb2
+
+        admin_msg = admin_pb2.AdminMessage()
+        config = config_pb2.Config()
+
+        if config_type == "device":
+            for key, value in config_data.items():
+                if hasattr(config.device, key):
+                    setattr(config.device, key, value)
+            admin_msg.set_config.CopyFrom(config)
+
+        elif config_type == "position":
+            for key, value in config_data.items():
+                if key == "gps_enabled":
+                    config.position.gps_mode = value
+                elif hasattr(config.position, key):
+                    setattr(config.position, key, value)
+            admin_msg.set_config.CopyFrom(config)
+
+        elif config_type == "power":
+            for key, value in config_data.items():
+                if hasattr(config.power, key):
+                    setattr(config.power, key, value)
+            admin_msg.set_config.CopyFrom(config)
+
+        elif config_type == "network":
+            for key, value in config_data.items():
+                if hasattr(config.network, key):
+                    setattr(config.network, key, value)
+            admin_msg.set_config.CopyFrom(config)
+
+        elif config_type == "display":
+            for key, value in config_data.items():
+                if hasattr(config.display, key):
+                    setattr(config.display, key, value)
+            admin_msg.set_config.CopyFrom(config)
+
+        elif config_type == "lora":
+            for key, value in config_data.items():
+                if hasattr(config.lora, key):
+                    setattr(config.lora, key, value)
+            admin_msg.set_config.CopyFrom(config)
+
+        elif config_type == "bluetooth":
+            for key, value in config_data.items():
+                if hasattr(config.bluetooth, key):
+                    if key == "mode" and not isinstance(value, int):
+                        try:
+                            value = int(value)
+                        except (ValueError, TypeError):
+                            continue
+                    if key == "fixed_pin" and not isinstance(value, int):
+                        try:
+                            value = int(value)
+                        except (ValueError, TypeError):
+                            continue
+                    setattr(config.bluetooth, key, value)
+            admin_msg.set_config.CopyFrom(config)
+
+        elif config_type == "security":
+            # Filter out forbidden fields
+            FORBIDDEN_SECURITY_FIELDS = {"private_key", "public_key"}
+            config_data = {
+                k: v
+                for k, v in config_data.items()
+                if k not in FORBIDDEN_SECURITY_FIELDS
+            }
+
+            for key, value in config_data.items():
+                if hasattr(config.security, key):
+                    field = getattr(config.security, key)
+                    if hasattr(field, "extend"):
+                        field.clear()
+                        if isinstance(value, (list, tuple)):
+                            for item in value:
+                                if isinstance(item, bytes):
+                                    field.append(item)
+                                elif isinstance(item, str):
+                                    try:
+                                        field.append(bytes.fromhex(item))
+                                    except Exception:
+                                        import base64
+
+                                        try:
+                                            field.append(base64.b64decode(item))
+                                        except Exception:
+                                            pass
+                    else:
+                        setattr(config.security, key, value)
+
+            if not config_data:
+                return None
+            admin_msg.set_config.CopyFrom(config)
+
+        else:
+            logger.error(f"Unknown config type: {config_type}")
+            return None
+
+        logger.info(f"Sending set_config for {config_type} to !{target_node_id:08x}")
+
+        return self.send_admin_message(
+            target_node_id=target_node_id,
+            admin_message=admin_msg,
+            want_response=True,
+        )
+
+    def send_set_module_config(
+        self,
+        target_node_id: int,
+        module_type: str,
+        module_data: dict,
+    ) -> int | None:
+        """
+        Set module configuration on a target node.
+
+        Args:
+            target_node_id: The target node ID
+            module_type: The module type (mqtt, serial, telemetry, etc.)
+            module_data: Dictionary of module config values to set
+
+        Returns:
+            Packet ID if sent successfully
+        """
+        from meshtastic.protobuf import module_config_pb2
+
+        admin_msg = admin_pb2.AdminMessage()
+        module_config = module_config_pb2.ModuleConfig()
+
+        module_type_lower = module_type.lower()
+
+        module_map = {
+            "mqtt": "mqtt",
+            "serial": "serial",
+            "extnotif": "external_notification",
+            "storeforward": "store_forward",
+            "rangetest": "range_test",
+            "telemetry": "telemetry",
+            "cannedmsg": "canned_message",
+            "audio": "audio",
+            "remotehardware": "remote_hardware",
+            "neighborinfo": "neighbor_info",
+            "ambientlighting": "ambient_lighting",
+            "detectionsensor": "detection_sensor",
+            "paxcounter": "paxcounter",
+        }
+
+        if module_type_lower not in module_map:
+            logger.error(f"Unknown module type: {module_type}")
+            return None
+
+        module_attr = module_map[module_type_lower]
+        module_obj = getattr(module_config, module_attr)
+
+        for key, value in module_data.items():
+            if hasattr(module_obj, key):
+                setattr(module_obj, key, value)
+
+        admin_msg.set_module_config.CopyFrom(module_config)
+
+        logger.info(
+            f"Sending set_module_config for {module_type} to !{target_node_id:08x}"
+        )
+
+        return self.send_admin_message(
+            target_node_id=target_node_id,
+            admin_message=admin_msg,
+            want_response=True,
+        )
+
+    def send_set_channel(
+        self,
+        target_node_id: int,
+        channel_index: int,
+        channel_data: dict,
+    ) -> int | None:
+        """
+        Set channel configuration on a target node.
+
+        Args:
+            target_node_id: The target node ID
+            channel_index: The channel index (0-7)
+            channel_data: Dictionary of channel settings
+
+        Returns:
+            Packet ID if sent successfully
+        """
+        import base64
+
+        from meshtastic import channel_pb2
+
+        admin_msg = admin_pb2.AdminMessage()
+
+        channel = channel_pb2.Channel()
+        channel.index = channel_index
+
+        if "role" in channel_data:
+            channel.role = channel_data["role"]
+
+        if "name" in channel_data:
+            channel.settings.name = channel_data["name"]
+
+        if "psk" in channel_data:
+            psk = channel_data["psk"]
+            if isinstance(psk, bytes):
+                channel.settings.psk = psk
+            elif isinstance(psk, str):
+                try:
+                    decoded = base64.b64decode(psk)
+                    channel.settings.psk = decoded
+                except Exception:
+                    try:
+                        decoded = bytes.fromhex(psk)
+                        channel.settings.psk = decoded
+                    except Exception:
+                        channel.settings.psk = psk.encode("utf-8")
+
+        if "position_precision" in channel_data:
+            channel.settings.module_settings.position_precision = channel_data[
+                "position_precision"
+            ]
+
+        if "uplink_enabled" in channel_data:
+            channel.settings.uplink_enabled = channel_data["uplink_enabled"]
+        if "downlink_enabled" in channel_data:
+            channel.settings.downlink_enabled = channel_data["downlink_enabled"]
+
+        admin_msg.set_channel.CopyFrom(channel)
+
+        logger.info(f"Sending set_channel {channel_index} to !{target_node_id:08x}")
+
+        return self.send_admin_message(
+            target_node_id=target_node_id,
+            admin_message=admin_msg,
+            want_response=True,
+        )
+
+    def send_remove_node(
+        self,
+        target_node_id: int,
+        node_to_remove: int,
+    ) -> int | None:
+        """
+        Remove a node from the target node's nodedb.
+
+        Args:
+            target_node_id: The node to send the command to
+            node_to_remove: The node number to remove from the nodedb
+
+        Returns:
+            Packet ID if sent successfully
+        """
+        admin_msg = admin_pb2.AdminMessage()
+        admin_msg.remove_by_nodenum = node_to_remove
+
+        logger.info(
+            f"Sending remove_by_nodenum command to !{target_node_id:08x} "
+            f"to remove !{node_to_remove:08x}"
+        )
+
+        return self.send_admin_message(
+            target_node_id=target_node_id,
+            admin_message=admin_msg,
+            want_response=True,
+        )
+
+    def send_nodedb_reset(
+        self,
+        target_node_id: int,
+    ) -> int | None:
+        """
+        Reset the nodedb on the target node.
+
+        Args:
+            target_node_id: The node to reset the nodedb on
+
+        Returns:
+            Packet ID if sent successfully
+        """
+        admin_msg = admin_pb2.AdminMessage()
+        admin_msg.nodedb_reset = 1
+
+        logger.info(f"Sending nodedb_reset command to !{target_node_id:08x}")
+
+        return self.send_admin_message(
+            target_node_id=target_node_id,
+            admin_message=admin_msg,
+            want_response=True,
+        )
+
+    def send_factory_reset(
+        self,
+        target_node_id: int,
+        config_only: bool = True,
+    ) -> int | None:
+        """
+        Factory reset the target node.
+
+        Args:
+            target_node_id: The node to reset
+            config_only: If True, only reset config. If False, full factory reset.
+
+        Returns:
+            Packet ID if sent successfully
+        """
+        admin_msg = admin_pb2.AdminMessage()
+
+        if config_only:
+            admin_msg.factory_reset_config = 1
+            logger.info(
+                f"Sending factory_reset_config command to !{target_node_id:08x}"
+            )
+        else:
+            admin_msg.factory_reset_device = 1
+            logger.info(
+                f"Sending factory_reset_device command to !{target_node_id:08x}"
+            )
+
+        return self.send_admin_message(
+            target_node_id=target_node_id,
+            admin_message=admin_msg,
+            want_response=True,
+        )
+
+    def send_telemetry_request(
+        self,
+        target_node_id: int,
+        telemetry_type: str = "device_metrics",
+        timeout: float = 25.0,
+    ) -> dict[str, Any] | None:
+        """
+        Request telemetry from a target node and wait for response.
+
+        This sends a telemetry request to the target node and waits for
+        the response containing current device metrics.
+
+        Args:
+            target_node_id: The destination node ID
+            telemetry_type: Type of telemetry to request
+                           (device_metrics, environment_metrics, etc.)
+            timeout: Timeout in seconds to wait for response (default 25s for mesh)
+
+        Returns:
+            Dictionary with telemetry data if successful, None otherwise
+        """
+        from meshtastic import telemetry_pb2
+
+        if not self.is_connected:
+            logger.error("Cannot send telemetry request: not connected")
+            return None
+
+        if self._interface is None:
+            return None
+
+        try:
+            # Create telemetry request
+            telemetry = telemetry_pb2.Telemetry()
+
+            # Set the appropriate metrics type to request
+            if telemetry_type == "environment_metrics":
+                telemetry.environment_metrics.CopyFrom(
+                    telemetry_pb2.EnvironmentMetrics()
+                )
+            elif telemetry_type == "power_metrics":
+                telemetry.power_metrics.CopyFrom(telemetry_pb2.PowerMetrics())
+            elif telemetry_type == "local_stats":
+                telemetry.local_stats.CopyFrom(telemetry_pb2.LocalStats())
+            else:
+                # Default to device_metrics
+                telemetry.device_metrics.CopyFrom(telemetry_pb2.DeviceMetrics())
+
+            # Set up tracking for this request
+            response_event = threading.Event()
+            response_data: dict[str, Any] = {}
+
+            with self._pending_telemetry_lock:
+                self._pending_telemetry_requests[target_node_id] = {
+                    "event": response_event,
+                    "response_data": response_data,
+                    "telemetry_type": telemetry_type,
+                    "requested_at": time.time(),
+                }
+
+            # Track statistics
+            request_time = time.time()
+            with self._telemetry_stats_lock:
+                self._telemetry_stats["total_requests"] += 1
+                self._telemetry_stats["last_request_time"] = request_time
+
+                # Per-node stats
+                node_key = str(target_node_id)
+                if node_key not in self._telemetry_stats["per_node_stats"]:
+                    self._telemetry_stats["per_node_stats"][node_key] = {
+                        "requests": 0,
+                        "successes": 0,
+                        "timeouts": 0,
+                        "errors": 0,
+                        "last_request": None,
+                        "last_success": None,
+                    }
+                self._telemetry_stats["per_node_stats"][node_key]["requests"] += 1
+                self._telemetry_stats["per_node_stats"][node_key]["last_request"] = (
+                    request_time
+                )
+
+            try:
+                logger.info(
+                    f"Sending telemetry request to !{target_node_id:08x} "
+                    f"(type={telemetry_type}) via serial"
+                )
+
+                # Send telemetry request
+                self._interface.sendData(
+                    data=telemetry,
+                    destinationId=target_node_id,
+                    portNum=portnums_pb2.TELEMETRY_APP,
+                    wantAck=False,
+                    wantResponse=True,
+                )
+
+                # Wait for response
+                if response_event.wait(timeout=timeout):
+                    if "error" in response_data:
+                        logger.warning(
+                            f"Telemetry request failed for !{target_node_id:08x}: "
+                            f"{response_data.get('error')}"
+                        )
+                        with self._telemetry_stats_lock:
+                            self._telemetry_stats["errors"] += 1
+                            self._telemetry_stats["per_node_stats"][node_key][
+                                "errors"
+                            ] += 1
+                        return None
+
+                    logger.info(
+                        f"Telemetry request successful for !{target_node_id:08x}"
+                    )
+                    # Track success
+                    success_time = time.time()
+                    with self._telemetry_stats_lock:
+                        self._telemetry_stats["successful_responses"] += 1
+                        self._telemetry_stats["last_success_time"] = success_time
+                        self._telemetry_stats["per_node_stats"][node_key][
+                            "successes"
+                        ] += 1
+                        self._telemetry_stats["per_node_stats"][node_key][
+                            "last_success"
+                        ] = success_time
+
+                    # Include stats in response
+                    response_data["stats"] = self.get_telemetry_stats(target_node_id)
+                    return response_data
+                else:
+                    logger.warning(
+                        f"Telemetry request timeout for !{target_node_id:08x}"
+                    )
+                    with self._telemetry_stats_lock:
+                        self._telemetry_stats["timeouts"] += 1
+                        self._telemetry_stats["per_node_stats"][node_key][
+                            "timeouts"
+                        ] += 1
+                    return None
+
+            finally:
+                # Always clean up the pending request
+                with self._pending_telemetry_lock:
+                    self._pending_telemetry_requests.pop(target_node_id, None)
+
+        except Exception as e:
+            logger.error(f"Failed to send telemetry request: {e}")
+            with self._telemetry_stats_lock:
+                self._telemetry_stats["errors"] += 1
+            return None
+
+    def get_telemetry_stats(self, node_id: int | None = None) -> dict[str, Any]:
+        """
+        Get telemetry request statistics.
+
+        Args:
+            node_id: Optional node ID to get per-node stats for
+
+        Returns:
+            Dictionary with telemetry statistics
+        """
+        with self._telemetry_stats_lock:
+            if node_id is not None:
+                node_key = str(node_id)
+                node_stats = self._telemetry_stats["per_node_stats"].get(node_key, {})
+                return {
+                    "node_id": node_id,
+                    "requests": node_stats.get("requests", 0),
+                    "successes": node_stats.get("successes", 0),
+                    "timeouts": node_stats.get("timeouts", 0),
+                    "errors": node_stats.get("errors", 0),
+                    "success_rate": (
+                        node_stats.get("successes", 0)
+                        / max(node_stats.get("requests", 0), 1)
+                        * 100
+                    ),
+                    "last_request": node_stats.get("last_request"),
+                    "last_success": node_stats.get("last_success"),
+                }
+            else:
+                return {
+                    "total_requests": self._telemetry_stats["total_requests"],
+                    "successful_responses": self._telemetry_stats[
+                        "successful_responses"
+                    ],
+                    "timeouts": self._telemetry_stats["timeouts"],
+                    "errors": self._telemetry_stats["errors"],
+                    "success_rate": (
+                        self._telemetry_stats["successful_responses"]
+                        / max(self._telemetry_stats["total_requests"], 1)
+                        * 100
+                    ),
+                    "last_request_time": self._telemetry_stats["last_request_time"],
+                    "last_success_time": self._telemetry_stats["last_success_time"],
+                }
+
+    def reset_telemetry_stats(self) -> None:
+        """Reset all telemetry statistics."""
+        with self._telemetry_stats_lock:
+            self._telemetry_stats = {
+                "total_requests": 0,
+                "successful_responses": 0,
+                "timeouts": 0,
+                "errors": 0,
+                "last_request_time": None,
+                "last_success_time": None,
+                "per_node_stats": {},
+            }
+            logger.info("Telemetry statistics reset")
 
     def send_reboot(
         self,

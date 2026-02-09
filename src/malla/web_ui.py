@@ -25,6 +25,7 @@ from .services.log_service import install_log_handler
 from .services.power_monitor import start_power_monitor, stop_power_monitor
 from .utils.formatting import format_node_id, format_time_ago
 from .utils.node_utils import start_cache_cleanup, stop_cache_cleanup
+from .utils.safe_logging import safe_error, safe_info
 
 
 def start_auto_archive_stale_nodes(interval_seconds=86400):
@@ -33,13 +34,14 @@ def start_auto_archive_stale_nodes(interval_seconds=86400):
     def archive_loop():
         while True:
             try:
-                logger.info("Auto-archiving stale nodes...")
+                safe_info(logger, "Auto-archiving stale nodes...")
                 result = AlertService.archive_stale_nodes()
-                logger.info(
-                    f"Auto-archived {result['archived_count']} nodes (failures: {result['failed_count']})"
+                safe_info(
+                    logger,
+                    f"Auto-archived {result['archived_count']} nodes (failures: {result['failed_count']})",
                 )
             except Exception as e:
-                logger.error(f"Error in auto-archive thread: {e}")
+                safe_error(logger, f"Error in auto-archive thread: {e}")
             time.sleep(interval_seconds)
 
     t = threading.Thread(target=archive_loop, daemon=True)
@@ -47,36 +49,46 @@ def start_auto_archive_stale_nodes(interval_seconds=86400):
 
 
 def _auto_connect_services(cfg: AppConfig) -> None:
-    """Auto-connect admin TCP and/or start bot based on configuration."""
-    # Auto-connect admin TCP if configured
-    if cfg.admin_auto_connect and cfg.admin_connection_type == "tcp":
-        try:
-            from .services.tcp_publisher import get_tcp_publisher
+    """Auto-connect admin TCP and/or start bot based on configuration.
 
-            logger.info(
-                f"Auto-connecting admin TCP to {cfg.admin_tcp_host}:{cfg.admin_tcp_port}..."
-            )
-            tcp_publisher = get_tcp_publisher()
-            if tcp_publisher.connect():
-                logger.info("Admin TCP auto-connected successfully")
-            else:
-                logger.warning(
-                    "Admin TCP auto-connect failed - connection will need to be established manually"
+    Runs in a background thread to avoid blocking startup.
+    """
+
+    def connect_async():
+        # Auto-connect admin TCP if configured
+        if cfg.admin_auto_connect and cfg.admin_connection_type == "tcp":
+            try:
+                from .services.tcp_publisher import get_tcp_publisher
+
+                logger.info(
+                    f"Auto-connecting admin TCP to {cfg.admin_tcp_host}:{cfg.admin_tcp_port}..."
                 )
-        except Exception as e:
-            logger.error(f"Error during admin TCP auto-connect: {e}")
+                tcp_publisher = get_tcp_publisher()
+                if tcp_publisher.connect():
+                    logger.info("Admin TCP auto-connected successfully")
+                else:
+                    logger.warning(
+                        "Admin TCP auto-connect failed - connection will need to be established manually"
+                    )
+            except Exception as e:
+                logger.error(f"Error during admin TCP auto-connect: {e}")
 
-    # Auto-start bot if configured (requires TCP connection)
-    if cfg.bot_auto_start:
-        try:
-            from .services.bot_service import get_bot_service
+        # Auto-start bot if configured (requires TCP connection)
+        if cfg.bot_auto_start:
+            try:
+                from .services.bot_service import get_bot_service
 
-            logger.info("Auto-starting bot service...")
-            bot = get_bot_service()
-            bot.start()
-            logger.info("Bot service auto-started successfully")
-        except Exception as e:
-            logger.error(f"Error during bot auto-start: {e}")
+                logger.info("Auto-starting bot service...")
+                bot = get_bot_service()
+                bot.start()
+                logger.info("Bot service auto-started successfully")
+            except Exception as e:
+                logger.error(f"Error during bot auto-start: {e}")
+
+    # Run connection in background thread to avoid blocking startup
+    t = threading.Thread(target=connect_async, daemon=True, name="auto-connect")
+    t.start()
+    logger.info("Auto-connect scheduled in background thread")
 
 
 # Configure logging
@@ -266,6 +278,19 @@ def create_app(cfg: AppConfig | None = None):  # noqa: D401
         except (ValueError, TypeError, OSError):
             return str(timestamp)
 
+    @app.template_filter("format_timestamp")
+    def format_timestamp_filter(timestamp):
+        """Template filter to format Unix timestamp as human-readable datetime."""
+        if timestamp is None:
+            return "N/A"
+        try:
+            from datetime import datetime
+
+            dt = datetime.fromtimestamp(float(timestamp))
+            return dt.strftime("%Y-%m-%d %H:%M:%S")
+        except (ValueError, TypeError, OSError):
+            return str(timestamp)
+
     # ------------------------------------------------------------------
     # Markdown rendering filter & context processor for config variables
     # ------------------------------------------------------------------
@@ -301,6 +326,12 @@ def create_app(cfg: AppConfig | None = None):  # noqa: D401
     # Initialize database
     logger.info("Initializing database connection")
     init_database()
+
+    # Initialize authentication system
+    from .services.auth_service import init_auth
+
+    logger.info("Initializing authentication system")
+    init_auth(app)
 
     # Initialize admin tables
     from .database.admin_repository import init_admin_tables

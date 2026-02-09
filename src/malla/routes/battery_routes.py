@@ -23,6 +23,10 @@ def battery_analytics():
         power_summary = BatteryAnalyticsRepository.get_power_source_summary()
         logger.debug(f"Power summary: {power_summary}")
 
+        # Get mesh-wide power statistics
+        mesh_power_stats = BatteryAnalyticsRepository.get_mesh_power_stats()
+        logger.debug(f"Mesh power stats: {mesh_power_stats}")
+
         # Get battery health overview
         battery_health = BatteryAnalyticsRepository.get_battery_health_overview()
         logger.debug(
@@ -47,6 +51,7 @@ def battery_analytics():
         return render_template(
             "battery_analytics.html",
             power_summary=power_summary,
+            mesh_power_stats=mesh_power_stats,
             battery_health=battery_health,
             critical_batteries=critical_batteries,
             nodes_with_telemetry=nodes_with_telemetry,
@@ -61,6 +66,18 @@ def battery_analytics():
                 "battery": 0,
                 "mains": 0,
                 "unknown": 0,
+            },
+            mesh_power_stats={
+                "total_nodes_with_telemetry": 0,
+                "active_nodes_24h": 0,
+                "avg_battery_level": None,
+                "avg_voltage": None,
+                "avg_health_score": None,
+                "nodes_critical": 0,
+                "nodes_low": 0,
+                "nodes_good": 0,
+                "total_telemetry_records": 0,
+                "data_history_days": 0,
             },
             battery_health=[],
             critical_batteries=[],

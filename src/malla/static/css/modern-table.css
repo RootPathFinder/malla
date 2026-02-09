@@ -445,6 +445,117 @@
     }
 }
 
+/* Mobile Card View - Converts table rows to cards on small screens */
+@media (max-width: 576px) {
+    .modern-table {
+        border: none;
+    }
+
+    .modern-table thead {
+        display: none; /* Hide table headers on mobile */
+    }
+
+    .modern-table tbody {
+        display: flex;
+        flex-direction: column;
+        gap: 0.75rem;
+        padding: 0.5rem;
+    }
+
+    .modern-table tbody tr {
+        display: flex;
+        flex-wrap: wrap;
+        background: var(--bs-body-bg);
+        border: 1px solid var(--bs-border-color);
+        border-radius: 0.5rem;
+        padding: 0.75rem;
+        box-shadow: var(--bs-box-shadow-sm);
+        gap: 0.5rem;
+    }
+
+    .modern-table tbody tr:hover {
+        box-shadow: var(--bs-box-shadow);
+        border-color: var(--bs-primary);
+    }
+
+    .modern-table tbody td {
+        display: flex;
+        align-items: center;
+        padding: 0.25rem 0.5rem;
+        border: none;
+        background: transparent !important;
+    }
+
+    /* Node name takes full width and is prominent */
+    .modern-table tbody td:nth-child(2) {
+        width: 100%;
+        font-size: 1rem;
+        font-weight: 600;
+        order: -2;
+        padding-bottom: 0.5rem;
+        border-bottom: 1px solid var(--bs-border-color);
+        margin-bottom: 0.25rem;
+    }
+
+    /* Node ID (hex) - smaller, secondary */
+    .modern-table tbody td:first-child {
+        width: 100%;
+        order: -1;
+        font-size: 0.75rem;
+        color: var(--bs-secondary);
+    }
+
+    .modern-table tbody td:first-child code {
+        font-size: 0.7rem;
+    }
+
+    /* Hardware and Role badges - inline */
+    .modern-table tbody td:nth-child(3),
+    .modern-table tbody td:nth-child(4) {
+        flex: 0 0 auto;
+    }
+
+    /* Last seen - takes remaining space */
+    .modern-table tbody td:nth-child(5) {
+        flex: 1 1 auto;
+        justify-content: flex-end;
+    }
+
+    /* Activity count */
+    .modern-table tbody td:nth-child(6) {
+        flex: 0 0 auto;
+    }
+
+    /* Channel badge - hide on mobile */
+    .modern-table tbody td:nth-child(7) {
+        display: none;
+    }
+
+    /* Actions - full width at bottom */
+    .modern-table tbody td:last-child {
+        width: 100%;
+        justify-content: flex-end;
+        padding-top: 0.5rem;
+        border-top: 1px solid var(--bs-border-color);
+        margin-top: 0.25rem;
+    }
+
+    .modern-table tbody td:last-child .btn-group {
+        display: flex;
+        gap: 0.5rem;
+    }
+
+    .modern-table tbody td:last-child .btn {
+        flex: 1;
+    }
+
+    /* Table wrapper adjustments for card view */
+    .table-wrapper {
+        max-height: none;
+        overflow-x: visible;
+    }
+}
+
 /* Table wrapper for horizontal scrolling and sticky headers */
 .table-wrapper {
     overflow-x: auto;

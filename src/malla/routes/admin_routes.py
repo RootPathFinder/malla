@@ -16,9 +16,11 @@ from flask import (
     request,
     stream_with_context,
 )
+from flask_login import current_user
 
 from ..config import get_config
 from ..database.admin_repository import AdminRepository
+from ..models.user import UserRole
 from ..services.admin_service import ConfigType, get_admin_service
 from ..services.serial_publisher import discover_serial_ports, get_serial_publisher
 from ..services.tcp_publisher import get_tcp_publisher
@@ -28,6 +30,30 @@ from ..utils.node_utils import convert_node_id
 logger = logging.getLogger(__name__)
 
 admin_bp = Blueprint("admin", __name__)
+
+
+def _check_operator_access():
+    """Check if current user has operator or higher access."""
+    if not current_user.is_authenticated:
+        if request.is_json:
+            return jsonify({"error": "Authentication required"}), 401
+        from flask import redirect, url_for
+
+        return redirect(url_for("auth.login", next=request.path))
+    if not current_user.has_role(UserRole.OPERATOR):
+        if request.is_json:
+            return jsonify(
+                {
+                    "error": "Insufficient permissions",
+                    "required_role": "operator",
+                    "your_role": current_user.role.value,
+                }
+            ), 403
+        from flask import flash, redirect, url_for
+
+        flash("You need operator or admin access for this feature.", "warning")
+        return redirect(url_for("main.dashboard"))
+    return None
 
 
 @admin_bp.before_request
@@ -52,6 +78,13 @@ def check_admin_enabled():
                 "Set MALLA_ADMIN_ENABLED=true to enable.",
             }
         ), 403
+
+    # Check operator access for all admin endpoints except status checks
+    if request.endpoint not in ("admin.api_admin_enabled", "admin.api_admin_status"):
+        auth_result = _check_operator_access()
+        if auth_result:
+            return auth_result
+
     return None
 
 
@@ -104,6 +137,19 @@ def api_admin_status():
         return jsonify(status)
     except Exception as e:
         logger.error(f"Error getting admin status: {e}")
+        return jsonify({"error": str(e)}), 500
+
+
+@admin_bp.route("/api/admin/firmware-stats")
+def api_firmware_stats():
+    """Get firmware version statistics for administrable nodes."""
+    try:
+        from ..database.admin_repository import AdminRepository
+
+        stats = AdminRepository.get_firmware_statistics()
+        return jsonify(stats)
+    except Exception as e:
+        logger.error(f"Error getting firmware stats: {e}")
         return jsonify({"error": str(e)}), 500
 
 
@@ -171,6 +217,89 @@ def api_clear_session_passkeys():
             )
     except Exception as e:
         logger.error(f"Error clearing session passkeys: {e}")
+        return jsonify({"error": str(e)}), 500
+
+
+@admin_bp.route("/api/admin/node/<node_id>/reset", methods=["POST"])
+def api_reset_node_admin_state(node_id: str):
+    """
+    Reset all admin state for a node (PKI cache and database entry).
+
+    Use this when a node has been factory reset or had its keys changed.
+    This clears:
+    1. The cached session passkey (PKI cache)
+    2. The administrable_nodes database entry
+    3. Optionally removes the node from the gateway's nodedb
+
+    After reset, the node will need to be re-tested for admin access.
+
+    Request body (optional):
+        remove_from_nodedb: bool - If true, also remove node from gateway's nodedb
+    """
+    try:
+        from ..database.admin_repository import AdminRepository
+
+        # Convert node_id to int if hex format
+        node_id_int = convert_node_id(node_id)
+        node_hex = f"!{node_id_int:08x}"
+
+        # Check if we should also remove from gateway's nodedb
+        data = request.get_json() or {}
+        remove_from_nodedb = data.get("remove_from_nodedb", False)
+
+        results = {
+            "node_id": node_hex,
+            "session_passkey_cleared": False,
+            "db_entry_removed": False,
+            "removed_from_gateway_nodedb": False,
+        }
+
+        # Step 1: Clear the session passkey cache
+        publisher = get_tcp_publisher()
+        cleared = publisher.clear_session_passkey(node_id_int)
+        results["session_passkey_cleared"] = cleared > 0
+
+        # Step 2: Remove from administrable_nodes database
+        removed = AdminRepository.remove_administrable_node(node_id_int)
+        results["db_entry_removed"] = removed
+
+        # Step 3: Optionally remove from gateway's nodedb
+        if remove_from_nodedb:
+            try:
+                admin_service = get_admin_service()
+                gateway_id = admin_service.gateway_node_id
+                if gateway_id:
+                    remove_result = admin_service.remove_node(
+                        target_node_id=gateway_id,
+                        node_to_remove=node_id_int,
+                    )
+                    results["removed_from_gateway_nodedb"] = remove_result.success
+                    if not remove_result.success:
+                        results["nodedb_error"] = remove_result.error
+                else:
+                    results["nodedb_error"] = "No gateway configured"
+            except Exception as nodedb_err:
+                results["nodedb_error"] = str(nodedb_err)
+                logger.warning(
+                    f"Failed to remove node from gateway nodedb: {nodedb_err}"
+                )
+
+        logger.info(
+            f"Reset admin state for node {node_hex}: "
+            f"passkey_cleared={results['session_passkey_cleared']}, "
+            f"db_removed={results['db_entry_removed']}, "
+            f"nodedb_removed={results['removed_from_gateway_nodedb']}"
+        )
+
+        return jsonify(
+            {
+                "success": True,
+                "message": f"Admin state reset for {node_hex}",
+                **results,
+            }
+        )
+    except Exception as e:
+        logger.error(f"Error resetting node admin state: {e}")
         return jsonify({"error": str(e)}), 500
 
 
@@ -2520,12 +2649,53 @@ def api_request_live_telemetry(node_id):
                     }
                 ), 408  # Request Timeout
 
+        elif connection_type == "serial":
+            serial_publisher = get_serial_publisher()
+            if not serial_publisher.is_connected:
+                return jsonify(
+                    {
+                        "success": False,
+                        "error": "Serial not connected. Connect via Admin page first.",
+                    }
+                ), 400
+
+            result = serial_publisher.send_telemetry_request(
+                target_node_id=node_id_int,
+                telemetry_type=telemetry_type,
+                timeout=timeout,
+            )
+
+            if result:
+                return jsonify(
+                    {
+                        "success": True,
+                        "node_id": node_id_int,
+                        "hex_id": f"!{node_id_int:08x}",
+                        "telemetry": result.get("telemetry", {}),
+                        "timestamp": result.get("timestamp"),
+                        "stats": result.get("stats", {}),
+                        "live": True,
+                    }
+                )
+            else:
+                # Get stats even on failure
+                stats = serial_publisher.get_telemetry_stats(node_id_int)
+                return jsonify(
+                    {
+                        "success": False,
+                        "error": f"No response from node within {timeout}s",
+                        "node_id": node_id_int,
+                        "hex_id": f"!{node_id_int:08x}",
+                        "stats": stats,
+                    }
+                ), 408  # Request Timeout
+
         elif connection_type == "mqtt":
             # MQTT is fire-and-forget, we can't wait for response here
             return jsonify(
                 {
                     "success": False,
-                    "error": "Live telemetry requires TCP connection. "
+                    "error": "Live telemetry requires TCP or Serial connection. "
                     "MQTT cannot wait for responses.",
                 }
             ), 400
@@ -2553,8 +2723,15 @@ def api_node_telemetry_stats(node_id: str):
     try:
         node_id_int = convert_node_id(node_id)
 
-        tcp_publisher = get_tcp_publisher()
-        stats = tcp_publisher.get_telemetry_stats(node_id_int)
+        admin_service = get_admin_service()
+        connection_type = admin_service.connection_type.value
+
+        if connection_type == "serial":
+            serial_publisher = get_serial_publisher()
+            stats = serial_publisher.get_telemetry_stats(node_id_int)
+        else:
+            tcp_publisher = get_tcp_publisher()
+            stats = tcp_publisher.get_telemetry_stats(node_id_int)
 
         return jsonify(
             {
@@ -2578,30 +2755,59 @@ def api_telemetry_stats():
     Returns overall success/failure rates and per-node breakdown.
     """
     try:
-        tcp_publisher = get_tcp_publisher()
-        stats = tcp_publisher.get_telemetry_stats()
+        admin_service = get_admin_service()
+        connection_type = admin_service.connection_type.value
 
-        # Add per-node stats
-        with tcp_publisher._telemetry_stats_lock:
-            per_node = tcp_publisher._telemetry_stats.get("per_node_stats", {})
-            stats["per_node_stats"] = {}
-            for node_key, node_data in per_node.items():
-                try:
-                    node_id = int(node_key)
-                    node_total = node_data.get("requests", 0)
-                    node_successes = node_data.get("successes", 0)
-                    success_rate = (
-                        (node_successes / node_total * 100) if node_total > 0 else 0
-                    )
-                    stats["per_node_stats"][f"!{node_id:08x}"] = {
-                        "requests": node_total,
-                        "successes": node_successes,
-                        "timeouts": node_data.get("timeouts", 0),
-                        "errors": node_data.get("errors", 0),
-                        "success_rate": round(success_rate, 1),
-                    }
-                except ValueError:
-                    pass
+        if connection_type == "serial":
+            serial_publisher = get_serial_publisher()
+            stats = serial_publisher.get_telemetry_stats()
+
+            # Add per-node stats
+            with serial_publisher._telemetry_stats_lock:
+                per_node = serial_publisher._telemetry_stats.get("per_node_stats", {})
+                stats["per_node_stats"] = {}
+                for node_key, node_data in per_node.items():
+                    try:
+                        node_id = int(node_key)
+                        node_total = node_data.get("requests", 0)
+                        node_successes = node_data.get("successes", 0)
+                        success_rate = (
+                            (node_successes / node_total * 100) if node_total > 0 else 0
+                        )
+                        stats["per_node_stats"][f"!{node_id:08x}"] = {
+                            "requests": node_total,
+                            "successes": node_successes,
+                            "timeouts": node_data.get("timeouts", 0),
+                            "errors": node_data.get("errors", 0),
+                            "success_rate": round(success_rate, 1),
+                        }
+                    except ValueError:
+                        pass
+        else:
+            tcp_publisher = get_tcp_publisher()
+            stats = tcp_publisher.get_telemetry_stats()
+
+            # Add per-node stats
+            with tcp_publisher._telemetry_stats_lock:
+                per_node = tcp_publisher._telemetry_stats.get("per_node_stats", {})
+                stats["per_node_stats"] = {}
+                for node_key, node_data in per_node.items():
+                    try:
+                        node_id = int(node_key)
+                        node_total = node_data.get("requests", 0)
+                        node_successes = node_data.get("successes", 0)
+                        success_rate = (
+                            (node_successes / node_total * 100) if node_total > 0 else 0
+                        )
+                        stats["per_node_stats"][f"!{node_id:08x}"] = {
+                            "requests": node_total,
+                            "successes": node_successes,
+                            "timeouts": node_data.get("timeouts", 0),
+                            "errors": node_data.get("errors", 0),
+                            "success_rate": round(success_rate, 1),
+                        }
+                    except ValueError:
+                        pass
 
         return jsonify({"success": True, "stats": stats})
 
@@ -2614,8 +2820,15 @@ def api_telemetry_stats():
 def api_telemetry_stats_reset():
     """Reset telemetry request statistics."""
     try:
-        tcp_publisher = get_tcp_publisher()
-        tcp_publisher.reset_telemetry_stats()
+        admin_service = get_admin_service()
+        connection_type = admin_service.connection_type.value
+
+        if connection_type == "serial":
+            serial_publisher = get_serial_publisher()
+            serial_publisher.reset_telemetry_stats()
+        else:
+            tcp_publisher = get_tcp_publisher()
+            tcp_publisher.reset_telemetry_stats()
 
         return jsonify({"success": True, "message": "Telemetry statistics reset"})
 

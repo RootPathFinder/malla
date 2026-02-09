@@ -1,0 +1,131 @@
+{% extends "base.html" %}
+
+{% block title %}Profile - {{ APP_NAME }}{% endblock %}
+
+{% block content %}
+<div class="container">
+    <div class="row">
+        <div class="col-lg-8 mx-auto">
+            <div class="d-flex justify-content-between align-items-center mb-4">
+                <h2><i class="bi bi-person-circle me-2"></i>My Profile</h2>
+                <a href="{{ url_for('main.dashboard') }}" class="btn btn-outline-secondary">
+                    <i class="bi bi-arrow-left me-1"></i>Back to Dashboard
+                </a>
+            </div>
+
+            {% with messages = get_flashed_messages(with_categories=true) %}
+                {% if messages %}
+                    {% for category, message in messages %}
+                        <div class="alert alert-{{ category }} alert-dismissible fade show" role="alert">
+                            {{ message }}
+                            <button type="button" class="btn-close" data-bs-dismiss="alert" aria-label="Close"></button>
+                        </div>
+                    {% endfor %}
+                {% endif %}
+            {% endwith %}
+
+            <!-- User Info Card -->
+            <div class="card mb-4">
+                <div class="card-header">
+                    <h5 class="mb-0"><i class="bi bi-info-circle me-2"></i>Account Information</h5>
+                </div>
+                <div class="card-body">
+                    <div class="row">
+                        <div class="col-md-6 mb-3">
+                            <label class="text-muted small">Username</label>
+                            <p class="mb-0 fs-5">{{ user.username }}</p>
+                        </div>
+                        <div class="col-md-6 mb-3">
+                            <label class="text-muted small">Role</label>
+                            <p class="mb-0">
+                                {% if user.role.value == 'admin' %}
+                                    <span class="badge bg-danger fs-6">Admin</span>
+                                {% elif user.role.value == 'operator' %}
+                                    <span class="badge bg-warning text-dark fs-6">Operator</span>
+                                {% else %}
+                                    <span class="badge bg-secondary fs-6">Viewer</span>
+                                {% endif %}
+                            </p>
+                        </div>
+                        <div class="col-md-6 mb-3">
+                            <label class="text-muted small">Account Created</label>
+                            <p class="mb-0">{{ user.created_at | format_timestamp }}</p>
+                        </div>
+                        <div class="col-md-6 mb-3">
+                            <label class="text-muted small">Last Login</label>
+                            <p class="mb-0">
+                                {% if user.last_login %}
+                                    {{ user.last_login | format_timestamp }}
+                                {% else %}
+                                    Never
+                                {% endif %}
+                            </p>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Change Password Card -->
+            <div class="card">
+                <div class="card-header">
+                    <h5 class="mb-0"><i class="bi bi-key me-2"></i>Change Password</h5>
+                </div>
+                <div class="card-body">
+                    <form method="POST" action="{{ url_for('auth.change_password') }}">
+                        <div class="mb-3">
+                            <label for="current_password" class="form-label">Current Password</label>
+                            <input type="password"
+                                   class="form-control"
+                                   id="current_password"
+                                   name="current_password"
+                                   autocomplete="current-password"
+                                   required>
+                        </div>
+                        <div class="mb-3">
+                            <label for="new_password" class="form-label">New Password</label>
+                            <input type="password"
+                                   class="form-control"
+                                   id="new_password"
+                                   name="new_password"
+                                   minlength="8"
+                                   autocomplete="new-password"
+                                   required>
+                            <div class="form-text">Password must be at least 8 characters.</div>
+                        </div>
+                        <div class="mb-3">
+                            <label for="confirm_password" class="form-label">Confirm New Password</label>
+                            <input type="password"
+                                   class="form-control"
+                                   id="confirm_password"
+                                   name="confirm_password"
+                                   minlength="8"
+                                   autocomplete="new-password"
+                                   required>
+                        </div>
+                        <button type="submit" class="btn btn-primary">
+                            <i class="bi bi-check-lg me-1"></i>Update Password
+                        </button>
+                    </form>
+                </div>
+            </div>
+
+            {% if user.is_admin() %}
+            <!-- Admin Quick Links -->
+            <div class="card mt-4">
+                <div class="card-header">
+                    <h5 class="mb-0"><i class="bi bi-gear me-2"></i>Administration</h5>
+                </div>
+                <div class="card-body">
+                    <a href="{{ url_for('auth.user_list') }}" class="btn btn-outline-primary me-2">
+                        <i class="bi bi-people me-1"></i>Manage Users
+                    </a>
+                    <a href="{{ url_for('admin.admin_page') }}" class="btn btn-outline-primary">
+                        <i class="bi bi-broadcast me-1"></i>Mesh Admin
+                    </a>
+                </div>
+            </div>
+            {% endif %}
+        </div>
+    </div>
+</div>
+{% endblock %}

@@ -92,12 +92,64 @@ def line_of_sight():
         return f"Line of sight error: {e}", 500
 
 
-@main_bp.route("/node-health")
-def node_health():
-    """Node health monitoring page."""
-    logger.info("Node health route accessed")
+@main_bp.route("/coverage-map")
+def coverage_map():
+    """Coverage map builder for multi-node RF coverage visualization."""
+    logger.info("Coverage map route accessed")
     try:
-        return render_template("node_health.html")
+        return render_template("coverage_map.html")
     except Exception as e:
-        logger.error(f"Error in node health route: {e}")
-        return f"Node health error: {e}", 500
+        logger.error(f"Error in coverage map route: {e}")
+        return f"Coverage map error: {e}", 500
+
+
+@main_bp.route("/weather-map")
+def weather_map():
+    """Mesh weather dashboard with sensor data on a map."""
+    logger.info("Weather map route accessed")
+    try:
+        return render_template("weather_map.html")
+    except Exception as e:
+        logger.error(f"Error in weather map route: {e}")
+        return f"Weather map error: {e}", 500
+
+
+@main_bp.route("/network-dependency")
+def network_dependency():
+    """Network dependency analysis dashboard for impact assessment."""
+    logger.info("Network dependency route accessed")
+    try:
+        return render_template("network_dependency.html")
+    except Exception as e:
+        logger.error(f"Error in network dependency route: {e}")
+        return f"Network dependency error: {e}", 500
+
+
+@main_bp.route("/detection-sensors")
+def detection_sensors():
+    """Redirect to sensor dashboard for backwards compatibility."""
+    from flask import redirect, url_for
+
+    return redirect(url_for("main.sensor_dashboard", sensor_type="detection"))
+
+
+@main_bp.route("/sensor-dashboard")
+def sensor_dashboard():
+    """Generic sensor dashboard for all sensor types."""
+    logger.info("Sensor dashboard route accessed")
+    try:
+        return render_template("sensor_dashboard.html")
+    except Exception as e:
+        logger.error(f"Error in sensor dashboard route: {e}")
+        return f"Sensor dashboard error: {e}", 500
+
+
+@main_bp.route("/paxcounter")
+def paxcounter():
+    """Paxcounter dashboard for monitoring people/device counts."""
+    logger.info("Paxcounter route accessed")
+    try:
+        return render_template("paxcounter.html")
+    except Exception as e:
+        logger.error(f"Error in paxcounter route: {e}")
+        return f"Paxcounter error: {e}", 500

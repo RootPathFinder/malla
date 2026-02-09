@@ -1,0 +1,97 @@
+{% extends "base.html" %}
+
+{% block title %}User Management - {{ APP_NAME }}{% endblock %}
+
+{% block content %}
+<div class="container">
+    <div class="d-flex justify-content-between align-items-center mb-4">
+        <h2><i class="bi bi-people me-2"></i>User Management</h2>
+        <div>
+            <a href="{{ url_for('auth.create_user') }}" class="btn btn-primary me-2">
+                <i class="bi bi-person-plus me-1"></i>Create User
+            </a>
+            <a href="{{ url_for('auth.profile') }}" class="btn btn-outline-secondary">
+                <i class="bi bi-arrow-left me-1"></i>Back to Profile
+            </a>
+        </div>
+    </div>
+
+    {% with messages = get_flashed_messages(with_categories=true) %}
+        {% if messages %}
+            {% for category, message in messages %}
+                <div class="alert alert-{{ category }} alert-dismissible fade show" role="alert">
+                    {{ message }}
+                    <button type="button" class="btn-close" data-bs-dismiss="alert" aria-label="Close"></button>
+                </div>
+            {% endfor %}
+        {% endif %}
+    {% endwith %}
+
+    <div class="card">
+        <div class="card-body">
+            <div class="table-responsive">
+                <table class="table table-hover align-middle">
+                    <thead>
+                        <tr>
+                            <th>Username</th>
+                            <th>Role</th>
+                            <th>Status</th>
+                            <th>Created</th>
+                            <th>Last Login</th>
+                            <th>Actions</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        {% for user in users %}
+                        <tr class="{{ 'table-secondary' if not user.is_active else '' }}">
+                            <td>
+                                <strong>{{ user.username }}</strong>
+                                {% if user.id == current_user.id %}
+                                    <span class="badge bg-info ms-1">You</span>
+                                {% endif %}
+                            </td>
+                            <td>
+                                {% if user.role.value == 'admin' %}
+                                    <span class="badge bg-danger">Admin</span>
+                                {% elif user.role.value == 'operator' %}
+                                    <span class="badge bg-warning text-dark">Operator</span>
+                                {% else %}
+                                    <span class="badge bg-secondary">Viewer</span>
+                                {% endif %}
+                            </td>
+                            <td>
+                                {% if user.is_active %}
+                                    <span class="badge bg-success">Active</span>
+                                {% else %}
+                                    <span class="badge bg-dark">Inactive</span>
+                                {% endif %}
+                            </td>
+                            <td>{{ user.created_at | format_timestamp }}</td>
+                            <td>
+                                {% if user.last_login %}
+                                    {{ user.last_login | format_timestamp }}
+                                {% else %}
+                                    <span class="text-muted">Never</span>
+                                {% endif %}
+                            </td>
+                            <td>
+                                <a href="{{ url_for('auth.edit_user', user_id=user.id) }}"
+                                   class="btn btn-sm btn-outline-primary">
+                                    <i class="bi bi-pencil"></i> Edit
+                                </a>
+                            </td>
+                        </tr>
+                        {% else %}
+                        <tr>
+                            <td colspan="6" class="text-center text-muted py-4">
+                                No users found.
+                            </td>
+                        </tr>
+                        {% endfor %}
+                    </tbody>
+                </table>
+            </div>
+        </div>
+    </div>
+</div>
+{% endblock %}
