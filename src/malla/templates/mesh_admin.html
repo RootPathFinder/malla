@@ -1876,6 +1876,61 @@
                             </div>
                         </div>
                     </div>
+
+                    <!-- Channel Directory Management -->
+                    <div class="row">
+                        <div class="col-12 mb-4">
+                            <div class="card">
+                                <div class="card-header d-flex justify-content-between align-items-center">
+                                    <span><i class="bi bi-broadcast-pin"></i> Channel Directory</span>
+                                    <div class="d-flex align-items-center gap-2">
+                                        <span class="badge bg-secondary" id="channelDirCount">0</span>
+                                        <div class="form-check form-switch mb-0 ms-2">
+                                            <input class="form-check-input" type="checkbox" id="channelDirShowInactive"
+                                                   onchange="loadChannelDirectory()">
+                                            <label class="form-check-label small" for="channelDirShowInactive">Show inactive</label>
+                                        </div>
+                                        <button class="btn btn-outline-primary btn-sm" onclick="loadChannelDirectory()" title="Refresh">
+                                            <i class="bi bi-arrow-clockwise"></i>
+                                        </button>
+                                        <button class="btn btn-success btn-sm" onclick="showAddChannelModal()">
+                                            <i class="bi bi-plus-lg"></i> Add Channel
+                                        </button>
+                                    </div>
+                                </div>
+                                <div class="card-body p-0">
+                                    <div class="table-responsive" style="max-height: 400px; overflow-y: auto;">
+                                        <table class="table table-hover table-sm mb-0">
+                                            <thead class="sticky-top bg-body">
+                                                <tr>
+                                                    <th>Channel Name</th>
+                                                    <th>PSK</th>
+                                                    <th>Description</th>
+                                                    <th>Registered By</th>
+                                                    <th>Status</th>
+                                                    <th style="width: 140px;">Actions</th>
+                                                </tr>
+                                            </thead>
+                                            <tbody id="channelDirTable">
+                                                <tr>
+                                                    <td colspan="6" class="text-center text-muted py-3">
+                                                        <div class="spinner-border spinner-border-sm" role="status"></div>
+                                                        Loading channels...
+                                                    </td>
+                                                </tr>
+                                            </tbody>
+                                        </table>
+                                    </div>
+                                </div>
+                                <div class="card-footer text-end">
+                                    <button class="btn btn-outline-info btn-sm" onclick="broadcastChannelDirectory()"
+                                            title="Broadcast the channel directory to the mesh now">
+                                        <i class="bi bi-megaphone"></i> Broadcast Directory
+                                    </button>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
                 </div>
             </div>
         </div>
@@ -2369,6 +2424,82 @@
                 </button>
                 <button type="button" class="btn btn-primary" id="restoreDoneBtn" style="display: none;" data-bs-dismiss="modal">
                     <i class="bi bi-check"></i> Done
+                </button>
+            </div>
+        </div>
+    </div>
+</div>
+
+<!-- Add/Edit Channel Modal -->
+<div class="modal fade" id="channelDirModal" tabindex="-1">
+    <div class="modal-dialog">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h5 class="modal-title" id="channelDirModalTitle">
+                    <i class="bi bi-broadcast-pin me-2"></i>Add Channel
+                </h5>
+                <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+            </div>
+            <div class="modal-body">
+                <input type="hidden" id="channelDirEditName">
+                <div class="mb-3">
+                    <label class="form-label">Channel Name <span class="text-danger">*</span></label>
+                    <input type="text" class="form-control" id="channelDirName"
+                           placeholder="e.g., LongFast" maxlength="64" required>
+                    <div class="form-text">Case-insensitive. Must be unique.</div>
+                </div>
+                <div class="mb-3">
+                    <label class="form-label">Pre-Shared Key (PSK)</label>
+                    <div class="input-group">
+                        <input type="text" class="form-control" id="channelDirPsk"
+                               placeholder="AQ==" value="AQ==">
+                        <button class="btn btn-outline-secondary" type="button"
+                                onclick="document.getElementById('channelDirPsk').value='AQ=='"
+                                title="Reset to default PSK">
+                            <i class="bi bi-arrow-counterclockwise"></i>
+                        </button>
+                    </div>
+                    <div class="form-text">Base64-encoded PSK. Default <code>AQ==</code> is the standard open key.</div>
+                </div>
+                <div class="mb-3">
+                    <label class="form-label">Description</label>
+                    <textarea class="form-control" id="channelDirDescription" rows="2"
+                              placeholder="Optional description for this channel"></textarea>
+                </div>
+                <div class="mb-3 d-none" id="channelDirActiveGroup">
+                    <div class="form-check form-switch">
+                        <input class="form-check-input" type="checkbox" id="channelDirActive" checked>
+                        <label class="form-check-label" for="channelDirActive">Active</label>
+                    </div>
+                    <div class="form-text">Inactive channels are hidden from the public directory.</div>
+                </div>
+            </div>
+            <div class="modal-footer">
+                <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Cancel</button>
+                <button type="button" class="btn btn-primary" id="channelDirSaveBtn" onclick="saveChannel()">
+                    <i class="bi bi-save"></i> Add Channel
+                </button>
+            </div>
+        </div>
+    </div>
+</div>
+
+<!-- Delete Channel Confirmation Modal -->
+<div class="modal fade" id="channelDirDeleteModal" tabindex="-1">
+    <div class="modal-dialog modal-sm">
+        <div class="modal-content">
+            <div class="modal-header bg-danger text-white">
+                <h5 class="modal-title"><i class="bi bi-trash me-2"></i>Delete Channel</h5>
+                <button type="button" class="btn-close btn-close-white" data-bs-dismiss="modal"></button>
+            </div>
+            <div class="modal-body">
+                <p>Are you sure you want to permanently delete channel <strong id="channelDirDeleteName"></strong>?</p>
+                <p class="text-danger small mb-0"><i class="bi bi-exclamation-triangle me-1"></i>This action cannot be undone.</p>
+            </div>
+            <div class="modal-footer">
+                <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Cancel</button>
+                <button type="button" class="btn btn-danger" id="channelDirDeleteBtn" onclick="confirmDeleteChannel()">
+                    <i class="bi bi-trash"></i> Delete
                 </button>
             </div>
         </div>
@@ -9778,6 +9909,261 @@
                 refreshBotStatus();
             } else {
                 showAlert('danger', data.error || 'Failed to clear queue');
+            }
+        } catch (error) {
+            showAlert('danger', `Error: ${error.message}`);
+        }
+    }
+
+    // ============================================================================
+    // CHANNEL DIRECTORY MANAGEMENT
+    // ============================================================================
+
+    let channelDirDeleteTarget = null;
+
+    // Load channel directory when bot tab is shown
+    document.getElementById('bot-tab')?.addEventListener('shown.bs.tab', function() {
+        loadChannelDirectory();
+    });
+
+    async function loadChannelDirectory() {
+        const showInactive = document.getElementById('channelDirShowInactive')?.checked || false;
+        const activeOnly = !showInactive;
+
+        try {
+            const response = await fetch(`/api/bot/channels?active_only=${activeOnly}`);
+            const data = await response.json();
+
+            const tbody = document.getElementById('channelDirTable');
+            const countBadge = document.getElementById('channelDirCount');
+            const channels = data.channels || [];
+
+            countBadge.textContent = channels.length;
+
+            if (channels.length === 0) {
+                tbody.innerHTML = `
+                    <tr>
+                        <td colspan="6" class="text-center text-muted py-4">
+                            <i class="bi bi-broadcast-pin fs-3 d-block mb-2"></i>
+                            No channels registered yet.
+                            <br><small>Click <strong>Add Channel</strong> to register one.</small>
+                        </td>
+                    </tr>`;
+                return;
+            }
+
+            tbody.innerHTML = channels.map(ch => {
+                const statusBadge = ch.active
+                    ? '<span class="badge bg-success">Active</span>'
+                    : '<span class="badge bg-secondary">Inactive</span>';
+                const registeredBy = ch.registered_by_name
+                    ? escapeHtml(ch.registered_by_name)
+                    : (ch.registered_by_node_id
+                        ? `!${ch.registered_by_node_id.toString(16).padStart(8, '0')}`
+                        : '<span class="text-muted">—</span>');
+                const pskDisplay = ch.psk === 'AQ=='
+                    ? '<span class="text-muted" title="Default open key">AQ== (default)</span>'
+                    : `<code title="${escapeHtml(ch.psk)}">${escapeHtml(ch.psk.substring(0, 12))}${ch.psk.length > 12 ? '…' : ''}</code>`;
+                const desc = ch.description
+                    ? escapeHtml(ch.description)
+                    : '<span class="text-muted">—</span>';
+
+                return `
+                    <tr>
+                        <td><strong>${escapeHtml(ch.channel_name)}</strong></td>
+                        <td>${pskDisplay}</td>
+                        <td class="small">${desc}</td>
+                        <td class="small">${registeredBy}</td>
+                        <td>${statusBadge}</td>
+                        <td>
+                            <div class="btn-group btn-group-sm">
+                                <button class="btn btn-outline-primary" onclick="showEditChannelModal('${escapeHtml(ch.channel_name)}')"
+                                        title="Edit channel">
+                                    <i class="bi bi-pencil"></i>
+                                </button>
+                                <button class="btn btn-outline-${ch.active ? 'warning' : 'success'}"
+                                        onclick="toggleChannelActive('${escapeHtml(ch.channel_name)}', ${!ch.active})"
+                                        title="${ch.active ? 'Deactivate' : 'Activate'}">
+                                    <i class="bi bi-${ch.active ? 'pause-circle' : 'play-circle'}"></i>
+                                </button>
+                                <button class="btn btn-outline-danger"
+                                        onclick="showDeleteChannelModal('${escapeHtml(ch.channel_name)}')"
+                                        title="Delete channel">
+                                    <i class="bi bi-trash"></i>
+                                </button>
+                            </div>
+                        </td>
+                    </tr>`;
+            }).join('');
+
+        } catch (error) {
+            console.error('Error loading channel directory:', error);
+            document.getElementById('channelDirTable').innerHTML = `
+                <tr>
+                    <td colspan="6" class="text-center text-danger py-3">
+                        <i class="bi bi-exclamation-triangle"></i> Failed to load channels
+                    </td>
+                </tr>`;
+        }
+    }
+
+    function showAddChannelModal() {
+        document.getElementById('channelDirModalTitle').innerHTML =
+            '<i class="bi bi-broadcast-pin me-2"></i>Add Channel';
+        document.getElementById('channelDirEditName').value = '';
+        document.getElementById('channelDirName').value = '';
+        document.getElementById('channelDirName').disabled = false;
+        document.getElementById('channelDirPsk').value = 'AQ==';
+        document.getElementById('channelDirDescription').value = '';
+        document.getElementById('channelDirActive').checked = true;
+        document.getElementById('channelDirActiveGroup').classList.add('d-none');
+        document.getElementById('channelDirSaveBtn').innerHTML = '<i class="bi bi-plus-lg"></i> Add Channel';
+
+        new bootstrap.Modal(document.getElementById('channelDirModal')).show();
+    }
+
+    async function showEditChannelModal(channelName) {
+        try {
+            const response = await fetch(`/api/bot/channels/${encodeURIComponent(channelName)}`);
+            if (!response.ok) {
+                showAlert('danger', 'Channel not found');
+                return;
+            }
+            const ch = await response.json();
+
+            document.getElementById('channelDirModalTitle').innerHTML =
+                '<i class="bi bi-pencil me-2"></i>Edit Channel';
+            document.getElementById('channelDirEditName').value = ch.channel_name;
+            document.getElementById('channelDirName').value = ch.channel_name;
+            document.getElementById('channelDirName').disabled = true;
+            document.getElementById('channelDirPsk').value = ch.psk || 'AQ==';
+            document.getElementById('channelDirDescription').value = ch.description || '';
+            document.getElementById('channelDirActive').checked = ch.active;
+            document.getElementById('channelDirActiveGroup').classList.remove('d-none');
+            document.getElementById('channelDirSaveBtn').innerHTML = '<i class="bi bi-save"></i> Save Changes';
+
+            new bootstrap.Modal(document.getElementById('channelDirModal')).show();
+        } catch (error) {
+            showAlert('danger', `Error loading channel: ${error.message}`);
+        }
+    }
+
+    async function saveChannel() {
+        const editName = document.getElementById('channelDirEditName').value;
+        const isEdit = editName.length > 0;
+
+        const channelName = document.getElementById('channelDirName').value.trim();
+        const psk = document.getElementById('channelDirPsk').value.trim() || 'AQ==';
+        const description = document.getElementById('channelDirDescription').value.trim();
+        const active = document.getElementById('channelDirActive').checked;
+
+        if (!channelName) {
+            showAlert('warning', 'Channel name is required');
+            return;
+        }
+
+        const btn = document.getElementById('channelDirSaveBtn');
+        const origHTML = btn.innerHTML;
+        btn.disabled = true;
+        btn.innerHTML = '<i class="bi bi-hourglass-split"></i> Saving...';
+
+        try {
+            let response;
+            if (isEdit) {
+                response = await fetch(`/api/bot/channels/${encodeURIComponent(editName)}`, {
+                    method: 'PUT',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ psk, description, active })
+                });
+            } else {
+                response = await fetch('/api/bot/channels', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ channel_name: channelName, psk, description })
+                });
+            }
+
+            const data = await response.json();
+
+            if (data.success || (data.channel && !data.error)) {
+                showAlert('success', isEdit ? 'Channel updated' : 'Channel added');
+                bootstrap.Modal.getInstance(document.getElementById('channelDirModal'))?.hide();
+                loadChannelDirectory();
+            } else {
+                showAlert('danger', data.error || 'Failed to save channel');
+            }
+        } catch (error) {
+            showAlert('danger', `Error: ${error.message}`);
+        } finally {
+            btn.disabled = false;
+            btn.innerHTML = origHTML;
+        }
+    }
+
+    async function toggleChannelActive(channelName, active) {
+        try {
+            const response = await fetch(`/api/bot/channels/${encodeURIComponent(channelName)}`, {
+                method: 'PUT',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ active })
+            });
+            const data = await response.json();
+
+            if (data.success) {
+                showAlert('success', `Channel ${active ? 'activated' : 'deactivated'}`);
+                loadChannelDirectory();
+            } else {
+                showAlert('danger', data.error || 'Failed to update channel');
+            }
+        } catch (error) {
+            showAlert('danger', `Error: ${error.message}`);
+        }
+    }
+
+    function showDeleteChannelModal(channelName) {
+        channelDirDeleteTarget = channelName;
+        document.getElementById('channelDirDeleteName').textContent = channelName;
+        new bootstrap.Modal(document.getElementById('channelDirDeleteModal')).show();
+    }
+
+    async function confirmDeleteChannel() {
+        if (!channelDirDeleteTarget) return;
+
+        const btn = document.getElementById('channelDirDeleteBtn');
+        btn.disabled = true;
+        btn.innerHTML = '<i class="bi bi-hourglass-split"></i> Deleting...';
+
+        try {
+            const response = await fetch(`/api/bot/channels/${encodeURIComponent(channelDirDeleteTarget)}`, {
+                method: 'DELETE'
+            });
+            const data = await response.json();
+
+            if (data.success) {
+                showAlert('success', `Channel '${channelDirDeleteTarget}' deleted`);
+                bootstrap.Modal.getInstance(document.getElementById('channelDirDeleteModal'))?.hide();
+                loadChannelDirectory();
+            } else {
+                showAlert('danger', data.error || 'Failed to delete channel');
+            }
+        } catch (error) {
+            showAlert('danger', `Error: ${error.message}`);
+        } finally {
+            btn.disabled = false;
+            btn.innerHTML = '<i class="bi bi-trash"></i> Delete';
+            channelDirDeleteTarget = null;
+        }
+    }
+
+    async function broadcastChannelDirectory() {
+        try {
+            const response = await fetch('/api/bot/channels/broadcast', { method: 'POST' });
+            const data = await response.json();
+
+            if (data.success) {
+                showAlert('success', 'Channel directory broadcast queued');
+            } else {
+                showAlert('danger', data.error || 'Failed to broadcast directory');
             }
         } catch (error) {
             showAlert('danger', `Error: ${error.message}`);
