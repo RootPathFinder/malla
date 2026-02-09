@@ -196,18 +196,11 @@ class BotService:
         self.register_command("lastseen", self._cmd_lastseen, "Node last activity")
         self.register_command("top", self._cmd_top, "Most active nodes")
         # Channel directory commands
-        self.register_command(
-            "channels", self._cmd_channels, "List community channels"
-        )
-        self.register_command(
-            "addchannel", self._cmd_addchannel, "Register a channel"
-        )
-        self.register_command(
-            "rmchannel", self._cmd_rmchannel, "Remove your channel"
-        )
-        self.register_command(
-            "channelinfo", self._cmd_channelinfo, "Channel details"
-        )
+        self.register_command("channels", self._cmd_channels, "List community channels")
+        self.register_command("addchannel", self._cmd_addchannel, "Register a channel")
+        self.register_command("rmchannel", self._cmd_rmchannel, "Remove your channel")
+        self.register_command("channelinfo", self._cmd_channelinfo, "Channel details")
+        self.register_command("chanurl", self._cmd_chanurl, "Get channel link")
 
     @property
     def is_enabled(self) -> bool:
@@ -2232,15 +2225,17 @@ class BotService:
                 return "📻 No channels registered. Use !addchannel <name> <key> [desc]"
 
             lines = [f"📻 Channels ({len(channels)}):"]
-            for ch in channels:
+            for i, ch in enumerate(channels, 1):
                 name = ch["channel_name"]
                 desc = ch.get("description") or ""
                 if desc and len(desc) > 20:
                     desc = desc[:17] + "..."
                 if desc:
-                    lines.append(f"• {name}: {desc}")
+                    lines.append(f"{i}. {name}: {desc}")
                 else:
-                    lines.append(f"• {name}")
+                    lines.append(f"{i}. {name}")
+
+            lines.append("!chanurl # for link")
 
             # Truncate to fit Meshtastic payload (~230 bytes)
             result = "\n".join(lines)
@@ -2334,6 +2329,48 @@ class BotService:
             logger.error(f"Error in rmchannel command: {e}", exc_info=True)
             return "Failed to remove channel"
 
+    def _cmd_chanurl(self, ctx: CommandContext) -> str:
+        """Handle !chanurl <number> command - return clickable channel URL.
+
+        The number corresponds to the position shown by !channels.
+        On iOS Meshtastic the URL is tappable and opens the channel
+        in the app for the user to add.
+        """
+        try:
+            if not ctx.args:
+                return "Usage: !chanurl <#> (number from !channels)"
+
+            try:
+                idx = int(ctx.args[0])
+            except ValueError:
+                return "Please provide a channel number (e.g. !chanurl 1)"
+
+            from ..database.channel_directory_repository import (
+                ChannelDirectoryRepository,
+            )
+
+            channels = ChannelDirectoryRepository.get_all_channels(active_only=True)
+            if not channels:
+                return "No channels registered"
+
+            if idx < 1 or idx > len(channels):
+                return f"Invalid #. Use 1-{len(channels)}"
+
+            ch = channels[idx - 1]
+            name = ch["channel_name"]
+            psk = ch.get("psk", "AQ==")
+
+            from ..utils.channel_url import generate_channel_url
+
+            url = generate_channel_url(name, psk)
+            if not url:
+                return f"📻 {name}\nKey: {psk}\n(URL generation unavailable)"
+
+            return f"📻 {name}\n{url}"
+        except Exception as e:
+            logger.error(f"Error in chanurl command: {e}", exc_info=True)
+            return "Channel URL unavailable"
+
     def _cmd_channelinfo(self, ctx: CommandContext) -> str:
         """Handle !channelinfo <name> command - show channel details."""
         try:
@@ -2411,9 +2448,7 @@ class BotService:
                 # Check every 5 minutes
                 self._stop_event.wait(timeout=300.0)
             except Exception as e:
-                logger.error(
-                    f"Error in channel broadcast loop: {e}", exc_info=True
-                )
+                logger.error(f"Error in channel broadcast loop: {e}", exc_info=True)
                 self._stop_event.wait(timeout=60.0)
 
         logger.info("Channel directory broadcast thread stopped")
@@ -2460,14 +2495,10 @@ class BotService:
                 "channel_broadcast",
                 {"channel_count": len(channels)},
             )
-            logger.info(
-                f"Broadcast channel directory ({len(channels)} channels)"
-            )
+            logger.info(f"Broadcast channel directory ({len(channels)} channels)")
 
         except Exception as e:
-            logger.error(
-                f"Error broadcasting channel directory: {e}", exc_info=True
-            )
+            logger.error(f"Error broadcasting channel directory: {e}", exc_info=True)
 
 
 # Singleton accessor

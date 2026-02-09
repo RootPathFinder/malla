@@ -222,3 +222,40 @@ class TestChannelDirectoryRepository:
 
         ch = ChannelDirectoryRepository.get_channel("Spaces")
         assert ch is not None
+
+
+class TestChannelUrlGeneration:
+    """Tests for Meshtastic channel URL generation."""
+
+    @pytest.mark.unit
+    def test_generate_channel_url_basic(self):
+        from malla.utils.channel_url import generate_channel_url
+
+        url = generate_channel_url("TestChan", "AQ==")
+        assert url is not None
+        assert url.startswith("https://meshtastic.org/e/#")
+        assert len(url) > len("https://meshtastic.org/e/#")
+
+    @pytest.mark.unit
+    def test_generate_channel_url_default_psk(self):
+        from malla.utils.channel_url import generate_channel_url
+
+        url = generate_channel_url("MyChan")
+        assert url is not None
+        assert "meshtastic.org/e/#" in url
+
+    @pytest.mark.unit
+    def test_generate_channel_url_different_channels_differ(self):
+        from malla.utils.channel_url import generate_channel_url
+
+        url1 = generate_channel_url("Alpha", "AQ==")
+        url2 = generate_channel_url("Beta", "AQ==")
+        assert url1 != url2
+
+    @pytest.mark.unit
+    def test_generate_channel_url_different_psk_differ(self):
+        from malla.utils.channel_url import generate_channel_url
+
+        url1 = generate_channel_url("Same", "AQ==")
+        url2 = generate_channel_url("Same", "BQ==")
+        assert url1 != url2
