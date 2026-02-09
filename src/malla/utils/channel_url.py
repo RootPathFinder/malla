@@ -18,9 +18,10 @@ def generate_channel_url(
 ) -> str | None:
     """Build a Meshtastic channel URL from a channel name and PSK.
 
-    The URL encodes a ``ChannelSet`` protobuf (channel settings + LoRa
-    config) in base64url format.  Opening the link on a phone with the
-    Meshtastic app (or the web client) lets the user add the channel.
+    The URL encodes a ``ChannelSet`` protobuf containing only the channel
+    settings (no LoRa config) in base64url format.  Omitting the LoRa
+    config tells the Meshtastic app that this is a single channel to
+    *add* rather than a full radio configuration to replace.
 
     Args:
         channel_name: Human-readable channel name (< 12 bytes).
@@ -42,11 +43,9 @@ def generate_channel_url(
         ch_settings.psk = base64.b64decode(psk_base64)
         channel_set.settings.append(ch_settings)
 
-        # Default LoRa preset (LONG_FAST = 0).  Since 0 is the proto
-        # default it won't add extra bytes to the serialisation—keeping
-        # the URL short.  ``use_preset = True`` tells the firmware to
-        # apply the preset rather than raw LoRa params.
-        channel_set.lora_config.use_preset = True
+        # NOTE: We intentionally omit lora_config so the Meshtastic app
+        # treats this as "add channel" rather than "replace all channels
+        # with this configuration."
 
         # Serialise → base64url (strip padding for shorter URLs)
         proto_bytes = channel_set.SerializeToString()
