@@ -256,6 +256,12 @@ def test_client():
     # Build a config object pointing at the temporary DB
     cfg = AppConfig(database_file=temp_db.name)
 
+    # Reset module-level table-creation flags so that lazy-init tables
+    # (like channel_directory) are re-created in the fresh temp database.
+    import malla.database.channel_directory_repository as _cd_repo
+
+    _cd_repo._TABLE_CREATED = False
+
     try:
         # Create the app with injected config
         app = create_app(cfg)
@@ -308,6 +314,12 @@ def app():
 
     # Build a config object pointing at the temporary DB
     cfg = AppConfig(database_file=temp_db.name)
+
+    # Reset module-level table-creation flags so that lazy-init tables
+    # (like channel_directory) are re-created in the fresh temp database.
+    import malla.database.channel_directory_repository as _cd_repo
+
+    _cd_repo._TABLE_CREATED = False
 
     try:
         # Create the app with injected config
