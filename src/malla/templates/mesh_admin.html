@@ -9968,15 +9968,33 @@
                     ? escapeHtml(ch.description)
                     : '<span class="text-muted">—</span>';
 
+                // Meshtastic URL link (clickable channel name)
+                const channelNameDisplay = ch.url
+                    ? `<a href="${escapeHtml(ch.url)}" target="_blank" rel="noopener"
+                          class="text-decoration-none" title="Open in Meshtastic app to add this channel">
+                          <strong>${escapeHtml(ch.channel_name)}</strong>
+                          <i class="bi bi-box-arrow-up-right ms-1" style="font-size: 0.7em;"></i>
+                       </a>`
+                    : `<strong>${escapeHtml(ch.channel_name)}</strong>`;
+
+                // Copy URL button
+                const copyUrlBtn = ch.url
+                    ? `<button class="btn btn-outline-info" onclick="copyChannelUrl('${escapeHtml(ch.url)}', this)"
+                              title="Copy channel link">
+                          <i class="bi bi-link-45deg"></i>
+                       </button>`
+                    : '';
+
                 return `
                     <tr>
-                        <td><strong>${escapeHtml(ch.channel_name)}</strong></td>
+                        <td>${channelNameDisplay}</td>
                         <td>${pskDisplay}</td>
                         <td class="small">${desc}</td>
                         <td class="small">${registeredBy}</td>
                         <td>${statusBadge}</td>
                         <td>
                             <div class="btn-group btn-group-sm">
+                                ${copyUrlBtn}
                                 <button class="btn btn-outline-primary" onclick="showEditChannelModal('${escapeHtml(ch.channel_name)}')"
                                         title="Edit channel">
                                     <i class="bi bi-pencil"></i>
@@ -10168,6 +10186,28 @@
         } catch (error) {
             showAlert('danger', `Error: ${error.message}`);
         }
+    }
+
+    function copyChannelUrl(url, btn) {
+        navigator.clipboard.writeText(url).then(() => {
+            const origHTML = btn.innerHTML;
+            btn.innerHTML = '<i class="bi bi-check-lg"></i>';
+            btn.classList.replace('btn-outline-info', 'btn-success');
+            setTimeout(() => {
+                btn.innerHTML = origHTML;
+                btn.classList.replace('btn-success', 'btn-outline-info');
+            }, 1500);
+            showAlert('success', 'Channel link copied to clipboard');
+        }).catch(() => {
+            // Fallback: select text in a temporary input
+            const tmp = document.createElement('input');
+            tmp.value = url;
+            document.body.appendChild(tmp);
+            tmp.select();
+            document.execCommand('copy');
+            document.body.removeChild(tmp);
+            showAlert('success', 'Channel link copied');
+        });
     }
 
     // ============================================================================
