@@ -71,7 +71,9 @@ class TestBatchNodeTelemetry:
         nodes_data = nodes_response.get_json()
 
         if nodes_data.get("nodes") and len(nodes_data["nodes"]) >= 2:
-            node_ids = [n.get("hex_id") for n in nodes_data["nodes"][:3] if n.get("hex_id")]
+            node_ids = [
+                n.get("hex_id") for n in nodes_data["nodes"][:3] if n.get("hex_id")
+            ]
 
             response = client.post(
                 "/api/custom-dashboard/nodes/telemetry",
@@ -306,9 +308,7 @@ class TestDashboardTelemetryHistory:
     @pytest.mark.api
     def test_telemetry_history_invalid_node(self, client):
         """Test telemetry history with invalid node ID."""
-        response = client.get(
-            "/api/custom-dashboard/node/invalid_id/telemetry/history"
-        )
+        response = client.get("/api/custom-dashboard/node/invalid_id/telemetry/history")
         assert response.status_code == 400
         data = response.get_json()
         assert "error" in data

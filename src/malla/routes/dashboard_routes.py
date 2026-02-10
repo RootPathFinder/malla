@@ -73,9 +73,7 @@ def batch_node_telemetry():
                     "telemetry": sanitize_floats(telemetry) if telemetry else None,
                 }
             except (ValueError, Exception) as e:
-                logger.warning(
-                    f"Error fetching telemetry for node {hex_id}: {e}"
-                )
+                logger.warning(f"Error fetching telemetry for node {hex_id}: {e}")
                 result[hex_id] = {"node_info": {}, "telemetry": None, "error": str(e)}
 
         return jsonify({"nodes": result})
