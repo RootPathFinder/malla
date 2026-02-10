@@ -51,11 +51,11 @@
     };
 
     const WIDGET_TYPES = {
-        single_metric: { label: 'Single Metric', icon: 'bi-speedometer', desc: 'Large display of one metric for one node', multiNode: false, multiMetric: false },
+        single_metric: { label: 'Single Metric', icon: 'bi-speedometer', desc: 'Large display of one metric for one node', multiNode: false, multiMetric: false, hasDisplayMode: true },
         multi_metric: { label: 'Multi Metric', icon: 'bi-grid-3x2', desc: 'Multiple metrics — data points or graph', multiNode: false, multiMetric: true, hasDisplayMode: true },
         multi_metric_chart: { label: 'Metric Chart', icon: 'bi-graph-up', desc: 'Time-series graph of metrics', multiNode: false, multiMetric: true, hasDisplayMode: true, isChart: true, hidden: true },
-        node_status: { label: 'Node Status', icon: 'bi-card-checklist', desc: 'Overview status card for a node', multiNode: false, multiMetric: false, autoMetrics: true },
-        multi_node_compare: { label: 'Multi-Node Compare', icon: 'bi-people', desc: 'Compare one metric across nodes', multiNode: true, multiMetric: false },
+        node_status: { label: 'Node Status', icon: 'bi-card-checklist', desc: 'Overview status card for a node', multiNode: false, multiMetric: false, autoMetrics: true, hasDisplayMode: true },
+        multi_node_compare: { label: 'Multi-Node Compare', icon: 'bi-people', desc: 'Compare one metric across nodes', multiNode: true, multiMetric: false, hasDisplayMode: true },
     };
 
     // ── State ───────────────────────────────────────────────────
@@ -349,15 +349,22 @@
             return;
         }
 
+        // Chart mode: any widget with displayMode 'chart' or the legacy multi_metric_chart type
+        if (widget.displayMode === 'chart' || widget.type === 'multi_metric_chart') {
+            if (widget.type === 'multi_node_compare') {
+                renderMultiNodeChart(body, widget, telemetryData);
+            } else {
+                renderMultiMetricChart(body, widget, telemetryData);
+            }
+            return;
+        }
+
         switch (widget.type) {
             case 'single_metric':
                 renderSingleMetric(body, widget, telemetryData);
                 break;
             case 'multi_metric':
                 renderMultiMetric(body, widget, telemetryData);
-                break;
-            case 'multi_metric_chart':
-                renderMultiMetricChart(body, widget, telemetryData);
                 break;
             case 'node_status':
                 renderNodeStatus(body, widget, telemetryData);
@@ -427,6 +434,14 @@
         body.innerHTML = `<div class="widget-multi-metrics">${metricsHtml}</div>`;
     }
 
+    function getChartMetrics(widget) {
+        // For node_status, chart all standard device metrics
+        if (widget.type === 'node_status') {
+            return ['battery_level', 'voltage', 'channel_utilization', 'air_util_tx'];
+        }
+        return widget.metrics || [];
+    }
+
     function renderMultiMetricChart(body, widget, telemetryData) {
         const nodeId = widget.nodes[0];
         const nodeData = telemetryData[nodeId];
@@ -438,9 +453,10 @@
         // Show current values summary + chart container
         const hours = widget.chartHours || 24;
         const chartId = 'chart-' + widget.id;
+        const chartMetrics = getChartMetrics(widget);
 
         // Build a compact current-values row above the chart
-        const summaryHtml = widget.metrics.map(metricKey => {
+        const summaryHtml = chartMetrics.map(metricKey => {
             const metricDef = findMetricDef(metricKey);
             const value = extractMetricValue(nodeData.telemetry, metricKey);
             const formatted = value !== null && value !== undefined ? formatMetricValue(value, metricDef) : '—';
@@ -471,12 +487,12 @@
             if (widgetIdx >= 0) {
                 db.widgets[widgetIdx].chartHours = parseInt(e.target.value);
                 saveDashboards();
-                fetchAndRenderChart(nodeId, widget.metrics, chartId, parseInt(e.target.value));
+                fetchAndRenderChart(nodeId, chartMetrics, chartId, parseInt(e.target.value));
             }
         });
 
         // Fetch history and render chart
-        fetchAndRenderChart(nodeId, widget.metrics, chartId, hours);
+        fetchAndRenderChart(nodeId, chartMetrics, chartId, hours);
     }
 
     function fetchAndRenderChart(nodeId, metrics, chartId, hours) {
@@ -488,7 +504,7 @@
         fetch(`/api/custom-dashboard/node/${encodeURIComponent(nodeId)}/telemetry/history?hours=${hours}`)
             .then(r => r.json())
             .then(data => {
-                if (!data.history || data.history.length === 0) {
+                if (!data.history || (typeof data.history === 'object' && Object.keys(data.history).length === 0)) {
                     container.innerHTML = '<div class="widget-no-data" style="min-height:60px;"><i class="bi bi-inbox"></i><span>No history data</span></div>';
                     return;
                 }
@@ -497,6 +513,29 @@
             })
             .catch(err => {
                 console.error('Chart data fetch failed:', err);
+                container.innerHTML = '<div class="widget-error">Failed to load chart data</div>';
+            });
+    }
+
+    function fetchAndRenderMultiNodeChart(nodeIds, nodeNames, metricKey, chartId, hours) {
+        const container = document.getElementById(chartId);
+        if (!container) return;
+
+        container.innerHTML = '<div class="widget-loading"><div class="spinner-border spinner-border-sm text-secondary" role="status"></div></div>';
+
+        // Fetch history for all nodes in parallel
+        const fetches = nodeIds.map(nodeId =>
+            fetch(`/api/custom-dashboard/node/${encodeURIComponent(nodeId)}/telemetry/history?hours=${hours}`)
+                .then(r => r.json())
+                .catch(() => ({ history: {} }))
+        );
+
+        Promise.all(fetches)
+            .then(results => {
+                renderPlotlyMultiNodeChart(container, results.map(r => r.history || {}), nodeIds, nodeNames, metricKey);
+            })
+            .catch(err => {
+                console.error('Multi-node chart data fetch failed:', err);
                 container.innerHTML = '<div class="widget-error">Failed to load chart data</div>';
             });
     }
@@ -510,22 +549,14 @@
 
         const CHART_COLORS = ['#0d6efd', '#198754', '#dc3545', '#ffc107', '#6f42c1', '#fd7e14', '#20c997', '#0dcaf0'];
 
+        // History is a dict of metric_name -> [{x, y}, ...] from the backend
         const traces = metrics.map((metricKey, i) => {
             const metricDef = findMetricDef(metricKey);
-            const xs = [];
-            const ys = [];
-
-            history.forEach(entry => {
-                const val = extractMetricFromHistoryEntry(entry, metricKey);
-                if (val !== null && val !== undefined) {
-                    xs.push(new Date(entry.timestamp * 1000));
-                    ys.push(Number(val));
-                }
-            });
+            const metricData = history[metricKey] || [];
 
             return {
-                x: xs,
-                y: ys,
+                x: metricData.map(pt => new Date(pt.x)),
+                y: metricData.map(pt => Number(pt.y)),
                 type: 'scatter',
                 mode: 'lines',
                 name: (metricDef?.label || metricKey) + (metricDef?.unit ? ` (${metricDef.unit})` : ''),
@@ -539,6 +570,44 @@
             return;
         }
 
+        renderPlotlyTraces(container, traces);
+    }
+
+    function renderPlotlyMultiNodeChart(container, historyArrays, nodeIds, nodeNames, metricKey) {
+        // Plotly availability check
+        if (typeof Plotly === 'undefined') {
+            container.innerHTML = '<div class="widget-error">Chart library not loaded</div>';
+            return;
+        }
+
+        const CHART_COLORS = ['#0d6efd', '#198754', '#dc3545', '#ffc107', '#6f42c1', '#fd7e14', '#20c997', '#0dcaf0'];
+        const metricDef = findMetricDef(metricKey);
+
+        const traces = nodeIds.map((nodeId, i) => {
+            const history = historyArrays[i] || {};
+            const metricData = history[metricKey] || [];
+            const nodeName = nodeNames?.[i] || nodeId;
+
+            return {
+                x: metricData.map(pt => new Date(pt.x)),
+                y: metricData.map(pt => Number(pt.y)),
+                type: 'scatter',
+                mode: 'lines',
+                name: nodeName,
+                line: { color: CHART_COLORS[i % CHART_COLORS.length], width: 2 },
+                hovertemplate: `%{y:.2f} ${metricDef?.unit || ''}<extra>${escapeHtml(nodeName)}</extra>`,
+            };
+        }).filter(t => t.x.length > 0);
+
+        if (traces.length === 0) {
+            container.innerHTML = '<div class="widget-no-data" style="min-height:60px;"><i class="bi bi-inbox"></i><span>No history data for selected nodes</span></div>';
+            return;
+        }
+
+        renderPlotlyTraces(container, traces);
+    }
+
+    function renderPlotlyTraces(container, traces) {
         const isDark = document.documentElement.getAttribute('data-bs-theme') === 'dark';
 
         const layout = {
@@ -570,19 +639,6 @@
 
         container.innerHTML = '';
         Plotly.newPlot(container, traces, layout, config);
-    }
-
-    function extractMetricFromHistoryEntry(entry, metricKey) {
-        // History entries may have flat keys or nested structure
-        if (entry[metricKey] !== undefined) return entry[metricKey];
-        // Try nested sections
-        const sections = ['device_metrics', 'environment_metrics', 'power_metrics', 'air_quality_metrics'];
-        for (const section of sections) {
-            if (entry[section] && entry[section][metricKey] !== undefined) {
-                return entry[section][metricKey];
-            }
-        }
-        return null;
     }
 
     function renderNodeStatus(body, widget, telemetryData) {
@@ -687,6 +743,53 @@
                 ${rows}
             </div>
         `;
+    }
+
+    function renderMultiNodeChart(body, widget, telemetryData) {
+        const metricKey = widget.metrics[0];
+        const metricDef = findMetricDef(metricKey);
+        const hours = widget.chartHours || 24;
+        const chartId = 'chart-' + widget.id;
+
+        // Build summary row with current values per node
+        const summaryHtml = widget.nodes.map(nodeId => {
+            const nodeData = telemetryData[nodeId];
+            const nodeName = widget.nodeNames?.[widget.nodes.indexOf(nodeId)] || nodeId;
+            const value = nodeData?.telemetry ? extractMetricValue(nodeData.telemetry, metricKey) : null;
+            const formatted = value !== null && value !== undefined ? formatMetricValue(value, metricDef) : '—';
+            const statusClass = value !== null && value !== undefined ? getStatusClass(value, metricDef) : 'status-unknown';
+            return `<span class="chart-summary-pill"><span class="${statusClass}">${formatted}</span> <small>${metricDef?.unit || ''} ${escapeHtml(nodeName)}</small></span>`;
+        }).join('');
+
+        body.innerHTML = `
+            <div class="widget-chart-wrapper">
+                <div class="chart-summary-row">${summaryHtml}</div>
+                <div class="chart-controls">
+                    <select class="form-select form-select-sm chart-hours-select" style="width: auto; font-size: 0.75rem;">
+                        <option value="6" ${hours === 6 ? 'selected' : ''}>6h</option>
+                        <option value="12" ${hours === 12 ? 'selected' : ''}>12h</option>
+                        <option value="24" ${hours === 24 ? 'selected' : ''}>24h</option>
+                        <option value="48" ${hours === 48 ? 'selected' : ''}>48h</option>
+                        <option value="168" ${hours === 168 ? 'selected' : ''}>7d</option>
+                    </select>
+                </div>
+                <div id="${chartId}" class="widget-chart-container"></div>
+            </div>
+        `;
+
+        // Wire up hours selector
+        body.querySelector('.chart-hours-select')?.addEventListener('change', (e) => {
+            const db = getActiveDashboard();
+            const widgetIdx = db.widgets.findIndex(w => w.id === widget.id);
+            if (widgetIdx >= 0) {
+                db.widgets[widgetIdx].chartHours = parseInt(e.target.value);
+                saveDashboards();
+                fetchAndRenderMultiNodeChart(widget.nodes, widget.nodeNames, metricKey, chartId, parseInt(e.target.value));
+            }
+        });
+
+        // Fetch history for all nodes and render
+        fetchAndRenderMultiNodeChart(widget.nodes, widget.nodeNames, metricKey, chartId, hours);
     }
 
     // ── Data Fetching ───────────────────────────────────────────
@@ -899,8 +1002,9 @@
             name: existingWidget.nodeNames?.[i] || nid
         })) || [];
         let selectedMetrics = existingWidget?.metrics?.slice() || [];
-        let selectedType = existingWidget?.type || '';
-        let selectedDisplayMode = existingWidget?.type === 'multi_metric_chart' ? 'chart' : 'data_points';
+        // Normalize legacy multi_metric_chart type back to multi_metric
+        let selectedType = existingWidget?.type === 'multi_metric_chart' ? 'multi_metric' : (existingWidget?.type || '');
+        let selectedDisplayMode = (existingWidget?.displayMode === 'chart' || existingWidget?.type === 'multi_metric_chart') ? 'chart' : 'data_points';
         let allowMultiNode = false;
         let allowMultiMetric = false;
 
@@ -947,18 +1051,6 @@
                 modal.querySelectorAll('.display-mode-option').forEach(o => o.classList.remove('selected'));
                 opt.classList.add('selected');
                 selectedDisplayMode = opt.dataset.displayMode;
-
-                // Re-derive effective type for form logic
-                if (selectedDisplayMode === 'chart') {
-                    selectedType = 'multi_metric_chart';
-                } else {
-                    selectedType = 'multi_metric';
-                }
-                typeInput.value = selectedType;
-
-                const derivedInfo = WIDGET_TYPES[selectedType];
-                allowMultiMetric = derivedInfo?.multiMetric || false;
-                updateMetricInputTypes(modal, allowMultiMetric);
             });
         });
 
@@ -1107,10 +1199,12 @@
             const widget = {
                 id: existingWidget?.id || 'w_' + Date.now() + '_' + Math.random().toString(36).substr(2, 4),
                 type: selectedType,
-                title: title || generateWidgetTitle(selectedType, selectedNodes, selectedMetrics),
+                displayMode: selectedDisplayMode === 'chart' ? 'chart' : undefined,
+                title: title || generateWidgetTitle(selectedType, selectedNodes, selectedMetrics, selectedDisplayMode),
                 nodes: selectedNodes.map(n => n.id),
                 nodeNames: selectedNodes.map(n => n.name),
                 metrics: typeInfo.autoMetrics ? [] : selectedMetrics,
+                chartHours: existingWidget?.chartHours,
                 createdAt: existingWidget?.createdAt || Date.now(),
                 updatedAt: Date.now(),
             };
@@ -1316,23 +1410,24 @@
         return `${Math.floor(diff / 86400)}d ago`;
     }
 
-    function generateWidgetTitle(type, nodes, metrics) {
+    function generateWidgetTitle(type, nodes, metrics, displayMode) {
         const typeLabel = WIDGET_TYPES[type]?.label || 'Widget';
         const nodeName = nodes[0]?.name || 'Node';
+        const chartSuffix = displayMode === 'chart' ? ' Chart' : '';
 
-        if (type === 'node_status') return `${nodeName} Status`;
+        if (type === 'node_status') return `${nodeName} Status${chartSuffix}`;
         if (type === 'multi_metric_chart') {
             return `${nodeName} — Chart`;
         }
         if (type === 'multi_node_compare') {
             const metricLabel = findMetricDef(metrics[0])?.label || metrics[0];
-            return `${metricLabel} Comparison`;
+            return `${metricLabel} Comparison${chartSuffix}`;
         }
         if (metrics.length === 1) {
             const metricLabel = findMetricDef(metrics[0])?.label || metrics[0];
-            return `${nodeName} — ${metricLabel}`;
+            return `${nodeName} — ${metricLabel}${chartSuffix}`;
         }
-        return `${nodeName} — ${typeLabel}`;
+        return `${nodeName} — ${typeLabel}${chartSuffix}`;
     }
 
     function escapeHtml(str) {
