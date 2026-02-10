@@ -324,3 +324,205 @@ class TestCustomDashboardNavigation:
         assert response.status_code == 200
         assert b"Custom Dashboard" in response.data
         assert b"custom-dashboard" in response.data
+
+
+class TestDashboardConfigAPI:
+    """Test the server-side dashboard config persistence API."""
+
+    @pytest.mark.integration
+    @pytest.mark.api
+    def test_get_config_unauthenticated(self, client):
+        """Unauthenticated requests should receive 401."""
+        response = client.get("/api/custom-dashboard/config")
+        assert response.status_code == 401
+        data = response.get_json()
+        assert "error" in data
+
+    @pytest.mark.integration
+    @pytest.mark.api
+    def test_put_config_unauthenticated(self, client):
+        """Unauthenticated PUT should receive 401."""
+        response = client.put(
+            "/api/custom-dashboard/config",
+            data=json.dumps({"dashboards": []}),
+            content_type="application/json",
+        )
+        assert response.status_code == 401
+
+    @pytest.mark.integration
+    @pytest.mark.api
+    def test_get_config_no_saved_data(self, operator_client):
+        """Authenticated user with no saved config gets 204."""
+        response = operator_client.get("/api/custom-dashboard/config")
+        assert response.status_code == 204
+
+    @pytest.mark.integration
+    @pytest.mark.api
+    def test_save_and_load_config(self, operator_client):
+        """Save a config then load it back."""
+        dashboards = [
+            {
+                "id": "db_test_1",
+                "name": "Test Dashboard",
+                "widgets": [],
+                "createdAt": 1000,
+                "updatedAt": 1000,
+            }
+        ]
+        put_resp = operator_client.put(
+            "/api/custom-dashboard/config",
+            data=json.dumps(
+                {
+                    "dashboards": dashboards,
+                    "active_dashboard_id": "db_test_1",
+                }
+            ),
+            content_type="application/json",
+        )
+        assert put_resp.status_code == 200
+        assert put_resp.get_json()["status"] == "saved"
+
+        get_resp = operator_client.get("/api/custom-dashboard/config")
+        assert get_resp.status_code == 200
+        data = get_resp.get_json()
+        assert data["active_dashboard_id"] == "db_test_1"
+        assert len(data["dashboards"]) == 1
+        assert data["dashboards"][0]["name"] == "Test Dashboard"
+
+    @pytest.mark.integration
+    @pytest.mark.api
+    def test_save_config_missing_dashboards(self, operator_client):
+        """PUT with no 'dashboards' key returns 400."""
+        response = operator_client.put(
+            "/api/custom-dashboard/config",
+            data=json.dumps({"not_dashboards": []}),
+            content_type="application/json",
+        )
+        assert response.status_code == 400
+
+    @pytest.mark.integration
+    @pytest.mark.api
+    def test_save_config_invalid_dashboards_type(self, operator_client):
+        """PUT with dashboards not being a list returns 400."""
+        response = operator_client.put(
+            "/api/custom-dashboard/config",
+            data=json.dumps({"dashboards": "not a list"}),
+            content_type="application/json",
+        )
+        assert response.status_code == 400
+
+    @pytest.mark.integration
+    @pytest.mark.api
+    def test_save_config_too_many_dashboards(self, operator_client):
+        """PUT with >20 dashboards returns 400."""
+        dashboards = [{"id": f"db_{i}", "name": f"D{i}", "widgets": []} for i in range(21)]
+        response = operator_client.put(
+            "/api/custom-dashboard/config",
+            data=json.dumps({"dashboards": dashboards}),
+            content_type="application/json",
+        )
+        assert response.status_code == 400
+        assert "20" in response.get_json()["error"]
+
+    @pytest.mark.integration
+    @pytest.mark.api
+    def test_save_config_too_many_widgets(self, operator_client):
+        """PUT with >50 widgets in one dashboard returns 400."""
+        widgets = [{"id": f"w_{i}", "type": "single_metric"} for i in range(51)]
+        dashboards = [{"id": "db_1", "name": "Big", "widgets": widgets}]
+        response = operator_client.put(
+            "/api/custom-dashboard/config",
+            data=json.dumps({"dashboards": dashboards}),
+            content_type="application/json",
+        )
+        assert response.status_code == 400
+        assert "50" in response.get_json()["error"]
+
+    @pytest.mark.integration
+    @pytest.mark.api
+    def test_save_config_overwrite(self, operator_client):
+        """Saving a second time overwrites the first."""
+        # First save
+        operator_client.put(
+            "/api/custom-dashboard/config",
+            data=json.dumps(
+                {
+                    "dashboards": [
+                        {"id": "db_1", "name": "First", "widgets": []}
+                    ],
+                }
+            ),
+            content_type="application/json",
+        )
+        # Second save
+        operator_client.put(
+            "/api/custom-dashboard/config",
+            data=json.dumps(
+                {
+                    "dashboards": [
+                        {"id": "db_2", "name": "Second", "widgets": []}
+                    ],
+                    "active_dashboard_id": "db_2",
+                }
+            ),
+            content_type="application/json",
+        )
+
+        get_resp = operator_client.get("/api/custom-dashboard/config")
+        data = get_resp.get_json()
+        assert len(data["dashboards"]) == 1
+        assert data["dashboards"][0]["name"] == "Second"
+
+    @pytest.mark.integration
+    @pytest.mark.api
+    def test_save_config_with_widgets(self, operator_client):
+        """Save dashboards that include widget definitions and verify round-trip."""
+        dashboards = [
+            {
+                "id": "db_widgets",
+                "name": "Widget Dashboard",
+                "widgets": [
+                    {
+                        "id": "w_1",
+                        "type": "single_metric",
+                        "nodes": ["!aabbccdd"],
+                        "metrics": ["battery_level"],
+                    },
+                    {
+                        "id": "w_2",
+                        "type": "node_status",
+                        "nodes": ["!11223344"],
+                        "metrics": [],
+                    },
+                ],
+                "createdAt": 2000,
+                "updatedAt": 2000,
+            }
+        ]
+        put_resp = operator_client.put(
+            "/api/custom-dashboard/config",
+            data=json.dumps({"dashboards": dashboards}),
+            content_type="application/json",
+        )
+        assert put_resp.status_code == 200
+
+        get_resp = operator_client.get("/api/custom-dashboard/config")
+        data = get_resp.get_json()
+        assert len(data["dashboards"][0]["widgets"]) == 2
+        assert data["dashboards"][0]["widgets"][0]["type"] == "single_metric"
+
+    @pytest.mark.integration
+    @pytest.mark.api
+    def test_page_has_auth_data_attribute(self, operator_client):
+        """The custom dashboard page should include the authenticated data attr."""
+        response = operator_client.get("/custom-dashboard")
+        assert response.status_code == 200
+        assert b'data-authenticated="true"' in response.data
+
+    @pytest.mark.integration
+    @pytest.mark.api
+    def test_page_unauthenticated_data_attribute(self, client):
+        """Unauthenticated visits should get data-authenticated=false."""
+        response = client.get("/custom-dashboard")
+        assert response.status_code == 200
+        assert b'data-authenticated="false"' in response.data

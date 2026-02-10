@@ -5,8 +5,10 @@ Custom dashboard routes for user-configurable node monitoring.
 import logging
 
 from flask import Blueprint, jsonify, render_template, request
+from flask_login import current_user
 
 from ..database.connection import get_db_connection
+from ..database.dashboard_repository import DashboardConfigRepository
 from ..database.repositories import NodeRepository
 from ..utils.cache_utils import cache_response
 from ..utils.node_utils import convert_node_id
@@ -19,7 +21,72 @@ dashboard_bp = Blueprint("custom_dashboard", __name__)
 @dashboard_bp.route("/custom-dashboard")
 def custom_dashboard():
     """Render the custom dashboard page."""
-    return render_template("custom_dashboard.html")
+    is_authenticated = current_user.is_authenticated
+    return render_template(
+        "custom_dashboard.html",
+        is_authenticated=is_authenticated,
+    )
+
+
+# ── Dashboard config persistence (server-side) ─────────────────────────
+@dashboard_bp.route("/api/custom-dashboard/config", methods=["GET"])
+def get_dashboard_config():
+    """Return the authenticated user's saved dashboard configuration.
+
+    Returns 401 if not logged in, 204 if no config stored yet.
+    """
+    if not current_user.is_authenticated:
+        return jsonify({"error": "Authentication required"}), 401
+
+    config = DashboardConfigRepository.get_config(current_user.id)
+    if config is None:
+        return "", 204  # No saved config yet
+
+    return jsonify(config)
+
+
+@dashboard_bp.route("/api/custom-dashboard/config", methods=["PUT"])
+def save_dashboard_config():
+    """Save the authenticated user's dashboard configuration.
+
+    Expects JSON body:
+    {
+      "dashboards": [ ... ],
+      "active_dashboard_id": "db_..."
+    }
+    """
+    if not current_user.is_authenticated:
+        return jsonify({"error": "Authentication required"}), 401
+
+    data = request.get_json(silent=True)
+    if not data or "dashboards" not in data:
+        return jsonify({"error": "Missing 'dashboards' in request body"}), 400
+
+    dashboards = data["dashboards"]
+    if not isinstance(dashboards, list):
+        return jsonify({"error": "'dashboards' must be a list"}), 400
+
+    # Enforce same limits as frontend
+    if len(dashboards) > 20:
+        return jsonify({"error": "Maximum 20 dashboards allowed"}), 400
+
+    for db in dashboards:
+        if not isinstance(db, dict):
+            return jsonify({"error": "Each dashboard must be an object"}), 400
+        widgets = db.get("widgets", [])
+        if isinstance(widgets, list) and len(widgets) > 50:
+            return jsonify({"error": "Maximum 50 widgets per dashboard"}), 400
+
+    active_id = data.get("active_dashboard_id")
+
+    ok = DashboardConfigRepository.save_config(
+        user_id=current_user.id,
+        dashboards=dashboards,
+        active_dashboard_id=active_id,
+    )
+    if ok:
+        return jsonify({"status": "saved"})
+    return jsonify({"error": "Failed to save dashboard config"}), 500
 
 
 @dashboard_bp.route("/api/custom-dashboard/nodes/telemetry", methods=["POST"])

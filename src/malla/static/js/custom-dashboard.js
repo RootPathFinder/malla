@@ -64,9 +64,16 @@
     let refreshTimer = null;
     let isRefreshing = false;
     let nodeSearchTimeout = null;
+    let _saveTimeout = null;
+
+    // Detect whether the user is authenticated (set via template data attr)
+    function isAuthenticated() {
+        const container = document.querySelector('[data-authenticated]');
+        return container && container.dataset.authenticated === 'true';
+    }
 
     // ── Persistence ─────────────────────────────────────────────
-    function loadDashboards() {
+    function loadDashboardsFromLocalStorage() {
         try {
             const raw = localStorage.getItem(STORAGE_KEY);
             if (raw) {
@@ -78,8 +85,13 @@
         } catch (e) {
             console.warn('CustomDashboard: Failed to load from localStorage:', e);
         }
+    }
 
-        // If no dashboards, create a default one
+    function loadDashboards() {
+        // Always start by loading from localStorage as fast fallback
+        loadDashboardsFromLocalStorage();
+
+        // Ensure at least one dashboard exists
         if (dashboards.length === 0) {
             dashboards.push(createDashboard('My Dashboard'));
         }
@@ -90,12 +102,64 @@
         }
     }
 
-    function saveDashboards() {
+    async function loadDashboardsFromServer() {
+        if (!isAuthenticated()) return false;
+
+        try {
+            const resp = await fetch('/api/custom-dashboard/config');
+            if (resp.status === 204) {
+                // No server config yet – push local dashboards to server
+                saveDashboardsToServer();
+                return false;
+            }
+            if (!resp.ok) return false;
+
+            const data = await resp.json();
+            if (data.dashboards && Array.isArray(data.dashboards) && data.dashboards.length > 0) {
+                dashboards = data.dashboards;
+                activeDashboardId = data.active_dashboard_id || dashboards[0].id;
+
+                // Mirror to localStorage as offline cache
+                saveToLocalStorage();
+
+                return true;
+            }
+        } catch (e) {
+            console.warn('CustomDashboard: Failed to load from server, using localStorage:', e);
+        }
+        return false;
+    }
+
+    function saveToLocalStorage() {
         try {
             localStorage.setItem(STORAGE_KEY, JSON.stringify(dashboards));
         } catch (e) {
             console.warn('CustomDashboard: Failed to save to localStorage:', e);
         }
+    }
+
+    function saveDashboardsToServer() {
+        if (!isAuthenticated()) return;
+
+        // Debounce server saves to avoid excessive requests
+        if (_saveTimeout) clearTimeout(_saveTimeout);
+        _saveTimeout = setTimeout(() => {
+            fetch('/api/custom-dashboard/config', {
+                method: 'PUT',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                    dashboards: dashboards,
+                    active_dashboard_id: activeDashboardId,
+                }),
+            }).catch(e => {
+                console.warn('CustomDashboard: Failed to save to server:', e);
+            });
+        }, 500);
+    }
+
+    function saveDashboards() {
+        saveToLocalStorage();
+        saveDashboardsToServer();
     }
 
     function createDashboard(name) {
@@ -119,6 +183,15 @@
         renderWidgets();
         startAutoRefresh();
         refreshAllWidgets();
+
+        // Asynchronously load from server; re-render if data differs
+        loadDashboardsFromServer().then(loaded => {
+            if (loaded) {
+                renderToolbar();
+                renderWidgets();
+                refreshAllWidgets();
+            }
+        });
     }
 
     // ── Toolbar ─────────────────────────────────────────────────
