@@ -807,7 +807,7 @@
                                 <div class="type-name">${type.label}</div>
                                 <div class="type-desc">${type.desc}</div>
                             </div>
-                        `).join('')}}
+                        `).join('')}
                     </div>
                     <input type="hidden" id="widget-type" value="${existingWidget?.type || ''}">
                 </div>
@@ -886,7 +886,7 @@
     function setupWidgetForm(modal, existingWidget, editIndex) {
         const form = modal.querySelector('#widget-form');
         const typeInput = modal.querySelector('#widget-type');
-        const typeOptions = modal.querySelectorAll('.widget-type-option');
+        const typeOptions = modal.querySelectorAll('.widget-type-option:not(.display-mode-option)');
         const metricGroup = modal.querySelector('#metric-selection-group');
         const displayModeGroup = modal.querySelector('#display-mode-group');
         const nodeSearch = modal.querySelector('#widget-node-search');
