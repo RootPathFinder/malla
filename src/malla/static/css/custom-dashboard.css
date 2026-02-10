@@ -585,3 +585,49 @@
         grid-template-columns: repeat(auto-fill, minmax(350px, 1fr));
     }
 }
+
+/* ── Chart Widget ───────────────────────────────────────── */
+.widget-chart-wrapper {
+    display: flex;
+    flex-direction: column;
+    gap: 0.5rem;
+    width: 100%;
+}
+
+.chart-summary-row {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.5rem;
+    justify-content: center;
+}
+
+.chart-summary-pill {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.25rem;
+    padding: 0.2rem 0.5rem;
+    background: var(--bs-tertiary-bg);
+    border-radius: 1rem;
+    font-size: 0.8rem;
+    font-weight: 500;
+}
+
+.chart-summary-pill small {
+    color: var(--bs-secondary-color);
+    font-weight: 400;
+}
+
+.chart-controls {
+    display: flex;
+    justify-content: flex-end;
+}
+
+.widget-chart-container {
+    width: 100%;
+    min-height: 200px;
+}
+
+/* Make chart widgets taller in the grid */
+.widget-card:has(.widget-chart-container) .widget-card-body {
+    min-height: 280px;
+}

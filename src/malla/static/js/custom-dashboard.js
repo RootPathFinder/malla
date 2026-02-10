@@ -52,7 +52,8 @@
 
     const WIDGET_TYPES = {
         single_metric: { label: 'Single Metric', icon: 'bi-speedometer', desc: 'Large display of one metric for one node', multiNode: false, multiMetric: false },
-        multi_metric: { label: 'Multi Metric', icon: 'bi-grid-3x2', desc: 'Multiple metrics for one node', multiNode: false, multiMetric: true },
+        multi_metric: { label: 'Multi Metric', icon: 'bi-grid-3x2', desc: 'Multiple metrics — data points or graph', multiNode: false, multiMetric: true, hasDisplayMode: true },
+        multi_metric_chart: { label: 'Metric Chart', icon: 'bi-graph-up', desc: 'Time-series graph of metrics', multiNode: false, multiMetric: true, hasDisplayMode: true, isChart: true, hidden: true },
         node_status: { label: 'Node Status', icon: 'bi-card-checklist', desc: 'Overview status card for a node', multiNode: false, multiMetric: false, autoMetrics: true },
         multi_node_compare: { label: 'Multi-Node Compare', icon: 'bi-people', desc: 'Compare one metric across nodes', multiNode: true, multiMetric: false },
     };
@@ -355,6 +356,9 @@
             case 'multi_metric':
                 renderMultiMetric(body, widget, telemetryData);
                 break;
+            case 'multi_metric_chart':
+                renderMultiMetricChart(body, widget, telemetryData);
+                break;
             case 'node_status':
                 renderNodeStatus(body, widget, telemetryData);
                 break;
@@ -421,6 +425,164 @@
         }).join('');
 
         body.innerHTML = `<div class="widget-multi-metrics">${metricsHtml}</div>`;
+    }
+
+    function renderMultiMetricChart(body, widget, telemetryData) {
+        const nodeId = widget.nodes[0];
+        const nodeData = telemetryData[nodeId];
+        if (!nodeData?.telemetry) {
+            body.innerHTML = '<div class="widget-no-data"><i class="bi bi-inbox"></i><span>No telemetry data</span></div>';
+            return;
+        }
+
+        // Show current values summary + chart container
+        const hours = widget.chartHours || 24;
+        const chartId = 'chart-' + widget.id;
+
+        // Build a compact current-values row above the chart
+        const summaryHtml = widget.metrics.map(metricKey => {
+            const metricDef = findMetricDef(metricKey);
+            const value = extractMetricValue(nodeData.telemetry, metricKey);
+            const formatted = value !== null && value !== undefined ? formatMetricValue(value, metricDef) : '—';
+            const statusClass = value !== null ? getStatusClass(value, metricDef) : 'status-unknown';
+            return `<span class="chart-summary-pill"><span class="${statusClass}">${formatted}</span> <small>${metricDef?.unit || ''} ${metricDef?.label || metricKey}</small></span>`;
+        }).join('');
+
+        body.innerHTML = `
+            <div class="widget-chart-wrapper">
+                <div class="chart-summary-row">${summaryHtml}</div>
+                <div class="chart-controls">
+                    <select class="form-select form-select-sm chart-hours-select" style="width: auto; font-size: 0.75rem;">
+                        <option value="6" ${hours === 6 ? 'selected' : ''}>6h</option>
+                        <option value="12" ${hours === 12 ? 'selected' : ''}>12h</option>
+                        <option value="24" ${hours === 24 ? 'selected' : ''}>24h</option>
+                        <option value="48" ${hours === 48 ? 'selected' : ''}>48h</option>
+                        <option value="168" ${hours === 168 ? 'selected' : ''}>7d</option>
+                    </select>
+                </div>
+                <div id="${chartId}" class="widget-chart-container"></div>
+            </div>
+        `;
+
+        // Wire up hours selector
+        body.querySelector('.chart-hours-select')?.addEventListener('change', (e) => {
+            const db = getActiveDashboard();
+            const widgetIdx = db.widgets.findIndex(w => w.id === widget.id);
+            if (widgetIdx >= 0) {
+                db.widgets[widgetIdx].chartHours = parseInt(e.target.value);
+                saveDashboards();
+                fetchAndRenderChart(nodeId, widget.metrics, chartId, parseInt(e.target.value));
+            }
+        });
+
+        // Fetch history and render chart
+        fetchAndRenderChart(nodeId, widget.metrics, chartId, hours);
+    }
+
+    function fetchAndRenderChart(nodeId, metrics, chartId, hours) {
+        const container = document.getElementById(chartId);
+        if (!container) return;
+
+        container.innerHTML = '<div class="widget-loading"><div class="spinner-border spinner-border-sm text-secondary" role="status"></div></div>';
+
+        fetch(`/api/custom-dashboard/node/${encodeURIComponent(nodeId)}/telemetry/history?hours=${hours}`)
+            .then(r => r.json())
+            .then(data => {
+                if (!data.history || data.history.length === 0) {
+                    container.innerHTML = '<div class="widget-no-data" style="min-height:60px;"><i class="bi bi-inbox"></i><span>No history data</span></div>';
+                    return;
+                }
+
+                renderPlotlyChart(container, data.history, metrics);
+            })
+            .catch(err => {
+                console.error('Chart data fetch failed:', err);
+                container.innerHTML = '<div class="widget-error">Failed to load chart data</div>';
+            });
+    }
+
+    function renderPlotlyChart(container, history, metrics) {
+        // Plotly availability check
+        if (typeof Plotly === 'undefined') {
+            container.innerHTML = '<div class="widget-error">Chart library not loaded</div>';
+            return;
+        }
+
+        const CHART_COLORS = ['#0d6efd', '#198754', '#dc3545', '#ffc107', '#6f42c1', '#fd7e14', '#20c997', '#0dcaf0'];
+
+        const traces = metrics.map((metricKey, i) => {
+            const metricDef = findMetricDef(metricKey);
+            const xs = [];
+            const ys = [];
+
+            history.forEach(entry => {
+                const val = extractMetricFromHistoryEntry(entry, metricKey);
+                if (val !== null && val !== undefined) {
+                    xs.push(new Date(entry.timestamp * 1000));
+                    ys.push(Number(val));
+                }
+            });
+
+            return {
+                x: xs,
+                y: ys,
+                type: 'scatter',
+                mode: 'lines',
+                name: (metricDef?.label || metricKey) + (metricDef?.unit ? ` (${metricDef.unit})` : ''),
+                line: { color: CHART_COLORS[i % CHART_COLORS.length], width: 2 },
+                hovertemplate: '%{y:.2f}<extra>%{fullData.name}</extra>',
+            };
+        }).filter(t => t.x.length > 0);
+
+        if (traces.length === 0) {
+            container.innerHTML = '<div class="widget-no-data" style="min-height:60px;"><i class="bi bi-inbox"></i><span>No data points for selected metrics</span></div>';
+            return;
+        }
+
+        const isDark = document.documentElement.getAttribute('data-bs-theme') === 'dark';
+
+        const layout = {
+            margin: { t: 8, r: 10, b: 32, l: 40 },
+            height: 200,
+            showlegend: traces.length > 1,
+            legend: { x: 0, y: 1.15, orientation: 'h', font: { size: 10, color: isDark ? '#adb5bd' : '#6c757d' } },
+            xaxis: {
+                type: 'date',
+                tickfont: { size: 9, color: isDark ? '#adb5bd' : '#6c757d' },
+                gridcolor: isDark ? '#495057' : '#e9ecef',
+                linecolor: isDark ? '#495057' : '#dee2e6',
+            },
+            yaxis: {
+                tickfont: { size: 9, color: isDark ? '#adb5bd' : '#6c757d' },
+                gridcolor: isDark ? '#495057' : '#e9ecef',
+                linecolor: isDark ? '#495057' : '#dee2e6',
+            },
+            paper_bgcolor: 'rgba(0,0,0,0)',
+            plot_bgcolor: 'rgba(0,0,0,0)',
+            hovermode: 'x unified',
+        };
+
+        const config = {
+            responsive: true,
+            displayModeBar: false,
+            staticPlot: false,
+        };
+
+        container.innerHTML = '';
+        Plotly.newPlot(container, traces, layout, config);
+    }
+
+    function extractMetricFromHistoryEntry(entry, metricKey) {
+        // History entries may have flat keys or nested structure
+        if (entry[metricKey] !== undefined) return entry[metricKey];
+        // Try nested sections
+        const sections = ['device_metrics', 'environment_metrics', 'power_metrics', 'air_quality_metrics'];
+        for (const section of sections) {
+            if (entry[section] && entry[section][metricKey] !== undefined) {
+                return entry[section][metricKey];
+            }
+        }
+        return null;
     }
 
     function renderNodeStatus(body, widget, telemetryData) {
@@ -639,13 +801,13 @@
                 <div class="mb-3">
                     <label class="form-label fw-semibold">Widget Type</label>
                     <div class="widget-type-grid">
-                        ${Object.entries(WIDGET_TYPES).map(([key, type]) => `
-                            <div class="widget-type-option ${existingWidget?.type === key ? 'selected' : ''}" data-type="${key}">
+                        ${Object.entries(WIDGET_TYPES).filter(([, type]) => !type.hidden).map(([key, type]) => `
+                            <div class="widget-type-option ${(existingWidget?.type === key || (key === 'multi_metric' && existingWidget?.type === 'multi_metric_chart')) ? 'selected' : ''}" data-type="${key}">
                                 <i class="bi ${type.icon}"></i>
                                 <div class="type-name">${type.label}</div>
                                 <div class="type-desc">${type.desc}</div>
                             </div>
-                        `).join('')}
+                        `).join('')}}
                     </div>
                     <input type="hidden" id="widget-type" value="${existingWidget?.type || ''}">
                 </div>
@@ -676,7 +838,24 @@
                     </div>
                 </div>
 
-                <!-- Step 4: Metric Selection -->
+                <!-- Step 4: Display Mode (for multi-metric types) -->
+                <div class="mb-3" id="display-mode-group" style="display: none;">
+                    <label class="form-label fw-semibold">Display Mode</label>
+                    <div class="d-flex gap-2">
+                        <div class="widget-type-option display-mode-option flex-fill ${(!existingWidget || existingWidget?.type === 'multi_metric') ? 'selected' : ''}" data-display-mode="data_points" style="padding: 0.75rem;">
+                            <i class="bi bi-grid-3x2"></i>
+                            <div class="type-name">Data Points</div>
+                            <div class="type-desc">Current values in a grid</div>
+                        </div>
+                        <div class="widget-type-option display-mode-option flex-fill ${existingWidget?.type === 'multi_metric_chart' ? 'selected' : ''}" data-display-mode="chart" style="padding: 0.75rem;">
+                            <i class="bi bi-graph-up"></i>
+                            <div class="type-name">Graph</div>
+                            <div class="type-desc">Time-series chart of history</div>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Step 5: Metric Selection -->
                 <div class="mb-3" id="metric-selection-group" style="display: none;">
                     <label class="form-label fw-semibold">Select Metric(s)</label>
                     <div id="metric-picker">
@@ -709,6 +888,7 @@
         const typeInput = modal.querySelector('#widget-type');
         const typeOptions = modal.querySelectorAll('.widget-type-option');
         const metricGroup = modal.querySelector('#metric-selection-group');
+        const displayModeGroup = modal.querySelector('#display-mode-group');
         const nodeSearch = modal.querySelector('#widget-node-search');
         const nodeResults = modal.querySelector('#widget-node-results');
         const nodesTagContainer = modal.querySelector('#selected-nodes-tags');
@@ -720,6 +900,7 @@
         })) || [];
         let selectedMetrics = existingWidget?.metrics?.slice() || [];
         let selectedType = existingWidget?.type || '';
+        let selectedDisplayMode = existingWidget?.type === 'multi_metric_chart' ? 'chart' : 'data_points';
         let allowMultiNode = false;
         let allowMultiMetric = false;
 
@@ -734,6 +915,14 @@
                 const typeInfo = WIDGET_TYPES[selectedType];
                 allowMultiNode = typeInfo?.multiNode || false;
                 allowMultiMetric = typeInfo?.multiMetric || false;
+
+                // Show/hide display mode toggle for multi-metric types
+                if (typeInfo?.hasDisplayMode) {
+                    displayModeGroup.style.display = 'block';
+                } else {
+                    displayModeGroup.style.display = 'none';
+                    selectedDisplayMode = 'data_points';
+                }
 
                 // Show/hide metric selection based on type
                 if (typeInfo?.autoMetrics) {
@@ -752,11 +941,36 @@
             });
         });
 
+        // Display mode toggle
+        modal.querySelectorAll('.display-mode-option').forEach(opt => {
+            opt.addEventListener('click', () => {
+                modal.querySelectorAll('.display-mode-option').forEach(o => o.classList.remove('selected'));
+                opt.classList.add('selected');
+                selectedDisplayMode = opt.dataset.displayMode;
+
+                // Re-derive effective type for form logic
+                if (selectedDisplayMode === 'chart') {
+                    selectedType = 'multi_metric_chart';
+                } else {
+                    selectedType = 'multi_metric';
+                }
+                typeInput.value = selectedType;
+
+                const derivedInfo = WIDGET_TYPES[selectedType];
+                allowMultiMetric = derivedInfo?.multiMetric || false;
+                updateMetricInputTypes(modal, allowMultiMetric);
+            });
+        });
+
         // Trigger initial state if editing
         if (selectedType) {
             const typeInfo = WIDGET_TYPES[selectedType];
             allowMultiNode = typeInfo?.multiNode || false;
             allowMultiMetric = typeInfo?.multiMetric || false;
+
+            if (typeInfo?.hasDisplayMode) {
+                displayModeGroup.style.display = 'block';
+            }
 
             if (typeInfo && !typeInfo.autoMetrics) {
                 metricGroup.style.display = 'block';
@@ -1107,6 +1321,9 @@
         const nodeName = nodes[0]?.name || 'Node';
 
         if (type === 'node_status') return `${nodeName} Status`;
+        if (type === 'multi_metric_chart') {
+            return `${nodeName} — Chart`;
+        }
         if (type === 'multi_node_compare') {
             const metricLabel = findMetricDef(metrics[0])?.label || metrics[0];
             return `${metricLabel} Comparison`;
