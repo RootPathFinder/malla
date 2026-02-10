@@ -429,11 +429,17 @@
 
                     <!-- Monitoring dropdown (Power, Alerts, Archived) -->
                     <li class="nav-item dropdown">
-                        {% set monitoring_active = request.endpoint in ['battery.battery_analytics', 'main.weather_map', 'main.network_dependency', 'main.sensor_dashboard', 'main.paxcounter', 'alerts.alerts_page', 'alerts.archived_nodes_page'] %}
+                        {% set monitoring_active = request.endpoint in ['battery.battery_analytics', 'main.weather_map', 'main.network_dependency', 'main.sensor_dashboard', 'main.paxcounter', 'alerts.alerts_page', 'alerts.archived_nodes_page', 'custom_dashboard.custom_dashboard'] %}
                         <a class="nav-link dropdown-toggle {{ 'active' if monitoring_active }}" href="#" id="monitoringDropdown" role="button" data-bs-toggle="dropdown">
                             Monitoring
                         </a>
                         <ul class="dropdown-menu">
+                            <li>
+                                <a class="dropdown-item {{ 'active' if request.endpoint == 'custom_dashboard.custom_dashboard' }}" href="{{ url_for('custom_dashboard.custom_dashboard') }}">
+                                    <i class="bi bi-grid-1x2"></i> Custom Dashboard
+                                </a>
+                            </li>
+                            <li><hr class="dropdown-divider"></li>
                             <li>
                                 <a class="dropdown-item {{ 'active' if request.endpoint == 'alerts.alerts_page' }}" href="{{ url_for('alerts.alerts_page') }}">
                                     <i class="bi bi-bell"></i> Insights & Alerts

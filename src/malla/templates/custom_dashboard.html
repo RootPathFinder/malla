@@ -1,0 +1,25 @@
+{% extends "base.html" %}
+
+{% block title %}Custom Dashboard - {{ APP_NAME }}{% endblock %}
+
+{% block extra_css %}
+<link rel="stylesheet" href="{{ url_for('static', filename='css/custom-dashboard.css') }}">
+{% endblock %}
+
+{% block content %}
+<div class="container-fluid mt-3">
+    <!-- Dashboard Toolbar -->
+    <div class="dashboard-toolbar" id="dashboard-toolbar">
+        <!-- Rendered by JS -->
+    </div>
+
+    <!-- Widget Grid -->
+    <div class="widget-grid" id="widget-grid">
+        <!-- Rendered by JS -->
+    </div>
+</div>
+{% endblock %}
+
+{% block extra_js %}
+<script src="{{ url_for('static', filename='js/custom-dashboard.js') }}"></script>
+{% endblock %}
