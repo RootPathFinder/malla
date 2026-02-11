@@ -526,3 +526,88 @@ class TestDashboardConfigAPI:
         response = client.get("/custom-dashboard")
         assert response.status_code == 200
         assert b'data-authenticated="false"' in response.data
+
+    @pytest.mark.integration
+    @pytest.mark.api
+    def test_save_config_with_widget_layout(self, operator_client):
+        """Save dashboards with widget layout (position/size) and verify round-trip."""
+        dashboards = [
+            {
+                "id": "db_layout",
+                "name": "Layout Dashboard",
+                "widgets": [
+                    {
+                        "id": "w_1",
+                        "type": "single_metric",
+                        "nodes": ["!aabbccdd"],
+                        "metrics": ["battery_level"],
+                        "layout": {"col": 1, "row": 1, "w": 3, "h": 2},
+                    },
+                    {
+                        "id": "w_2",
+                        "type": "node_status",
+                        "nodes": ["!11223344"],
+                        "metrics": [],
+                        "layout": {"col": 4, "row": 1, "w": 4, "h": 3},
+                    },
+                    {
+                        "id": "w_3",
+                        "type": "multi_metric_chart",
+                        "nodes": ["!aabbccdd"],
+                        "metrics": ["temperature"],
+                        "layout": {"col": 1, "row": 3, "w": 6, "h": 4},
+                    },
+                ],
+                "createdAt": 3000,
+                "updatedAt": 3000,
+            }
+        ]
+        put_resp = operator_client.put(
+            "/api/custom-dashboard/config",
+            data=json.dumps({"dashboards": dashboards}),
+            content_type="application/json",
+        )
+        assert put_resp.status_code == 200
+
+        get_resp = operator_client.get("/api/custom-dashboard/config")
+        data = get_resp.get_json()
+        widgets = data["dashboards"][0]["widgets"]
+        assert len(widgets) == 3
+
+        # Verify layout round-trips correctly
+        assert widgets[0]["layout"] == {"col": 1, "row": 1, "w": 3, "h": 2}
+        assert widgets[1]["layout"] == {"col": 4, "row": 1, "w": 4, "h": 3}
+        assert widgets[2]["layout"] == {"col": 1, "row": 3, "w": 6, "h": 4}
+
+    @pytest.mark.integration
+    @pytest.mark.api
+    def test_save_config_widgets_without_layout(self, operator_client):
+        """Widgets saved without layout field are returned as-is (client assigns layout)."""
+        dashboards = [
+            {
+                "id": "db_nolayout",
+                "name": "No Layout Dashboard",
+                "widgets": [
+                    {
+                        "id": "w_1",
+                        "type": "single_metric",
+                        "nodes": ["!aabbccdd"],
+                        "metrics": ["battery_level"],
+                    },
+                ],
+                "createdAt": 4000,
+                "updatedAt": 4000,
+            }
+        ]
+        put_resp = operator_client.put(
+            "/api/custom-dashboard/config",
+            data=json.dumps({"dashboards": dashboards}),
+            content_type="application/json",
+        )
+        assert put_resp.status_code == 200
+
+        get_resp = operator_client.get("/api/custom-dashboard/config")
+        data = get_resp.get_json()
+        widget = data["dashboards"][0]["widgets"][0]
+        # Widget should not have layout key since it was not provided
+        assert "layout" not in widget

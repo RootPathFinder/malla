@@ -97,7 +97,7 @@ def batch_node_telemetry():
     Returns: {"nodes": {"!aabbccdd": {...}, ...}}
     """
     try:
-        data = request.get_json()
+        data = request.get_json(silent=True)
         if not data or "node_ids" not in data:
             return jsonify({"error": "Missing node_ids in request body"}), 400
 

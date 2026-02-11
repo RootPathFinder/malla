@@ -66,6 +66,72 @@
     let nodeSearchTimeout = null;
     let _saveTimeout = null;
 
+    // ── Grid Layout Constants ───────────────────────────────────
+    const GRID_COLS = 12;
+    const DEFAULT_LAYOUTS = {
+        single_metric:      { w: 3, h: 2 },
+        multi_metric:       { w: 4, h: 3 },
+        multi_metric_chart: { w: 6, h: 4 },
+        node_status:        { w: 4, h: 3 },
+        multi_node_compare: { w: 6, h: 3 },
+    };
+    const MIN_W = 2;
+    const MIN_H = 2;
+    const MAX_H = 12;
+
+    /**
+     * Ensure every widget in a dashboard has a layout property.
+     * New widgets get placed in the first open slot.
+     */
+    function ensureWidgetLayouts(widgets) {
+        // Build occupancy grid from widgets that already have layout
+        const occupied = new Set();
+        widgets.forEach(w => {
+            if (w.layout) {
+                for (let r = w.layout.row; r < w.layout.row + w.layout.h; r++) {
+                    for (let c = w.layout.col; c < w.layout.col + w.layout.w; c++) {
+                        occupied.add(`${r},${c}`);
+                    }
+                }
+            }
+        });
+
+        widgets.forEach(w => {
+            if (w.layout) return;
+
+            const def = DEFAULT_LAYOUTS[w.type] || { w: 4, h: 3 };
+            // If display mode is chart, make it wider
+            const isChart = w.displayMode === 'chart' || w.type === 'multi_metric_chart';
+            const ww = isChart ? Math.max(def.w, 6) : def.w;
+            const hh = isChart ? Math.max(def.h, 4) : def.h;
+
+            // Find first open position scanning row by row
+            let placed = false;
+            for (let row = 1; row < 200 && !placed; row++) {
+                for (let col = 1; col <= GRID_COLS - ww + 1 && !placed; col++) {
+                    let fits = true;
+                    for (let r = row; r < row + hh && fits; r++) {
+                        for (let c = col; c < col + ww && fits; c++) {
+                            if (occupied.has(`${r},${c}`)) fits = false;
+                        }
+                    }
+                    if (fits) {
+                        w.layout = { col: col, row: row, w: ww, h: hh };
+                        for (let r = row; r < row + hh; r++) {
+                            for (let c = col; c < col + ww; c++) {
+                                occupied.add(`${r},${c}`);
+                            }
+                        }
+                        placed = true;
+                    }
+                }
+            }
+            if (!placed) {
+                w.layout = { col: 1, row: 1, w: ww, h: hh };
+            }
+        });
+    }
+
     // Detect whether the user is authenticated (set via template data attr)
     function isAuthenticated() {
         const container = document.querySelector('[data-authenticated]');
@@ -369,10 +435,13 @@
             return;
         }
 
+        // Ensure every widget has grid layout data
+        ensureWidgetLayouts(db.widgets);
+
         container.innerHTML = db.widgets.map((widget, index) => renderWidgetCard(widget, index)).join('');
 
-        // Setup drag and drop
-        setupDragAndDrop(container);
+        // Setup drag-to-move and resize interactions
+        setupGridInteractions(container);
     }
 
     function renderWidgetCard(widget, index) {
@@ -381,8 +450,11 @@
             ? `${widget.nodes.length} nodes`
             : (widget.nodeNames?.[0] || widget.nodes?.[0] || 'No node');
 
+        const layout = widget.layout || { col: 1, row: 1, w: 4, h: 3 };
+        const gridStyle = `grid-column: ${layout.col} / span ${layout.w}; grid-row: ${layout.row} / span ${layout.h};`;
+
         return `
-            <div class="widget-card" data-widget-index="${index}" draggable="true">
+            <div class="widget-card" data-widget-index="${index}" style="${gridStyle}">
                 <div class="widget-card-header">
                     <i class="bi bi-grip-vertical drag-handle"></i>
                     <span class="widget-title">${escapeHtml(widget.title || typeInfo.label || 'Widget')}</span>
@@ -403,6 +475,7 @@
                         </div>
                     </div>
                 </div>
+                <div class="widget-resize-handle" data-resize-index="${index}"></div>
             </div>
         `;
     }
@@ -685,7 +758,7 @@
 
         const layout = {
             margin: { t: 8, r: 10, b: 32, l: 40 },
-            height: 200,
+            autosize: true,
             showlegend: traces.length > 1,
             legend: { x: 0, y: 1.15, orientation: 'h', font: { size: 10, color: isDark ? '#adb5bd' : '#6c757d' } },
             xaxis: {
@@ -1278,6 +1351,7 @@
                 nodeNames: selectedNodes.map(n => n.name),
                 metrics: typeInfo.autoMetrics ? [] : selectedMetrics,
                 chartHours: existingWidget?.chartHours,
+                layout: existingWidget?.layout || undefined, // will be auto-assigned by ensureWidgetLayouts
                 createdAt: existingWidget?.createdAt || Date.now(),
                 updatedAt: Date.now(),
             };
@@ -1359,50 +1433,195 @@
         refreshAllWidgets();
     }
 
-    // ── Drag and Drop ───────────────────────────────────────────
-    function setupDragAndDrop(container) {
-        let draggedIndex = null;
+    // ── Grid Interactions (Drag-to-move & Resize) ─────────────
+    function setupGridInteractions(container) {
+        const db = getActiveDashboard();
 
-        container.querySelectorAll('.widget-card').forEach(card => {
-            card.addEventListener('dragstart', (e) => {
-                draggedIndex = parseInt(card.dataset.widgetIndex);
-                card.classList.add('dragging');
-                e.dataTransfer.effectAllowed = 'move';
-                e.dataTransfer.setData('text/plain', draggedIndex);
-            });
-
-            card.addEventListener('dragend', () => {
-                card.classList.remove('dragging');
-                container.querySelectorAll('.widget-card').forEach(c => c.classList.remove('drag-over'));
-                draggedIndex = null;
-            });
-
-            card.addEventListener('dragover', (e) => {
-                e.preventDefault();
-                e.dataTransfer.dropEffect = 'move';
-                card.classList.add('drag-over');
-            });
-
-            card.addEventListener('dragleave', () => {
-                card.classList.remove('drag-over');
-            });
-
-            card.addEventListener('drop', (e) => {
-                e.preventDefault();
-                card.classList.remove('drag-over');
-
-                const targetIndex = parseInt(card.dataset.widgetIndex);
-                if (draggedIndex === null || draggedIndex === targetIndex) return;
-
-                const db = getActiveDashboard();
-                const [moved] = db.widgets.splice(draggedIndex, 1);
-                db.widgets.splice(targetIndex, 0, moved);
-                db.updatedAt = Date.now();
-                saveDashboards();
-                renderWidgets();
-                refreshAllWidgets();
-            });
+        // ── Drag to move (via header) ──────────────
+        container.querySelectorAll('.widget-card-header').forEach(header => {
+            header.addEventListener('mousedown', onDragStart);
+            header.addEventListener('touchstart', onDragStartTouch, { passive: false });
         });
+
+        // ── Resize (via corner handle) ─────────────
+        container.querySelectorAll('.widget-resize-handle').forEach(handle => {
+            handle.addEventListener('mousedown', onResizeStart);
+            handle.addEventListener('touchstart', onResizeStartTouch, { passive: false });
+        });
+
+        /* ─── helpers ─── */
+
+        /** Convert a page-coordinate to a grid cell {col, row} */
+        function pageToGrid(pageX, pageY) {
+            const rect = container.getBoundingClientRect();
+            const scrollTop = window.pageYOffset || document.documentElement.scrollTop;
+            const scrollLeft = window.pageXOffset || document.documentElement.scrollLeft;
+            const x = pageX - rect.left - scrollLeft;
+            const y = pageY - rect.top - scrollTop;
+            const style = getComputedStyle(container);
+            const gap = parseFloat(style.gap) || parseFloat(style.gridGap) || 12;
+            const colWidth = (rect.width - gap * (GRID_COLS - 1)) / GRID_COLS;
+            const rowHeight = parseFloat(style.gridAutoRows) || 80;
+            const col = Math.max(1, Math.min(GRID_COLS, Math.floor(x / (colWidth + gap)) + 1));
+            const row = Math.max(1, Math.floor(y / (rowHeight + gap)) + 1);
+            return { col, row, colWidth, rowHeight, gap };
+        }
+
+        /** Remove placeholder element if it exists */
+        function removePlaceholder() {
+            container.querySelector('.grid-drop-placeholder')?.remove();
+        }
+
+        /** Show / update placeholder */
+        function showPlaceholder(col, row, w, h) {
+            let ph = container.querySelector('.grid-drop-placeholder');
+            if (!ph) {
+                ph = document.createElement('div');
+                ph.className = 'grid-drop-placeholder';
+                container.appendChild(ph);
+            }
+            ph.style.gridColumn = `${col} / span ${w}`;
+            ph.style.gridRow = `${row} / span ${h}`;
+        }
+
+        /* ─── DRAG ─── */
+        function onDragStartTouch(e) {
+            if (e.touches.length !== 1) return;
+            const touch = e.touches[0];
+            const header = e.currentTarget;
+            const card = header.closest('.widget-card');
+            if (!card) return;
+            e.preventDefault();
+            beginDrag(card, touch.pageX, touch.pageY, true);
+        }
+
+        function onDragStart(e) {
+            // Ignore clicks on buttons inside header
+            if (e.target.closest('button')) return;
+            const header = e.currentTarget;
+            const card = header.closest('.widget-card');
+            if (!card) return;
+            e.preventDefault();
+            beginDrag(card, e.pageX, e.pageY, false);
+        }
+
+        function beginDrag(card, startX, startY, isTouch) {
+            const widgetIndex = parseInt(card.dataset.widgetIndex);
+            const widget = db.widgets[widgetIndex];
+            if (!widget) return;
+
+            const layout = widget.layout;
+            card.classList.add('dragging');
+            container.classList.add('drag-active');
+
+            const moveEvent = isTouch ? 'touchmove' : 'mousemove';
+            const upEvent = isTouch ? 'touchend' : 'mouseup';
+
+            let lastCol = layout.col;
+            let lastRow = layout.row;
+
+            showPlaceholder(layout.col, layout.row, layout.w, layout.h);
+
+            function onMove(ev) {
+                const px = isTouch ? ev.touches[0].pageX : ev.pageX;
+                const py = isTouch ? ev.touches[0].pageY : ev.pageY;
+                const g = pageToGrid(px, py);
+                // Centre the widget on the cursor
+                let col = g.col - Math.floor(layout.w / 2);
+                col = Math.max(1, Math.min(GRID_COLS - layout.w + 1, col));
+                let row = Math.max(1, g.row - Math.floor(layout.h / 2));
+                if (col !== lastCol || row !== lastRow) {
+                    lastCol = col;
+                    lastRow = row;
+                    showPlaceholder(col, row, layout.w, layout.h);
+                }
+            }
+
+            function onUp() {
+                document.removeEventListener(moveEvent, onMove);
+                document.removeEventListener(upEvent, onUp);
+                card.classList.remove('dragging');
+                container.classList.remove('drag-active');
+                removePlaceholder();
+
+                if (lastCol !== layout.col || lastRow !== layout.row) {
+                    layout.col = lastCol;
+                    layout.row = lastRow;
+                    db.updatedAt = Date.now();
+                    saveDashboards();
+                    renderWidgets();
+                    refreshAllWidgets();
+                }
+            }
+
+            document.addEventListener(moveEvent, onMove);
+            document.addEventListener(upEvent, onUp);
+        }
+
+        /* ─── RESIZE ─── */
+        function onResizeStartTouch(e) {
+            if (e.touches.length !== 1) return;
+            e.preventDefault();
+            const handle = e.currentTarget;
+            const card = handle.closest('.widget-card');
+            if (!card) return;
+            beginResize(card, e.touches[0].pageX, e.touches[0].pageY, true);
+        }
+
+        function onResizeStart(e) {
+            e.preventDefault();
+            e.stopPropagation();
+            const handle = e.currentTarget;
+            const card = handle.closest('.widget-card');
+            if (!card) return;
+            beginResize(card, e.pageX, e.pageY, false);
+        }
+
+        function beginResize(card, startX, startY, isTouch) {
+            const widgetIndex = parseInt(card.dataset.widgetIndex);
+            const widget = db.widgets[widgetIndex];
+            if (!widget) return;
+
+            const layout = widget.layout;
+            const startW = layout.w;
+            const startH = layout.h;
+
+            const moveEvent = isTouch ? 'touchmove' : 'mousemove';
+            const upEvent = isTouch ? 'touchend' : 'mouseup';
+
+            let newW = startW;
+            let newH = startH;
+
+            function onMove(ev) {
+                const px = isTouch ? ev.touches[0].pageX : ev.pageX;
+                const py = isTouch ? ev.touches[0].pageY : ev.pageY;
+                const g = pageToGrid(px, py);
+                // Width = cursor col - widget start col + 1, clamped
+                newW = Math.max(MIN_W, Math.min(GRID_COLS - layout.col + 1, g.col - layout.col + 1));
+                newH = Math.max(MIN_H, Math.min(MAX_H, g.row - layout.row + 1));
+
+                // Live preview via inline style
+                card.style.gridColumn = `${layout.col} / span ${newW}`;
+                card.style.gridRow = `${layout.row} / span ${newH}`;
+            }
+
+            function onUp() {
+                document.removeEventListener(moveEvent, onMove);
+                document.removeEventListener(upEvent, onUp);
+
+                if (newW !== startW || newH !== startH) {
+                    layout.w = newW;
+                    layout.h = newH;
+                    db.updatedAt = Date.now();
+                    saveDashboards();
+                    renderWidgets();
+                    refreshAllWidgets();
+                }
+            }
+
+            document.addEventListener(moveEvent, onMove);
+            document.addEventListener(upEvent, onUp);
+        }
     }
 
     // ── Helpers ──────────────────────────────────────────────────
