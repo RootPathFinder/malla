@@ -415,7 +415,9 @@ class TestDashboardConfigAPI:
     @pytest.mark.api
     def test_save_config_too_many_dashboards(self, operator_client):
         """PUT with >20 dashboards returns 400."""
-        dashboards = [{"id": f"db_{i}", "name": f"D{i}", "widgets": []} for i in range(21)]
+        dashboards = [
+            {"id": f"db_{i}", "name": f"D{i}", "widgets": []} for i in range(21)
+        ]
         response = operator_client.put(
             "/api/custom-dashboard/config",
             data=json.dumps({"dashboards": dashboards}),
@@ -447,9 +449,7 @@ class TestDashboardConfigAPI:
             "/api/custom-dashboard/config",
             data=json.dumps(
                 {
-                    "dashboards": [
-                        {"id": "db_1", "name": "First", "widgets": []}
-                    ],
+                    "dashboards": [{"id": "db_1", "name": "First", "widgets": []}],
                 }
             ),
             content_type="application/json",
@@ -459,9 +459,7 @@ class TestDashboardConfigAPI:
             "/api/custom-dashboard/config",
             data=json.dumps(
                 {
-                    "dashboards": [
-                        {"id": "db_2", "name": "Second", "widgets": []}
-                    ],
+                    "dashboards": [{"id": "db_2", "name": "Second", "widgets": []}],
                     "active_dashboard_id": "db_2",
                 }
             ),

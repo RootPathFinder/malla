@@ -48,8 +48,7 @@ def _ensure_table(cursor: sqlite3.Cursor) -> None:
     """)
 
     cursor.execute(
-        "CREATE INDEX IF NOT EXISTS idx_channel_dir_active "
-        "ON channel_directory(active)"
+        "CREATE INDEX IF NOT EXISTS idx_channel_dir_active ON channel_directory(active)"
     )
     cursor.execute(
         "CREATE INDEX IF NOT EXISTS idx_channel_dir_name "
@@ -289,8 +288,7 @@ class ChannelDirectoryRepository:
             _ensure_table(cursor)
 
             cursor.execute(
-                "SELECT * FROM channel_directory "
-                "WHERE channel_name = ? COLLATE NOCASE",
+                "SELECT * FROM channel_directory WHERE channel_name = ? COLLATE NOCASE",
                 (channel_name.strip(),),
             )
             row = cursor.fetchone()

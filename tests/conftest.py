@@ -256,13 +256,12 @@ def test_client():
     # Build a config object pointing at the temporary DB
     cfg = AppConfig(database_file=temp_db.name)
 
-    # Reset module-level table-creation flags so that lazy-init tables
-    # (like channel_directory, custom_dashboards) are re-created in the fresh temp database.
+    # Reset module-level table-creation flag for channel directory.
+    # Note: dashboard_repository no longer uses a flag - it always runs
+    # CREATE TABLE IF NOT EXISTS for robustness.
     import malla.database.channel_directory_repository as _cd_repo
-    import malla.database.dashboard_repository as _dash_repo
 
     _cd_repo._TABLE_CREATED = False
-    _dash_repo._TABLE_CREATED = False
 
     try:
         # Create the app with injected config
@@ -317,13 +316,12 @@ def app():
     # Build a config object pointing at the temporary DB
     cfg = AppConfig(database_file=temp_db.name)
 
-    # Reset module-level table-creation flags so that lazy-init tables
-    # (like channel_directory, custom_dashboards) are re-created in the fresh temp database.
+    # Reset module-level table-creation flag for channel directory.
+    # Note: dashboard_repository no longer uses a flag - it always runs
+    # CREATE TABLE IF NOT EXISTS for robustness.
     import malla.database.channel_directory_repository as _cd_repo
-    import malla.database.dashboard_repository as _dash_repo
 
     _cd_repo._TABLE_CREATED = False
-    _dash_repo._TABLE_CREATED = False
 
     try:
         # Create the app with injected config

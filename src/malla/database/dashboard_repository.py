@@ -20,19 +20,15 @@ logger = logging.getLogger(__name__)
 # Schema management
 # ---------------------------------------------------------------------------
 
-_TABLE_CREATED = False
-
 
 def _ensure_table(cursor: sqlite3.Cursor) -> None:
     """Create the custom_dashboards table if it does not exist yet.
 
-    Safe to call repeatedly – the CREATE TABLE uses IF NOT EXISTS and a
-    module-level flag avoids hitting the database more than once per process.
+    Safe to call repeatedly – the CREATE TABLE uses IF NOT EXISTS
+    so this is idempotent. We always run the DDL rather than caching
+    in a module-level flag, which makes the code more robust across
+    test runs that swap out the underlying database file.
     """
-    global _TABLE_CREATED  # noqa: PLW0603
-    if _TABLE_CREATED:
-        return
-
     cursor.execute("""
         CREATE TABLE IF NOT EXISTS custom_dashboards (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -49,8 +45,6 @@ def _ensure_table(cursor: sqlite3.Cursor) -> None:
         "CREATE INDEX IF NOT EXISTS idx_custom_dashboards_user "
         "ON custom_dashboards(user_id)"
     )
-
-    _TABLE_CREATED = True
 
 
 # ---------------------------------------------------------------------------
