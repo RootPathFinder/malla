@@ -278,13 +278,31 @@
     // Live Activity Popup System
     // =========================================================================
 
-    const ACTIVITY_POLL_INTERVAL = 5000; // Poll every 5 seconds
     const ACTIVITY_POPUP_DURATION = 20000; // Show popup for 20 seconds
     const MAX_VISIBLE_POPUPS = 5;
+    const DEFAULT_POLL_INTERVAL = 5; // Default 5 seconds
 
     let lastActivityTimestamp = Date.now() / 1000;
     let activityPollTimer = null;
     let activePopups = new Map(); // Track active popups by event ID
+
+    /**
+     * Get the configured poll interval in milliseconds
+     * @returns {number} Poll interval in ms
+     */
+    function getPollInterval() {
+        // Try to get from UserPreferences if available
+        if (window.UserPreferences && typeof window.UserPreferences.getPinnedPollInterval === 'function') {
+            return window.UserPreferences.getPinnedPollInterval() * 1000;
+        }
+        // Fallback to localStorage directly
+        const stored = localStorage.getItem('malla-pinned-poll-interval');
+        const seconds = parseInt(stored, 10);
+        if (!isNaN(seconds) && seconds >= 1 && seconds <= 10) {
+            return seconds * 1000;
+        }
+        return DEFAULT_POLL_INTERVAL * 1000;
+    }
 
     /**
      * Show an activity popup for a node
@@ -388,44 +406,44 @@
         }
 
         try {
-            const response = await fetch('/api/live/recent?limit=20');
+            // Use /api/packets/new which polls the database directly for new packets
+            const response = await fetch(`/api/packets/new?since=${lastActivityTimestamp}&limit=50`);
             if (!response.ok) return;
 
             const data = await response.json();
-            const events = data.events || [];
+            const packets = data.packets || [];
 
-            // Filter to events newer than last check
-            const newEvents = events.filter(e => e.timestamp > lastActivityTimestamp);
-
-            if (newEvents.length > 0) {
-                lastActivityTimestamp = Math.max(...newEvents.map(e => e.timestamp));
+            if (packets.length > 0) {
+                // Update lastActivityTimestamp to the newest packet
+                lastActivityTimestamp = Math.max(...packets.map(p => p.timestamp));
 
                 // Get pinned node IDs for matching
                 const pinnedNodeIds = new Set(pinnedNodes.map(n => n.node_id));
 
-                // Show popups for pinned node activity (prioritize pinned)
-                newEvents.forEach(event => {
-                    // Event data is nested under event.data from the API
-                    const eventData = event.data || {};
-                    const nodeId = eventData.from_node || eventData.node_id || eventData.to_node;
+                // Show popups for pinned node activity
+                packets.forEach(packet => {
+                    const fromNodeId = packet.from_node_id;
 
-                    if (nodeId == null) {
+                    if (fromNodeId == null) {
                         return;
                     }
 
-                    const isPinned = pinnedNodeIds.has(nodeId);
+                    const isPinned = pinnedNodeIds.has(fromNodeId);
 
                     // Only show activity for pinned nodes
                     if (isPinned) {
-                        // Flatten event data for popup display
-                        const flatEvent = {
-                            ...eventData,
-                            id: event.id,
-                            type: eventData.type || event.type,
-                            timestamp: event.timestamp,
-                            severity: event.severity
+                        // Convert packet to event format for popup display
+                        const event = {
+                            id: `packet-${packet.id}`,
+                            from_node: fromNodeId,
+                            from_name: packet.from_node_name || `!${fromNodeId.toString(16).padStart(8, '0')}`,
+                            to_node: packet.to_node_id,
+                            type: packet.portnum_name || 'Packet',
+                            timestamp: packet.timestamp,
+                            rssi: packet.rssi,
+                            snr: packet.snr
                         };
-                        showActivityPopup(flatEvent, true);
+                        showActivityPopup(event, true);
                     }
                 });
             }
@@ -443,8 +461,26 @@
         // Initial poll
         pollNodeActivity();
 
-        // Set up interval
-        activityPollTimer = setInterval(pollNodeActivity, ACTIVITY_POLL_INTERVAL);
+        // Set up interval with configurable duration
+        activityPollTimer = setInterval(pollNodeActivity, getPollInterval());
+
+        // Listen for preference changes to restart polling with new interval
+        window.addEventListener('pinnedPollIntervalChanged', function() {
+            restartActivityPolling();
+        });
+        window.addEventListener('preferenceChanged', function(e) {
+            if (e.detail && e.detail.key === 'malla-pinned-poll-interval') {
+                restartActivityPolling();
+            }
+        });
+    }
+
+    /**
+     * Restart activity polling (used when interval changes)
+     */
+    function restartActivityPolling() {
+        stopActivityPolling();
+        activityPollTimer = setInterval(pollNodeActivity, getPollInterval());
     }
 
     /**

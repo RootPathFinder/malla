@@ -151,6 +151,48 @@ def change_password():
     return redirect(url_for("auth.profile"))
 
 
+@auth_bp.route("/api/preferences", methods=["GET"])
+@login_required
+def get_preferences():
+    """Get current user's preferences."""
+    prefs = AuthService.get_user_preferences(current_user.id)
+    return jsonify({"preferences": prefs})
+
+
+@auth_bp.route("/api/preferences", methods=["POST"])
+@login_required
+def set_preferences():
+    """Set current user's preferences (replaces all)."""
+    try:
+        data = request.get_json()
+        if not data or "preferences" not in data:
+            return jsonify({"error": "Missing preferences data"}), 400
+
+        if AuthService.set_user_preferences(current_user.id, data["preferences"]):
+            return jsonify({"success": True, "preferences": data["preferences"]})
+        return jsonify({"error": "Failed to save preferences"}), 500
+    except Exception as e:
+        logger.error(f"Error setting preferences: {e}")
+        return jsonify({"error": str(e)}), 500
+
+
+@auth_bp.route("/api/preferences/<key>", methods=["PUT"])
+@login_required
+def update_preference(key: str):
+    """Update a single preference."""
+    try:
+        data = request.get_json()
+        if data is None or "value" not in data:
+            return jsonify({"error": "Missing value"}), 400
+
+        if AuthService.update_user_preference(current_user.id, key, data["value"]):
+            return jsonify({"success": True, "key": key, "value": data["value"]})
+        return jsonify({"error": "Failed to save preference"}), 500
+    except Exception as e:
+        logger.error(f"Error updating preference {key}: {e}")
+        return jsonify({"error": str(e)}), 500
+
+
 # ============================================================================
 # User Management Routes (Admin Only)
 # ============================================================================

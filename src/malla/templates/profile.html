@@ -109,6 +109,62 @@
                 </div>
             </div>
 
+            <!-- User Preferences Card -->
+            <div class="card mt-4">
+                <div class="card-header">
+                    <h5 class="mb-0"><i class="bi bi-sliders me-2"></i>Preferences</h5>
+                </div>
+                <div class="card-body">
+                    <p class="text-muted small mb-4">
+                        These settings are stored locally in your browser and will persist across sessions.
+                    </p>
+
+                    <div class="row">
+                        <!-- Temperature Unit -->
+                        <div class="col-md-6 mb-4">
+                            <label for="pref-temperature-unit" class="form-label">
+                                <i class="bi bi-thermometer-half me-1"></i>Temperature Unit
+                            </label>
+                            <select id="pref-temperature-unit" class="form-select">
+                                <option value="C">Celsius (°C)</option>
+                                <option value="F">Fahrenheit (°F)</option>
+                            </select>
+                            <div class="form-text">Display temperatures in Celsius or Fahrenheit</div>
+                        </div>
+
+                        <!-- Timezone -->
+                        <div class="col-md-6 mb-4">
+                            <label for="pref-timezone" class="form-label">
+                                <i class="bi bi-globe me-1"></i>Timezone
+                            </label>
+                            <select id="pref-timezone" class="form-select">
+                                <option value="local">Local (Browser)</option>
+                                <option value="utc">UTC</option>
+                            </select>
+                            <div class="form-text">Display timestamps in local time or UTC</div>
+                        </div>
+
+                        <!-- Pinned Node Poll Interval -->
+                        <div class="col-md-6 mb-4">
+                            <label for="pref-pinned-poll-interval" class="form-label">
+                                <i class="bi bi-pin-angle me-1"></i>Pinned Node Refresh Rate
+                            </label>
+                            <div class="d-flex align-items-center">
+                                <input type="range"
+                                       id="pref-pinned-poll-interval"
+                                       class="form-range flex-grow-1"
+                                       min="1"
+                                       max="10"
+                                       step="1"
+                                       value="5">
+                                <span id="pref-pinned-poll-value" class="ms-3 badge bg-primary" style="min-width: 40px;">5s</span>
+                            </div>
+                            <div class="form-text">How often to check for new packets from pinned nodes (1-10 seconds)</div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
             {% if user.is_admin() %}
             <!-- Admin Quick Links -->
             <div class="card mt-4">
@@ -128,4 +184,14 @@
         </div>
     </div>
 </div>
+{% endblock %}
+
+{% block extra_js %}
+<script src="{{ url_for('static', filename='js/user-preferences.js') }}"></script>
+<style>
+    .pref-saved-indicator {
+        transition: opacity 0.3s ease;
+        opacity: 0;
+    }
+</style>
 {% endblock %}

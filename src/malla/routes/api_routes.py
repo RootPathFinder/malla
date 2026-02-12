@@ -2365,15 +2365,17 @@ def api_packets_new():
         conn = get_db_connection()
         cursor = conn.cursor()
 
-        # Get new packets since the given timestamp
+        # Get new packets since the given timestamp with node names
         query = """
         SELECT
-            id, timestamp, from_node_id, to_node_id, portnum_name,
-            gateway_id, channel_id, rssi, snr, hop_limit, hop_start,
-            payload_length, processed_successfully
-        FROM packet_history
-        WHERE timestamp > ?
-        ORDER BY timestamp DESC
+            p.id, p.timestamp, p.from_node_id, p.to_node_id, p.portnum_name,
+            p.gateway_id, p.channel_id, p.rssi, p.snr, p.hop_limit, p.hop_start,
+            p.payload_length, p.processed_successfully,
+            ni.long_name as from_node_name, ni.short_name as from_node_short
+        FROM packet_history p
+        LEFT JOIN node_info ni ON ni.node_id = p.from_node_id
+        WHERE p.timestamp > ?
+        ORDER BY p.timestamp DESC
         LIMIT ?
         """
 
@@ -2393,6 +2395,12 @@ def api_packets_new():
                 if packet_dict["hop_start"] and packet_dict["hop_limit"] is not None
                 else None
             )
+            # Format node name for display
+            if not packet_dict.get("from_node_name"):
+                if packet_dict.get("from_node_short"):
+                    packet_dict["from_node_name"] = packet_dict["from_node_short"]
+                elif packet_dict.get("from_node_id"):
+                    packet_dict["from_node_name"] = f"!{packet_dict['from_node_id']:08x}"
             packets.append(packet_dict)
 
         return jsonify({"packets": packets, "count": len(packets), "since": since})

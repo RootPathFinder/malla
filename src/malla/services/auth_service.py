@@ -6,6 +6,7 @@ Handles user creation, authentication, password hashing, and session management.
 
 from __future__ import annotations
 
+import json
 import logging
 import secrets
 import time
@@ -210,6 +211,80 @@ class AuthService:
             return False
 
     @staticmethod
+    def get_user_preferences(user_id: int) -> dict:
+        """
+        Get user preferences from database.
+
+        Args:
+            user_id: User ID
+
+        Returns:
+            dict: User preferences (empty dict if none set)
+        """
+        try:
+            conn = get_db_connection()
+            cursor = conn.cursor()
+            cursor.execute("SELECT preferences FROM users WHERE id = ?", (user_id,))
+            row = cursor.fetchone()
+            conn.close()
+
+            if row and row["preferences"]:
+                return json.loads(row["preferences"])
+            return {}
+        except Exception as e:
+            logger.error(f"Error getting preferences for user {user_id}: {e}")
+            return {}
+
+    @staticmethod
+    def set_user_preferences(user_id: int, preferences: dict) -> bool:
+        """
+        Set user preferences in database.
+
+        Args:
+            user_id: User ID
+            preferences: Preferences dictionary
+
+        Returns:
+            bool: True if successful
+        """
+        try:
+            conn = get_db_connection()
+            cursor = conn.cursor()
+            cursor.execute(
+                "UPDATE users SET preferences = ? WHERE id = ?",
+                (json.dumps(preferences), user_id),
+            )
+            conn.commit()
+            conn.close()
+
+            logger.debug(f"Preferences updated for user ID {user_id}")
+            return True
+        except Exception as e:
+            logger.error(f"Error setting preferences for user {user_id}: {e}")
+            return False
+
+    @staticmethod
+    def update_user_preference(user_id: int, key: str, value) -> bool:
+        """
+        Update a single user preference.
+
+        Args:
+            user_id: User ID
+            key: Preference key
+            value: Preference value
+
+        Returns:
+            bool: True if successful
+        """
+        try:
+            prefs = AuthService.get_user_preferences(user_id)
+            prefs[key] = value
+            return AuthService.set_user_preferences(user_id, prefs)
+        except Exception as e:
+            logger.error(f"Error updating preference {key} for user {user_id}: {e}")
+            return False
+
+    @staticmethod
     def deactivate_user(user_id: int) -> bool:
         """Deactivate a user (soft delete)."""
         try:
@@ -316,9 +391,17 @@ def _ensure_users_table() -> None:
                 role TEXT NOT NULL DEFAULT 'viewer',
                 created_at REAL NOT NULL,
                 last_login REAL,
-                is_active INTEGER DEFAULT 1
+                is_active INTEGER DEFAULT 1,
+                preferences TEXT
             )
         """)
+
+        # Add preferences column if it doesn't exist (for existing databases)
+        cursor.execute("PRAGMA table_info(users)")
+        columns = [col[1] for col in cursor.fetchall()]
+        if "preferences" not in columns:
+            cursor.execute("ALTER TABLE users ADD COLUMN preferences TEXT")
+            logger.info("Added preferences column to users table")
 
         cursor.execute(
             "CREATE INDEX IF NOT EXISTS idx_users_username ON users(username)"
