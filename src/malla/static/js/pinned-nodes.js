@@ -405,12 +405,27 @@
 
                 // Show popups for pinned node activity (prioritize pinned)
                 newEvents.forEach(event => {
-                    const nodeId = event.from_node || event.node_id;
+                    // Event data is nested under event.data from the API
+                    const eventData = event.data || {};
+                    const nodeId = eventData.from_node || eventData.node_id || eventData.to_node;
+
+                    if (nodeId == null) {
+                        return;
+                    }
+
                     const isPinned = pinnedNodeIds.has(nodeId);
 
                     // Only show activity for pinned nodes
                     if (isPinned) {
-                        showActivityPopup(event, true);
+                        // Flatten event data for popup display
+                        const flatEvent = {
+                            ...eventData,
+                            id: event.id,
+                            type: eventData.type || event.type,
+                            timestamp: event.timestamp,
+                            severity: event.severity
+                        };
+                        showActivityPopup(flatEvent, true);
                     }
                 });
             }
