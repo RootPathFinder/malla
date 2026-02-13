@@ -19,19 +19,13 @@ logger = logging.getLogger(__name__)
 # Schema management
 # ---------------------------------------------------------------------------
 
-_TABLE_CREATED = False
-
 
 def _ensure_table(cursor: sqlite3.Cursor) -> None:
     """Create the channel_directory table if it does not exist yet.
 
-    Safe to call repeatedly – the CREATE TABLE uses IF NOT EXISTS and a
-    module-level flag avoids hitting the database more than once per process.
+    Safe to call repeatedly – all DDL statements use IF NOT EXISTS,
+    making them idempotent and safe for concurrent calls.
     """
-    global _TABLE_CREATED  # noqa: PLW0603
-    if _TABLE_CREATED:
-        return
-
     cursor.execute("""
         CREATE TABLE IF NOT EXISTS channel_directory (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -54,8 +48,6 @@ def _ensure_table(cursor: sqlite3.Cursor) -> None:
         "CREATE INDEX IF NOT EXISTS idx_channel_dir_name "
         "ON channel_directory(channel_name COLLATE NOCASE)"
     )
-
-    _TABLE_CREATED = True
 
 
 # ---------------------------------------------------------------------------

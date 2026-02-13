@@ -2400,7 +2400,9 @@ def api_packets_new():
                 if packet_dict.get("from_node_short"):
                     packet_dict["from_node_name"] = packet_dict["from_node_short"]
                 elif packet_dict.get("from_node_id"):
-                    packet_dict["from_node_name"] = f"!{packet_dict['from_node_id']:08x}"
+                    packet_dict["from_node_name"] = (
+                        f"!{packet_dict['from_node_id']:08x}"
+                    )
             packets.append(packet_dict)
 
         return jsonify({"packets": packets, "count": len(packets), "since": since})

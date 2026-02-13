@@ -1019,7 +1019,7 @@ function updateSortIndicators() {
 // Load nodes with issues for dashboard
 async function loadDashboardNetworkHealth() {
     try {
-        const response = await fetch('/api/health/problematic-nodes?hours=24&min_health_score=70&limit=5');
+        const response = await fetch('/alerts/api/node-health');
         const data = await response.json();
 
         if (data.error) {
@@ -1028,19 +1028,25 @@ async function loadDashboardNetworkHealth() {
         }
 
         const listContainer = document.getElementById('nodes-with-issues-list');
-        const nodes = data.problematic_nodes || [];
+        const nodes = data.nodes_needing_attention || [];
 
         if (nodes.length === 0) {
             listContainer.innerHTML = '<div class="text-success mb-2"><i class="bi bi-check-circle"></i> All nodes healthy</div>';
         } else {
+            // Show only first 5 nodes
+            const displayNodes = nodes.slice(0, 5);
             let html = '<ul class="list-unstyled mb-2">';
-            nodes.forEach(node => {
-                const statusClass = node.health_score < 50 ? 'text-danger' : 'text-warning';
-                const statusIcon = node.health_score < 50 ? 'exclamation-triangle-fill' : 'exclamation-circle';
-                const nodeName = node.display_name || node.short_name || `!${node.node_id.toString(16).padStart(8, '0')}`;
-                const topIssue = node.issues && node.issues.length > 0 ? node.issues[0].message : 'Health issues detected';
+            displayNodes.forEach(node => {
+                const statusClass = node.status === 'critical' ? 'text-danger' : 'text-warning';
+                const statusIcon = node.status === 'critical' ? 'exclamation-triangle-fill' : 'exclamation-circle';
+                const nodeName = node.name || node.node_id_hex || `!${node.node_id.toString(16).padStart(8, '0')}`;
+                // Build issue text from status and value
+                let issueText = node.issue || 'Health issue detected';
+                if (node.value) {
+                    issueText += ` (${node.value})`;
+                }
                 // Truncate issue message if too long
-                const truncatedIssue = topIssue.length > 40 ? topIssue.substring(0, 40) + '...' : topIssue;
+                const truncatedIssue = issueText.length > 40 ? issueText.substring(0, 40) + '...' : issueText;
                 html += `<li class="mb-1">
                     <a href="/nodes/${node.node_id}" class="${statusClass}" style="text-decoration: none;">
                         <i class="bi bi-${statusIcon}"></i> ${nodeName}
@@ -1049,8 +1055,8 @@ async function loadDashboardNetworkHealth() {
                 </li>`;
             });
             html += '</ul>';
-            if (data.total_count > 5) {
-                html += `<div class="text-muted mb-1">+ ${data.total_count - 5} more nodes with issues</div>`;
+            if (nodes.length > 5) {
+                html += `<div class="text-muted mb-1">+ ${nodes.length - 5} more nodes with issues</div>`;
             }
             listContainer.innerHTML = html;
         }

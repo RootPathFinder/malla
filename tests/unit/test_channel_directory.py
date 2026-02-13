@@ -13,22 +13,20 @@ from malla.database.channel_directory_repository import (
 )
 
 
-@pytest.fixture(autouse=True)
-def _reset_table_flag():
-    """Reset the module-level table-created flag between tests."""
-    import malla.database.channel_directory_repository as mod
-
-    mod._TABLE_CREATED = False
-    yield
-    mod._TABLE_CREATED = False
-
-
 @pytest.fixture()
 def _temp_db(monkeypatch):
-    """Create a temporary database and point the config at it."""
+    """Create a temporary database and point the config at it.
+
+    Uses environment variable override for complete database isolation
+    during parallel test execution.
+    """
     tmp = tempfile.NamedTemporaryFile(delete=False, suffix=".db")
     tmp.close()
 
+    # Set environment variable - this takes priority in get_db_connection()
+    monkeypatch.setenv("MALLA_DATABASE_FILE", tmp.name)
+
+    # Also patch config for any code paths that check it directly
     cfg = AppConfig(database_file=tmp.name)
     monkeypatch.setattr("malla.database.connection.get_config", lambda: cfg)
 
