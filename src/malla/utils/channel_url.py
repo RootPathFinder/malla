@@ -37,15 +37,21 @@ def generate_channel_url(
 
         channel_set = apponly_pb2.ChannelSet()
 
-        # Build channel settings
+        # Build channel settings - ONLY the channel, nothing else
         ch_settings = channel_pb2.ChannelSettings()
         ch_settings.name = channel_name
         ch_settings.psk = base64.b64decode(psk_base64)
         channel_set.settings.append(ch_settings)
 
-        # NOTE: We intentionally omit lora_config so the Meshtastic app
+        # CRITICAL: We intentionally omit lora_config so the Meshtastic app
         # treats this as "add channel" rather than "replace all channels
-        # with this configuration."
+        # with this configuration." When lora_config is absent, the app
+        # should only add this single channel without touching existing
+        # channels or LoRa settings.
+        #
+        # If lora_config were present (even empty), some app versions
+        # interpret that as "replace entire radio configuration."
+        channel_set.ClearField("lora_config")
 
         # Serialise → base64url (strip padding for shorter URLs)
         proto_bytes = channel_set.SerializeToString()
