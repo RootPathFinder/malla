@@ -159,14 +159,15 @@
                     </div>
 
                     <div class="mb-3">
-                        <h6 style="font-family: var(--bs-font-sans-serif); font-weight: 600; margin-bottom: 0.5rem;">Nodes with Issues</h6>
+                        <h6 style="font-family: var(--bs-font-sans-serif); font-weight: 600; margin-bottom: 0.5rem;">Node Health</h6>
                         <div id="network-health-loading" class="text-center p-2">
                             <div class="spinner-border spinner-border-sm text-primary" role="status">
                                 <span class="visually-hidden">Loading...</span>
                             </div>
                         </div>
                         <div id="network-health-content" style="display: none;">
-                            <div id="nodes-with-issues-list" class="small">
+                            <div id="node-health-chart" style="height: 180px; width: 100%;"></div>
+                            <div id="node-health-legend" class="small mt-2">
                                 <!-- Populated by JavaScript -->
                             </div>
                             <small class="text-muted" style="font-family: var(--bs-font-sans-serif);">
@@ -1016,7 +1017,7 @@ function updateSortIndicators() {
     });
 }
 
-// Load nodes with issues for dashboard
+// Load nodes with issues for dashboard - renders as donut chart
 async function loadDashboardNetworkHealth() {
     try {
         const response = await fetch('/alerts/api/node-health');
@@ -1027,38 +1028,136 @@ async function loadDashboardNetworkHealth() {
             return;
         }
 
-        const listContainer = document.getElementById('nodes-with-issues-list');
+        const chartContainer = document.getElementById('node-health-chart');
+        const legendContainer = document.getElementById('node-health-legend');
         const nodes = data.nodes_needing_attention || [];
+        const totalNodes = data.total || 0;
+        const healthyCount = data.healthy || 0;
+        const criticalCount = data.critical || 0;
+        const warningCount = data.warning || 0;
+        const offlineCount = data.offline || 0;
 
-        if (nodes.length === 0) {
-            listContainer.innerHTML = '<div class="text-success mb-2"><i class="bi bi-check-circle"></i> All nodes healthy</div>';
+        const isDarkMode = document.documentElement.getAttribute('data-bs-theme') === 'dark';
+
+        if (totalNodes === 0) {
+            chartContainer.innerHTML = '<div class="text-center text-muted p-3"><i class="bi bi-inbox"></i> No nodes detected</div>';
+            legendContainer.innerHTML = '';
+        } else if (nodes.length === 0) {
+            // All healthy - show a green filled chart
+            const traceData = [{
+                values: [1],
+                labels: ['Healthy'],
+                type: 'pie',
+                hole: 0.6,
+                marker: { colors: ['#198754'] },
+                textinfo: 'none',
+                hoverinfo: 'label+value',
+                hovertemplate: '<b>%{label}</b>: %{value}<extra></extra>'
+            }];
+
+            const layout = {
+                margin: { t: 10, r: 10, b: 10, l: 10 },
+                paper_bgcolor: 'transparent',
+                showlegend: false,
+                annotations: [{
+                    text: `<b>${totalNodes}</b><br>Healthy`,
+                    x: 0.5, y: 0.5,
+                    font: { size: 14, color: '#198754' },
+                    showarrow: false
+                }]
+            };
+
+            Plotly.newPlot(chartContainer, traceData, layout, { responsive: true, displayModeBar: false });
+            legendContainer.innerHTML = `<div class="text-success"><i class="bi bi-check-circle-fill"></i> All ${totalNodes} nodes healthy</div>`;
         } else {
-            // Show only first 5 nodes
-            const displayNodes = nodes.slice(0, 5);
-            let html = '<ul class="list-unstyled mb-2">';
-            displayNodes.forEach(node => {
-                const statusClass = node.status === 'critical' ? 'text-danger' : 'text-warning';
-                const statusIcon = node.status === 'critical' ? 'exclamation-triangle-fill' : 'exclamation-circle';
-                const nodeName = node.name || node.node_id_hex || `!${node.node_id.toString(16).padStart(8, '0')}`;
-                // Build issue text from status and value
-                let issueText = node.issue || 'Health issue detected';
-                if (node.value) {
-                    issueText += ` (${node.value})`;
-                }
-                // Truncate issue message if too long
-                const truncatedIssue = issueText.length > 40 ? issueText.substring(0, 40) + '...' : issueText;
-                html += `<li class="mb-1">
-                    <a href="/node/${node.node_id}" class="${statusClass}" style="text-decoration: none;">
-                        <i class="bi bi-${statusIcon}"></i> ${nodeName}
-                    </a>
-                    <div class="text-muted" style="font-size: 0.75rem; margin-left: 1.1rem;">${truncatedIssue}</div>
-                </li>`;
-            });
-            html += '</ul>';
-            if (nodes.length > 5) {
-                html += `<div class="text-muted mb-1">+ ${nodes.length - 5} more nodes with issues</div>`;
+            // Build donut chart with issues breakdown
+            const values = [];
+            const labels = [];
+            const colors = [];
+
+            if (criticalCount > 0) {
+                values.push(criticalCount);
+                labels.push('Critical');
+                colors.push('#dc3545');
             }
-            listContainer.innerHTML = html;
+            if (warningCount > 0) {
+                values.push(warningCount);
+                labels.push('Warning');
+                colors.push('#ffc107');
+            }
+            if (offlineCount > 0) {
+                values.push(offlineCount);
+                labels.push('Offline');
+                colors.push('#6c757d');
+            }
+            if (healthyCount > 0) {
+                values.push(healthyCount);
+                labels.push('Healthy');
+                colors.push('#198754');
+            }
+
+            const traceData = [{
+                values: values,
+                labels: labels,
+                type: 'pie',
+                hole: 0.6,
+                marker: { colors: colors },
+                textinfo: 'none',
+                hoverinfo: 'label+value+percent',
+                hovertemplate: '<b>%{label}</b>: %{value} (%{percent})<extra></extra>'
+            }];
+
+            const issueCount = criticalCount + warningCount;
+            const centerColor = criticalCount > 0 ? '#dc3545' : (warningCount > 0 ? '#ffc107' : '#198754');
+            const centerText = issueCount > 0 ? `<b>${issueCount}</b><br>Issues` : `<b>${totalNodes}</b><br>Nodes`;
+
+            const layout = {
+                margin: { t: 10, r: 10, b: 10, l: 10 },
+                paper_bgcolor: 'transparent',
+                showlegend: false,
+                annotations: [{
+                    text: centerText,
+                    x: 0.5, y: 0.5,
+                    font: { size: 14, color: centerColor },
+                    showarrow: false
+                }]
+            };
+
+            Plotly.newPlot(chartContainer, traceData, layout, { responsive: true, displayModeBar: false });
+
+            // Build clickable legend with top issues
+            let legendHtml = '<div class="d-flex flex-wrap justify-content-center gap-2 mb-2" style="font-size: 0.8rem;">';
+            if (criticalCount > 0) {
+                legendHtml += `<span class="text-danger"><i class="bi bi-circle-fill"></i> ${criticalCount} Critical</span>`;
+            }
+            if (warningCount > 0) {
+                legendHtml += `<span class="text-warning"><i class="bi bi-circle-fill"></i> ${warningCount} Warning</span>`;
+            }
+            if (offlineCount > 0) {
+                legendHtml += `<span class="text-secondary"><i class="bi bi-circle-fill"></i> ${offlineCount} Offline</span>`;
+            }
+            legendHtml += `<span class="text-success"><i class="bi bi-circle-fill"></i> ${healthyCount} OK</span>`;
+            legendHtml += '</div>';
+
+            // Show top 3 issues as clickable links
+            const topIssues = nodes.slice(0, 3);
+            if (topIssues.length > 0) {
+                legendHtml += '<div class="border-top pt-2 mt-1">';
+                topIssues.forEach(node => {
+                    const statusClass = node.status === 'critical' ? 'text-danger' : 'text-warning';
+                    const nodeName = node.name || node.node_id_hex || `!${node.node_id.toString(16).padStart(8, '0')}`;
+                    const shortName = nodeName.length > 15 ? nodeName.substring(0, 15) + '…' : nodeName;
+                    legendHtml += `<a href="/node/${node.node_id}" class="${statusClass} d-block text-truncate" style="text-decoration: none; font-size: 0.8rem;">
+                        <i class="bi bi-dot"></i> ${shortName}
+                    </a>`;
+                });
+                if (nodes.length > 3) {
+                    legendHtml += `<span class="text-muted" style="font-size: 0.75rem;">+${nodes.length - 3} more</span>`;
+                }
+                legendHtml += '</div>';
+            }
+
+            legendContainer.innerHTML = legendHtml;
         }
 
         document.getElementById('network-health-loading').style.display = 'none';
