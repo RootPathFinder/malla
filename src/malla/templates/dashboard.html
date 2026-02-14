@@ -1048,7 +1048,7 @@ async function loadDashboardNetworkHealth() {
                 // Truncate issue message if too long
                 const truncatedIssue = issueText.length > 40 ? issueText.substring(0, 40) + '...' : issueText;
                 html += `<li class="mb-1">
-                    <a href="/nodes/${node.node_id}" class="${statusClass}" style="text-decoration: none;">
+                    <a href="/node/${node.node_id}" class="${statusClass}" style="text-decoration: none;">
                         <i class="bi bi-${statusIcon}"></i> ${nodeName}
                     </a>
                     <div class="text-muted" style="font-size: 0.75rem; margin-left: 1.1rem;">${truncatedIssue}</div>

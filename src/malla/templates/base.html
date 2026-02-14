@@ -427,24 +427,13 @@
                         </ul>
                     </li>
 
-                    <!-- Monitoring dropdown (Power, Alerts, Archived) -->
+                    <!-- Telemetry dropdown (Sensors, Paxcounter, Weather, Power) -->
                     <li class="nav-item dropdown">
-                        {% set monitoring_active = request.endpoint in ['battery.battery_analytics', 'main.weather_map', 'main.network_dependency', 'main.sensor_dashboard', 'main.paxcounter', 'alerts.alerts_page', 'alerts.archived_nodes_page', 'custom_dashboard.custom_dashboard'] %}
-                        <a class="nav-link dropdown-toggle {{ 'active' if monitoring_active }}" href="#" id="monitoringDropdown" role="button" data-bs-toggle="dropdown">
-                            Monitoring
+                        {% set telemetry_active = request.endpoint in ['main.sensor_dashboard', 'main.paxcounter', 'main.weather_map', 'battery.battery_analytics'] %}
+                        <a class="nav-link dropdown-toggle {{ 'active' if telemetry_active }}" href="#" id="telemetryDropdown" role="button" data-bs-toggle="dropdown">
+                            Telemetry
                         </a>
                         <ul class="dropdown-menu">
-                            <li>
-                                <a class="dropdown-item {{ 'active' if request.endpoint == 'custom_dashboard.custom_dashboard' }}" href="{{ url_for('custom_dashboard.custom_dashboard') }}">
-                                    <i class="bi bi-grid-1x2"></i> Custom Dashboard
-                                </a>
-                            </li>
-                            <li><hr class="dropdown-divider"></li>
-                            <li>
-                                <a class="dropdown-item {{ 'active' if request.endpoint == 'alerts.alerts_page' }}" href="{{ url_for('alerts.alerts_page') }}">
-                                    <i class="bi bi-bell"></i> Insights & Alerts
-                                </a>
-                            </li>
                             <li>
                                 <a class="dropdown-item {{ 'active' if request.endpoint == 'main.sensor_dashboard' }}" href="{{ url_for('main.sensor_dashboard') }}">
                                     <i class="bi bi-broadcast-pin"></i> Sensor Dashboard
@@ -456,13 +445,28 @@
                                 </a>
                             </li>
                             <li>
+                                <a class="dropdown-item {{ 'active' if request.endpoint == 'main.weather_map' }}" href="{{ url_for('main.weather_map') }}">
+                                    <i class="bi bi-thermometer-half"></i> Weather Map
+                                </a>
+                            </li>
+                            <li>
                                 <a class="dropdown-item {{ 'active' if request.endpoint == 'battery.battery_analytics' }}" href="{{ url_for('battery.battery_analytics') }}">
                                     <i class="bi bi-battery-charging"></i> Power Analytics
                                 </a>
                             </li>
+                        </ul>
+                    </li>
+
+                    <!-- Health dropdown (Alerts, Dependencies, Archived, Custom Dashboard) -->
+                    <li class="nav-item dropdown">
+                        {% set health_active = request.endpoint in ['alerts.alerts_page', 'main.network_dependency', 'alerts.archived_nodes_page', 'custom_dashboard.custom_dashboard'] %}
+                        <a class="nav-link dropdown-toggle {{ 'active' if health_active }}" href="#" id="healthDropdown" role="button" data-bs-toggle="dropdown">
+                            Health
+                        </a>
+                        <ul class="dropdown-menu">
                             <li>
-                                <a class="dropdown-item {{ 'active' if request.endpoint == 'main.weather_map' }}" href="{{ url_for('main.weather_map') }}">
-                                    <i class="bi bi-thermometer-half"></i> Weather Map
+                                <a class="dropdown-item {{ 'active' if request.endpoint == 'alerts.alerts_page' }}" href="{{ url_for('alerts.alerts_page') }}">
+                                    <i class="bi bi-bell"></i> Insights & Alerts
                                 </a>
                             </li>
                             <li>
@@ -471,6 +475,11 @@
                                 </a>
                             </li>
                             <li><hr class="dropdown-divider"></li>
+                            <li>
+                                <a class="dropdown-item {{ 'active' if request.endpoint == 'custom_dashboard.custom_dashboard' }}" href="{{ url_for('custom_dashboard.custom_dashboard') }}">
+                                    <i class="bi bi-grid-1x2"></i> Custom Dashboard
+                                </a>
+                            </li>
                             <li>
                                 <a class="dropdown-item {{ 'active' if request.endpoint == 'alerts.archived_nodes_page' }}" href="{{ url_for('alerts.archived_nodes_page') }}">
                                     <i class="bi bi-archive"></i> Archived Nodes
