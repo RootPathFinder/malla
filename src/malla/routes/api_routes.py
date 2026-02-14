@@ -1100,6 +1100,154 @@ def api_traceroute_hops_nodes():
         return jsonify({"error": str(e)}), 500
 
 
+@api_bp.route("/traceroute-hops/distribution")
+def api_traceroute_hop_distribution():
+    """
+    API endpoint for hop distribution analysis across all traceroutes.
+    Returns nodes grouped by their observed hop counts from traceroute data.
+    """
+    logger.info("API traceroute-hops/distribution endpoint accessed")
+    try:
+        from datetime import datetime, timedelta
+
+        from ..utils.traceroute_utils import parse_traceroute_payload
+
+        # Get recent traceroute packets
+        end_time = datetime.now()
+        start_time = end_time - timedelta(days=7)
+
+        filters = {
+            "start_time": start_time.timestamp(),
+            "end_time": end_time.timestamp(),
+            "processed_successfully_only": True,
+        }
+
+        result = TracerouteRepository.get_traceroute_packets(
+            limit=5000, filters=filters
+        )
+
+        packets = result.get("packets", [])
+
+        # Track hop counts per node
+        # Key: node_id, Value: dict with hop counts observed
+        node_hop_data = {}
+
+        for packet in packets:
+            from_node = packet.get("from_node_id")
+            to_node = packet.get("to_node_id")
+            raw_payload = packet.get("raw_payload")
+
+            if not raw_payload:
+                continue
+
+            route_data = parse_traceroute_payload(raw_payload)
+            route_nodes = route_data.get("route_nodes", [])
+
+            # Source node is at hop 0
+            if from_node:
+                if from_node not in node_hop_data:
+                    node_hop_data[from_node] = {
+                        "min_hops": 0,
+                        "max_hops": 0,
+                        "observations": 0,
+                    }
+                node_hop_data[from_node]["observations"] += 1
+
+            # Each intermediate node has a hop distance from source
+            for idx, node_id in enumerate(route_nodes):
+                hop_distance = idx + 1  # 1-indexed
+                if node_id not in node_hop_data:
+                    node_hop_data[node_id] = {
+                        "min_hops": hop_distance,
+                        "max_hops": hop_distance,
+                        "observations": 0,
+                    }
+                else:
+                    node_hop_data[node_id]["min_hops"] = min(
+                        node_hop_data[node_id]["min_hops"], hop_distance
+                    )
+                    node_hop_data[node_id]["max_hops"] = max(
+                        node_hop_data[node_id]["max_hops"], hop_distance
+                    )
+                node_hop_data[node_id]["observations"] += 1
+
+            # Destination node is at max hop distance
+            if to_node and route_nodes:
+                dest_hops = len(route_nodes) + 1
+                if to_node not in node_hop_data:
+                    node_hop_data[to_node] = {
+                        "min_hops": dest_hops,
+                        "max_hops": dest_hops,
+                        "observations": 0,
+                    }
+                else:
+                    node_hop_data[to_node]["min_hops"] = min(
+                        node_hop_data[to_node]["min_hops"], dest_hops
+                    )
+                    node_hop_data[to_node]["max_hops"] = max(
+                        node_hop_data[to_node]["max_hops"], dest_hops
+                    )
+                node_hop_data[to_node]["observations"] += 1
+
+        # Get node names
+        node_ids = list(node_hop_data.keys())
+        node_names = get_bulk_node_names(node_ids)
+
+        # Group nodes by their minimum observed hop count
+        hop_groups = {}
+        nodes_list = []
+
+        for node_id, hop_info in node_hop_data.items():
+            min_hops = hop_info["min_hops"]
+            avg_hops = (hop_info["min_hops"] + hop_info["max_hops"]) / 2
+
+            node_entry = {
+                "node_id": node_id,
+                "hex_id": f"!{node_id:08x}",
+                "display_name": node_names.get(node_id, f"!{node_id:08x}"),
+                "min_hops": min_hops,
+                "max_hops": hop_info["max_hops"],
+                "avg_hops": round(avg_hops, 1),
+                "observations": hop_info["observations"],
+            }
+            nodes_list.append(node_entry)
+
+            # Group for distribution chart
+            hop_key = str(min_hops) if min_hops <= 4 else "5+"
+            if hop_key not in hop_groups:
+                hop_groups[hop_key] = []
+            hop_groups[hop_key].append(node_entry)
+
+        # Sort nodes by min_hops for consistent ordering
+        nodes_list.sort(key=lambda x: (x["min_hops"], -x["observations"]))
+
+        # Calculate distribution summary
+        distribution = []
+        for hop_count in ["0", "1", "2", "3", "4", "5+"]:
+            group = hop_groups.get(hop_count, [])
+            distribution.append(
+                {
+                    "hop_count": hop_count,
+                    "node_count": len(group),
+                    "nodes": sorted(group, key=lambda x: -x["observations"])[
+                        :10
+                    ],  # Top 10 per group
+                }
+            )
+
+        return jsonify(
+            {
+                "nodes": nodes_list,
+                "distribution": distribution,
+                "total_nodes": len(nodes_list),
+                "total_traceroutes": len(packets),
+            }
+        )
+    except Exception as e:
+        logger.error(f"Error in API traceroute-hops/distribution: {e}")
+        return jsonify({"error": str(e)}), 500
+
+
 @api_bp.route("/traceroute/related-nodes/<node_id>")
 def api_traceroute_related_nodes(node_id):
     """API endpoint for nodes that have traceroute connections to the specified node."""

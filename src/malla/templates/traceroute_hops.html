@@ -6,6 +6,8 @@
 {% block head_libs %}
 <!-- Chart.js for hop analysis charts -->
 <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js" integrity="sha384-e6nUZLBkQ86NJ6TVVKAeSaK8jWa3NhkYWZFomE39AvDbQWeie9PlQqM3pmYW5d1g" crossorigin="anonymous"></script>
+<!-- Plotly for hop distribution visualization -->
+<script src="https://cdn.plot.ly/plotly-2.27.0.min.js" charset="utf-8"></script>
 {% endblock head_libs %}
 
 {% block extra_css %}
@@ -49,88 +51,16 @@
         margin: 1rem 0;
     }
 
-    /* Hop Distribution Visual Styles */
-    .hop-distribution-container {
-        background: var(--bs-tertiary-bg);
-        border-radius: 12px;
-        padding: 1.5rem;
-        margin-bottom: 1.5rem;
+    /* Hop Distribution Styles */
+    .hop-group {
+        border-bottom: 1px solid var(--bs-border-color);
+        padding-bottom: 0.5rem;
     }
-    .hop-tower {
-        display: flex;
-        flex-direction: column;
-        align-items: center;
-        padding: 0.5rem;
-        min-width: 80px;
-    }
-    .hop-bar-container {
-        width: 60px;
-        background: var(--bs-secondary-bg);
-        border-radius: 8px 8px 0 0;
-        display: flex;
-        flex-direction: column;
-        justify-content: flex-end;
-        align-items: center;
-        position: relative;
-        min-height: 180px;
-    }
-    .hop-bar {
-        width: 100%;
-        border-radius: 8px 8px 0 0;
-        display: flex;
-        flex-direction: column;
-        justify-content: flex-end;
-        align-items: center;
-        transition: height 0.5s ease;
-        position: relative;
-    }
-    .hop-bar.hop-0 { background: linear-gradient(180deg, #198754, #20c997); }
-    .hop-bar.hop-1 { background: linear-gradient(180deg, #0d6efd, #6ea8fe); }
-    .hop-bar.hop-2 { background: linear-gradient(180deg, #6f42c1, #a370f7); }
-    .hop-bar.hop-3 { background: linear-gradient(180deg, #fd7e14, #feb272); }
-    .hop-bar.hop-4 { background: linear-gradient(180deg, #dc3545, #ea868f); }
-    .hop-bar.hop-unknown { background: linear-gradient(180deg, #6c757d, #adb5bd); }
-
-    .hop-count {
-        font-size: 1.5rem;
-        font-weight: bold;
-        color: white;
-        text-shadow: 0 1px 2px rgba(0,0,0,0.3);
-        padding: 0.5rem;
-    }
-    .hop-label {
-        font-size: 0.85rem;
-        font-weight: 600;
-        margin-top: 0.5rem;
-        color: var(--bs-body-color);
-    }
-    .hop-signal {
-        display: flex;
-        gap: 2px;
-        margin-bottom: 0.5rem;
-    }
-    .hop-signal-bar {
-        width: 6px;
-        background: var(--bs-secondary-bg);
-        border-radius: 2px;
-    }
-    .hop-signal-bar.active { background: currentColor; }
-
-    .hop-nodes-list {
-        max-height: 150px;
-        overflow-y: auto;
-        font-size: 0.75rem;
-    }
-    .hop-node-item {
-        padding: 0.25rem 0.5rem;
-        border-radius: 4px;
-        margin-bottom: 2px;
-        background: var(--bs-body-bg);
-        cursor: pointer;
-        transition: background 0.2s;
+    .hop-group:last-child {
+        border-bottom: none;
     }
     .hop-node-item:hover {
-        background: var(--bs-primary-bg-subtle);
+        background: var(--bs-primary-bg-subtle) !important;
     }
 </style>
 {% endblock %}
@@ -156,12 +86,24 @@
             <div class="card-body">
                 <div id="hop-distribution-loading" class="text-center p-3">
                     <div class="spinner-border spinner-border-sm text-primary" role="status"></div>
-                    <span class="ms-2">Loading hop distribution...</span>
+                    <span class="ms-2">Loading hop distribution from traceroute data...</span>
                 </div>
                 <div id="hop-distribution-content" style="display: none;">
-                    <div class="d-flex justify-content-center align-items-end flex-wrap gap-3" id="hop-towers"></div>
-                    <div class="text-center mt-3">
-                        <small class="text-muted"><i class="bi bi-info-circle"></i> Estimated hop distance based on traceroute data. Click a node to analyze its connections.</small>
+                    <div class="row">
+                        <div class="col-lg-8">
+                            <!-- Plotly Chart -->
+                            <div id="hop-distribution-chart" style="height: 400px;"></div>
+                        </div>
+                        <div class="col-lg-4">
+                            <!-- Node List by Hop Count -->
+                            <div id="hop-node-list" class="border rounded p-2" style="max-height: 400px; overflow-y: auto;">
+                                <h6 class="text-muted mb-2">Nodes by Hop Distance</h6>
+                                <div id="hop-node-groups"></div>
+                            </div>
+                        </div>
+                    </div>
+                    <div class="text-center mt-2">
+                        <small class="text-muted"><i class="bi bi-info-circle"></i> Based on <span id="traceroute-count">0</span> traceroutes from the last 7 days. Click a node to analyze its connections.</small>
                     </div>
                 </div>
                 <div id="hop-distribution-empty" class="text-center text-muted p-4" style="display: none;">
@@ -986,8 +928,10 @@
     }
 
     // =====================================================================
-    // Hop Distribution Visualization
+    // Hop Distribution Visualization (Plotly)
     // =====================================================================
+
+    let hopDistributionData = null;
 
     async function loadHopDistribution() {
         const loadingEl = document.getElementById('hop-distribution-loading');
@@ -999,36 +943,24 @@
         emptyEl.style.display = 'none';
 
         try {
-            // Try admin hop estimates API first (more accurate)
-            let hopData = null;
-            try {
-                const response = await fetch('/api/admin/nodes/hop-estimates');
-                if (response.ok) {
-                    hopData = await response.json();
-                }
-            } catch (e) {
-                console.log('Admin hop estimates not available, using fallback');
+            // Use the new distribution API that analyzes actual traceroute data
+            const response = await fetch('/api/traceroute-hops/distribution');
+            if (!response.ok) {
+                throw new Error('Failed to fetch hop distribution');
             }
 
-            if (hopData && hopData.hop_estimates && Object.keys(hopData.hop_estimates).length > 0) {
-                renderHopDistribution(hopData);
+            const data = await response.json();
+
+            if (data.nodes && data.nodes.length > 0) {
+                hopDistributionData = data;
+                renderHopDistributionChart(data);
+                renderHopNodeList(data);
+                document.getElementById('traceroute-count').textContent = data.total_traceroutes || 0;
                 loadingEl.style.display = 'none';
                 contentEl.style.display = 'block';
             } else {
-                // Fallback: estimate hops from traceroute nodes
-                const nodesResponse = await fetch('/api/traceroute-hops/nodes');
-                const nodesData = await nodesResponse.json();
-
-                if (nodesData.nodes && nodesData.nodes.length > 0) {
-                    // Create estimated hop data from available nodes
-                    const estimatedData = estimateHopsFromNodes(nodesData.nodes);
-                    renderHopDistribution(estimatedData);
-                    loadingEl.style.display = 'none';
-                    contentEl.style.display = 'block';
-                } else {
-                    loadingEl.style.display = 'none';
-                    emptyEl.style.display = 'block';
-                }
+                loadingEl.style.display = 'none';
+                emptyEl.style.display = 'block';
             }
         } catch (error) {
             console.error('Error loading hop distribution:', error);
@@ -1037,113 +969,199 @@
         }
     }
 
-    function estimateHopsFromNodes(nodes) {
-        // Simple estimation: distribute nodes randomly for visualization
-        // In reality, this would require actual traceroute analysis
-        const hopEstimates = {};
-        nodes.forEach((node, idx) => {
-            // Assign estimated hops based on some heuristic (placeholder)
-            const estimatedHops = Math.floor(Math.random() * 4) + 1; // 1-4 hops
-            hopEstimates[node.node_id] = {
-                node_id: node.node_id,
-                hex_id: node.hex_id,
-                display_name: node.display_name,
-                estimated_hops: estimatedHops
-            };
+    function renderHopDistributionChart(data) {
+        const chartDiv = document.getElementById('hop-distribution-chart');
+        const isDarkMode = document.documentElement.getAttribute('data-bs-theme') === 'dark';
+
+        // Prepare data for scatter plot - each node as a point
+        const nodes = data.nodes || [];
+
+        // Group by hop count for coloring
+        const hopColors = {
+            0: '#198754',  // Green - Gateway/Source
+            1: '#0d6efd',  // Blue
+            2: '#6f42c1',  // Purple
+            3: '#fd7e14',  // Orange
+            4: '#dc3545',  // Red
+            5: '#6c757d'   // Gray for 5+
+        };
+
+        // Create traces for each hop group
+        const traces = [];
+        const distribution = data.distribution || [];
+
+        distribution.forEach((group, groupIdx) => {
+            const hopCount = group.hop_count;
+            const groupNodes = data.nodes.filter(n => {
+                if (hopCount === '5+') return n.min_hops >= 5;
+                return n.min_hops === parseInt(hopCount);
+            });
+
+            if (groupNodes.length === 0) return;
+
+            // Add jitter to x positions for better visualization
+            const xValues = groupNodes.map((n, i) => {
+                const baseX = hopCount === '5+' ? 5 : parseInt(hopCount);
+                const jitter = (Math.random() - 0.5) * 0.6;
+                return baseX + jitter;
+            });
+
+            // Y values based on observation count (activity level)
+            const yValues = groupNodes.map(n => n.observations);
+
+            // Size based on observations (normalized)
+            const maxObs = Math.max(...nodes.map(n => n.observations));
+            const sizes = groupNodes.map(n => Math.max(8, Math.min(30, (n.observations / maxObs) * 25 + 8)));
+
+            const colorIdx = hopCount === '5+' ? 5 : parseInt(hopCount);
+
+            traces.push({
+                type: 'scatter',
+                mode: 'markers',
+                name: hopCount === '0' ? 'Gateway (0 hops)' : hopCount === '5+' ? '5+ Hops' : `${hopCount} Hop${hopCount === '1' ? '' : 's'}`,
+                x: xValues,
+                y: yValues,
+                text: groupNodes.map(n => `${n.display_name}<br>Min Hops: ${n.min_hops}<br>Max Hops: ${n.max_hops}<br>Observations: ${n.observations}`),
+                hovertemplate: '%{text}<extra></extra>',
+                marker: {
+                    size: sizes,
+                    color: hopColors[colorIdx],
+                    opacity: 0.7,
+                    line: {
+                        color: isDarkMode ? '#ffffff' : '#000000',
+                        width: 1
+                    }
+                },
+                customdata: groupNodes.map(n => n.node_id)
+            });
         });
-        return { hop_estimates: hopEstimates, node_count: nodes.length };
+
+        // Add a bar chart overlay showing distribution
+        const barTrace = {
+            type: 'bar',
+            name: 'Node Count',
+            x: distribution.map(d => d.hop_count === '5+' ? 5 : parseInt(d.hop_count)),
+            y: distribution.map(d => d.node_count),
+            marker: {
+                color: distribution.map(d => {
+                    const idx = d.hop_count === '5+' ? 5 : parseInt(d.hop_count);
+                    return hopColors[idx];
+                }),
+                opacity: 0.3
+            },
+            yaxis: 'y2',
+            hovertemplate: '%{y} nodes at %{x} hops<extra></extra>',
+            showlegend: false
+        };
+
+        const layout = {
+            title: {
+                text: `Hop Distribution (${data.total_nodes} nodes)`,
+                font: { size: 16, color: isDarkMode ? '#ffffff' : '#000000' }
+            },
+            xaxis: {
+                title: 'Hop Distance from Source',
+                tickmode: 'array',
+                tickvals: [0, 1, 2, 3, 4, 5],
+                ticktext: ['0 (Gateway)', '1', '2', '3', '4', '5+'],
+                gridcolor: isDarkMode ? '#444' : '#ddd',
+                zerolinecolor: isDarkMode ? '#666' : '#ccc',
+                color: isDarkMode ? '#ffffff' : '#000000'
+            },
+            yaxis: {
+                title: 'Traceroute Observations',
+                gridcolor: isDarkMode ? '#444' : '#ddd',
+                zerolinecolor: isDarkMode ? '#666' : '#ccc',
+                color: isDarkMode ? '#ffffff' : '#000000'
+            },
+            yaxis2: {
+                title: 'Node Count',
+                overlaying: 'y',
+                side: 'right',
+                showgrid: false,
+                color: isDarkMode ? '#aaaaaa' : '#666666'
+            },
+            paper_bgcolor: isDarkMode ? '#212529' : '#ffffff',
+            plot_bgcolor: isDarkMode ? '#2d3238' : '#f8f9fa',
+            font: { color: isDarkMode ? '#ffffff' : '#000000' },
+            legend: {
+                orientation: 'h',
+                y: -0.15,
+                x: 0.5,
+                xanchor: 'center',
+                font: { size: 10 }
+            },
+            margin: { t: 50, b: 80, l: 60, r: 60 },
+            hovermode: 'closest'
+        };
+
+        const config = {
+            responsive: true,
+            displayModeBar: true,
+            modeBarButtonsToRemove: ['select2d', 'lasso2d'],
+            displaylogo: false
+        };
+
+        Plotly.newPlot(chartDiv, [barTrace, ...traces], layout, config);
+
+        // Add click handler to select nodes
+        chartDiv.on('plotly_click', function(eventData) {
+            if (eventData.points && eventData.points.length > 0) {
+                const point = eventData.points[0];
+                if (point.customdata) {
+                    selectNodeForAnalysis(point.customdata);
+                }
+            }
+        });
     }
 
-    function renderHopDistribution(hopData) {
-        const container = document.getElementById('hop-towers');
-        const estimates = hopData.hop_estimates || {};
+    function renderHopNodeList(data) {
+        const container = document.getElementById('hop-node-groups');
+        const distribution = data.distribution || [];
 
-        // Group nodes by hop count
-        const hopGroups = {};
-        let maxNodes = 0;
-
-        Object.values(estimates).forEach(node => {
-            const hops = node.estimated_hops || 0;
-            const hopKey = hops > 4 ? '4+' : String(hops);
-
-            if (!hopGroups[hopKey]) {
-                hopGroups[hopKey] = [];
-            }
-            hopGroups[hopKey].push(node);
-            maxNodes = Math.max(maxNodes, hopGroups[hopKey].length);
-        });
-
-        // Also add unknown/unestimated nodes
-        if (!hopGroups['0']) hopGroups['0'] = [];
-
-        // Define hop levels to display
-        const hopLevels = ['0', '1', '2', '3', '4+'];
         const hopLabels = {
-            '0': 'Gateway',
-            '1': '1 Hop',
-            '2': '2 Hops',
-            '3': '3 Hops',
-            '4+': '4+ Hops'
-        };
-        const hopColors = {
-            '0': '#198754',
-            '1': '#0d6efd',
-            '2': '#6f42c1',
-            '3': '#fd7e14',
-            '4+': '#dc3545'
+            '0': '🟢 Gateway (0 hops)',
+            '1': '🔵 1 Hop',
+            '2': '🟣 2 Hops',
+            '3': '🟠 3 Hops',
+            '4': '🔴 4 Hops',
+            '5+': '⬛ 5+ Hops'
         };
 
         let html = '';
 
-        hopLevels.forEach(hopLevel => {
-            const nodes = hopGroups[hopLevel] || [];
-            const count = nodes.length;
-            const barHeight = maxNodes > 0 ? Math.max(30, (count / maxNodes) * 150) : 30;
-            const hopClass = hopLevel === '4+' ? 'hop-4' : `hop-${hopLevel}`;
+        distribution.forEach(group => {
+            const hopCount = group.hop_count;
+            const nodeCount = group.node_count;
+            const nodes = group.nodes || [];
 
-            // Generate signal strength bars (visual indicator)
-            const signalBars = generateSignalBars(parseInt(hopLevel) || 5);
+            if (nodeCount === 0) return;
 
             html += `
-                <div class="hop-tower">
-                    <div class="hop-signal" style="color: ${hopColors[hopLevel]};">
-                        ${signalBars}
+                <div class="hop-group mb-2">
+                    <div class="d-flex justify-content-between align-items-center mb-1">
+                        <small class="fw-bold">${hopLabels[hopCount] || hopCount + ' Hops'}</small>
+                        <span class="badge bg-secondary">${nodeCount}</span>
                     </div>
-                    <div class="hop-bar-container">
-                        <div class="hop-bar ${hopClass}" style="height: ${barHeight}px;">
-                            <span class="hop-count">${count}</span>
-                        </div>
+                    <div class="hop-nodes-list">
+                        ${nodes.map(n => `
+                            <div class="hop-node-item d-flex justify-content-between align-items-center"
+                                 onclick="selectNodeForAnalysis(${n.node_id})"
+                                 title="${n.hex_id} - ${n.observations} observations"
+                                 style="cursor: pointer; padding: 4px 8px; border-radius: 4px; margin-bottom: 2px; background: var(--bs-body-bg);">
+                                <span style="font-size: 0.8rem;">${truncateName(n.display_name, 18)}</span>
+                                <span class="badge bg-primary" style="font-size: 0.65rem;">${n.observations}</span>
+                            </div>
+                        `).join('')}
+                        ${nodeCount > nodes.length ? `
+                            <div class="text-center text-muted" style="font-size: 0.7rem;">+${nodeCount - nodes.length} more</div>
+                        ` : ''}
                     </div>
-                    <div class="hop-label">${hopLabels[hopLevel]}</div>
-                    ${count > 0 ? `
-                        <div class="hop-nodes-list mt-2">
-                            ${nodes.slice(0, 5).map(n => `
-                                <div class="hop-node-item" onclick="selectNodeForAnalysis('${n.node_id}')" title="${n.hex_id}">
-                                    ${truncateName(n.display_name || n.hex_id, 12)}
-                                </div>
-                            `).join('')}
-                            ${count > 5 ? `<div class="text-center text-muted" style="font-size: 0.7rem;">+${count - 5} more</div>` : ''}
-                        </div>
-                    ` : ''}
                 </div>
             `;
         });
 
         container.innerHTML = html;
-    }
-
-    function generateSignalBars(hopCount) {
-        // More hops = weaker signal visual
-        const totalBars = 5;
-        const activeBars = Math.max(1, totalBars - hopCount);
-
-        let html = '';
-        for (let i = 0; i < totalBars; i++) {
-            const height = 8 + (i * 4); // Increasing heights: 8, 12, 16, 20, 24
-            const isActive = i < activeBars;
-            html += `<div class="hop-signal-bar ${isActive ? 'active' : ''}" style="height: ${height}px;"></div>`;
-        }
-        return html;
     }
 
     function truncateName(name, maxLen) {
