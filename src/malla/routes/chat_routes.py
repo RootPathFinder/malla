@@ -117,9 +117,13 @@ def api_get_messages():
     Get recent text messages.
 
     Query parameters:
-        - limit: Number of messages to return (default: 100, max: 500)
-        - since_id: Get messages with ID greater than this (for polling)
+        - limit: Number of messages to return (default: 500, max: 1000)
+        - since_id: Get messages with ID greater than this (for polling new messages)
+        - before_id: Get messages with ID less than this (for loading older messages)
         - channel: Filter by channel index (optional)
+        - hours: Time window in hours from now (default: 24, max: 168)
+        - start_time: Unix timestamp for start of time range (overrides hours)
+        - end_time: Unix timestamp for end of time range (defaults to now)
     """
     # Check viewer access
     auth_result = _check_viewer_access()
@@ -127,9 +131,22 @@ def api_get_messages():
         return auth_result
 
     try:
-        limit = min(request.args.get("limit", 100, type=int), 500)
+        import time as time_module
+
+        limit = min(request.args.get("limit", 500, type=int), 1000)
         since_id = request.args.get("since_id", 0, type=int)
+        before_id = request.args.get("before_id", type=int)
         channel = request.args.get("channel", type=int)
+        hours = min(request.args.get("hours", 24, type=int), 168)  # Max 7 days
+        start_time = request.args.get("start_time", type=float)
+        end_time = request.args.get("end_time", type=float)
+
+        # Calculate time bounds
+        now = time_module.time()
+        if end_time is None:
+            end_time = now
+        if start_time is None:
+            start_time = end_time - (hours * 3600)
 
         conn = get_db_connection()
         cursor = conn.cursor()
@@ -142,9 +159,20 @@ def api_get_messages():
                 rssi, snr, hop_limit, hop_start
             FROM packet_history
             WHERE portnum_name = 'TEXT_MESSAGE_APP'
-            AND id > ?
+            AND timestamp >= ?
+            AND timestamp <= ?
         """
-        params = [since_id]
+        params = [start_time, end_time]
+
+        # Filter by since_id for polling new messages
+        if since_id > 0:
+            query += " AND id > ?"
+            params.append(since_id)
+
+        # Filter by before_id for loading older messages
+        if before_id is not None:
+            query += " AND id < ?"
+            params.append(before_id)
 
         if channel is not None:
             query += " AND channel_index = ?"
@@ -221,11 +249,22 @@ def api_get_messages():
         # Reverse to get chronological order (oldest first)
         messages.reverse()
 
+        # Calculate pagination info
+        oldest_id = messages[0]["id"] if messages else None
+        newest_id = messages[-1]["id"] if messages else None
+        oldest_timestamp = messages[0]["timestamp"] if messages else None
+
         return jsonify(
             {
                 "messages": messages,
                 "count": len(messages),
                 "limit": limit,
+                "start_time": start_time,
+                "end_time": end_time,
+                "oldest_id": oldest_id,
+                "newest_id": newest_id,
+                "oldest_timestamp": oldest_timestamp,
+                "has_more": len(messages) >= limit,
             }
         )
 

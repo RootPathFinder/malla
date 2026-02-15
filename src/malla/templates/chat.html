@@ -299,6 +299,31 @@
         margin-right: 10px;
     }
 
+    .load-more-container {
+        display: flex;
+        flex-direction: column;
+        align-items: center;
+        padding: 15px;
+        gap: 8px;
+        border-bottom: 1px dashed var(--bs-border-color);
+        margin-bottom: 10px;
+    }
+
+    .load-more-btn {
+        display: flex;
+        align-items: center;
+        gap: 6px;
+    }
+
+    .load-more-btn:disabled {
+        opacity: 0.6;
+    }
+
+    .time-range-info {
+        font-size: 0.75rem;
+        color: var(--bs-secondary);
+    }
+
     /* Responsive adjustments */
     @media (max-width: 768px) {
         .chat-container {
@@ -342,6 +367,9 @@
             <select id="channelFilter" class="form-select form-select-sm channel-filter">
                 <option value="">All Channels</option>
             </select>
+            <select id="sendChannelSelect" class="form-select form-select-sm channel-filter" title="Send on channel">
+                <option value="0">Send: Ch 0</option>
+            </select>
             <button id="refreshBtn" class="btn btn-outline-secondary btn-sm" title="Refresh messages">
                 <i class="bi bi-arrow-clockwise"></i>
             </button>
@@ -353,6 +381,14 @@
 
     <div class="messages-wrapper">
         <div id="messagesContainer" class="messages-container">
+            <!-- Load More button at top -->
+            <div id="loadMoreContainer" class="load-more-container" style="display: none;">
+                <button id="loadMoreBtn" class="btn btn-outline-secondary btn-sm load-more-btn">
+                    <i class="bi bi-clock-history"></i>
+                    <span>Load previous 12 hours</span>
+                </button>
+                <span id="timeRangeInfo" class="time-range-info"></span>
+            </div>
             <div class="empty-state" id="emptyState">
                 <i class="bi bi-chat-text"></i>
                 <h5>No messages yet</h5>
@@ -398,19 +434,31 @@
 (function() {
     'use strict';
 
+    // Constants
+    const INITIAL_HOURS = 24;  // Load last 24 hours initially
+    const LOAD_MORE_HOURS = 12;  // Load 12 more hours when clicking "Load More"
+    const MAX_HOURS = 168;  // Max 7 days
+
     // State
     let messages = [];
     let lastMessageId = 0;
+    let oldestMessageId = null;
+    let oldestTimestamp = null;
+    let currentStartTime = null;
     let autoScroll = true;
     let eventSource = null;
     let canSend = {{ 'true' if can_send else 'false' }};
     let isConnected = false;
     let selectedChannel = '';
+    let sendChannel = 0;
+    let isLoadingMore = false;
+    let hasMoreMessages = true;
 
     // DOM elements
     const messagesContainer = document.getElementById('messagesContainer');
     const emptyState = document.getElementById('emptyState');
     const channelFilter = document.getElementById('channelFilter');
+    const sendChannelSelect = document.getElementById('sendChannelSelect');
     const refreshBtn = document.getElementById('refreshBtn');
     const autoScrollBtn = document.getElementById('autoScrollBtn');
     const connectionStatus = document.getElementById('connectionStatus');
@@ -418,10 +466,13 @@
     const sendBtn = document.getElementById('sendBtn');
     const charCounter = document.getElementById('charCounter');
     const destinationSelect = document.getElementById('destinationSelect');
+    const loadMoreContainer = document.getElementById('loadMoreContainer');
+    const loadMoreBtn = document.getElementById('loadMoreBtn');
+    const timeRangeInfo = document.getElementById('timeRangeInfo');
 
     // Initialize
     function init() {
-        loadMessages();
+        loadMessages(true);
         loadChannels();
         checkConnectionStatus();
         setupEventSource();
@@ -431,10 +482,22 @@
         setInterval(checkConnectionStatus, 10000);
     }
 
-    // Load initial messages
-    async function loadMessages() {
+    // Load messages with time-based pagination
+    async function loadMessages(isInitial = false) {
         try {
-            const params = new URLSearchParams({ limit: 200 });
+            const now = Date.now() / 1000;
+            const params = new URLSearchParams({ limit: 500 });
+
+            if (isInitial) {
+                // Load last 24 hours
+                currentStartTime = now - (INITIAL_HOURS * 3600);
+                params.append('hours', INITIAL_HOURS);
+            } else {
+                // Use current time range
+                params.append('start_time', currentStartTime);
+                params.append('end_time', now);
+            }
+
             if (selectedChannel) {
                 params.append('channel', selectedChannel);
             }
@@ -446,12 +509,110 @@
             messages = data.messages || [];
 
             if (messages.length > 0) {
-                lastMessageId = Math.max(...messages.map(m => m.id));
+                lastMessageId = data.newest_id || Math.max(...messages.map(m => m.id));
+                oldestMessageId = data.oldest_id;
+                oldestTimestamp = data.oldest_timestamp;
             }
 
+            hasMoreMessages = data.has_more;
+            currentStartTime = data.start_time;
+
             renderMessages();
+            updateLoadMoreButton();
         } catch (error) {
             console.error('Error loading messages:', error);
+        }
+    }
+
+    // Load more (older) messages
+    async function loadMoreMessages() {
+        if (isLoadingMore || !oldestTimestamp) return;
+
+        isLoadingMore = true;
+        loadMoreBtn.disabled = true;
+        loadMoreBtn.innerHTML = '<span class="spinner-border spinner-border-sm"></span> Loading...';
+
+        try {
+            // Calculate new time range (12 hours earlier)
+            const newStartTime = currentStartTime - (LOAD_MORE_HOURS * 3600);
+            const now = Date.now() / 1000;
+            const totalHours = (now - newStartTime) / 3600;
+
+            if (totalHours > MAX_HOURS) {
+                hasMoreMessages = false;
+                updateLoadMoreButton();
+                return;
+            }
+
+            const params = new URLSearchParams({
+                start_time: newStartTime,
+                end_time: currentStartTime,
+                limit: 500
+            });
+
+            if (selectedChannel) {
+                params.append('channel', selectedChannel);
+            }
+
+            const response = await fetch(`/api/chat/messages?${params}`);
+            if (!response.ok) throw new Error('Failed to load more messages');
+
+            const data = await response.json();
+            const olderMessages = data.messages || [];
+
+            if (olderMessages.length > 0) {
+                // Prepend older messages
+                messages = [...olderMessages, ...messages];
+                oldestMessageId = data.oldest_id;
+                oldestTimestamp = data.oldest_timestamp;
+
+                // Remember scroll position
+                const scrollPos = messagesContainer.scrollTop;
+                const scrollHeight = messagesContainer.scrollHeight;
+
+                renderMessages();
+
+                // Restore scroll position relative to new content
+                const newScrollHeight = messagesContainer.scrollHeight;
+                messagesContainer.scrollTop = scrollPos + (newScrollHeight - scrollHeight);
+            }
+
+            hasMoreMessages = data.has_more && olderMessages.length > 0;
+            currentStartTime = newStartTime;
+
+            updateLoadMoreButton();
+        } catch (error) {
+            console.error('Error loading more messages:', error);
+        } finally {
+            isLoadingMore = false;
+            loadMoreBtn.disabled = false;
+            loadMoreBtn.innerHTML = '<i class="bi bi-clock-history"></i><span>Load previous 12 hours</span>';
+        }
+    }
+
+    // Update Load More button state
+    function updateLoadMoreButton() {
+        if (messages.length === 0) {
+            loadMoreContainer.style.display = 'none';
+            return;
+        }
+
+        loadMoreContainer.style.display = 'flex';
+
+        const now = Date.now() / 1000;
+        const hoursLoaded = Math.round((now - currentStartTime) / 3600);
+
+        if (hasMoreMessages && hoursLoaded < MAX_HOURS) {
+            loadMoreBtn.style.display = 'inline-flex';
+            loadMoreBtn.disabled = false;
+        } else {
+            loadMoreBtn.style.display = 'none';
+        }
+
+        // Show time range info
+        if (oldestTimestamp) {
+            const oldestDate = new Date(oldestTimestamp * 1000);
+            timeRangeInfo.textContent = `Showing messages from ${oldestDate.toLocaleString()} (${hoursLoaded}h loaded)`;
         }
     }
 
@@ -464,12 +625,23 @@
             const data = await response.json();
             const channels = data.channels || [];
 
+            // Populate filter dropdown
             channels.forEach(ch => {
                 const option = document.createElement('option');
                 option.value = ch.index;
                 option.textContent = `Channel ${ch.index} (${ch.message_count})`;
                 channelFilter.appendChild(option);
             });
+
+            // Populate send channel dropdown
+            if (sendChannelSelect) {
+                channels.forEach(ch => {
+                    const option = document.createElement('option');
+                    option.value = ch.index;
+                    option.textContent = `Send: Ch ${ch.index}`;
+                    sendChannelSelect.appendChild(option);
+                });
+            }
         } catch (error) {
             console.error('Error loading channels:', error);
         }
@@ -554,18 +726,24 @@
 
     // Render all messages
     function renderMessages() {
+        // Clear all content except the load more container
+        const existingLoadMore = messagesContainer.querySelector('.load-more-container');
         messagesContainer.innerHTML = '';
 
         if (messages.length === 0) {
             messagesContainer.innerHTML = `
                 <div class="empty-state" id="emptyState">
                     <i class="bi bi-chat-text"></i>
-                    <h5>No messages yet</h5>
+                    <h5>No messages in last ${INITIAL_HOURS} hours</h5>
                     <p>Text messages from the mesh will appear here.</p>
                 </div>
             `;
+            loadMoreContainer.style.display = 'none';
             return;
         }
+
+        // Re-add load more container at top
+        messagesContainer.appendChild(loadMoreContainer);
 
         messages.forEach(msg => appendMessage(msg, false));
 
@@ -660,12 +838,24 @@
         // Channel filter
         channelFilter.addEventListener('change', function() {
             selectedChannel = this.value;
-            loadMessages();
+            loadMessages(true);  // Reset to initial load
         });
+
+        // Send channel selector
+        if (sendChannelSelect) {
+            sendChannelSelect.addEventListener('change', function() {
+                sendChannel = parseInt(this.value) || 0;
+            });
+        }
+
+        // Load more button
+        if (loadMoreBtn) {
+            loadMoreBtn.addEventListener('click', loadMoreMessages);
+        }
 
         // Refresh button
         refreshBtn.addEventListener('click', function() {
-            loadMessages();
+            loadMessages(true);  // Reset to initial load
         });
 
         // Auto-scroll toggle
@@ -740,7 +930,7 @@
                 body: JSON.stringify({
                     text: text,
                     destination: destination,
-                    channel_index: selectedChannel ? parseInt(selectedChannel) : 0
+                    channel_index: sendChannel
                 })
             });
 
