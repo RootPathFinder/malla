@@ -75,9 +75,27 @@
         node_status:        { w: 4, h: 3 },
         multi_node_compare: { w: 6, h: 3 },
     };
-    const MIN_W = 2;
-    const MIN_H = 2;
+    // Per-widget-type minimum sizes to prevent content from being cut off
+    const MIN_LAYOUTS = {
+        single_metric:      { w: 2, h: 2 },
+        multi_metric:       { w: 3, h: 2 },
+        multi_metric_chart: { w: 4, h: 3 },
+        node_status:        { w: 3, h: 3 },
+        multi_node_compare: { w: 4, h: 2 },
+    };
+    const MIN_W = 2;  // Fallback minimum width
+    const MIN_H = 2;  // Fallback minimum height
     const MAX_H = 12;
+
+    /** Get minimum width for a widget type */
+    function getMinWidth(widgetType) {
+        return MIN_LAYOUTS[widgetType]?.w || MIN_W;
+    }
+
+    /** Get minimum height for a widget type */
+    function getMinHeight(widgetType) {
+        return MIN_LAYOUTS[widgetType]?.h || MIN_H;
+    }
 
     /**
      * Ensure every widget in a dashboard has a layout property.
@@ -1586,6 +1604,10 @@
             const startW = layout.w;
             const startH = layout.h;
 
+            // Get per-widget-type minimum sizes
+            const minW = getMinWidth(widget.type);
+            const minH = getMinHeight(widget.type);
+
             const moveEvent = isTouch ? 'touchmove' : 'mousemove';
             const upEvent = isTouch ? 'touchend' : 'mouseup';
 
@@ -1596,9 +1618,9 @@
                 const px = isTouch ? ev.touches[0].pageX : ev.pageX;
                 const py = isTouch ? ev.touches[0].pageY : ev.pageY;
                 const g = pageToGrid(px, py);
-                // Width = cursor col - widget start col + 1, clamped
-                newW = Math.max(MIN_W, Math.min(GRID_COLS - layout.col + 1, g.col - layout.col + 1));
-                newH = Math.max(MIN_H, Math.min(MAX_H, g.row - layout.row + 1));
+                // Width = cursor col - widget start col + 1, clamped to per-type minimum
+                newW = Math.max(minW, Math.min(GRID_COLS - layout.col + 1, g.col - layout.col + 1));
+                newH = Math.max(minH, Math.min(MAX_H, g.row - layout.row + 1));
 
                 // Live preview via inline style
                 card.style.gridColumn = `${layout.col} / span ${newW}`;

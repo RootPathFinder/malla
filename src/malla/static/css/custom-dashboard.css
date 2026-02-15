@@ -696,3 +696,91 @@
     min-height: 0;
     flex: 1;
 }
+
+/* ── Widget Size Adaptation (Container Queries) ─────────── */
+/* Make widget cards container query contexts */
+.widget-card {
+    container-type: size;
+    container-name: widget;
+}
+
+/* Small widget adaptations (compact mode) */
+@container widget (max-width: 200px) {
+    .widget-value-display .metric-value {
+        font-size: 1.5rem;
+    }
+    .widget-value-display .metric-unit {
+        font-size: 0.75rem;
+    }
+    .widget-value-display .metric-label {
+        font-size: 0.7rem;
+    }
+    .widget-value-display .metric-timestamp {
+        display: none;
+    }
+    .widget-multi-metrics {
+        grid-template-columns: 1fr;
+        gap: 0.375rem;
+    }
+    .widget-multi-metrics .mini-metric {
+        padding: 0.25rem;
+    }
+    .widget-multi-metrics .mini-metric .mini-value {
+        font-size: 1rem;
+    }
+    .widget-multi-metrics .mini-metric .mini-label {
+        font-size: 0.65rem;
+    }
+    .widget-node-status .status-row {
+        flex-direction: column;
+        align-items: flex-start;
+        gap: 0.125rem;
+        padding: 0.25rem 0;
+    }
+    .widget-node-status .status-label,
+    .widget-node-status .status-value {
+        font-size: 0.75rem;
+    }
+    .chart-summary-row {
+        display: none;
+    }
+    .widget-card-body {
+        padding: 0.5rem;
+    }
+}
+
+/* Very small height adaptation */
+@container widget (max-height: 140px) {
+    .widget-value-display .metric-label {
+        display: none;
+    }
+    .widget-value-display .metric-timestamp {
+        display: none;
+    }
+    .widget-node-status .status-row {
+        padding: 0.15rem 0;
+    }
+    .widget-card-body {
+        padding: 0.375rem;
+    }
+}
+
+/* Medium widget - moderate density */
+@container widget (min-width: 201px) and (max-width: 300px) {
+    .widget-value-display .metric-value {
+        font-size: 2rem;
+    }
+    .widget-multi-metrics .mini-metric .mini-value {
+        font-size: 1.1rem;
+    }
+}
+
+/* Fallback for browsers without container query support */
+@supports not (container-type: size) {
+    .widget-card-body {
+        overflow: auto;
+    }
+    .widget-multi-metrics {
+        flex-wrap: wrap;
+    }
+}
