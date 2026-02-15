@@ -137,7 +137,9 @@ def api_get_messages():
         since_id = request.args.get("since_id", 0, type=int)
         before_id = request.args.get("before_id", type=int)
         channel = request.args.get("channel", type=int)
-        hours = min(request.args.get("hours", 6, type=int), 168)  # Max 7 days, default 6h
+        hours = min(
+            request.args.get("hours", 6, type=int), 168
+        )  # Max 7 days, default 6h
         start_time = request.args.get("start_time", type=float)
         end_time = request.args.get("end_time", type=float)
 
