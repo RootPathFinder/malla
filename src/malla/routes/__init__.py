@@ -8,6 +8,7 @@ from .api_routes import api_bp
 from .auth_routes import auth_bp
 from .battery_routes import battery_bp
 from .bot_routes import bot_bp
+from .chat_routes import chat_bp
 from .dashboard_routes import dashboard_bp
 from .gateway_routes import gateway_bp
 from .job_routes import job_bp
@@ -35,4 +36,5 @@ def register_routes(app):
     app.register_blueprint(admin_bp)
     app.register_blueprint(job_bp)
     app.register_blueprint(bot_bp)
+    app.register_blueprint(chat_bp)
     app.register_blueprint(dashboard_bp)

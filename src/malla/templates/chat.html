@@ -1,0 +1,788 @@
+{% extends "base.html" %}
+
+{% block title %}Chat - {{ APP_NAME }}{% endblock %}
+
+{% block extra_css %}
+<style>
+    .chat-container {
+        display: flex;
+        flex-direction: column;
+        height: calc(100vh - 180px);
+        max-width: 1200px;
+        margin: 20px auto;
+        padding: 0 20px;
+    }
+
+    .chat-header {
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+        padding: 15px 0;
+        border-bottom: 2px solid var(--bs-border-color);
+        margin-bottom: 15px;
+    }
+
+    .chat-title {
+        font-size: 1.5rem;
+        font-weight: 600;
+        display: flex;
+        align-items: center;
+        gap: 10px;
+    }
+
+    .connection-badge {
+        font-size: 0.75rem;
+        padding: 4px 10px;
+        border-radius: 12px;
+        display: inline-flex;
+        align-items: center;
+        gap: 6px;
+    }
+
+    .connection-badge.connected {
+        background: var(--bs-success-bg-subtle);
+        color: var(--bs-success);
+    }
+
+    .connection-badge.disconnected {
+        background: var(--bs-danger-bg-subtle);
+        color: var(--bs-danger);
+    }
+
+    .connection-dot {
+        width: 8px;
+        height: 8px;
+        border-radius: 50%;
+        background: currentColor;
+    }
+
+    .chat-controls {
+        display: flex;
+        gap: 10px;
+        align-items: center;
+    }
+
+    .channel-filter {
+        min-width: 150px;
+    }
+
+    .messages-wrapper {
+        flex: 1;
+        display: flex;
+        flex-direction: column;
+        min-height: 0;
+        background: var(--bs-body-bg);
+        border: 1px solid var(--bs-border-color);
+        border-radius: var(--bs-border-radius);
+        overflow: hidden;
+    }
+
+    .messages-container {
+        flex: 1;
+        overflow-y: auto;
+        padding: 15px;
+        display: flex;
+        flex-direction: column;
+        gap: 10px;
+    }
+
+    .message-item {
+        display: flex;
+        gap: 12px;
+        padding: 12px 15px;
+        background: var(--bs-tertiary-bg);
+        border-radius: var(--bs-border-radius);
+        animation: messageSlideIn 0.3s ease-out;
+    }
+
+    .message-item.new-message {
+        background: var(--bs-primary-bg-subtle);
+        border-left: 3px solid var(--bs-primary);
+    }
+
+    .message-item.dm-message {
+        background: var(--bs-info-bg-subtle);
+        border-left: 3px solid var(--bs-info);
+    }
+
+    @keyframes messageSlideIn {
+        from {
+            opacity: 0;
+            transform: translateY(10px);
+        }
+        to {
+            opacity: 1;
+            transform: translateY(0);
+        }
+    }
+
+    .message-avatar {
+        width: 40px;
+        height: 40px;
+        border-radius: 50%;
+        background: var(--bs-primary);
+        color: white;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        font-weight: 600;
+        font-size: 1rem;
+        flex-shrink: 0;
+    }
+
+    .message-content {
+        flex: 1;
+        min-width: 0;
+    }
+
+    .message-header {
+        display: flex;
+        align-items: center;
+        gap: 8px;
+        margin-bottom: 4px;
+        flex-wrap: wrap;
+    }
+
+    .message-sender {
+        font-weight: 600;
+        color: var(--bs-body-color);
+        text-decoration: none;
+    }
+
+    .message-sender:hover {
+        color: var(--bs-primary);
+    }
+
+    .message-meta {
+        font-size: 0.75rem;
+        color: var(--bs-secondary);
+        display: flex;
+        align-items: center;
+        gap: 6px;
+    }
+
+    .message-badge {
+        font-size: 0.65rem;
+        padding: 2px 6px;
+        border-radius: 4px;
+        background: var(--bs-secondary-bg);
+        color: var(--bs-secondary);
+    }
+
+    .message-badge.broadcast {
+        background: var(--bs-warning-bg-subtle);
+        color: var(--bs-warning-text-emphasis);
+    }
+
+    .message-badge.dm {
+        background: var(--bs-info-bg-subtle);
+        color: var(--bs-info-text-emphasis);
+    }
+
+    .message-badge.channel {
+        background: var(--bs-primary-bg-subtle);
+        color: var(--bs-primary-text-emphasis);
+    }
+
+    .message-text {
+        color: var(--bs-body-color);
+        word-wrap: break-word;
+        white-space: pre-wrap;
+        line-height: 1.5;
+    }
+
+    .message-signal {
+        font-size: 0.75rem;
+        color: var(--bs-secondary);
+        margin-top: 4px;
+    }
+
+    .compose-area {
+        padding: 15px;
+        background: var(--bs-light);
+        border-top: 1px solid var(--bs-border-color);
+    }
+
+    .compose-form {
+        display: flex;
+        gap: 10px;
+    }
+
+    .compose-input-wrapper {
+        flex: 1;
+        position: relative;
+    }
+
+    .compose-input {
+        width: 100%;
+        padding: 10px 15px;
+        padding-right: 60px;
+        border: 1px solid var(--bs-border-color);
+        border-radius: var(--bs-border-radius);
+        background: var(--bs-body-bg);
+        color: var(--bs-body-color);
+        resize: none;
+        min-height: 44px;
+        max-height: 120px;
+    }
+
+    .compose-input:focus {
+        outline: none;
+        border-color: var(--bs-primary);
+        box-shadow: 0 0 0 3px rgba(var(--bs-primary-rgb), 0.15);
+    }
+
+    .char-counter {
+        position: absolute;
+        right: 12px;
+        bottom: 10px;
+        font-size: 0.7rem;
+        color: var(--bs-secondary);
+    }
+
+    .char-counter.warning {
+        color: var(--bs-warning);
+    }
+
+    .char-counter.danger {
+        color: var(--bs-danger);
+    }
+
+    .send-options {
+        display: flex;
+        flex-direction: column;
+        gap: 8px;
+    }
+
+    .destination-select {
+        min-width: 160px;
+        font-size: 0.875rem;
+    }
+
+    .send-btn {
+        padding: 10px 25px;
+        font-weight: 500;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        gap: 6px;
+    }
+
+    .send-btn:disabled {
+        opacity: 0.6;
+        cursor: not-allowed;
+    }
+
+    .empty-state {
+        text-align: center;
+        padding: 60px 20px;
+        color: var(--bs-secondary);
+    }
+
+    .empty-state i {
+        font-size: 4rem;
+        margin-bottom: 15px;
+        opacity: 0.5;
+    }
+
+    .loading-indicator {
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        padding: 30px;
+        color: var(--bs-secondary);
+    }
+
+    .loading-indicator .spinner-border {
+        width: 24px;
+        height: 24px;
+        margin-right: 10px;
+    }
+
+    /* Responsive adjustments */
+    @media (max-width: 768px) {
+        .chat-container {
+            padding: 0 10px;
+            height: calc(100vh - 160px);
+        }
+
+        .chat-header {
+            flex-direction: column;
+            gap: 10px;
+            align-items: flex-start;
+        }
+
+        .compose-form {
+            flex-direction: column;
+        }
+
+        .send-options {
+            flex-direction: row;
+        }
+
+        .destination-select {
+            flex: 1;
+        }
+    }
+</style>
+{% endblock %}
+
+{% block content %}
+<div class="chat-container">
+    <div class="chat-header">
+        <div class="chat-title">
+            <i class="bi bi-chat-dots"></i>
+            Mesh Chat
+            <span id="connectionStatus" class="connection-badge disconnected">
+                <span class="connection-dot"></span>
+                <span class="status-text">Checking...</span>
+            </span>
+        </div>
+        <div class="chat-controls">
+            <select id="channelFilter" class="form-select form-select-sm channel-filter">
+                <option value="">All Channels</option>
+            </select>
+            <button id="refreshBtn" class="btn btn-outline-secondary btn-sm" title="Refresh messages">
+                <i class="bi bi-arrow-clockwise"></i>
+            </button>
+            <button id="autoScrollBtn" class="btn btn-outline-primary btn-sm active" title="Auto-scroll">
+                <i class="bi bi-arrow-down-circle"></i>
+            </button>
+        </div>
+    </div>
+
+    <div class="messages-wrapper">
+        <div id="messagesContainer" class="messages-container">
+            <div class="empty-state" id="emptyState">
+                <i class="bi bi-chat-text"></i>
+                <h5>No messages yet</h5>
+                <p>Text messages from the mesh will appear here.</p>
+            </div>
+        </div>
+
+        {% if can_send %}
+        <div class="compose-area">
+            <div class="compose-form">
+                <div class="compose-input-wrapper">
+                    <textarea id="messageInput" class="compose-input"
+                              placeholder="Type your message..."
+                              maxlength="228"
+                              rows="1"></textarea>
+                    <span id="charCounter" class="char-counter">0/228</span>
+                </div>
+                <div class="send-options">
+                    <select id="destinationSelect" class="form-select form-select-sm destination-select">
+                        <option value="broadcast">📢 Broadcast</option>
+                    </select>
+                    <button id="sendBtn" class="btn btn-primary send-btn" disabled>
+                        <i class="bi bi-send"></i>
+                        <span>Send</span>
+                    </button>
+                </div>
+            </div>
+        </div>
+        {% else %}
+        <div class="compose-area">
+            <div class="alert alert-info mb-0 d-flex align-items-center gap-2">
+                <i class="bi bi-info-circle"></i>
+                <span>You need <strong>Operator</strong> or <strong>Admin</strong> access to send messages.</span>
+            </div>
+        </div>
+        {% endif %}
+    </div>
+</div>
+{% endblock %}
+
+{% block extra_js %}
+<script>
+(function() {
+    'use strict';
+
+    // State
+    let messages = [];
+    let lastMessageId = 0;
+    let autoScroll = true;
+    let eventSource = null;
+    let canSend = {{ 'true' if can_send else 'false' }};
+    let isConnected = false;
+    let selectedChannel = '';
+
+    // DOM elements
+    const messagesContainer = document.getElementById('messagesContainer');
+    const emptyState = document.getElementById('emptyState');
+    const channelFilter = document.getElementById('channelFilter');
+    const refreshBtn = document.getElementById('refreshBtn');
+    const autoScrollBtn = document.getElementById('autoScrollBtn');
+    const connectionStatus = document.getElementById('connectionStatus');
+    const messageInput = document.getElementById('messageInput');
+    const sendBtn = document.getElementById('sendBtn');
+    const charCounter = document.getElementById('charCounter');
+    const destinationSelect = document.getElementById('destinationSelect');
+
+    // Initialize
+    function init() {
+        loadMessages();
+        loadChannels();
+        checkConnectionStatus();
+        setupEventSource();
+        setupEventListeners();
+
+        // Periodically check connection status
+        setInterval(checkConnectionStatus, 10000);
+    }
+
+    // Load initial messages
+    async function loadMessages() {
+        try {
+            const params = new URLSearchParams({ limit: 200 });
+            if (selectedChannel) {
+                params.append('channel', selectedChannel);
+            }
+
+            const response = await fetch(`/api/chat/messages?${params}`);
+            if (!response.ok) throw new Error('Failed to load messages');
+
+            const data = await response.json();
+            messages = data.messages || [];
+
+            if (messages.length > 0) {
+                lastMessageId = Math.max(...messages.map(m => m.id));
+            }
+
+            renderMessages();
+        } catch (error) {
+            console.error('Error loading messages:', error);
+        }
+    }
+
+    // Load available channels
+    async function loadChannels() {
+        try {
+            const response = await fetch('/api/chat/channels');
+            if (!response.ok) return;
+
+            const data = await response.json();
+            const channels = data.channels || [];
+
+            channels.forEach(ch => {
+                const option = document.createElement('option');
+                option.value = ch.index;
+                option.textContent = `Channel ${ch.index} (${ch.message_count})`;
+                channelFilter.appendChild(option);
+            });
+        } catch (error) {
+            console.error('Error loading channels:', error);
+        }
+    }
+
+    // Check connection status
+    async function checkConnectionStatus() {
+        try {
+            const response = await fetch('/api/chat/connection-status');
+            if (!response.ok) throw new Error('Failed to check status');
+
+            const data = await response.json();
+            isConnected = data.can_send;
+
+            const statusText = connectionStatus.querySelector('.status-text');
+            if (isConnected) {
+                connectionStatus.classList.remove('disconnected');
+                connectionStatus.classList.add('connected');
+                if (data.connected_node) {
+                    statusText.textContent = data.connected_node.name || 'Connected';
+                } else {
+                    statusText.textContent = 'Connected';
+                }
+            } else {
+                connectionStatus.classList.remove('connected');
+                connectionStatus.classList.add('disconnected');
+                statusText.textContent = 'Not Connected';
+            }
+
+            updateSendButton();
+        } catch (error) {
+            console.error('Error checking connection:', error);
+        }
+    }
+
+    // Setup SSE for real-time updates
+    function setupEventSource() {
+        if (eventSource) {
+            eventSource.close();
+        }
+
+        eventSource = new EventSource('/api/chat/stream');
+
+        eventSource.onmessage = function(event) {
+            try {
+                const data = JSON.parse(event.data);
+                if (data.type === 'message') {
+                    handleNewMessage(data.data);
+                }
+            } catch (error) {
+                console.error('Error parsing SSE message:', error);
+            }
+        };
+
+        eventSource.onerror = function() {
+            console.warn('SSE connection error, will reconnect...');
+        };
+    }
+
+    // Handle new incoming message
+    function handleNewMessage(msg) {
+        // Filter by channel if selected
+        if (selectedChannel && msg.channel_index !== parseInt(selectedChannel)) {
+            return;
+        }
+
+        // Check if we already have this message
+        if (messages.some(m => m.id === msg.id)) {
+            return;
+        }
+
+        messages.push(msg);
+        lastMessageId = Math.max(lastMessageId, msg.id);
+
+        // Keep only last 500 messages
+        if (messages.length > 500) {
+            messages = messages.slice(-500);
+        }
+
+        appendMessage(msg, true);
+    }
+
+    // Render all messages
+    function renderMessages() {
+        messagesContainer.innerHTML = '';
+
+        if (messages.length === 0) {
+            messagesContainer.innerHTML = `
+                <div class="empty-state" id="emptyState">
+                    <i class="bi bi-chat-text"></i>
+                    <h5>No messages yet</h5>
+                    <p>Text messages from the mesh will appear here.</p>
+                </div>
+            `;
+            return;
+        }
+
+        messages.forEach(msg => appendMessage(msg, false));
+
+        if (autoScroll) {
+            scrollToBottom();
+        }
+    }
+
+    // Append a single message
+    function appendMessage(msg, isNew) {
+        const emptyState = messagesContainer.querySelector('.empty-state');
+        if (emptyState) {
+            emptyState.remove();
+        }
+
+        const msgEl = document.createElement('div');
+        msgEl.className = 'message-item' + (isNew ? ' new-message' : '') + (msg.is_broadcast ? '' : ' dm-message');
+        msgEl.dataset.id = msg.id;
+
+        // Get initials for avatar
+        const name = msg.from_node_name || 'Unknown';
+        const initials = name.substring(0, 2).toUpperCase();
+
+        // Format timestamp
+        const timestamp = new Date(msg.timestamp * 1000);
+        const timeStr = timestamp.toLocaleTimeString();
+        const dateStr = timestamp.toLocaleDateString();
+
+        // Build signal info
+        let signalInfo = [];
+        if (msg.rssi !== null && msg.rssi !== undefined) {
+            signalInfo.push(`RSSI: ${msg.rssi} dBm`);
+        }
+        if (msg.snr !== null && msg.snr !== undefined) {
+            signalInfo.push(`SNR: ${msg.snr.toFixed(1)} dB`);
+        }
+        if (msg.hop_count !== null && msg.hop_count !== undefined) {
+            signalInfo.push(`${msg.hop_count} hop${msg.hop_count !== 1 ? 's' : ''}`);
+        }
+
+        // Build destination badge
+        let destBadge = '';
+        if (msg.is_broadcast) {
+            destBadge = '<span class="message-badge broadcast">📢 Broadcast</span>';
+        } else {
+            destBadge = `<span class="message-badge dm">→ ${escapeHtml(msg.to_node_name)}</span>`;
+        }
+
+        // Channel badge
+        let channelBadge = '';
+        if (msg.channel_index !== null && msg.channel_index !== undefined) {
+            channelBadge = `<span class="message-badge channel">Ch ${msg.channel_index}</span>`;
+        }
+
+        msgEl.innerHTML = `
+            <div class="message-avatar">${initials}</div>
+            <div class="message-content">
+                <div class="message-header">
+                    <a href="/node/${msg.from_node_id}" class="message-sender">${escapeHtml(name)}</a>
+                    ${destBadge}
+                    ${channelBadge}
+                    <span class="message-meta">
+                        <span title="${dateStr}">${timeStr}</span>
+                    </span>
+                </div>
+                <div class="message-text">${escapeHtml(msg.text)}</div>
+                ${signalInfo.length > 0 ? `<div class="message-signal">${signalInfo.join(' • ')}</div>` : ''}
+            </div>
+        `;
+
+        messagesContainer.appendChild(msgEl);
+
+        if (autoScroll) {
+            scrollToBottom();
+        }
+
+        // Remove new message highlight after animation
+        if (isNew) {
+            setTimeout(() => {
+                msgEl.classList.remove('new-message');
+            }, 3000);
+        }
+    }
+
+    // Scroll to bottom of messages
+    function scrollToBottom() {
+        messagesContainer.scrollTop = messagesContainer.scrollHeight;
+    }
+
+    // Setup event listeners
+    function setupEventListeners() {
+        // Channel filter
+        channelFilter.addEventListener('change', function() {
+            selectedChannel = this.value;
+            loadMessages();
+        });
+
+        // Refresh button
+        refreshBtn.addEventListener('click', function() {
+            loadMessages();
+        });
+
+        // Auto-scroll toggle
+        autoScrollBtn.addEventListener('click', function() {
+            autoScroll = !autoScroll;
+            this.classList.toggle('active', autoScroll);
+        });
+
+        // Manual scroll detection
+        messagesContainer.addEventListener('scroll', function() {
+            const atBottom = messagesContainer.scrollHeight - messagesContainer.scrollTop - messagesContainer.clientHeight < 50;
+            if (!atBottom && autoScroll) {
+                // User scrolled up, keep auto-scroll but don't jump
+            }
+        });
+
+        if (canSend) {
+            // Message input
+            messageInput.addEventListener('input', function() {
+                const len = this.value.length;
+                charCounter.textContent = `${len}/228`;
+                charCounter.classList.remove('warning', 'danger');
+                if (len > 200) {
+                    charCounter.classList.add('danger');
+                } else if (len > 150) {
+                    charCounter.classList.add('warning');
+                }
+                updateSendButton();
+
+                // Auto-resize textarea
+                this.style.height = 'auto';
+                this.style.height = Math.min(this.scrollHeight, 120) + 'px';
+            });
+
+            // Enter to send (Shift+Enter for newline)
+            messageInput.addEventListener('keydown', function(e) {
+                if (e.key === 'Enter' && !e.shiftKey) {
+                    e.preventDefault();
+                    sendMessage();
+                }
+            });
+
+            // Send button
+            sendBtn.addEventListener('click', sendMessage);
+        }
+    }
+
+    // Update send button state
+    function updateSendButton() {
+        if (!canSend) return;
+
+        const hasText = messageInput.value.trim().length > 0;
+        sendBtn.disabled = !hasText || !isConnected;
+    }
+
+    // Send message
+    async function sendMessage() {
+        if (!canSend || !isConnected) return;
+
+        const text = messageInput.value.trim();
+        if (!text) return;
+
+        const destination = destinationSelect.value;
+
+        sendBtn.disabled = true;
+        sendBtn.innerHTML = '<span class="spinner-border spinner-border-sm"></span>';
+
+        try {
+            const response = await fetch('/api/chat/send', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                    text: text,
+                    destination: destination,
+                    channel_index: selectedChannel ? parseInt(selectedChannel) : 0
+                })
+            });
+
+            const data = await response.json();
+
+            if (response.ok && data.success) {
+                messageInput.value = '';
+                charCounter.textContent = '0/228';
+                messageInput.style.height = 'auto';
+            } else {
+                alert('Failed to send message: ' + (data.error || 'Unknown error'));
+            }
+        } catch (error) {
+            console.error('Error sending message:', error);
+            alert('Failed to send message: ' + error.message);
+        } finally {
+            sendBtn.disabled = false;
+            sendBtn.innerHTML = '<i class="bi bi-send"></i><span>Send</span>';
+            updateSendButton();
+        }
+    }
+
+    // Escape HTML
+    function escapeHtml(text) {
+        const div = document.createElement('div');
+        div.textContent = text;
+        return div.innerHTML;
+    }
+
+    // Cleanup on page unload
+    window.addEventListener('beforeunload', function() {
+        if (eventSource) {
+            eventSource.close();
+        }
+    });
+
+    // Initialize when DOM is ready
+    if (document.readyState === 'loading') {
+        document.addEventListener('DOMContentLoaded', init);
+    } else {
+        init();
+    }
+})();
+</script>
+{% endblock %}

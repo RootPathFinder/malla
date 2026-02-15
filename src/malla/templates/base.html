@@ -488,6 +488,13 @@
                         </ul>
                     </li>
 
+                    <!-- Chat (always available for logged-in users) -->
+                    <li class="nav-item">
+                        <a class="nav-link {{ 'active' if request.endpoint == 'chat.chat_page' }}" href="{{ url_for('chat.chat_page') }}">
+                            <i class="bi bi-chat-dots"></i> Chat
+                        </a>
+                    </li>
+
                     {% if APP_CONFIG.admin_enabled %}
                     <!-- Mesh Admin -->
                     <li class="nav-item">
