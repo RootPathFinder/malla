@@ -137,7 +137,7 @@ def api_get_messages():
         since_id = request.args.get("since_id", 0, type=int)
         before_id = request.args.get("before_id", type=int)
         channel = request.args.get("channel", type=int)
-        hours = min(request.args.get("hours", 24, type=int), 168)  # Max 7 days
+        hours = min(request.args.get("hours", 6, type=int), 168)  # Max 7 days, default 6h
         start_time = request.args.get("start_time", type=float)
         end_time = request.args.get("end_time", type=float)
 
@@ -275,18 +275,60 @@ def api_get_messages():
 
 @chat_bp.route("/api/chat/channels")
 def api_get_channels():
-    """Get list of channels that have text messages."""
+    """Get list of channels available for chat.
+
+    Combines:
+    1. Channels from the connected admin node (if connected)
+    2. Channels that have text messages in the database
+    3. All 8 possible channel indices (0-7) as fallback
+    """
     auth_result = _check_viewer_access()
     if auth_result:
         return auth_result
 
     try:
+        # Start with all 8 possible channels (0-7)
+        channels_dict = {}
+        for i in range(8):
+            channels_dict[i] = {
+                "index": i,
+                "name": f"Channel {i}" if i > 0 else "Primary",
+                "message_count": 0,
+                "source": "default",
+            }
+
+        # Try to get configured channels from connected admin node
+        try:
+            from ..services.tcp_publisher import get_tcp_publisher
+
+            tcp_publisher = get_tcp_publisher()
+            if tcp_publisher.is_connected and tcp_publisher._interface:
+                local_node = tcp_publisher._interface.localNode
+                if local_node and hasattr(local_node, "channels"):
+                    for channel in local_node.channels:
+                        if channel and hasattr(channel, "index"):
+                            idx = channel.index
+                            if 0 <= idx < 8:
+                                name = "Primary" if idx == 0 else f"Channel {idx}"
+                                if (
+                                    hasattr(channel, "settings")
+                                    and channel.settings
+                                    and hasattr(channel.settings, "name")
+                                    and channel.settings.name
+                                ):
+                                    name = channel.settings.name
+                                channels_dict[idx]["name"] = name
+                                channels_dict[idx]["source"] = "node"
+        except Exception as e:
+            logger.debug(f"Could not get channels from node: {e}")
+
+        # Get message counts from database
         conn = get_db_connection()
         cursor = conn.cursor()
 
         cursor.execute(
             """
-            SELECT DISTINCT channel_index, COUNT(*) as message_count
+            SELECT channel_index, COUNT(*) as message_count
             FROM packet_history
             WHERE portnum_name = 'TEXT_MESSAGE_APP'
             AND channel_index IS NOT NULL
@@ -295,12 +337,17 @@ def api_get_channels():
         """
         )
 
-        channels = [
-            {"index": row["channel_index"], "message_count": row["message_count"]}
-            for row in cursor.fetchall()
-        ]
+        for row in cursor.fetchall():
+            idx = row["channel_index"]
+            if idx in channels_dict:
+                channels_dict[idx]["message_count"] = row["message_count"]
+                if channels_dict[idx]["source"] == "default":
+                    channels_dict[idx]["source"] = "database"
 
         conn.close()
+
+        # Convert to list and sort by index
+        channels = sorted(channels_dict.values(), key=lambda c: c["index"])
 
         return jsonify({"channels": channels})
 

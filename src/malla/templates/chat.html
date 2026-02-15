@@ -385,7 +385,7 @@
             <div id="loadMoreContainer" class="load-more-container" style="display: none;">
                 <button id="loadMoreBtn" class="btn btn-outline-secondary btn-sm load-more-btn">
                     <i class="bi bi-clock-history"></i>
-                    <span>Load previous 12 hours</span>
+                    <span>Load previous 6 hours</span>
                 </button>
                 <span id="timeRangeInfo" class="time-range-info"></span>
             </div>
@@ -435,8 +435,8 @@
     'use strict';
 
     // Constants
-    const INITIAL_HOURS = 24;  // Load last 24 hours initially
-    const LOAD_MORE_HOURS = 12;  // Load 12 more hours when clicking "Load More"
+    const INITIAL_HOURS = 6;  // Load last 6 hours initially
+    const LOAD_MORE_HOURS = 6;  // Load 6 more hours when clicking "Load More"
     const MAX_HOURS = 168;  // Max 7 days
 
     // State
@@ -586,7 +586,7 @@
         } finally {
             isLoadingMore = false;
             loadMoreBtn.disabled = false;
-            loadMoreBtn.innerHTML = '<i class="bi bi-clock-history"></i><span>Load previous 12 hours</span>';
+            loadMoreBtn.innerHTML = '<i class="bi bi-clock-history"></i><span>Load previous 6 hours</span>';
         }
     }
 
@@ -629,7 +629,8 @@
             channels.forEach(ch => {
                 const option = document.createElement('option');
                 option.value = ch.index;
-                option.textContent = `Channel ${ch.index} (${ch.message_count})`;
+                const countInfo = ch.message_count > 0 ? ` (${ch.message_count})` : '';
+                option.textContent = `${ch.name}${countInfo}`;
                 channelFilter.appendChild(option);
             });
 
@@ -638,7 +639,7 @@
                 channels.forEach(ch => {
                     const option = document.createElement('option');
                     option.value = ch.index;
-                    option.textContent = `Send: Ch ${ch.index}`;
+                    option.textContent = ch.name;
                     sendChannelSelect.appendChild(option);
                 });
             }
