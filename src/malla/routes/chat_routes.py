@@ -306,7 +306,11 @@ def api_get_channels():
             tcp_publisher = get_tcp_publisher()
             if tcp_publisher.is_connected and tcp_publisher._interface:
                 local_node = tcp_publisher._interface.localNode
-                if local_node and hasattr(local_node, "channels"):
+                if (
+                    local_node
+                    and hasattr(local_node, "channels")
+                    and local_node.channels
+                ):
                     for channel in local_node.channels:
                         if channel and hasattr(channel, "index"):
                             idx = channel.index
