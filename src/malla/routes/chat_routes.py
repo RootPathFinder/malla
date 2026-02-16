@@ -377,6 +377,24 @@ def api_message_stream():
         conn = None
 
         try:
+            # Get the most recent message ID so we only stream NEW messages
+            # (not replay old ones)
+            try:
+                init_conn = get_db_connection()
+                init_cursor = init_conn.cursor()
+                init_cursor.execute(
+                    """
+                    SELECT MAX(id) as max_id FROM packet_history
+                    WHERE portnum_name = 'TEXT_MESSAGE_APP'
+                """
+                )
+                result = init_cursor.fetchone()
+                if result and result["max_id"]:
+                    last_id = result["max_id"]
+                init_conn.close()
+            except Exception as e:
+                logger.debug(f"Could not get max message ID: {e}")
+
             # Send initial connection message
             conn_msg = json.dumps({"type": "connected", "timestamp": time.time()})
             yield f"data: {conn_msg}\n\n"

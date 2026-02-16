@@ -489,7 +489,7 @@
             const params = new URLSearchParams({ limit: 500 });
 
             if (isInitial) {
-                // Load last 24 hours
+                // Load last 6 hours
                 currentStartTime = now - (INITIAL_HOURS * 3600);
                 params.append('hours', INITIAL_HOURS);
             } else {
