@@ -1890,6 +1890,23 @@
                                                    onchange="loadChannelDirectory()">
                                             <label class="form-check-label small" for="channelDirShowInactive">Show inactive</label>
                                         </div>
+                                        <div class="input-group input-group-sm ms-2" style="width: auto;">
+                                            <label class="input-group-text" for="channelDirSlot"
+                                                   title="Target slot on the radio for generated URLs">
+                                                <i class="bi bi-hash"></i> Slot
+                                            </label>
+                                            <select class="form-select form-select-sm" id="channelDirSlot"
+                                                    onchange="loadChannelDirectory()" style="width: 68px;">
+                                                <option value="1" selected>1</option>
+                                                <option value="2">2</option>
+                                                <option value="3">3</option>
+                                                <option value="4">4</option>
+                                                <option value="5">5</option>
+                                                <option value="6">6</option>
+                                                <option value="7">7</option>
+                                                <option value="0">0 (primary)</option>
+                                            </select>
+                                        </div>
                                         <button class="btn btn-outline-primary btn-sm" onclick="loadChannelDirectory()" title="Refresh">
                                             <i class="bi bi-arrow-clockwise"></i>
                                         </button>
@@ -9929,9 +9946,10 @@
     async function loadChannelDirectory() {
         const showInactive = document.getElementById('channelDirShowInactive')?.checked || false;
         const activeOnly = !showInactive;
+        const slot = document.getElementById('channelDirSlot')?.value || '1';
 
         try {
-            const response = await fetch(`/api/bot/channels?active_only=${activeOnly}`);
+            const response = await fetch(`/api/bot/channels?active_only=${activeOnly}&slot=${slot}`);
             const data = await response.json();
 
             const tbody = document.getElementById('channelDirTable');

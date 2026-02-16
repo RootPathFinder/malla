@@ -257,3 +257,106 @@ class TestChannelUrlGeneration:
         url1 = generate_channel_url("Same", "AQ==")
         url2 = generate_channel_url("Same", "BQ==")
         assert url1 != url2
+
+    @pytest.mark.unit
+    def test_generate_channel_url_preserves_primary_channel(self):
+        """URL encodes the shared channel at index 1 (secondary) with
+        the default primary channel at index 0 so tapping the URL on
+        iOS/Android does not wipe existing channels."""
+        import base64
+
+        from meshtastic.protobuf import apponly_pb2
+
+        from malla.utils.channel_url import generate_channel_url
+
+        url = generate_channel_url("TestChan", "AQ==")
+        assert url is not None
+
+        # Decode the protobuf from the URL fragment
+        fragment = url.split("#", 1)[1]
+        # Re-pad base64url
+        padded = fragment + "=" * (-len(fragment) % 4)
+        proto_bytes = base64.urlsafe_b64decode(padded)
+
+        channel_set = apponly_pb2.ChannelSet()
+        channel_set.ParseFromString(proto_bytes)
+
+        # Must have 2 settings entries: primary (index 0) + shared (index 1)
+        assert len(channel_set.settings) == 2
+
+        # settings[0] should be the default primary channel (empty name,
+        # default PSK 0x01)
+        primary = channel_set.settings[0]
+        assert primary.name == ""
+        assert primary.psk == b"\x01"
+
+        # settings[1] should be the shared channel
+        secondary = channel_set.settings[1]
+        assert secondary.name == "TestChan"
+        assert secondary.psk == base64.b64decode("AQ==")
+
+        # lora_config should not be present
+        assert not channel_set.HasField("lora_config")
+
+    @pytest.mark.unit
+    def test_generate_channel_url_custom_slot(self):
+        """Specifying channel_index=3 puts the channel at settings[3]
+        with placeholder entries at settings[0]-[2]."""
+        import base64
+
+        from meshtastic.protobuf import apponly_pb2
+
+        from malla.utils.channel_url import generate_channel_url
+
+        url = generate_channel_url("MyChan", "AQ==", channel_index=3)
+        assert url is not None
+
+        fragment = url.split("#", 1)[1]
+        padded = fragment + "=" * (-len(fragment) % 4)
+        proto_bytes = base64.urlsafe_b64decode(padded)
+
+        channel_set = apponly_pb2.ChannelSet()
+        channel_set.ParseFromString(proto_bytes)
+
+        # 4 entries: slots 0, 1, 2 (placeholders) + slot 3 (target)
+        assert len(channel_set.settings) == 4
+
+        # Placeholders should have default PSK and no name
+        for i in range(3):
+            assert channel_set.settings[i].name == ""
+            assert channel_set.settings[i].psk == b"\x01"
+
+        # Slot 3 is the actual channel
+        assert channel_set.settings[3].name == "MyChan"
+        assert channel_set.settings[3].psk == base64.b64decode("AQ==")
+
+    @pytest.mark.unit
+    def test_generate_channel_url_slot_zero_replaces_primary(self):
+        """channel_index=0 puts the channel directly at slot 0 with
+        no extra placeholder entries."""
+        import base64
+
+        from meshtastic.protobuf import apponly_pb2
+
+        from malla.utils.channel_url import generate_channel_url
+
+        url = generate_channel_url("Primary", "AQ==", channel_index=0)
+        assert url is not None
+
+        fragment = url.split("#", 1)[1]
+        padded = fragment + "=" * (-len(fragment) % 4)
+        proto_bytes = base64.urlsafe_b64decode(padded)
+
+        channel_set = apponly_pb2.ChannelSet()
+        channel_set.ParseFromString(proto_bytes)
+
+        assert len(channel_set.settings) == 1
+        assert channel_set.settings[0].name == "Primary"
+
+    @pytest.mark.unit
+    def test_generate_channel_url_invalid_slot_returns_none(self):
+        """Out of range channel_index (8, -1) returns None."""
+        from malla.utils.channel_url import generate_channel_url
+
+        assert generate_channel_url("X", "AQ==", channel_index=8) is None
+        assert generate_channel_url("X", "AQ==", channel_index=-1) is None

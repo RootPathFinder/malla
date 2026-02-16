@@ -2235,7 +2235,7 @@ class BotService:
                 else:
                     lines.append(f"{i}. {name}")
 
-            lines.append("!chanurl # for link")
+            lines.append("!chanurl # [slot] for link")
 
             # Truncate to fit Meshtastic payload (~230 bytes)
             result = "\n".join(lines)
@@ -2330,20 +2330,33 @@ class BotService:
             return "Failed to remove channel"
 
     def _cmd_chanurl(self, ctx: CommandContext) -> str:
-        """Handle !chanurl <number> command - return clickable channel URL.
+        """Handle !chanurl <number> [slot] - return clickable channel URL.
 
-        The number corresponds to the position shown by !channels.
+        The first number corresponds to the position shown by !channels.
+        The optional second number is the target channel slot (0-7) on
+        the user's radio.  Defaults to 1 (first secondary slot).
+
         On iOS Meshtastic the URL is tappable and opens the channel
         in the app for the user to add.
         """
         try:
             if not ctx.args:
-                return "Usage: !chanurl <#> (number from !channels)"
+                return "Usage: !chanurl <#> [slot]\nSlot 0=primary, 1-7=secondary (default 1)"
 
             try:
                 idx = int(ctx.args[0])
             except ValueError:
                 return "Please provide a channel number (e.g. !chanurl 1)"
+
+            # Optional target slot (default: 1 = first secondary)
+            slot = 1
+            if len(ctx.args) >= 2:
+                try:
+                    slot = int(ctx.args[1])
+                except ValueError:
+                    return "Slot must be a number 0-7 (e.g. !chanurl 1 2)"
+                if slot < 0 or slot > 7:
+                    return "Slot must be 0-7 (0=primary, 1-7=secondary)"
 
             from ..database.channel_directory_repository import (
                 ChannelDirectoryRepository,
@@ -2362,11 +2375,12 @@ class BotService:
 
             from ..utils.channel_url import generate_channel_url
 
-            url = generate_channel_url(name, psk)
+            url = generate_channel_url(name, psk, channel_index=slot)
             if not url:
                 return f"📻 {name}\nKey: {psk}\n(URL generation unavailable)"
 
-            return f"📻 {name}\n{url}"
+            slot_label = "primary" if slot == 0 else f"slot {slot}"
+            return f"📻 {name} ({slot_label})\n{url}"
         except Exception as e:
             logger.error(f"Error in chanurl command: {e}", exc_info=True)
             return "Channel URL unavailable"
