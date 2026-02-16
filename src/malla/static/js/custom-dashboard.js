@@ -76,12 +76,13 @@
         multi_node_compare: { w: 6, h: 3 },
     };
     // Per-widget-type minimum sizes to prevent content from being cut off
+    // These are enforced during resize to ensure widgets remain usable
     const MIN_LAYOUTS = {
         single_metric:      { w: 2, h: 2 },
-        multi_metric:       { w: 3, h: 2 },
-        multi_metric_chart: { w: 4, h: 3 },
+        multi_metric:       { w: 3, h: 3 },
+        multi_metric_chart: { w: 5, h: 4 },
         node_status:        { w: 3, h: 3 },
-        multi_node_compare: { w: 4, h: 2 },
+        multi_node_compare: { w: 4, h: 3 },
     };
     const MIN_W = 2;  // Fallback minimum width
     const MIN_H = 2;  // Fallback minimum height
@@ -1625,11 +1626,21 @@
                 // Live preview via inline style
                 card.style.gridColumn = `${layout.col} / span ${newW}`;
                 card.style.gridRow = `${layout.row} / span ${newH}`;
+
+                // Visual feedback when at minimum size
+                const atMinW = newW <= minW;
+                const atMinH = newH <= minH;
+                card.classList.toggle('at-min-width', atMinW);
+                card.classList.toggle('at-min-height', atMinH);
+                card.classList.toggle('at-min-size', atMinW || atMinH);
             }
 
             function onUp() {
                 document.removeEventListener(moveEvent, onMove);
                 document.removeEventListener(upEvent, onUp);
+
+                // Remove visual feedback classes
+                card.classList.remove('at-min-width', 'at-min-height', 'at-min-size');
 
                 if (newW !== startW || newH !== startH) {
                     layout.w = newW;

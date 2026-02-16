@@ -784,3 +784,24 @@
         flex-wrap: wrap;
     }
 }
+
+/* Visual feedback when widget is at minimum size during resize */
+.widget-card.at-min-size {
+    box-shadow: 0 0 0 2px rgba(var(--bs-warning-rgb), 0.6) !important;
+}
+
+.widget-card.at-min-size::after {
+    content: 'Min size';
+    position: absolute;
+    bottom: 4px;
+    left: 50%;
+    transform: translateX(-50%);
+    background: var(--bs-warning);
+    color: var(--bs-dark);
+    padding: 0.125rem 0.5rem;
+    border-radius: 0.25rem;
+    font-size: 0.65rem;
+    font-weight: 600;
+    z-index: 10;
+    pointer-events: none;
+}
