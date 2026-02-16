@@ -150,6 +150,11 @@ def api_get_messages():
         if start_time is None:
             start_time = end_time - (hours * 3600)
 
+        logger.debug(
+            f"Chat messages query: channel={channel}, hours={hours}, "
+            f"start_time={start_time}, end_time={end_time}"
+        )
+
         conn = get_db_connection()
         cursor = conn.cursor()
 
@@ -183,8 +188,13 @@ def api_get_messages():
         query += " ORDER BY timestamp DESC LIMIT ?"
         params.append(limit)
 
+        logger.debug(f"Chat query: {query}")
+        logger.debug(f"Chat params: {params}")
+
         cursor.execute(query, params)
         rows = cursor.fetchall()
+
+        logger.debug(f"Chat query returned {len(rows)} rows")
 
         # Collect node IDs for bulk lookup
         node_ids = set()
@@ -296,6 +306,7 @@ def api_get_channels():
                 "index": i,
                 "name": f"Channel {i}" if i > 0 else "Primary",
                 "message_count": 0,
+                "recent_count": 0,
                 "source": "default",
             }
 
@@ -328,10 +339,16 @@ def api_get_channels():
         except Exception as e:
             logger.debug(f"Could not get channels from node: {e}")
 
-        # Get message counts from database
+        # Get message counts from database (both total and recent)
+        import time as time_module
+
+        now = time_module.time()
+        recent_cutoff = now - (6 * 3600)  # Last 6 hours
+
         conn = get_db_connection()
         cursor = conn.cursor()
 
+        # Get total counts per channel
         cursor.execute(
             """
             SELECT channel_index, COUNT(*) as message_count
@@ -349,6 +366,25 @@ def api_get_channels():
                 channels_dict[idx]["message_count"] = row["message_count"]
                 if channels_dict[idx]["source"] == "default":
                     channels_dict[idx]["source"] = "database"
+
+        # Get recent counts per channel (last 6 hours)
+        cursor.execute(
+            """
+            SELECT channel_index, COUNT(*) as recent_count
+            FROM packet_history
+            WHERE portnum_name = 'TEXT_MESSAGE_APP'
+            AND channel_index IS NOT NULL
+            AND timestamp >= ?
+            GROUP BY channel_index
+            ORDER BY channel_index
+        """,
+            (recent_cutoff,),
+        )
+
+        for row in cursor.fetchall():
+            idx = row["channel_index"]
+            if idx in channels_dict:
+                channels_dict[idx]["recent_count"] = row["recent_count"]
 
         conn.close()
 

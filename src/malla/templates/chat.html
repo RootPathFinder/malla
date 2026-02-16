@@ -625,11 +625,13 @@
             const data = await response.json();
             const channels = data.channels || [];
 
-            // Populate filter dropdown
+            // Populate filter dropdown - show recent count (last 6h)
             channels.forEach(ch => {
                 const option = document.createElement('option');
                 option.value = ch.index;
-                const countInfo = ch.message_count > 0 ? ` (${ch.message_count})` : '';
+                // Show recent_count (last 6h) for accurate expectations
+                const recentCount = ch.recent_count || 0;
+                const countInfo = recentCount > 0 ? ` (${recentCount} recent)` : '';
                 option.textContent = `${ch.name}${countInfo}`;
                 channelFilter.appendChild(option);
             });
