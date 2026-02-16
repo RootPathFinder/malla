@@ -182,7 +182,13 @@ def api_get_messages():
             params.append(before_id)
 
         if channel is not None:
-            query += " AND channel_index = ?"
+            if channel == 0:
+                # Channel 0 is the primary channel; also include NULL
+                # channel_index for backward compatibility with data stored
+                # before the channel extraction fix.
+                query += " AND (channel_index = ? OR channel_index IS NULL)"
+            else:
+                query += " AND channel_index = ?"
             params.append(channel)
 
         query += " ORDER BY timestamp DESC LIMIT ?"
@@ -247,7 +253,9 @@ def api_get_messages():
                     if not is_broadcast
                     else "Broadcast",
                     "is_broadcast": is_broadcast,
-                    "channel_index": row["channel_index"],
+                    "channel_index": row["channel_index"]
+                    if row["channel_index"] is not None
+                    else 0,
                     "text": text,
                     "rssi": row["rssi"],
                     "snr": row["snr"],
@@ -349,13 +357,15 @@ def api_get_channels():
         cursor = conn.cursor()
 
         # Get total counts per channel
+        # Use COALESCE to treat NULL channel_index as channel 0 (primary)
+        # for backward compatibility with data stored before the fix.
         cursor.execute(
             """
-            SELECT channel_index, COUNT(*) as message_count
+            SELECT COALESCE(channel_index, 0) as channel_index,
+                   COUNT(*) as message_count
             FROM packet_history
             WHERE portnum_name = 'TEXT_MESSAGE_APP'
-            AND channel_index IS NOT NULL
-            GROUP BY channel_index
+            GROUP BY COALESCE(channel_index, 0)
             ORDER BY channel_index
         """
         )
@@ -370,12 +380,12 @@ def api_get_channels():
         # Get recent counts per channel (last 6 hours)
         cursor.execute(
             """
-            SELECT channel_index, COUNT(*) as recent_count
+            SELECT COALESCE(channel_index, 0) as channel_index,
+                   COUNT(*) as recent_count
             FROM packet_history
             WHERE portnum_name = 'TEXT_MESSAGE_APP'
-            AND channel_index IS NOT NULL
             AND timestamp >= ?
-            GROUP BY channel_index
+            GROUP BY COALESCE(channel_index, 0)
             ORDER BY channel_index
         """,
             (recent_cutoff,),
@@ -503,7 +513,9 @@ def api_message_stream():
                                 if is_broadcast
                                 else node_names.get(row["to_node_id"], "Unknown"),
                                 "is_broadcast": is_broadcast,
-                                "channel_index": row["channel_index"],
+                                "channel_index": row["channel_index"]
+                                if row["channel_index"] is not None
+                                else 0,
                                 "text": text,
                                 "gateway_id": row["gateway_id"],
                             },

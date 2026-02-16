@@ -1233,6 +1233,11 @@
                 metricGroup.style.display = 'block';
                 updateMetricInputTypes(modal, allowMultiMetric);
             }
+
+            // Attach event listeners to existing node tags (if editing)
+            if (selectedNodes.length > 0) {
+                renderSelectedNodes();
+            }
         }
 
         // Node search

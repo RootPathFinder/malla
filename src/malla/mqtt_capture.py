@@ -845,7 +845,7 @@ def log_packet_to_database(
     want_ack = getattr(mesh_packet, "want_ack", None) if mesh_packet else None
     priority = getattr(mesh_packet, "priority", None) if mesh_packet else None
     delayed = getattr(mesh_packet, "delayed", None) if mesh_packet else None
-    channel_index = getattr(mesh_packet, "channel_index", None) if mesh_packet else None
+    channel_index = getattr(mesh_packet, "channel", None) if mesh_packet else None
     rx_time = getattr(mesh_packet, "rx_time", None) if mesh_packet else None
     pki_encrypted = getattr(mesh_packet, "pki_encrypted", None) if mesh_packet else None
     next_hop = getattr(mesh_packet, "next_hop", None) if mesh_packet else None
