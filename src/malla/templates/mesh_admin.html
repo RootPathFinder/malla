@@ -957,11 +957,11 @@
                             <div class="mb-3">
                                 <label class="form-label">User Settings</label>
                                 <div class="d-flex flex-wrap gap-2">
-                                    <button class="btn btn-outline-warning command-btn" onclick="showUserSettingsModal()">
-                                        <i class="bi bi-person-badge"></i> Edit User Settings
+                                    <button class="btn btn-outline-warning command-btn config-req-btn" onclick="getUserSettings(this)">
+                                        <i class="bi bi-person-badge"></i> User Settings
                                     </button>
                                 </div>
-                                <div class="form-text">Configure node owner name and settings</div>
+                                <div class="form-text">Get and edit node owner name and settings</div>
                             </div>
 
                             <div class="mb-3">
@@ -2542,39 +2542,51 @@
                 <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
             </div>
             <div class="modal-body">
-                <p class="text-muted mb-3">
-                    Configure the node owner name and settings. These settings identify your node on the mesh.
-                </p>
-                <div class="mb-3">
-                    <label class="form-label">Long Name <span class="text-danger">*</span></label>
-                    <input type="text" class="form-control" id="userLongName"
-                           placeholder="e.g., John's Node" maxlength="39">
-                    <div class="form-text">Display name shown on other nodes (max 39 characters)</div>
-                </div>
-                <div class="mb-3">
-                    <label class="form-label">Short Name <span class="text-danger">*</span></label>
-                    <input type="text" class="form-control" id="userShortName"
-                           placeholder="e.g., JN01" maxlength="4">
-                    <div class="form-text">4-character identifier shown on displays</div>
-                </div>
-                <div class="mb-3">
-                    <div class="form-check">
-                        <input type="checkbox" class="form-check-input" id="userIsLicensed">
-                        <label class="form-check-label" for="userIsLicensed">
-                            Licensed HAM Operator
-                        </label>
+                <!-- Loading state -->
+                <div id="userSettingsLoading" class="text-center py-4">
+                    <div class="spinner-border text-primary" role="status">
+                        <span class="visually-hidden">Loading...</span>
                     </div>
-                    <div class="form-text">Check if you have an amateur radio license</div>
+                    <p class="mt-2 text-muted">Fetching current user settings...</p>
                 </div>
+                <!-- Form (hidden while loading) -->
+                <div id="userSettingsForm" style="display: none;">
+                    <p class="text-muted mb-3">
+                        Configure the node owner name and settings. These settings identify your node on the mesh.
+                    </p>
+                    <div class="mb-3">
+                        <label class="form-label">Long Name <span class="text-danger">*</span></label>
+                        <input type="text" class="form-control" id="userLongName"
+                               placeholder="e.g., John's Node" maxlength="39">
+                        <div class="form-text">Display name shown on other nodes (max 39 characters)</div>
+                    </div>
+                    <div class="mb-3">
+                        <label class="form-label">Short Name <span class="text-danger">*</span></label>
+                        <input type="text" class="form-control" id="userShortName"
+                               placeholder="e.g., JN01" maxlength="4">
+                        <div class="form-text">4-character identifier shown on displays</div>
+                    </div>
+                    <div class="mb-3">
+                        <div class="form-check">
+                            <input type="checkbox" class="form-check-input" id="userIsLicensed">
+                            <label class="form-check-label" for="userIsLicensed">
+                                Licensed HAM Operator
+                            </label>
+                        </div>
+                        <div class="form-text">Check if you have an amateur radio license</div>
+                    </div>
 
-                <div class="alert alert-warning py-2 mb-0">
-                    <i class="bi bi-exclamation-triangle me-1"></i>
-                    <small>Changing user settings will take effect after the node reboots or the next node info broadcast.</small>
+                    <div class="alert alert-warning py-2 mb-0">
+                        <i class="bi bi-exclamation-triangle me-1"></i>
+                        <small>Changing user settings will take effect after the node reboots or the next node info broadcast.</small>
+                    </div>
                 </div>
+                <!-- Error state -->
+                <div id="userSettingsError" class="alert alert-danger" style="display: none;"></div>
             </div>
             <div class="modal-footer">
                 <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Cancel</button>
-                <button type="button" class="btn btn-warning" id="userSettingsSaveBtn" onclick="saveUserSettings()">
+                <button type="button" class="btn btn-warning" id="userSettingsSaveBtn" onclick="saveUserSettings()" disabled>
                     <i class="bi bi-save"></i> Save User Settings
                 </button>
             </div>
@@ -5086,13 +5098,30 @@
     // User Settings Functions
     // ============================================================================
 
-    // Show user settings modal
-    function showUserSettingsModal() {
+    // Store the current node ID for user settings
+    let userSettingsNodeId = null;
+
+    // Get and display user settings
+    async function getUserSettings(btn = null) {
+        highlightConfigButton(btn);
+
         const nodeId = getNodeIdFromInput('targetNodeInput');
         if (!nodeId) {
             alert('Please enter a target node ID first');
             return;
         }
+
+        userSettingsNodeId = nodeId;
+
+        // Initialize command log
+        initCommandLog();
+        addCommandLog(`Requesting user settings for ${nodeId}`);
+
+        // Reset modal state
+        document.getElementById('userSettingsLoading').style.display = 'block';
+        document.getElementById('userSettingsForm').style.display = 'none';
+        document.getElementById('userSettingsError').style.display = 'none';
+        document.getElementById('userSettingsSaveBtn').disabled = true;
 
         // Clear previous values
         document.getElementById('userLongName').value = '';
@@ -5102,11 +5131,50 @@
         // Show the modal
         const modal = new bootstrap.Modal(document.getElementById('userSettingsModal'));
         modal.show();
+
+        try {
+            // Fetch current node info
+            const response = await fetch(`/api/node/${encodeURIComponent(nodeId)}/info`);
+            const data = await response.json();
+
+            if (data.error) {
+                throw new Error(data.error);
+            }
+
+            // Extract user settings from node info
+            const node = data.node || {};
+            const longName = node.long_name || '';
+            const shortName = node.short_name || '';
+            const isLicensed = node.is_licensed || false;
+
+            addCommandLog(`Current settings retrieved:`);
+            addCommandLog(`  Long Name: ${longName || '(not set)'}`);
+            addCommandLog(`  Short Name: ${shortName || '(not set)'}`);
+            addCommandLog(`  Is Licensed: ${isLicensed}`);
+
+            // Populate form
+            document.getElementById('userLongName').value = longName;
+            document.getElementById('userShortName').value = shortName;
+            document.getElementById('userIsLicensed').checked = isLicensed;
+
+            // Show form, hide loading
+            document.getElementById('userSettingsLoading').style.display = 'none';
+            document.getElementById('userSettingsForm').style.display = 'block';
+            document.getElementById('userSettingsSaveBtn').disabled = false;
+
+        } catch (error) {
+            addCommandLog(`Error fetching user settings: ${error.message}`, 'error');
+            document.getElementById('userSettingsLoading').style.display = 'none';
+            document.getElementById('userSettingsError').textContent = `Failed to fetch current settings: ${error.message}. You can still enter new values.`;
+            document.getElementById('userSettingsError').style.display = 'block';
+            document.getElementById('userSettingsForm').style.display = 'block';
+            document.getElementById('userSettingsSaveBtn').disabled = false;
+        }
     }
 
     // Save user settings to the node
     async function saveUserSettings() {
-        const nodeId = getNodeIdFromInput('targetNodeInput');
+        const nodeId = userSettingsNodeId || getNodeIdFromInput('targetNodeInput');
         if (!nodeId) {
             alert('Please enter a target node ID first');
             return;
