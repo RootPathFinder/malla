@@ -1017,6 +1017,47 @@ class SerialPublisher:
             want_response=True,
         )
 
+    def send_set_owner(
+        self,
+        target_node_id: int,
+        long_name: str,
+        short_name: str,
+        is_licensed: bool = False,
+    ) -> int | None:
+        """
+        Set owner/user settings on a target node.
+
+        Args:
+            target_node_id: The target node ID
+            long_name: The owner's long name (max 39 characters)
+            short_name: The owner's short name (max 4 characters)
+            is_licensed: Whether the owner is a licensed HAM operator
+
+        Returns:
+            Packet ID if sent successfully
+        """
+        from meshtastic import mesh_pb2
+
+        admin_msg = admin_pb2.AdminMessage()
+        user = mesh_pb2.User()
+
+        user.long_name = long_name[:39]  # Enforce max length
+        user.short_name = short_name[:4]  # Enforce max length
+        user.is_licensed = is_licensed
+
+        admin_msg.set_owner.CopyFrom(user)
+
+        logger.info(
+            f"Sending set_owner to !{target_node_id:08x}: "
+            f"long_name={long_name}, short_name={short_name}, is_licensed={is_licensed}"
+        )
+
+        return self.send_admin_message(
+            target_node_id=target_node_id,
+            admin_message=admin_msg,
+            want_response=True,
+        )
+
     def send_remove_node(
         self,
         target_node_id: int,

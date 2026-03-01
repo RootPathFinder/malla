@@ -955,6 +955,16 @@
                             </div>
 
                             <div class="mb-3">
+                                <label class="form-label">User Settings</label>
+                                <div class="d-flex flex-wrap gap-2">
+                                    <button class="btn btn-outline-warning command-btn" onclick="showUserSettingsModal()">
+                                        <i class="bi bi-person-badge"></i> Edit User Settings
+                                    </button>
+                                </div>
+                                <div class="form-text">Configure node owner name and settings</div>
+                            </div>
+
+                            <div class="mb-3">
                                 <label class="form-label">Channel Requests</label>
                                 <div class="d-flex flex-wrap gap-2" id="channelRequestBtns">
                                     {% for i in range(8) %}
@@ -2517,6 +2527,55 @@
                 <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Cancel</button>
                 <button type="button" class="btn btn-danger" id="channelDirDeleteBtn" onclick="confirmDeleteChannel()">
                     <i class="bi bi-trash"></i> Delete
+                </button>
+            </div>
+        </div>
+    </div>
+</div>
+
+<!-- User Settings Modal -->
+<div class="modal fade" id="userSettingsModal" tabindex="-1">
+    <div class="modal-dialog">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h5 class="modal-title"><i class="bi bi-person-badge me-2"></i>User Settings</h5>
+                <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+            </div>
+            <div class="modal-body">
+                <p class="text-muted mb-3">
+                    Configure the node owner name and settings. These settings identify your node on the mesh.
+                </p>
+                <div class="mb-3">
+                    <label class="form-label">Long Name <span class="text-danger">*</span></label>
+                    <input type="text" class="form-control" id="userLongName"
+                           placeholder="e.g., John's Node" maxlength="39">
+                    <div class="form-text">Display name shown on other nodes (max 39 characters)</div>
+                </div>
+                <div class="mb-3">
+                    <label class="form-label">Short Name <span class="text-danger">*</span></label>
+                    <input type="text" class="form-control" id="userShortName"
+                           placeholder="e.g., JN01" maxlength="4">
+                    <div class="form-text">4-character identifier shown on displays</div>
+                </div>
+                <div class="mb-3">
+                    <div class="form-check">
+                        <input type="checkbox" class="form-check-input" id="userIsLicensed">
+                        <label class="form-check-label" for="userIsLicensed">
+                            Licensed HAM Operator
+                        </label>
+                    </div>
+                    <div class="form-text">Check if you have an amateur radio license</div>
+                </div>
+
+                <div class="alert alert-warning py-2 mb-0">
+                    <i class="bi bi-exclamation-triangle me-1"></i>
+                    <small>Changing user settings will take effect after the node reboots or the next node info broadcast.</small>
+                </div>
+            </div>
+            <div class="modal-footer">
+                <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Cancel</button>
+                <button type="button" class="btn btn-warning" id="userSettingsSaveBtn" onclick="saveUserSettings()">
+                    <i class="bi bi-save"></i> Save User Settings
                 </button>
             </div>
         </div>
@@ -5021,6 +5080,89 @@
                 await sendShutdown(nodeId);
             }
         );
+    }
+
+    // ============================================================================
+    // User Settings Functions
+    // ============================================================================
+
+    // Show user settings modal
+    function showUserSettingsModal() {
+        const nodeId = getNodeIdFromInput('targetNodeInput');
+        if (!nodeId) {
+            alert('Please enter a target node ID first');
+            return;
+        }
+
+        // Clear previous values
+        document.getElementById('userLongName').value = '';
+        document.getElementById('userShortName').value = '';
+        document.getElementById('userIsLicensed').checked = false;
+
+        // Show the modal
+        const modal = new bootstrap.Modal(document.getElementById('userSettingsModal'));
+        modal.show();
+    }
+
+    // Save user settings to the node
+    async function saveUserSettings() {
+        const nodeId = getNodeIdFromInput('targetNodeInput');
+        if (!nodeId) {
+            alert('Please enter a target node ID first');
+            return;
+        }
+
+        const longName = document.getElementById('userLongName').value.trim();
+        const shortName = document.getElementById('userShortName').value.trim();
+        const isLicensed = document.getElementById('userIsLicensed').checked;
+
+        // Validate inputs
+        if (!longName) {
+            alert('Long name is required');
+            return;
+        }
+        if (!shortName) {
+            alert('Short name is required');
+            return;
+        }
+        if (shortName.length > 4) {
+            alert('Short name must be 4 characters or less');
+            return;
+        }
+
+        // Close modal
+        const modal = bootstrap.Modal.getInstance(document.getElementById('userSettingsModal'));
+        modal.hide();
+
+        // Initialize command log
+        initCommandLog();
+        addCommandLog(`Setting user settings on ${nodeId}...`);
+        addCommandLog(`Long Name: ${longName}`);
+        addCommandLog(`Short Name: ${shortName}`);
+        addCommandLog(`Is Licensed: ${isLicensed}`);
+
+        try {
+            const response = await fetch(`/api/admin/node/${encodeURIComponent(nodeId)}/user`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                    long_name: longName,
+                    short_name: shortName,
+                    is_licensed: isLicensed
+                })
+            });
+
+            const data = await response.json();
+
+            if (data.success) {
+                addCommandLog('User settings updated successfully!', 'success');
+                addCommandLog('Note: Changes may take effect after node reboots or next broadcast.', 'info');
+            } else {
+                addCommandLog(`Failed to update user settings: ${data.error}`, 'error');
+            }
+        } catch (error) {
+            addCommandLog(`Error: ${error.message}`, 'error');
+        }
     }
 
     // Confirm remove node from nodedb

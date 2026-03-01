@@ -2213,6 +2213,60 @@ def api_set_node_config(node_id, config_type):
         return jsonify({"error": str(e)}), 500
 
 
+@admin_bp.route("/api/admin/node/<node_id>/user", methods=["POST"])
+def api_set_node_user(node_id):
+    """Set user/owner settings on a remote node."""
+    try:
+        node_id_int = convert_node_id(node_id)
+
+        data = request.get_json()
+        if not data:
+            return jsonify({"error": "No user data provided"}), 400
+
+        long_name = data.get("long_name", "").strip()
+        short_name = data.get("short_name", "").strip()
+        is_licensed = data.get("is_licensed", False)
+
+        if not long_name:
+            return jsonify({"error": "long_name is required"}), 400
+        if not short_name:
+            return jsonify({"error": "short_name is required"}), 400
+        if len(short_name) > 4:
+            return jsonify({"error": "short_name must be 4 characters or less"}), 400
+        if len(long_name) > 39:
+            return jsonify({"error": "long_name must be 39 characters or less"}), 400
+
+        admin_service = get_admin_service()
+        result = admin_service.set_owner(
+            target_node_id=node_id_int,
+            long_name=long_name,
+            short_name=short_name,
+            is_licensed=is_licensed,
+        )
+
+        if result.success:
+            return jsonify(
+                {
+                    "success": True,
+                    "node_id": node_id_int,
+                    "message": "User settings updated",
+                    "log_id": result.log_id,
+                }
+            )
+        else:
+            return jsonify(
+                {
+                    "success": False,
+                    "error": result.error,
+                    "log_id": result.log_id,
+                }
+            ), 200
+
+    except Exception as e:
+        logger.error(f"Error setting node user: {e}")
+        return jsonify({"error": str(e)}), 500
+
+
 @admin_bp.route("/api/admin/node/<node_id>/channel/<int:channel_index>")
 def api_get_node_channel(node_id, channel_index):
     """Get channel configuration from a remote node."""
