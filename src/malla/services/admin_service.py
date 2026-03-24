@@ -2551,6 +2551,26 @@ class AdminService:
         """
         return AdminRepository.get_admin_log(target_node_id=target_node_id, limit=limit)
 
+    # =========================================================================
+    # Favorite Nodes
+    # =========================================================================
+
+    def get_favorite_nodes(self) -> list[dict[str, Any]]:
+        """Get list of all favorite nodes."""
+        return AdminRepository.get_favorite_nodes()
+
+    def add_favorite_node(self, node_id: int, note: str | None = None) -> bool:
+        """Add a node to the favorites list."""
+        return AdminRepository.add_favorite_node(node_id, note)
+
+    def remove_favorite_node(self, node_id: int) -> bool:
+        """Remove a node from the favorites list."""
+        return AdminRepository.remove_favorite_node(node_id)
+
+    def update_favorite_node_note(self, node_id: int, note: str | None) -> bool:
+        """Update the note for a favorite node."""
+        return AdminRepository.update_favorite_node_note(node_id, note)
+
     @staticmethod
     def _config_to_dict(config: config_pb2.Config) -> dict[str, Any]:
         """

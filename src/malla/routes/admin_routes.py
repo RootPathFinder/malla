@@ -101,11 +101,13 @@ def admin_page():
         admin_service = get_admin_service()
         connection_status = admin_service.get_connection_status()
         administrable_nodes = admin_service.get_administrable_nodes()
+        favorite_nodes = admin_service.get_favorite_nodes()
 
         return render_template(
             "mesh_admin.html",
             connection_status=connection_status,
             administrable_nodes=administrable_nodes,
+            favorite_nodes=favorite_nodes,
         )
     except Exception as e:
         logger.error(f"Error rendering admin page: {e}")
@@ -4960,6 +4962,107 @@ def api_clear_logs():
 
     except Exception as e:
         logger.error(f"Error clearing logs: {e}")
+        return jsonify({"error": str(e)}), 500
+
+
+# ============================================================================
+# API Routes - Favorite Nodes
+# ============================================================================
+
+
+@admin_bp.route("/api/admin/favorites")
+def api_get_favorite_nodes():
+    """Get all favorite nodes."""
+    try:
+        admin_service = get_admin_service()
+        favorites = admin_service.get_favorite_nodes()
+        return jsonify({"favorites": favorites})
+    except Exception as e:
+        logger.error(f"Error getting favorite nodes: {e}")
+        return jsonify({"error": str(e)}), 500
+
+
+@admin_bp.route("/api/admin/favorites", methods=["POST"])
+def api_add_favorite_node():
+    """Add a node to the favorites list."""
+    try:
+        data = request.get_json()
+        if not data or "node_id" not in data:
+            return jsonify({"error": "node_id is required"}), 400
+
+        node_id = convert_node_id(data["node_id"])
+        if node_id is None:
+            return jsonify({"error": "Invalid node_id"}), 400
+
+        note = data.get("note")
+        if note is not None:
+            note = str(note).strip()[:500]
+
+        admin_service = get_admin_service()
+        added = admin_service.add_favorite_node(node_id, note)
+
+        if added:
+            logger.info(f"Added node {node_id} to favorites")
+            return jsonify(
+                {"success": True, "message": f"Node {node_id} added to favorites"}
+            )
+        else:
+            return jsonify(
+                {"success": False, "message": "Node is already in favorites"}
+            ), 409
+    except Exception as e:
+        logger.error(f"Error adding favorite node: {e}")
+        return jsonify({"error": str(e)}), 500
+
+
+@admin_bp.route("/api/admin/favorites/<node_id_str>", methods=["DELETE"])
+def api_remove_favorite_node(node_id_str):
+    """Remove a node from the favorites list."""
+    try:
+        node_id = convert_node_id(node_id_str)
+        if node_id is None:
+            return jsonify({"error": "Invalid node_id"}), 400
+
+        admin_service = get_admin_service()
+        removed = admin_service.remove_favorite_node(node_id)
+
+        if removed:
+            logger.info(f"Removed node {node_id} from favorites")
+            return jsonify(
+                {"success": True, "message": f"Node {node_id} removed from favorites"}
+            )
+        else:
+            return jsonify({"error": "Node not found in favorites"}), 404
+    except Exception as e:
+        logger.error(f"Error removing favorite node: {e}")
+        return jsonify({"error": str(e)}), 500
+
+
+@admin_bp.route("/api/admin/favorites/<node_id_str>", methods=["PUT"])
+def api_update_favorite_node(node_id_str):
+    """Update the note for a favorite node."""
+    try:
+        node_id = convert_node_id(node_id_str)
+        if node_id is None:
+            return jsonify({"error": "Invalid node_id"}), 400
+
+        data = request.get_json()
+        if data is None:
+            return jsonify({"error": "JSON body required"}), 400
+
+        note = data.get("note")
+        if note is not None:
+            note = str(note).strip()[:500]
+
+        admin_service = get_admin_service()
+        updated = admin_service.update_favorite_node_note(node_id, note)
+
+        if updated:
+            return jsonify({"success": True, "message": "Note updated"})
+        else:
+            return jsonify({"error": "Node not found in favorites"}), 404
+    except Exception as e:
+        logger.error(f"Error updating favorite node: {e}")
         return jsonify({"error": str(e)}), 500
 
 

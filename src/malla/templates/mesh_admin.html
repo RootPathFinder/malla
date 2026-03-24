@@ -629,6 +629,13 @@
                     </button>
                 </li>
                 <li class="nav-item" role="presentation">
+                    <button class="nav-link" id="favorites-tab" data-bs-toggle="tab"
+                            data-bs-target="#favorites-pane" type="button" role="tab">
+                        <i class="bi bi-star"></i> Favorite Nodes
+                        <span class="badge bg-warning text-dark" id="favoritesTabBadge">{{ favorite_nodes|length }}</span>
+                    </button>
+                </li>
+                <li class="nav-item" role="presentation">
                     <button class="nav-link" id="commands-tab" data-bs-toggle="tab"
                             data-bs-target="#commands-pane" type="button" role="tab">
                         <i class="bi bi-gear"></i> Node Config
@@ -801,6 +808,162 @@
                             </p>
                         </div>
                     {% endif %}
+                </div>
+
+                <!-- Favorite Nodes Tab -->
+                <div class="tab-pane fade" id="favorites-pane" role="tabpanel">
+                    <div class="d-flex justify-content-between align-items-center mb-3">
+                        <div>
+                            <h6 class="mb-0">Favorite Nodes</h6>
+                            <small class="text-muted">Bookmark administrable nodes for quick access</small>
+                        </div>
+                        <button class="btn btn-primary btn-sm" onclick="showAddFavoriteModal()">
+                            <i class="bi bi-plus-lg"></i> Add Node
+                        </button>
+                    </div>
+
+                    <div id="favoritesTableContainer">
+                        {% if favorite_nodes %}
+                        <div class="table-responsive">
+                            <table class="table table-hover">
+                                <thead>
+                                    <tr>
+                                        <th>Node</th>
+                                        <th>Hardware</th>
+                                        <th>Firmware</th>
+                                        <th>Admin Status</th>
+                                        <th>Note</th>
+                                        <th>Added</th>
+                                        <th>Actions</th>
+                                    </tr>
+                                </thead>
+                                <tbody id="favoritesTableBody">
+                                    {% for node in favorite_nodes %}
+                                    <tr id="fav-node-row-{{ node.node_id }}" data-node-id="{{ node.node_id }}">
+                                        <td>
+                                            <a href="/node/{{ node.node_id }}" class="text-decoration-none">
+                                                <strong>{{ node.long_name or node.short_name or 'Unknown' }}</strong>
+                                            </a>
+                                            <br>
+                                            <code class="text-muted small">{{ node.hex_id or ('!' + '%08x'|format(node.node_id)) }}</code>
+                                        </td>
+                                        <td>{{ node.hw_model or 'Unknown' }}</td>
+                                        <td>{{ node.firmware_version or '—' }}</td>
+                                        <td>
+                                            {% if node.is_administrable %}
+                                                {% if node.last_status_result == 'online' %}
+                                                    <span class="badge bg-success"><i class="bi bi-check-circle"></i> Online</span>
+                                                {% elif node.last_status_result == 'timeout' %}
+                                                    <span class="badge bg-warning text-dark"><i class="bi bi-clock"></i> Timeout</span>
+                                                {% elif node.last_status_result == 'error' or node.last_status_result == 'offline' %}
+                                                    <span class="badge bg-danger"><i class="bi bi-x-circle"></i> {{ node.last_status_result|title }}</span>
+                                                {% else %}
+                                                    <span class="badge bg-secondary">Not checked</span>
+                                                {% endif %}
+                                            {% else %}
+                                                <span class="badge bg-dark"><i class="bi bi-question-circle"></i> Not confirmed</span>
+                                            {% endif %}
+                                        </td>
+                                        <td>
+                                            <span class="fav-note-display" id="fav-note-display-{{ node.node_id }}"
+                                                  onclick="editFavoriteNote({{ node.node_id }})"
+                                                  style="cursor: pointer;" title="Click to edit note">
+                                                {{ node.note or '—' }}
+                                            </span>
+                                            <div class="d-none" id="fav-note-edit-{{ node.node_id }}">
+                                                <div class="input-group input-group-sm">
+                                                    <input type="text" class="form-control form-control-sm"
+                                                           id="fav-note-input-{{ node.node_id }}"
+                                                           value="{{ node.note or '' }}"
+                                                           placeholder="Add a note..."
+                                                           maxlength="500">
+                                                    <button class="btn btn-outline-success btn-sm"
+                                                            onclick="saveFavoriteNote({{ node.node_id }})">
+                                                        <i class="bi bi-check"></i>
+                                                    </button>
+                                                    <button class="btn btn-outline-secondary btn-sm"
+                                                            onclick="cancelEditFavoriteNote({{ node.node_id }})">
+                                                        <i class="bi bi-x"></i>
+                                                    </button>
+                                                </div>
+                                            </div>
+                                        </td>
+                                        <td>
+                                            <span class="text-muted small">
+                                                {{ node.added_at | timestamp_to_datetime }}
+                                            </span>
+                                        </td>
+                                        <td>
+                                            <div class="btn-group btn-group-sm">
+                                                <button class="btn btn-outline-primary"
+                                                        onclick="selectNode({{ node.node_id }})"
+                                                        title="Select for commands">
+                                                    <i class="bi bi-cursor"></i>
+                                                </button>
+                                                <button class="btn btn-outline-success"
+                                                        onclick="refreshNodeAdminInfo({{ node.node_id }})"
+                                                        title="Test admin access">
+                                                    <i class="bi bi-arrow-repeat"></i>
+                                                </button>
+                                                <button class="btn btn-outline-danger"
+                                                        onclick="removeFavoriteNode({{ node.node_id }}, '{{ node.long_name or node.short_name or 'Unknown' }}')"
+                                                        title="Remove from favorites">
+                                                    <i class="bi bi-star-fill"></i>
+                                                </button>
+                                            </div>
+                                        </td>
+                                    </tr>
+                                    {% endfor %}
+                                </tbody>
+                            </table>
+                        </div>
+                        {% else %}
+                        <div class="text-center py-5" id="favoritesEmptyState">
+                            <i class="bi bi-star text-muted" style="font-size: 4rem;"></i>
+                            <h4 class="mt-3">No Favorite Nodes</h4>
+                            <p class="text-muted">
+                                Add administrable nodes to your favorites for quick access.<br>
+                                Click "Add Node" above to get started.
+                            </p>
+                        </div>
+                        {% endif %}
+                    </div>
+
+                    <!-- Add Favorite Node Modal -->
+                    <div class="modal fade" id="addFavoriteModal" tabindex="-1">
+                        <div class="modal-dialog">
+                            <div class="modal-content">
+                                <div class="modal-header">
+                                    <h5 class="modal-title"><i class="bi bi-star"></i> Add Favorite Node</h5>
+                                    <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+                                </div>
+                                <div class="modal-body">
+                                    <div class="mb-3 node-autocomplete-container">
+                                        <label for="favoriteNodeInput" class="form-label">Select Node</label>
+                                        <input type="text" class="form-control" id="favoriteNodeInput"
+                                               placeholder="Type to search nodes..."
+                                               autocomplete="off"
+                                               oninput="searchFavoriteNodes(this.value)"
+                                               onfocus="searchFavoriteNodes(this.value)"
+                                               onblur="setTimeout(() => hideAutocomplete('favoriteNodeResults'), 200)">
+                                        <div id="favoriteNodeResults" class="node-autocomplete-results" style="display:none;"></div>
+                                        <input type="hidden" id="favoriteNodeIdInput">
+                                    </div>
+                                    <div class="mb-3">
+                                        <label for="favoriteNodeNoteInput" class="form-label">Note (optional)</label>
+                                        <input type="text" class="form-control" id="favoriteNodeNoteInput"
+                                               placeholder="e.g. Gateway node at hilltop" maxlength="500">
+                                    </div>
+                                </div>
+                                <div class="modal-footer">
+                                    <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Cancel</button>
+                                    <button type="button" class="btn btn-primary" onclick="addFavoriteNode()">
+                                        <i class="bi bi-star"></i> Add to Favorites
+                                    </button>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
                 </div>
 
                 <!-- Node Config Tab -->
@@ -3169,6 +3332,259 @@
     // Refresh cached nodes
     function refreshNodeCache() {
         cachedNodes = null;
+    }
+
+    // ============================================================================
+    // Favorite Nodes Management
+    // ============================================================================
+
+    function showAddFavoriteModal() {
+        document.getElementById('favoriteNodeInput').value = '';
+        document.getElementById('favoriteNodeIdInput').value = '';
+        document.getElementById('favoriteNodeNoteInput').value = '';
+        hideAutocomplete('favoriteNodeResults');
+        const modal = new bootstrap.Modal(document.getElementById('addFavoriteModal'));
+        modal.show();
+    }
+
+    async function searchFavoriteNodes(value) {
+        if (!value || value.length < 1) {
+            // Show administrable nodes as default suggestions
+            showAdministrableNodesInFavoriteSearch();
+            return;
+        }
+        // Reuse the general node search but target the favorite results container
+        searchNodes(value, 'favoriteNodeResults');
+    }
+
+    function showAdministrableNodesInFavoriteSearch() {
+        const resultsDiv = document.getElementById('favoriteNodeResults');
+        if (!administrableNodesCache || administrableNodesCache.length === 0) {
+            resultsDiv.innerHTML = '<div class="p-2 text-muted small">No administrable nodes found. Type to search all.</div>';
+            resultsDiv.style.display = 'block';
+            return;
+        }
+
+        let html = '<div class="p-2 text-muted small fw-bold">Administrable Nodes:</div>';
+        for (const node of administrableNodesCache) {
+            const displayName = node.long_name || node.short_name || 'Unknown';
+            const hexId = node.hex_id || `!${(node.node_id >>> 0).toString(16).padStart(8, '0')}`;
+            html += `
+                <div class="node-autocomplete-item"
+                     onclick="selectFavoriteAutocompleteNode(${node.node_id}, '${hexId}', '${escapeHtml(displayName)}')">
+                    <div class="node-name">${escapeHtml(displayName)} <i class="bi bi-shield-check text-success ms-1" title="Administrable"></i></div>
+                    <div class="node-id">${hexId}</div>
+                </div>
+            `;
+        }
+        resultsDiv.innerHTML = html;
+        resultsDiv.style.display = 'block';
+    }
+
+    function selectFavoriteAutocompleteNode(nodeId, hexId, nodeName) {
+        const input = document.getElementById('favoriteNodeInput');
+        input.value = `${hexId} - ${nodeName}`;
+        document.getElementById('favoriteNodeIdInput').value = nodeId;
+        hideAutocomplete('favoriteNodeResults');
+    }
+
+    // Override selectAutocompleteNode for favorites context
+    const origSelectAutocompleteNode = selectAutocompleteNode;
+    selectAutocompleteNode = function(nodeId, nodeName, resultsContainerId) {
+        if (resultsContainerId === 'favoriteNodeResults') {
+            const input = document.getElementById('favoriteNodeInput');
+            input.value = `${nodeId} - ${nodeName}`;
+            document.getElementById('favoriteNodeIdInput').value = nodeId;
+            hideAutocomplete('favoriteNodeResults');
+            return;
+        }
+        origSelectAutocompleteNode(nodeId, nodeName, resultsContainerId);
+    };
+
+    async function addFavoriteNode() {
+        let nodeId = document.getElementById('favoriteNodeIdInput').value;
+        if (!nodeId) {
+            // Try to extract from input text
+            const inputVal = document.getElementById('favoriteNodeInput').value.trim();
+            if (inputVal.includes(' - ')) {
+                nodeId = inputVal.split(' - ')[0].trim();
+            } else {
+                nodeId = inputVal;
+            }
+        }
+
+        if (!nodeId) {
+            showAlert('warning', 'Please select a node first');
+            return;
+        }
+
+        const note = document.getElementById('favoriteNodeNoteInput').value.trim() || null;
+
+        try {
+            const response = await fetch('/api/admin/favorites', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ node_id: nodeId, note: note })
+            });
+
+            const data = await response.json();
+
+            if (response.ok && data.success) {
+                showAlert('success', data.message || 'Node added to favorites');
+                bootstrap.Modal.getInstance(document.getElementById('addFavoriteModal')).hide();
+                reloadFavoriteNodes();
+            } else {
+                showAlert('warning', data.message || data.error || 'Failed to add node');
+            }
+        } catch (error) {
+            showAlert('danger', 'Error adding favorite node: ' + error.message);
+        }
+    }
+
+    async function removeFavoriteNode(nodeId, nodeName) {
+        if (!confirm(`Remove "${nodeName}" from favorites?`)) return;
+
+        try {
+            const response = await fetch(`/api/admin/favorites/${nodeId}`, {
+                method: 'DELETE'
+            });
+
+            const data = await response.json();
+
+            if (response.ok && data.success) {
+                showAlert('success', data.message || 'Node removed from favorites');
+                const row = document.getElementById(`fav-node-row-${nodeId}`);
+                if (row) row.remove();
+                updateFavoritesCount();
+                // Show empty state if no more rows
+                const tbody = document.getElementById('favoritesTableBody');
+                if (tbody && tbody.children.length === 0) {
+                    reloadFavoriteNodes();
+                }
+            } else {
+                showAlert('danger', data.error || 'Failed to remove node');
+            }
+        } catch (error) {
+            showAlert('danger', 'Error removing favorite node: ' + error.message);
+        }
+    }
+
+    function editFavoriteNote(nodeId) {
+        document.getElementById(`fav-note-display-${nodeId}`).classList.add('d-none');
+        document.getElementById(`fav-note-edit-${nodeId}`).classList.remove('d-none');
+        const input = document.getElementById(`fav-note-input-${nodeId}`);
+        input.focus();
+        input.addEventListener('keydown', function handler(e) {
+            if (e.key === 'Enter') { saveFavoriteNote(nodeId); input.removeEventListener('keydown', handler); }
+            if (e.key === 'Escape') { cancelEditFavoriteNote(nodeId); input.removeEventListener('keydown', handler); }
+        });
+    }
+
+    function cancelEditFavoriteNote(nodeId) {
+        document.getElementById(`fav-note-display-${nodeId}`).classList.remove('d-none');
+        document.getElementById(`fav-note-edit-${nodeId}`).classList.add('d-none');
+    }
+
+    async function saveFavoriteNote(nodeId) {
+        const note = document.getElementById(`fav-note-input-${nodeId}`).value.trim() || null;
+
+        try {
+            const response = await fetch(`/api/admin/favorites/${nodeId}`, {
+                method: 'PUT',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ note: note })
+            });
+
+            const data = await response.json();
+
+            if (response.ok && data.success) {
+                const display = document.getElementById(`fav-note-display-${nodeId}`);
+                display.textContent = note || '—';
+                cancelEditFavoriteNote(nodeId);
+            } else {
+                showAlert('danger', data.error || 'Failed to update note');
+            }
+        } catch (error) {
+            showAlert('danger', 'Error updating note: ' + error.message);
+        }
+    }
+
+    async function reloadFavoriteNodes() {
+        try {
+            const response = await fetch('/api/admin/favorites');
+            const data = await response.json();
+            const favorites = data.favorites || [];
+
+            const container = document.getElementById('favoritesTableContainer');
+            if (favorites.length === 0) {
+                container.innerHTML = `
+                    <div class="text-center py-5" id="favoritesEmptyState">
+                        <i class="bi bi-star text-muted" style="font-size: 4rem;"></i>
+                        <h4 class="mt-3">No Favorite Nodes</h4>
+                        <p class="text-muted">
+                            Add administrable nodes to your favorites for quick access.<br>
+                            Click "Add Node" above to get started.
+                        </p>
+                    </div>`;
+            } else {
+                let html = `<div class="table-responsive"><table class="table table-hover"><thead><tr>
+                    <th>Node</th><th>Hardware</th><th>Firmware</th><th>Admin Status</th>
+                    <th>Note</th><th>Added</th><th>Actions</th></tr></thead><tbody id="favoritesTableBody">`;
+
+                for (const node of favorites) {
+                    const displayName = node.long_name || node.short_name || 'Unknown';
+                    const hexId = node.hex_id || `!${(node.node_id >>> 0).toString(16).padStart(8, '0')}`;
+                    const addedDate = node.added_at ? new Date(node.added_at * 1000).toLocaleString() : '—';
+                    let statusBadge;
+                    if (node.is_administrable) {
+                        if (node.last_status_result === 'online') statusBadge = '<span class="badge bg-success"><i class="bi bi-check-circle"></i> Online</span>';
+                        else if (node.last_status_result === 'timeout') statusBadge = '<span class="badge bg-warning text-dark"><i class="bi bi-clock"></i> Timeout</span>';
+                        else if (node.last_status_result === 'error' || node.last_status_result === 'offline') statusBadge = `<span class="badge bg-danger"><i class="bi bi-x-circle"></i> ${node.last_status_result.charAt(0).toUpperCase() + node.last_status_result.slice(1)}</span>`;
+                        else statusBadge = '<span class="badge bg-secondary">Not checked</span>';
+                    } else {
+                        statusBadge = '<span class="badge bg-dark"><i class="bi bi-question-circle"></i> Not confirmed</span>';
+                    }
+
+                    html += `<tr id="fav-node-row-${node.node_id}" data-node-id="${node.node_id}">
+                        <td><a href="/node/${node.node_id}" class="text-decoration-none"><strong>${escapeHtml(displayName)}</strong></a><br><code class="text-muted small">${hexId}</code></td>
+                        <td>${escapeHtml(node.hw_model || 'Unknown')}</td>
+                        <td>${escapeHtml(node.firmware_version || '—')}</td>
+                        <td>${statusBadge}</td>
+                        <td>
+                            <span class="fav-note-display" id="fav-note-display-${node.node_id}" onclick="editFavoriteNote(${node.node_id})" style="cursor: pointer;" title="Click to edit note">${escapeHtml(node.note || '—')}</span>
+                            <div class="d-none" id="fav-note-edit-${node.node_id}">
+                                <div class="input-group input-group-sm">
+                                    <input type="text" class="form-control form-control-sm" id="fav-note-input-${node.node_id}" value="${escapeHtml(node.note || '')}" placeholder="Add a note..." maxlength="500">
+                                    <button class="btn btn-outline-success btn-sm" onclick="saveFavoriteNote(${node.node_id})"><i class="bi bi-check"></i></button>
+                                    <button class="btn btn-outline-secondary btn-sm" onclick="cancelEditFavoriteNote(${node.node_id})"><i class="bi bi-x"></i></button>
+                                </div>
+                            </div>
+                        </td>
+                        <td><span class="text-muted small">${addedDate}</span></td>
+                        <td>
+                            <div class="btn-group btn-group-sm">
+                                <button class="btn btn-outline-primary" onclick="selectNode(${node.node_id})" title="Select for commands"><i class="bi bi-cursor"></i></button>
+                                <button class="btn btn-outline-success" onclick="refreshNodeAdminInfo(${node.node_id})" title="Test admin access"><i class="bi bi-arrow-repeat"></i></button>
+                                <button class="btn btn-outline-danger" onclick="removeFavoriteNode(${node.node_id}, '${escapeHtml(displayName)}')" title="Remove from favorites"><i class="bi bi-star-fill"></i></button>
+                            </div>
+                        </td>
+                    </tr>`;
+                }
+
+                html += '</tbody></table></div>';
+                container.innerHTML = html;
+            }
+            updateFavoritesCount();
+        } catch (error) {
+            console.error('Error reloading favorites:', error);
+        }
+    }
+
+    function updateFavoritesCount() {
+        const tbody = document.getElementById('favoritesTableBody');
+        const count = tbody ? tbody.children.length : 0;
+        const badge = document.getElementById('favoritesTabBadge');
+        if (badge) badge.textContent = count;
     }
 
     // ============================================================================

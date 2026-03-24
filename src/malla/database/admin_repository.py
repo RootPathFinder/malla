@@ -156,6 +156,15 @@ def init_admin_tables() -> None:
         "CREATE INDEX IF NOT EXISTS idx_compliance_node ON compliance_checks(node_id, checked_at DESC)"
     )
 
+    # Table for favorite (bookmarked) administrable nodes
+    cursor.execute("""
+        CREATE TABLE IF NOT EXISTS favorite_nodes (
+            node_id INTEGER PRIMARY KEY,
+            added_at REAL NOT NULL,
+            note TEXT
+        )
+    """)
+
     conn.commit()
     conn.close()
     logger.info("Admin tables initialized")
@@ -1285,3 +1294,158 @@ class AdminRepository:
         conn.close()
 
         return deleted
+
+    # =========================================================================
+    # Favorite Nodes Methods
+    # =========================================================================
+
+    @staticmethod
+    def get_favorite_nodes() -> list[dict[str, Any]]:
+        """
+        Get all favorite nodes with their details.
+
+        Returns:
+            List of favorite node records with node_info and administrable status joined
+        """
+        conn = get_db_connection()
+        cursor = conn.cursor()
+
+        cursor.execute(
+            """
+            SELECT
+                fn.node_id,
+                fn.added_at,
+                fn.note,
+                ni.hex_id,
+                ni.long_name,
+                ni.short_name,
+                ni.hw_model,
+                ni.last_updated as last_seen,
+                CASE WHEN an.node_id IS NOT NULL THEN 1 ELSE 0 END as is_administrable,
+                an.firmware_version,
+                an.last_status_result,
+                an.last_status_check,
+                an.last_confirmed
+            FROM favorite_nodes fn
+            LEFT JOIN node_info ni ON fn.node_id = ni.node_id
+            LEFT JOIN administrable_nodes an ON fn.node_id = an.node_id
+            ORDER BY fn.added_at DESC
+            """
+        )
+
+        rows = cursor.fetchall()
+        conn.close()
+
+        return [dict(row) for row in rows]
+
+    @staticmethod
+    def add_favorite_node(node_id: int, note: str | None = None) -> bool:
+        """
+        Add a node to the favorites list.
+
+        Args:
+            node_id: The node ID to add
+            note: Optional note about this node
+
+        Returns:
+            True if the node was added, False if it already existed
+        """
+        conn = get_db_connection()
+        cursor = conn.cursor()
+
+        try:
+            cursor.execute(
+                """
+                INSERT INTO favorite_nodes (node_id, added_at, note)
+                VALUES (?, ?, ?)
+                """,
+                (node_id, time.time(), note),
+            )
+            conn.commit()
+            added = True
+            logger.info(f"Added node {node_id} to favorites")
+        except Exception:
+            # Already exists (PRIMARY KEY constraint)
+            added = False
+        finally:
+            conn.close()
+
+        return added
+
+    @staticmethod
+    def remove_favorite_node(node_id: int) -> bool:
+        """
+        Remove a node from the favorites list.
+
+        Args:
+            node_id: The node ID to remove
+
+        Returns:
+            True if a node was removed
+        """
+        conn = get_db_connection()
+        cursor = conn.cursor()
+
+        cursor.execute(
+            "DELETE FROM favorite_nodes WHERE node_id = ?",
+            (node_id,),
+        )
+
+        deleted = cursor.rowcount > 0
+        conn.commit()
+        conn.close()
+
+        if deleted:
+            logger.info(f"Removed node {node_id} from favorites")
+
+        return deleted
+
+    @staticmethod
+    def update_favorite_node_note(node_id: int, note: str | None) -> bool:
+        """
+        Update the note for a favorite node.
+
+        Args:
+            node_id: The node ID
+            note: The new note (or None to clear)
+
+        Returns:
+            True if the node was updated
+        """
+        conn = get_db_connection()
+        cursor = conn.cursor()
+
+        cursor.execute(
+            "UPDATE favorite_nodes SET note = ? WHERE node_id = ?",
+            (note, node_id),
+        )
+
+        updated = cursor.rowcount > 0
+        conn.commit()
+        conn.close()
+
+        return updated
+
+    @staticmethod
+    def is_favorite_node(node_id: int) -> bool:
+        """
+        Check if a node is in the favorites list.
+
+        Args:
+            node_id: The node ID to check
+
+        Returns:
+            True if the node is a favorite
+        """
+        conn = get_db_connection()
+        cursor = conn.cursor()
+
+        cursor.execute(
+            "SELECT 1 FROM favorite_nodes WHERE node_id = ?",
+            (node_id,),
+        )
+
+        result = cursor.fetchone()
+        conn.close()
+
+        return result is not None
