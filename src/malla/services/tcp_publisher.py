@@ -2078,6 +2078,70 @@ class TCPPublisher:
             want_response=True,
         )
 
+    def send_set_favorite_node(
+        self,
+        target_node_id: int,
+        node_to_favorite: int,
+    ) -> int | None:
+        """
+        Set a node as a favorite on the target node's device.
+
+        Sends an admin message to the target node instructing it to mark
+        the specified node as a favorite in its local node database.
+
+        Args:
+            target_node_id: The node to send the command to
+            node_to_favorite: The node number to mark as favorite
+
+        Returns:
+            Packet ID if sent successfully
+        """
+        admin_msg = admin_pb2.AdminMessage()
+        admin_msg.set_favorite_node = node_to_favorite
+
+        logger.info(
+            f"Sending set_favorite_node command to !{target_node_id:08x} "
+            f"to favorite !{node_to_favorite:08x}"
+        )
+
+        return self.send_admin_message(
+            target_node_id=target_node_id,
+            admin_message=admin_msg,
+            want_response=True,
+        )
+
+    def send_remove_favorite_node(
+        self,
+        target_node_id: int,
+        node_to_unfavorite: int,
+    ) -> int | None:
+        """
+        Remove a node from the target node's favorites.
+
+        Sends an admin message to the target node instructing it to
+        unmark the specified node as a favorite in its local node database.
+
+        Args:
+            target_node_id: The node to send the command to
+            node_to_unfavorite: The node number to remove from favorites
+
+        Returns:
+            Packet ID if sent successfully
+        """
+        admin_msg = admin_pb2.AdminMessage()
+        admin_msg.remove_favorite_node = node_to_unfavorite
+
+        logger.info(
+            f"Sending remove_favorite_node command to !{target_node_id:08x} "
+            f"to unfavorite !{node_to_unfavorite:08x}"
+        )
+
+        return self.send_admin_message(
+            target_node_id=target_node_id,
+            admin_message=admin_msg,
+            want_response=True,
+        )
+
     def send_nodedb_reset(
         self,
         target_node_id: int,

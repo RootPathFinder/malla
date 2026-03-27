@@ -1619,6 +1619,182 @@ class AdminService:
             },
         )
 
+    def set_favorite_node(
+        self,
+        target_node_id: int,
+        node_to_favorite: int,
+    ) -> AdminCommandResult:
+        """
+        Set a node as a favorite on the target node's device.
+
+        Sends an admin message to remotely mark a node as a favorite
+        in the target node's local node database.
+
+        Args:
+            target_node_id: The node to send the command to
+            node_to_favorite: The node number to mark as favorite
+
+        Returns:
+            AdminCommandResult
+        """
+        gateway_id = self.gateway_node_id
+        if not gateway_id:
+            return AdminCommandResult(
+                success=False,
+                error="No gateway node configured",
+            )
+
+        conn_type = self.connection_type
+
+        log_id = AdminRepository.log_admin_command(
+            target_node_id=target_node_id,
+            command_type="set_favorite_node",
+            command_data=json.dumps(
+                {
+                    "node_to_favorite": f"!{node_to_favorite:08x}",
+                    "connection_type": conn_type.value,
+                }
+            ),
+        )
+
+        publisher = self._get_publisher()
+
+        if conn_type in (AdminConnectionType.TCP, AdminConnectionType.SERIAL):
+            packet_id = publisher.send_set_favorite_node(
+                target_node_id=target_node_id,
+                node_to_favorite=node_to_favorite,
+            )
+        else:
+            AdminRepository.update_admin_log_status(
+                log_id=log_id,
+                status="failed",
+                error_message="set_favorite_node requires TCP or Serial connection",
+            )
+            return AdminCommandResult(
+                success=False,
+                log_id=log_id,
+                error="set_favorite_node requires TCP or Serial connection",
+            )
+
+        if packet_id is None:
+            AdminRepository.update_admin_log_status(
+                log_id=log_id,
+                status="failed",
+                error_message=f"Failed to send message via {conn_type.value}",
+            )
+            return AdminCommandResult(
+                success=False,
+                log_id=log_id,
+                error=f"Failed to send set_favorite_node command via {conn_type.value}",
+            )
+
+        AdminRepository.update_admin_log_status(
+            log_id=log_id,
+            status="success",
+            response_data=json.dumps(
+                {
+                    "message": f"Set favorite node command sent for !{node_to_favorite:08x}"
+                }
+            ),
+        )
+
+        return AdminCommandResult(
+            success=True,
+            packet_id=packet_id,
+            log_id=log_id,
+            response={
+                "message": f"Node !{node_to_favorite:08x} set as favorite on !{target_node_id:08x}"
+            },
+        )
+
+    def remove_favorite_node(
+        self,
+        target_node_id: int,
+        node_to_unfavorite: int,
+    ) -> AdminCommandResult:
+        """
+        Remove a node from the target node's favorites.
+
+        Sends an admin message to remotely unmark a node as a favorite
+        in the target node's local node database.
+
+        Args:
+            target_node_id: The node to send the command to
+            node_to_unfavorite: The node number to remove from favorites
+
+        Returns:
+            AdminCommandResult
+        """
+        gateway_id = self.gateway_node_id
+        if not gateway_id:
+            return AdminCommandResult(
+                success=False,
+                error="No gateway node configured",
+            )
+
+        conn_type = self.connection_type
+
+        log_id = AdminRepository.log_admin_command(
+            target_node_id=target_node_id,
+            command_type="remove_favorite_node",
+            command_data=json.dumps(
+                {
+                    "node_to_unfavorite": f"!{node_to_unfavorite:08x}",
+                    "connection_type": conn_type.value,
+                }
+            ),
+        )
+
+        publisher = self._get_publisher()
+
+        if conn_type in (AdminConnectionType.TCP, AdminConnectionType.SERIAL):
+            packet_id = publisher.send_remove_favorite_node(
+                target_node_id=target_node_id,
+                node_to_unfavorite=node_to_unfavorite,
+            )
+        else:
+            AdminRepository.update_admin_log_status(
+                log_id=log_id,
+                status="failed",
+                error_message="remove_favorite_node requires TCP or Serial connection",
+            )
+            return AdminCommandResult(
+                success=False,
+                log_id=log_id,
+                error="remove_favorite_node requires TCP or Serial connection",
+            )
+
+        if packet_id is None:
+            AdminRepository.update_admin_log_status(
+                log_id=log_id,
+                status="failed",
+                error_message=f"Failed to send message via {conn_type.value}",
+            )
+            return AdminCommandResult(
+                success=False,
+                log_id=log_id,
+                error=f"Failed to send remove_favorite_node command via {conn_type.value}",
+            )
+
+        AdminRepository.update_admin_log_status(
+            log_id=log_id,
+            status="success",
+            response_data=json.dumps(
+                {
+                    "message": f"Remove favorite node command sent for !{node_to_unfavorite:08x}"
+                }
+            ),
+        )
+
+        return AdminCommandResult(
+            success=True,
+            packet_id=packet_id,
+            log_id=log_id,
+            response={
+                "message": f"Node !{node_to_unfavorite:08x} removed from favorites on !{target_node_id:08x}"
+            },
+        )
+
     def reset_nodedb(
         self,
         target_node_id: int,
@@ -2550,26 +2726,6 @@ class AdminService:
             List of log entries
         """
         return AdminRepository.get_admin_log(target_node_id=target_node_id, limit=limit)
-
-    # =========================================================================
-    # Favorite Nodes
-    # =========================================================================
-
-    def get_favorite_nodes(self) -> list[dict[str, Any]]:
-        """Get list of all favorite nodes."""
-        return AdminRepository.get_favorite_nodes()
-
-    def add_favorite_node(self, node_id: int, note: str | None = None) -> bool:
-        """Add a node to the favorites list."""
-        return AdminRepository.add_favorite_node(node_id, note)
-
-    def remove_favorite_node(self, node_id: int) -> bool:
-        """Remove a node from the favorites list."""
-        return AdminRepository.remove_favorite_node(node_id)
-
-    def update_favorite_node_note(self, node_id: int, note: str | None) -> bool:
-        """Update the note for a favorite node."""
-        return AdminRepository.update_favorite_node_note(node_id, note)
 
     @staticmethod
     def _config_to_dict(config: config_pb2.Config) -> dict[str, Any]:
