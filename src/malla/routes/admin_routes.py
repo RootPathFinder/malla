@@ -2213,6 +2213,60 @@ def api_set_node_config(node_id, config_type):
         return jsonify({"error": str(e)}), 500
 
 
+@admin_bp.route("/api/admin/node/<node_id>/user", methods=["POST"])
+def api_set_node_user(node_id):
+    """Set user/owner settings on a remote node."""
+    try:
+        node_id_int = convert_node_id(node_id)
+
+        data = request.get_json()
+        if not data:
+            return jsonify({"error": "No user data provided"}), 400
+
+        long_name = data.get("long_name", "").strip()
+        short_name = data.get("short_name", "").strip()
+        is_licensed = data.get("is_licensed", False)
+
+        if not long_name:
+            return jsonify({"error": "long_name is required"}), 400
+        if not short_name:
+            return jsonify({"error": "short_name is required"}), 400
+        if len(short_name) > 4:
+            return jsonify({"error": "short_name must be 4 characters or less"}), 400
+        if len(long_name) > 39:
+            return jsonify({"error": "long_name must be 39 characters or less"}), 400
+
+        admin_service = get_admin_service()
+        result = admin_service.set_owner(
+            target_node_id=node_id_int,
+            long_name=long_name,
+            short_name=short_name,
+            is_licensed=is_licensed,
+        )
+
+        if result.success:
+            return jsonify(
+                {
+                    "success": True,
+                    "node_id": node_id_int,
+                    "message": "User settings updated",
+                    "log_id": result.log_id,
+                }
+            )
+        else:
+            return jsonify(
+                {
+                    "success": False,
+                    "error": result.error,
+                    "log_id": result.log_id,
+                }
+            ), 200
+
+    except Exception as e:
+        logger.error(f"Error setting node user: {e}")
+        return jsonify({"error": str(e)}), 500
+
+
 @admin_bp.route("/api/admin/node/<node_id>/channel/<int:channel_index>")
 def api_get_node_channel(node_id, channel_index):
     """Get channel configuration from a remote node."""
@@ -2494,6 +2548,108 @@ def api_remove_node_from_nodedb(node_id):
 
     except Exception as e:
         logger.error(f"Error removing node: {e}")
+        return jsonify({"error": str(e)}), 500
+
+
+@admin_bp.route("/api/admin/node/<node_id>/set-favorite-node", methods=["POST"])
+def api_set_favorite_node(node_id):
+    """
+    Set a node as a favorite on the target node's device.
+
+    This sends an admin message to the target node instructing it to mark
+    the specified node as a favorite in its local node database.
+
+    Request body:
+        node_to_favorite: The node ID to mark as favorite (required)
+    """
+    try:
+        target_node_id = convert_node_id(node_id)
+
+        data = request.get_json()
+        if not data or "node_to_favorite" not in data:
+            return jsonify({"error": "node_to_favorite is required"}), 400
+
+        node_to_favorite = convert_node_id(data["node_to_favorite"])
+
+        admin_service = get_admin_service()
+        result = admin_service.set_favorite_node(
+            target_node_id=target_node_id,
+            node_to_favorite=node_to_favorite,
+        )
+
+        if result.success:
+            message = result.response.get("message") if result.response else None
+            return jsonify(
+                {
+                    "success": True,
+                    "target_node_id": f"!{target_node_id:08x}",
+                    "node_favorited": f"!{node_to_favorite:08x}",
+                    "message": message,
+                    "log_id": result.log_id,
+                }
+            )
+        else:
+            return jsonify(
+                {
+                    "success": False,
+                    "error": result.error,
+                    "log_id": result.log_id,
+                }
+            ), 200
+
+    except Exception as e:
+        logger.error(f"Error setting favorite node: {e}")
+        return jsonify({"error": str(e)}), 500
+
+
+@admin_bp.route("/api/admin/node/<node_id>/remove-favorite-node", methods=["POST"])
+def api_remove_favorite_node(node_id):
+    """
+    Remove a node from the target node's favorites.
+
+    This sends an admin message to the target node instructing it to unmark
+    the specified node as a favorite in its local node database.
+
+    Request body:
+        node_to_unfavorite: The node ID to remove from favorites (required)
+    """
+    try:
+        target_node_id = convert_node_id(node_id)
+
+        data = request.get_json()
+        if not data or "node_to_unfavorite" not in data:
+            return jsonify({"error": "node_to_unfavorite is required"}), 400
+
+        node_to_unfavorite = convert_node_id(data["node_to_unfavorite"])
+
+        admin_service = get_admin_service()
+        result = admin_service.remove_favorite_node(
+            target_node_id=target_node_id,
+            node_to_unfavorite=node_to_unfavorite,
+        )
+
+        if result.success:
+            message = result.response.get("message") if result.response else None
+            return jsonify(
+                {
+                    "success": True,
+                    "target_node_id": f"!{target_node_id:08x}",
+                    "node_unfavorited": f"!{node_to_unfavorite:08x}",
+                    "message": message,
+                    "log_id": result.log_id,
+                }
+            )
+        else:
+            return jsonify(
+                {
+                    "success": False,
+                    "error": result.error,
+                    "log_id": result.log_id,
+                }
+            ), 200
+
+    except Exception as e:
+        logger.error(f"Error removing favorite node: {e}")
         return jsonify({"error": str(e)}), 500
 
 

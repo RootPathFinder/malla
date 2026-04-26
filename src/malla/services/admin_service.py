@@ -185,6 +185,14 @@ class AdminPublisher(Protocol):
         channel_data: dict,
     ) -> int | None: ...
 
+    def send_set_owner(
+        self,
+        target_node_id: int,
+        long_name: str,
+        short_name: str,
+        is_licensed: bool = False,
+    ) -> int | None: ...
+
     def send_begin_edit_settings(
         self,
         target_node_id: int,
@@ -1611,6 +1619,182 @@ class AdminService:
             },
         )
 
+    def set_favorite_node(
+        self,
+        target_node_id: int,
+        node_to_favorite: int,
+    ) -> AdminCommandResult:
+        """
+        Set a node as a favorite on the target node's device.
+
+        Sends an admin message to remotely mark a node as a favorite
+        in the target node's local node database.
+
+        Args:
+            target_node_id: The node to send the command to
+            node_to_favorite: The node number to mark as favorite
+
+        Returns:
+            AdminCommandResult
+        """
+        gateway_id = self.gateway_node_id
+        if not gateway_id:
+            return AdminCommandResult(
+                success=False,
+                error="No gateway node configured",
+            )
+
+        conn_type = self.connection_type
+
+        log_id = AdminRepository.log_admin_command(
+            target_node_id=target_node_id,
+            command_type="set_favorite_node",
+            command_data=json.dumps(
+                {
+                    "node_to_favorite": f"!{node_to_favorite:08x}",
+                    "connection_type": conn_type.value,
+                }
+            ),
+        )
+
+        publisher = self._get_publisher()
+
+        if conn_type in (AdminConnectionType.TCP, AdminConnectionType.SERIAL):
+            packet_id = publisher.send_set_favorite_node(
+                target_node_id=target_node_id,
+                node_to_favorite=node_to_favorite,
+            )
+        else:
+            AdminRepository.update_admin_log_status(
+                log_id=log_id,
+                status="failed",
+                error_message="set_favorite_node requires TCP or Serial connection",
+            )
+            return AdminCommandResult(
+                success=False,
+                log_id=log_id,
+                error="set_favorite_node requires TCP or Serial connection",
+            )
+
+        if packet_id is None:
+            AdminRepository.update_admin_log_status(
+                log_id=log_id,
+                status="failed",
+                error_message=f"Failed to send message via {conn_type.value}",
+            )
+            return AdminCommandResult(
+                success=False,
+                log_id=log_id,
+                error=f"Failed to send set_favorite_node command via {conn_type.value}",
+            )
+
+        AdminRepository.update_admin_log_status(
+            log_id=log_id,
+            status="success",
+            response_data=json.dumps(
+                {
+                    "message": f"Set favorite node command sent for !{node_to_favorite:08x}"
+                }
+            ),
+        )
+
+        return AdminCommandResult(
+            success=True,
+            packet_id=packet_id,
+            log_id=log_id,
+            response={
+                "message": f"Node !{node_to_favorite:08x} set as favorite on !{target_node_id:08x}"
+            },
+        )
+
+    def remove_favorite_node(
+        self,
+        target_node_id: int,
+        node_to_unfavorite: int,
+    ) -> AdminCommandResult:
+        """
+        Remove a node from the target node's favorites.
+
+        Sends an admin message to remotely unmark a node as a favorite
+        in the target node's local node database.
+
+        Args:
+            target_node_id: The node to send the command to
+            node_to_unfavorite: The node number to remove from favorites
+
+        Returns:
+            AdminCommandResult
+        """
+        gateway_id = self.gateway_node_id
+        if not gateway_id:
+            return AdminCommandResult(
+                success=False,
+                error="No gateway node configured",
+            )
+
+        conn_type = self.connection_type
+
+        log_id = AdminRepository.log_admin_command(
+            target_node_id=target_node_id,
+            command_type="remove_favorite_node",
+            command_data=json.dumps(
+                {
+                    "node_to_unfavorite": f"!{node_to_unfavorite:08x}",
+                    "connection_type": conn_type.value,
+                }
+            ),
+        )
+
+        publisher = self._get_publisher()
+
+        if conn_type in (AdminConnectionType.TCP, AdminConnectionType.SERIAL):
+            packet_id = publisher.send_remove_favorite_node(
+                target_node_id=target_node_id,
+                node_to_unfavorite=node_to_unfavorite,
+            )
+        else:
+            AdminRepository.update_admin_log_status(
+                log_id=log_id,
+                status="failed",
+                error_message="remove_favorite_node requires TCP or Serial connection",
+            )
+            return AdminCommandResult(
+                success=False,
+                log_id=log_id,
+                error="remove_favorite_node requires TCP or Serial connection",
+            )
+
+        if packet_id is None:
+            AdminRepository.update_admin_log_status(
+                log_id=log_id,
+                status="failed",
+                error_message=f"Failed to send message via {conn_type.value}",
+            )
+            return AdminCommandResult(
+                success=False,
+                log_id=log_id,
+                error=f"Failed to send remove_favorite_node command via {conn_type.value}",
+            )
+
+        AdminRepository.update_admin_log_status(
+            log_id=log_id,
+            status="success",
+            response_data=json.dumps(
+                {
+                    "message": f"Remove favorite node command sent for !{node_to_unfavorite:08x}"
+                }
+            ),
+        )
+
+        return AdminCommandResult(
+            success=True,
+            packet_id=packet_id,
+            log_id=log_id,
+            response={
+                "message": f"Node !{node_to_unfavorite:08x} removed from favorites on !{target_node_id:08x}"
+            },
+        )
+
     def reset_nodedb(
         self,
         target_node_id: int,
@@ -2344,6 +2528,142 @@ class AdminService:
                 log_id=log_id,
                 response={
                     "message": "Channel config sent - no ACK received (likely applied)",
+                    "acknowledged": False,
+                },
+            )
+
+    def set_owner(
+        self,
+        target_node_id: int,
+        long_name: str,
+        short_name: str,
+        is_licensed: bool = False,
+    ) -> AdminCommandResult:
+        """
+        Set owner/user settings on a remote node.
+
+        Args:
+            target_node_id: The target node ID
+            long_name: The owner's long name (max 39 characters)
+            short_name: The owner's short name (max 4 characters)
+            is_licensed: Whether the owner is a licensed HAM operator
+
+        Returns:
+            AdminCommandResult with success/failure info
+        """
+        gateway_id = self.gateway_node_id
+        if not gateway_id:
+            return AdminCommandResult(
+                success=False,
+                error="No gateway node configured",
+            )
+
+        conn_type = self.connection_type
+
+        # Log the command
+        log_id = AdminRepository.log_admin_command(
+            target_node_id=target_node_id,
+            command_type="set_owner",
+            command_data=json.dumps(
+                {
+                    "long_name": long_name,
+                    "short_name": short_name,
+                    "is_licensed": is_licensed,
+                    "connection_type": conn_type.value,
+                }
+            ),
+        )
+
+        # Send the request using appropriate publisher
+        publisher = self._get_publisher()
+
+        if conn_type in (AdminConnectionType.TCP, AdminConnectionType.SERIAL):
+            packet_id = publisher.send_set_owner(
+                target_node_id=target_node_id,
+                long_name=long_name,
+                short_name=short_name,
+                is_licensed=is_licensed,
+            )
+        else:
+            # MQTT set_owner not yet implemented
+            AdminRepository.update_admin_log_status(
+                log_id=log_id,
+                status="failed",
+                error_message="set_owner requires TCP or Serial connection",
+            )
+            return AdminCommandResult(
+                success=False,
+                log_id=log_id,
+                error="set_owner requires TCP or Serial connection",
+            )
+
+        if packet_id is None:
+            AdminRepository.update_admin_log_status(
+                log_id=log_id,
+                status="failed",
+                error_message=f"Failed to send message via {conn_type.value}",
+            )
+            return AdminCommandResult(
+                success=False,
+                log_id=log_id,
+                error=f"Failed to send admin message via {conn_type.value}",
+            )
+
+        # Wait for response/acknowledgment with shorter timeout for write operations
+        response = publisher.get_response(packet_id, timeout=10.0)
+
+        if response:
+            # Check if this was a NAK (negative acknowledgement)
+            is_nak = response.get("is_nak", False)
+            error_reason = response.get("error_reason", "")
+
+            if is_nak:
+                error_msg = f"Node rejected user settings: {error_reason}"
+                AdminRepository.update_admin_log_status(
+                    log_id=log_id,
+                    status="failed",
+                    error_message=error_msg,
+                )
+                return AdminCommandResult(
+                    success=False,
+                    packet_id=packet_id,
+                    log_id=log_id,
+                    error=error_msg,
+                )
+
+            AdminRepository.update_admin_log_status(
+                log_id=log_id,
+                status="success",
+                response_data=json.dumps(
+                    {"message": "User settings updated - ACK received"}
+                ),
+            )
+
+            return AdminCommandResult(
+                success=True,
+                packet_id=packet_id,
+                log_id=log_id,
+                response={
+                    "message": "User settings updated - ACK received",
+                    "acknowledged": True,
+                },
+            )
+        else:
+            # No response - packet was sent but ACK not received
+            # Treat as success since packet was sent; node may have applied settings
+            AdminRepository.update_admin_log_status(
+                log_id=log_id,
+                status="success",
+                response_data=json.dumps(
+                    {"message": "User settings sent - no ACK (likely applied)"}
+                ),
+            )
+            return AdminCommandResult(
+                success=True,
+                packet_id=packet_id,
+                log_id=log_id,
+                response={
+                    "message": "User settings sent - no ACK received (likely applied)",
                     "acknowledged": False,
                 },
             )
