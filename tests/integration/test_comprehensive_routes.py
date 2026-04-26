@@ -229,6 +229,19 @@ class TestAPIStatsEndpoints:
         data = response.get_json()
         assert isinstance(data, dict)
 
+    @pytest.mark.integration
+    @pytest.mark.api
+    def test_api_analytics_with_days(self, client):
+        """Test /api/analytics with supported days parameter."""
+        response = client.get("/api/analytics?days=7")
+        assert response.status_code == 200
+
+        data = response.get_json()
+        assert isinstance(data, dict)
+        assert "temporal_patterns" in data
+        assert data["temporal_patterns"]["daily_breakdown"] is not None
+        assert data["temporal_patterns"]["hourly_breakdown"] is None
+
 
 class TestAPIPacketEndpoints:
     """Test API packet endpoints."""

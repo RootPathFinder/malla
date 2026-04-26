@@ -107,9 +107,12 @@ def api_analytics():
         gateway_id = request.args.get("gateway_id")
         from_node = request.args.get("from_node", type=int)
         hop_count = request.args.get("hop_count", type=int)
+        days = request.args.get("days", 1, type=int)
+        if days not in (1, 7, 30):
+            days = 1
 
         analytics_data = AnalyticsService.get_analytics_data(
-            gateway_id=gateway_id, from_node=from_node, hop_count=hop_count
+            gateway_id=gateway_id, from_node=from_node, hop_count=hop_count, days=days
         )
         response = safe_jsonify(analytics_data)
         # Add cache headers for client-side caching

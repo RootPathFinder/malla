@@ -20,9 +20,9 @@ logger = logging.getLogger(__name__)
 class AnalyticsService:
     """Service for analytics and statistical calculations."""
 
-    # (gateway_id, from_node, hop_count) → (timestamp, data)
+    # (gateway_id, from_node, hop_count, days) → (timestamp, data)
     _CACHE: dict[
-        tuple[str | None, int | None, int | None], tuple[float, dict[str, Any]]
+        tuple[str | None, int | None, int | None, int], tuple[float, dict[str, Any]]
     ] = {}
     _CACHE_TTL_SEC: int = 60  # one minute cache window
 
@@ -31,10 +31,11 @@ class AnalyticsService:
         gateway_id: str | None = None,
         from_node: int | None = None,
         hop_count: int | None = None,
+        days: int = 1,
     ) -> dict[str, Any]:
         """Get comprehensive analytics data for the dashboard with simple in-memory caching."""
 
-        cache_key = (gateway_id, from_node, hop_count)
+        cache_key = (gateway_id, from_node, hop_count, days)
         now_ts = time.time()
 
         # Return cached value if still valid
@@ -59,27 +60,28 @@ class AnalyticsService:
             if hop_count is not None:
                 filters["hop_count"] = hop_count
 
+            since_timestamp = now_ts - days * 24 * 3600
             twenty_four_hours_ago = now_ts - 24 * 3600
             seven_days_ago = now_ts - 7 * 24 * 3600
 
             packet_stats = AnalyticsService._get_packet_statistics(
-                filters, twenty_four_hours_ago
+                filters, since_timestamp
             )
             node_stats = AnalyticsService._get_node_activity_statistics(
-                filters, twenty_four_hours_ago
+                filters, since_timestamp
             )
             signal_stats = AnalyticsService._get_signal_quality_statistics(
-                filters, twenty_four_hours_ago
+                filters, since_timestamp
             )
             temporal_stats = AnalyticsService._get_temporal_patterns(
-                filters, twenty_four_hours_ago
+                filters, since_timestamp, days
             )
             top_nodes = AnalyticsService._get_top_active_nodes(filters, seven_days_ago)
             packet_types = AnalyticsService._get_packet_type_distribution(
-                filters, twenty_four_hours_ago
+                filters, since_timestamp
             )
             gateway_stats = AnalyticsService._get_gateway_distribution(
-                filters, twenty_four_hours_ago
+                filters, since_timestamp
             )
 
             result = {
@@ -307,8 +309,14 @@ class AnalyticsService:
         }
 
     @staticmethod
-    def _get_temporal_patterns(filters: dict, since_timestamp: float) -> dict[str, Any]:
-        """Get temporal patterns (hourly breakdown) efficiently using SQL aggregation."""
+    def _get_temporal_patterns(
+        filters: dict, since_timestamp: float, days: int = 1
+    ) -> dict[str, Any]:
+        """Get temporal patterns efficiently using SQL aggregation.
+
+        When days == 1, returns an hourly breakdown (24 buckets).
+        When days > 1, returns a daily breakdown (one bucket per day).
+        """
 
         from ..database.connection import get_db_connection
 
@@ -330,62 +338,97 @@ class AnalyticsService:
 
         where_clause = " AND ".join(where_conditions)
 
-        query = f"""
-            SELECT
-                strftime('%H', datetime(timestamp, 'unixepoch')) AS hour,
-                COUNT(*) AS total_packets,
-                SUM(CASE WHEN processed_successfully = 1 THEN 1 ELSE 0 END) AS successful_packets
-            FROM packet_history
-            WHERE {where_clause}
-            GROUP BY hour
-        """
+        if days == 1:
+            # Hourly buckets for a single day
+            query = f"""
+                SELECT
+                    strftime('%H', datetime(timestamp, 'unixepoch')) AS bucket,
+                    COUNT(*) AS total_packets,
+                    SUM(CASE WHEN processed_successfully = 1 THEN 1 ELSE 0 END) AS successful_packets
+                FROM packet_history
+                WHERE {where_clause}
+                GROUP BY bucket
+            """
+        else:
+            # Daily buckets for multi-day views
+            query = f"""
+                SELECT
+                    strftime('%Y-%m-%d', datetime(timestamp, 'unixepoch')) AS bucket,
+                    COUNT(*) AS total_packets,
+                    SUM(CASE WHEN processed_successfully = 1 THEN 1 ELSE 0 END) AS successful_packets
+                FROM packet_history
+                WHERE {where_clause}
+                GROUP BY bucket
+                ORDER BY bucket
+            """
 
         conn = get_db_connection()
         cursor = conn.cursor()
         cursor.execute(query, params)
-
         rows = cursor.fetchall()
+        conn.close()
 
-        hourly_counts: dict[int, int] = defaultdict(int)
-        hourly_success: dict[int, int] = defaultdict(int)
+        if days == 1:
+            hourly_counts: dict[int, int] = defaultdict(int)
+            hourly_success: dict[int, int] = defaultdict(int)
 
-        for row in rows:
-            hour = int(row["hour"])
-            hourly_counts[hour] = row["total_packets"]
-            hourly_success[hour] = row["successful_packets"]
+            for row in rows:
+                hour = int(row["bucket"])
+                hourly_counts[hour] = row["total_packets"]
+                hourly_success[hour] = row["successful_packets"]
 
-        hourly_data: list[dict[str, Any]] = []
-        for hour in range(24):
-            count = hourly_counts.get(hour, 0)
-            success = hourly_success.get(hour, 0)
-            success_rate = (success / count * 100) if count > 0 else 0
+            hourly_data: list[dict[str, Any]] = []
+            for hour in range(24):
+                count = hourly_counts.get(hour, 0)
+                success = hourly_success.get(hour, 0)
+                success_rate = (success / count * 100) if count > 0 else 0
+                hourly_data.append(
+                    {
+                        "hour": hour,
+                        "total_packets": count,
+                        "successful_packets": success,
+                        "success_rate": round(success_rate, 2),
+                    }
+                )
 
-            hourly_data.append(
-                {
-                    "hour": hour,
-                    "total_packets": count,
-                    "successful_packets": success,
-                    "success_rate": round(success_rate, 2),
-                }
+            peak_hour = (
+                max(hourly_counts, key=lambda x: hourly_counts[x])
+                if hourly_counts
+                else None
+            )
+            quiet_hour = (
+                min(hourly_counts, key=lambda x: hourly_counts[x])
+                if hourly_counts
+                else None
             )
 
-        # Determine peak and quiet hours if any packets exist
-        peak_hour = (
-            max(hourly_counts, key=lambda x: hourly_counts[x])
-            if hourly_counts
-            else None
-        )
-        quiet_hour = (
-            min(hourly_counts, key=lambda x: hourly_counts[x])
-            if hourly_counts
-            else None
-        )
+            return {
+                "hourly_breakdown": hourly_data,
+                "daily_breakdown": None,
+                "peak_hour": peak_hour,
+                "quiet_hour": quiet_hour,
+            }
+        else:
+            daily_data: list[dict[str, Any]] = []
+            for row in rows:
+                count = row["total_packets"]
+                success = row["successful_packets"]
+                success_rate = (success / count * 100) if count > 0 else 0
+                daily_data.append(
+                    {
+                        "date": row["bucket"],
+                        "total_packets": count,
+                        "successful_packets": success,
+                        "success_rate": round(success_rate, 2),
+                    }
+                )
 
-        return {
-            "hourly_breakdown": hourly_data,
-            "peak_hour": peak_hour,
-            "quiet_hour": quiet_hour,
-        }
+            return {
+                "hourly_breakdown": None,
+                "daily_breakdown": daily_data,
+                "peak_hour": None,
+                "quiet_hour": None,
+            }
 
     @staticmethod
     def _get_top_active_nodes(

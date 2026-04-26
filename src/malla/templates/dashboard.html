@@ -51,11 +51,11 @@
         <div class="col-md-2">
             <div class="card h-100">
                 <div class="card-body card-metric">
-                    <div class="metric-value text-success">{{ stats.active_nodes_24h }}</div>
-                    <div class="metric-label">Active Nodes (24h)</div>
+                    <div id="activeNodesMetricValue" class="metric-value text-success">{{ stats.active_nodes_24h }}</div>
+                    <div id="activeNodesMetricLabel" class="metric-label">Active Nodes (24h)</div>
                     {% set total_nodes_safe = stats.total_nodes if stats.total_nodes > 0 else 1 %}
                     {% set coverage_pct = (stats.active_nodes_24h / total_nodes_safe * 100)|int %}
-                    <small class="text-muted">{{ coverage_pct }}% network coverage</small>
+                    <small id="activeNodesMetricCoverage" class="text-muted">{{ coverage_pct }}% network coverage</small>
                 </div>
             </div>
         </div>
@@ -103,8 +103,13 @@
         <!-- Network Activity Chart -->
         <div class="col-md-8 mb-4">
             <div class="card h-100">
-                <div class="card-header">
-                    <h5 class="card-title mb-0"><i class="bi bi-graph-up-arrow"></i> Network Activity Trends (7 Days)</h5>
+                <div class="card-header d-flex align-items-center justify-content-between">
+                    <h5 class="card-title mb-0"><i class="bi bi-graph-up-arrow"></i> <span id="activityChartTitle">Network Activity (24h)</span></h5>
+                    <div class="btn-group btn-group-sm" role="group" aria-label="Time range">
+                        <button type="button" class="btn btn-outline-secondary activity-range-btn active" data-days="1">24h</button>
+                        <button type="button" class="btn btn-outline-secondary activity-range-btn" data-days="7">7d</button>
+                        <button type="button" class="btn btn-outline-secondary activity-range-btn" data-days="30">30d</button>
+                    </div>
                 </div>
                 <div class="card-body">
                     <div id="timeSeriesChartLoading" class="loading-container">
@@ -129,11 +134,11 @@
                             {% set total_nodes_safe = stats.total_nodes if stats.total_nodes > 0 else 1 %}
                             {% set activity_percentage = (stats.active_nodes_24h / total_nodes_safe * 100)|int %}
                             {% set coverage_class = 'bg-success' if activity_percentage >= 70 else 'bg-warning' if activity_percentage >= 40 else 'bg-danger' %}
-                            <div class="progress-bar {{ coverage_class }}" style="width: {{ activity_percentage }}%;">
+                            <div id="networkCoverageProgress" class="progress-bar {{ coverage_class }}" style="width: {{ activity_percentage }}%;">
                                 {{ activity_percentage }}%
                             </div>
                         </div>
-                        <small class="text-muted" style="font-family: var(--bs-font-sans-serif);">{{ stats.active_nodes_24h }} of {{ stats.total_nodes }} nodes active</small>
+                        <small id="networkCoverageText" class="text-muted" style="font-family: var(--bs-font-sans-serif);">{{ stats.active_nodes_24h }} of {{ stats.total_nodes }} nodes active</small>
                     </div>
 
                     <div class="mb-3">
@@ -545,8 +550,13 @@ function updateChartsForTheme() {
         });
         chartInstances = {};
 
+        // Determine currently active days from toggle buttons
+        const activeBtn = document.querySelector('.activity-range-btn.active');
+        const activeDays = activeBtn ? parseInt(activeBtn.dataset.days, 10) : 1;
+
         // Recreate charts with new theme
-        createTimeSeriesChart(analyticsData.temporal_patterns);
+        createTimeSeriesChart(analyticsData.temporal_patterns, activeDays);
+        updateActivitySummary(analyticsData.node_statistics, activeDays);
         createNodeActivityChart(analyticsData.node_statistics);
         createGatewayActivityChart(analyticsData.gateway_distribution);
         createSignalDistributionChart(analyticsData.signal_quality);
@@ -557,8 +567,20 @@ function updateChartsForTheme() {
 
 // Initialize dashboard when page loads
 document.addEventListener('DOMContentLoaded', function () {
-    // Load analytics data asynchronously
-    loadAnalyticsData();
+    // Load analytics data asynchronously (default: 24h)
+    loadAnalyticsData(1);
+
+    // Time-range toggle buttons
+    document.querySelectorAll('.activity-range-btn').forEach(function(btn) {
+        btn.addEventListener('click', function() {
+            document.querySelectorAll('.activity-range-btn').forEach(b => b.classList.remove('active'));
+            this.classList.add('active');
+            const days = parseInt(this.dataset.days, 10);
+            const titles = {1: 'Network Activity (24h)', 7: 'Network Activity (7d)', 30: 'Network Activity (30d)'};
+            document.getElementById('activityChartTitle').textContent = titles[days] || 'Network Activity';
+            reloadActivityChart(days);
+        });
+    });
 
     // Listen for theme changes and update charts
     window.addEventListener('themeChanged', function(event) {
@@ -566,16 +588,18 @@ document.addEventListener('DOMContentLoaded', function () {
     });
 });
 
-async function loadAnalyticsData() {
+async function loadAnalyticsData(days) {
+    days = days || 1;
     try {
-        const response = await fetch('/api/analytics');
+        const response = await fetch('/api/analytics?days=' + days);
         if (!response.ok) {
             throw new Error(`HTTP error! status: ${response.status}`);
         }
         analyticsData = await response.json();
 
         // Render all charts and tables with loaded data
-        createTimeSeriesChart(analyticsData.temporal_patterns);
+        createTimeSeriesChart(analyticsData.temporal_patterns, days);
+        updateActivitySummary(analyticsData.node_statistics, days);
         createNodeActivityChart(analyticsData.node_statistics);
         createGatewayActivityChart(analyticsData.gateway_distribution);
         createSignalDistributionChart(analyticsData.signal_quality);
@@ -588,6 +612,59 @@ async function loadAnalyticsData() {
         // Hide loading spinners and show error state
         showErrorState('Failed to load analytics data. Please check your connection and try refreshing the page.');
     }
+}
+
+async function reloadActivityChart(days) {
+    // Show skeleton while loading
+    const canvas = document.getElementById('timeSeriesChart');
+    const loading = document.getElementById('timeSeriesChartLoading');
+    if (canvas) canvas.style.display = 'none';
+    if (loading) { loading.innerHTML = '<div class="skeleton skeleton-chart"></div>'; loading.style.display = 'block'; }
+
+    try {
+        const response = await fetch('/api/analytics?days=' + days);
+        if (!response.ok) throw new Error(`HTTP error! status: ${response.status}`);
+        const data = await response.json();
+        analyticsData = data;
+        if (chartInstances.timeSeriesChart) { chartInstances.timeSeriesChart.destroy(); delete chartInstances.timeSeriesChart; }
+        updateActivitySummary(data.node_statistics, days);
+        createTimeSeriesChart(data.temporal_patterns, days);
+    } catch (error) {
+        console.error('Error reloading activity chart:', error);
+        if (loading) loading.innerHTML = '<div class="text-muted p-3">Failed to load data.</div>';
+    }
+}
+
+function updateActivitySummary(nodeData, days) {
+    if (!nodeData) return;
+
+    const totalNodes = nodeData.total_nodes || 0;
+    const activeNodes = nodeData.active_nodes || 0;
+    const coveragePct = totalNodes > 0 ? Math.round((activeNodes / totalNodes) * 100) : 0;
+    const labelText = days === 1 ? 'Active Nodes (24h)' : `Active Nodes (${days}d)`;
+
+    const metricValue = document.getElementById('activeNodesMetricValue');
+    const metricLabel = document.getElementById('activeNodesMetricLabel');
+    const metricCoverage = document.getElementById('activeNodesMetricCoverage');
+    const coverageProgress = document.getElementById('networkCoverageProgress');
+    const coverageText = document.getElementById('networkCoverageText');
+
+    if (metricValue) metricValue.textContent = activeNodes;
+    if (metricLabel) metricLabel.textContent = labelText;
+    if (metricCoverage) metricCoverage.textContent = `${coveragePct}% network coverage`;
+    if (coverageProgress) {
+        coverageProgress.textContent = `${coveragePct}%`;
+        coverageProgress.style.width = `${coveragePct}%`;
+        coverageProgress.classList.remove('bg-success', 'bg-warning', 'bg-danger');
+        if (coveragePct >= 70) {
+            coverageProgress.classList.add('bg-success');
+        } else if (coveragePct >= 40) {
+            coverageProgress.classList.add('bg-warning');
+        } else {
+            coverageProgress.classList.add('bg-danger');
+        }
+    }
+    if (coverageText) coverageText.textContent = `${activeNodes} of ${totalNodes} nodes active`;
 }
 
 function showErrorState(message) {
@@ -630,34 +707,48 @@ function showErrorMessage(message) {
     console.error(message);
 }
 
-function createTimeSeriesChart(temporalData) {
-    if (!temporalData || !temporalData.hourly_breakdown) return;
+function createTimeSeriesChart(temporalData, days) {
+    days = days || 1;
+    const isDaily = days > 1;
+    const breakdown = isDaily ? temporalData && temporalData.daily_breakdown : temporalData && temporalData.hourly_breakdown;
+    if (!temporalData || !breakdown) return;
 
     hideLoadingSpinner('timeSeriesChart');
     const ctx = document.getElementById('timeSeriesChart');
     if (!ctx) return;
 
-    // Convert hourly data to chart format with 12-hour AM/PM labels
     const labels = [];
     const data = [];
 
-    temporalData.hourly_breakdown.forEach(item => {
-        const hour24 = item.hour;
-        const hour12 = hour24 === 0 ? 12 : (hour24 > 12 ? hour24 - 12 : hour24);
-        const ampm = hour24 < 12 ? 'AM' : 'PM';
-        labels.push(`${hour12} ${ampm}`);
-        data.push(item.total_packets);
-    });
-
-    // Get current hour for the vertical line
-    const currentHour = new Date().getHours();
-    const currentHour12 = currentHour === 0 ? 12 : (currentHour > 12 ? currentHour - 12 : currentHour);
-    const currentAmpm = currentHour < 12 ? 'AM' : 'PM';
-    const currentTimeLabel = `${currentHour12} ${currentAmpm}`;
-    const currentHourIndex = labels.indexOf(currentTimeLabel);
+    if (isDaily) {
+        breakdown.forEach(item => {
+            // Format date as "Apr 26"
+            const d = new Date(item.date + 'T00:00:00');
+            labels.push(d.toLocaleDateString(undefined, {month: 'short', day: 'numeric'}));
+            data.push(item.total_packets);
+        });
+    } else {
+        breakdown.forEach(item => {
+            const hour24 = item.hour;
+            const hour12 = hour24 === 0 ? 12 : (hour24 > 12 ? hour24 - 12 : hour24);
+            const ampm = hour24 < 12 ? 'AM' : 'PM';
+            labels.push(`${hour12} ${ampm}`);
+            data.push(item.total_packets);
+        });
+    }
 
     const colors = getChartColors();
     const options = getDefaultChartOptions();
+
+    // For 24h view: draw a "Now" vertical line
+    let currentHourIndex = -1;
+    if (!isDaily) {
+        const currentHour = new Date().getHours();
+        const currentHour12 = currentHour === 0 ? 12 : (currentHour > 12 ? currentHour - 12 : currentHour);
+        const currentAmpm = currentHour < 12 ? 'AM' : 'PM';
+        const currentTimeLabel = `${currentHour12} ${currentAmpm}`;
+        currentHourIndex = labels.indexOf(currentTimeLabel);
+    }
 
     // Custom plugin to draw current time vertical line
     const currentTimeLinePlugin = {
@@ -702,12 +793,13 @@ function createTimeSeriesChart(temporalData) {
         }
     };
 
+    const datasetLabel = isDaily ? 'Messages per Day' : 'Messages per Hour';
     chartInstances.timeSeriesChart = new Chart(ctx, {
         type: 'line',
         data: {
             labels: labels,
             datasets: [{
-                label: 'Messages per Hour',
+                label: datasetLabel,
                 data: data,
                 borderColor: colors.info,
                 backgroundColor: colors.infoBg,
