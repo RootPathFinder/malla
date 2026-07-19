@@ -126,6 +126,8 @@ class BotService:
 
         # Pending traceroutes: maps dest_node_id -> (requester_id, requester_name, channel_index, timestamp)
         self._pending_traceroutes: dict[int, tuple[int, str | None, int, float]] = {}
+        self._traceroute_lock = threading.Lock()
+        self._traceroute_unk_snr = -128  # Meshtastic unknown SNR marker (raw protobuf value)
         self._traceroute_timeout = 60.0  # Seconds to wait for traceroute response
 
         # Traceroute rate limiting (hardware firmware limit)
@@ -639,105 +641,257 @@ class BotService:
             return
         self._handle_traceroute_packet(packet)
 
+    def _normalize_node_id(self, node_id: Any) -> int | None:
+        """Normalize Meshtastic node IDs from packet fields."""
+        if node_id is None:
+            return None
+        if isinstance(node_id, int):
+            return node_id
+        if isinstance(node_id, str):
+            value = node_id.strip()
+            if value.startswith("!"):
+                value = value[1:]
+            try:
+                return int(value, 16)
+            except ValueError:
+                try:
+                    return int(value)
+                except ValueError:
+                    return None
+        return None
+
+    def _normalize_snr_list(
+        self, values: list[Any], *, scale_protobuf: bool = True
+    ) -> list[float | None]:
+        """Convert protobuf SNR values to dB, preserving unknown markers."""
+        normalized: list[float | None] = []
+        for value in values:
+            if value is None:
+                normalized.append(None)
+                continue
+
+            snr = float(value)
+            if snr in (self._traceroute_unk_snr, -32.0):
+                normalized.append(None)
+                continue
+
+            # Meshtastic protobuf SNR values are int8 values scaled by 4.
+            if scale_protobuf and isinstance(value, int):
+                snr /= 4.0
+
+            normalized.append(snr)
+
+        return normalized
+
+    def _parse_traceroute_route_data(
+        self, packet: dict[str, Any], decoded: dict[str, Any]
+    ) -> tuple[list[int], list[int], list[float | None], list[float | None]]:
+        """Parse RouteDiscovery data from a live traceroute packet."""
+        route: list[int] = []
+        route_back: list[int] = []
+        snr_towards: list[float | None] = []
+        snr_back: list[float | None] = []
+
+        payload = decoded.get("payload")
+        if isinstance(payload, bytes) and payload:
+            from ..utils.traceroute_utils import parse_traceroute_payload
+
+            parsed = parse_traceroute_payload(payload)
+            route = [int(node_id) for node_id in parsed.get("route_nodes", [])]
+            route_back = [int(node_id) for node_id in parsed.get("route_back", [])]
+            snr_towards = self._normalize_snr_list(
+                parsed.get("snr_towards", []), scale_protobuf=False
+            )
+            snr_back = self._normalize_snr_list(
+                parsed.get("snr_back", []), scale_protobuf=False
+            )
+            return route, route_back, snr_towards, snr_back
+
+        route_discovery = (
+            decoded.get("traceroute")
+            or decoded.get("routeDiscovery")
+            or decoded.get("route_discovery")
+        )
+
+        if route_discovery is None:
+            return route, route_back, snr_towards, snr_back
+
+        if hasattr(route_discovery, "route"):
+            route = [int(node_id) for node_id in route_discovery.route]
+            route_back = [int(node_id) for node_id in route_discovery.route_back]
+            snr_towards = self._normalize_snr_list(list(route_discovery.snr_towards))
+            snr_back = self._normalize_snr_list(list(route_discovery.snr_back))
+            return route, route_back, snr_towards, snr_back
+
+        if isinstance(route_discovery, dict):
+            route = [
+                int(node_id)
+                for node_id in (
+                    route_discovery.get("route")
+                    or route_discovery.get("route_nodes")
+                    or []
+                )
+            ]
+            route_back = [
+                int(node_id)
+                for node_id in (
+                    route_discovery.get("routeBack")
+                    or route_discovery.get("route_back")
+                    or []
+                )
+            ]
+            raw_snr_towards = (
+                route_discovery.get("snrTowards")
+                or route_discovery.get("snr_towards")
+                or []
+            )
+            raw_snr_back = (
+                route_discovery.get("snrBack") or route_discovery.get("snr_back") or []
+            )
+            snr_towards = self._normalize_snr_list(list(raw_snr_towards))
+            snr_back = self._normalize_snr_list(list(raw_snr_back))
+
+        return route, route_back, snr_towards, snr_back
+
+    def _match_pending_traceroute(
+        self,
+        from_id: int | None,
+        to_id: int | None,
+        request_id: Any,
+        route: list[int],
+        route_back: list[int],
+        snr_towards: list[float | None],
+        snr_back: list[float | None],
+    ) -> int | None:
+        """Find a pending traceroute destination that matches this packet."""
+        local_node_id = self._get_local_node_id()
+
+        with self._traceroute_lock:
+            pending_destinations = list(self._pending_traceroutes.keys())
+
+        for dest_id in pending_destinations:
+            if from_id == dest_id:
+                return dest_id
+
+            if local_node_id and to_id == local_node_id and from_id == dest_id:
+                return dest_id
+
+            if (
+                local_node_id
+                and from_id == local_node_id
+                and to_id == dest_id
+                and request_id
+            ):
+                return dest_id
+
+            if dest_id in route or dest_id in route_back:
+                if snr_towards or snr_back:
+                    return dest_id
+
+        return None
+
+    def _is_traceroute_response_packet(
+        self,
+        from_id: int | None,
+        to_id: int | None,
+        request_id: Any,
+        local_node_id: int | None,
+    ) -> bool:
+        """Return True when this packet is a traceroute response, not our request."""
+        if request_id:
+            return True
+
+        if local_node_id and from_id == local_node_id and to_id != local_node_id:
+            return False
+
+        return bool(from_id and to_id)
+
     def _handle_traceroute_packet(self, packet: dict[str, Any]) -> None:
         """Process a traceroute packet and send results if we initiated it."""
         try:
-            # Check if this is a traceroute we initiated
             decoded = packet.get("decoded", {})
             portnum = decoded.get("portnum")
 
             if portnum != "TRACEROUTE_APP":
                 return
 
-            # Get the from/to nodes to check if this is our traceroute
-            from_id = packet.get("fromId") or packet.get("from")
+            from_id = self._normalize_node_id(packet.get("fromId") or packet.get("from"))
+            to_id = self._normalize_node_id(packet.get("toId") or packet.get("to"))
+            request_id = packet.get("requestId") or packet.get("request_id")
+            local_node_id = self._get_local_node_id()
 
-            if isinstance(from_id, str) and from_id.startswith("!"):
-                from_id = int(from_id[1:], 16)
-            elif not isinstance(from_id, int):
+            if from_id is None:
                 return
 
-            # Clean up expired pending traceroutes
-            current_time = time.time()
-            expired = [
-                k
-                for k, v in self._pending_traceroutes.items()
-                if current_time - v[3] > self._traceroute_timeout
-            ]
-            for k in expired:
-                del self._pending_traceroutes[k]
-
-            # Check if we're waiting for a traceroute from this node
-            if from_id not in self._pending_traceroutes:
+            if not self._is_traceroute_response_packet(
+                from_id, to_id, request_id, local_node_id
+            ):
                 logger.debug(
-                    f"Received traceroute response from !{from_id:08x} but not in pending list"
+                    "Ignoring outbound traceroute request packet from !%08x",
+                    from_id,
                 )
                 return
 
-            requester_id, requester_name, channel_index, _ = (
-                self._pending_traceroutes.pop(from_id)
+            route, route_back, snr_towards, snr_back = self._parse_traceroute_route_data(
+                packet, decoded
             )
+
+            current_time = time.time()
+            with self._traceroute_lock:
+                expired = [
+                    dest_id
+                    for dest_id, pending in self._pending_traceroutes.items()
+                    if current_time - pending[3] > self._traceroute_timeout
+                ]
+                for dest_id in expired:
+                    del self._pending_traceroutes[dest_id]
+
+            matched_dest = self._match_pending_traceroute(
+                from_id,
+                to_id,
+                request_id,
+                route,
+                route_back,
+                snr_towards,
+                snr_back,
+            )
+            if matched_dest is None:
+                logger.debug(
+                    "Received traceroute packet from !%08x to !%s with no pending match",
+                    from_id,
+                    f"{to_id:08x}" if to_id is not None else "?",
+                )
+                return
+
+            with self._traceroute_lock:
+                pending = self._pending_traceroutes.pop(matched_dest, None)
+            if pending is None:
+                return
+
+            requester_id, requester_name, channel_index, _ = pending
+            source_id = local_node_id or 0
+            dest_id = matched_dest
+
             logger.info(
-                f"Processing traceroute response from !{from_id:08x} for channel {channel_index}"
+                "Processing traceroute response for !%08x on channel %s "
+                "(from=!%08x, to=!%s, fwd_hops=%d, back_hops=%d)",
+                dest_id,
+                channel_index,
+                from_id,
+                f"{to_id:08x}" if to_id is not None else "?",
+                len(route),
+                len(route_back),
             )
 
-            # Parse the traceroute data from the packet
-            # The data can be under 'traceroute' or 'routeDiscovery' key depending on version
-            route_discovery = decoded.get("traceroute") or decoded.get("routeDiscovery")
-
-            # Log the packet structure for debugging (INFO level to ensure visibility)
-            logger.debug(f"[TR DEBUG] Full decoded dict: {decoded}")
-            logger.debug(f"[TR DEBUG] decoded keys: {list(decoded.keys())}")
-            logger.debug(
-                f"[TR DEBUG] routeDiscovery type: {type(route_discovery)}, "
-                f"value: {route_discovery}"
-            )
-            if route_discovery is not None:
-                logger.debug(f"[TR DEBUG] routeDiscovery dir: {dir(route_discovery)}")
-
-            route: list[int] = []
-            route_back: list[int] = []
-            snr_towards: list[float] = []
-            snr_back: list[float] = []
-
-            if route_discovery is not None:
-                # Check if it's a protobuf object (has 'route' as attribute)
-                if hasattr(route_discovery, "route"):
-                    # It's a protobuf object
-                    logger.debug("[TR DEBUG] Detected protobuf object")
-                    route = list(route_discovery.route)
-                    route_back = list(route_discovery.route_back)
-                    # SNR values are scaled by 4 in protobuf
-                    snr_towards = [float(s) / 4.0 for s in route_discovery.snr_towards]
-                    snr_back = [float(s) / 4.0 for s in route_discovery.snr_back]
-                elif isinstance(route_discovery, dict):
-                    # It's a dict (already parsed)
-                    logger.debug(f"[TR DEBUG] Detected dict: {route_discovery}")
-                    route = route_discovery.get("route", [])
-                    route_back = route_discovery.get("routeBack", [])
-                    # SNR values may be scaled by 4 in the dict too
-                    raw_snr_towards = route_discovery.get("snrTowards", [])
-                    raw_snr_back = route_discovery.get("snrBack", [])
-                    # Scale down by 4 (protobuf encoding)
-                    snr_towards = [float(s) / 4.0 for s in raw_snr_towards]
-                    snr_back = [float(s) / 4.0 for s in raw_snr_back]
-                else:
-                    logger.debug(f"[TR DEBUG] Unknown type: {type(route_discovery)}")
-
-            logger.debug(
-                f"[TR DEBUG] Parsed result: route={route}, route_back={route_back}, "
-                f"snr_towards={snr_towards}, snr_back={snr_back}"
-            )
-
-            # Get local node ID (source of traceroute)
-            local_node_id = self._get_local_node_id() or 0
-
-            # Format the response (from_id is the destination we traced to)
             response = self._format_traceroute_result(
-                route, route_back, snr_towards, snr_back, local_node_id, from_id
+                route,
+                route_back,
+                snr_towards,
+                snr_back,
+                source_id,
+                dest_id,
             )
 
-            # Queue the response
             self.queue_message(
                 text=response,
                 destination=0xFFFFFFFF,
@@ -749,84 +903,79 @@ class BotService:
             self._log_activity(
                 "traceroute_result",
                 {
-                    "target": f"!{from_id:08x}",
+                    "target": f"!{dest_id:08x}",
                     "target_name": requester_name,
                     "channel": channel_name or f"ch{channel_index}",
-                    "hops_forward": len(route),
-                    "hops_return": len(route_back),
+                    "hops_forward": len(route) + (1 if snr_towards else 0),
+                    "hops_return": len(route_back) + (1 if snr_back else 0),
                     "status": "result received",
                 },
             )
-            logger.info(f"Traceroute result sent for !{from_id:08x}")
+            logger.info("Traceroute result sent for !%08x", dest_id)
 
         except Exception as e:
             logger.error(f"Error processing traceroute response: {e}", exc_info=True)
+
+    def _short_node_id(self, node_id: int) -> str:
+        """Return a compact node identifier for mesh payloads."""
+        return f"{node_id:08x}"[-4:]
+
+    def _format_path_trace(
+        self,
+        start_id: int,
+        intermediates: list[int],
+        end_id: int,
+        snrs: list[float | None],
+    ) -> str:
+        """Format one traceroute direction with per-hop SNR values."""
+        if not start_id or not end_id:
+            return ""
+
+        hops: list[str] = []
+        path_nodes = [start_id, *intermediates, end_id]
+
+        for index in range(len(path_nodes) - 1):
+            from_short = self._short_node_id(path_nodes[index])
+            to_short = self._short_node_id(path_nodes[index + 1])
+            snr = snrs[index] if index < len(snrs) else None
+            if snr is None:
+                hops.append(f"{index + 1}.{from_short}→{to_short}")
+            else:
+                hops.append(f"{index + 1}.{from_short}→{to_short} {snr:.1f}dB")
+
+        return " ".join(hops)
 
     def _format_traceroute_result(
         self,
         route: list[int],
         route_back: list[int],
-        snr_towards: list[float],
-        snr_back: list[float],
+        snr_towards: list[float | None],
+        snr_back: list[float | None],
         source_id: int = 0,
         dest_id: int = 0,
     ) -> str:
         """Format traceroute results for sending back to channel."""
-        # Build traceroute output showing each hop
-        # Format: → src→A(6.5)→B(5.2)→dst | ← dst→B(4.8)→A(5.0)→src
-        lines = []
+        lines: list[str] = []
 
-        # Short IDs for source and destination
-        src_short = f"{source_id:08x}"[-4:] if source_id else "?"
-        dst_short = f"{dest_id:08x}"[-4:] if dest_id else "?"
+        forward_trace = self._format_path_trace(
+            source_id, route, dest_id, snr_towards
+        )
+        if forward_trace:
+            lines.append(f"→ {forward_trace}")
 
-        # Forward path
-        if route:
-            # Show each hop with SNR: src→hop1(snr)→hop2(snr)→dst
-            hops_str = self._format_hop_chain(route, snr_towards, "→")
-            lines.append(f"→ {src_short}→{hops_str}→{dst_short}")
-        else:
-            # Direct connection (no intermediate hops)
-            if snr_towards:
-                lines.append(f"→ {src_short}→{dst_short} ({snr_towards[0]:.1f}dB)")
-            else:
-                lines.append(f"→ {src_short}→{dst_short}")
+        if route_back or snr_back:
+            return_trace = self._format_path_trace(
+                dest_id, route_back, source_id, snr_back
+            )
+            if return_trace:
+                lines.append(f"← {return_trace}")
 
-        # Return path
-        if route_back:
-            hops_str = self._format_hop_chain(route_back, snr_back, "→")
-            lines.append(f"← {dst_short}→{hops_str}→{src_short}")
-        else:
-            # Direct return or no return path
-            if snr_back:
-                lines.append(f"← {dst_short}→{src_short} ({snr_back[0]:.1f}dB)")
-            else:
-                lines.append("← none")
+        if not lines:
+            src_short = self._short_node_id(source_id) if source_id else "?"
+            dst_short = self._short_node_id(dest_id) if dest_id else "?"
+            lines.append(f"→ 1.{src_short}→{dst_short} (no SNR)")
 
         return "🔍 TR: " + " | ".join(lines)
-
-    def _format_hop_chain(
-        self, nodes: list[int], snrs: list[float], separator: str = "→"
-    ) -> str:
-        """Format a chain of hops with SNR values.
-
-        Args:
-            nodes: List of node IDs in the path
-            snrs: List of SNR values for each hop
-            separator: Character to use between hops
-
-        Returns:
-            Formatted string like "A(6.5)→B(5.2)→C"
-        """
-        parts = []
-        for i, node_id in enumerate(nodes):
-            # Use short node ID (last 4 hex chars)
-            short_id = f"{node_id:08x}"[-4:]
-            if i < len(snrs):
-                parts.append(f"{short_id}({snrs[i]:.1f})")
-            else:
-                parts.append(short_id)
-        return separator.join(parts)
 
     def _worker_loop(self) -> None:
         """Worker loop that sends queued messages."""
@@ -1206,18 +1355,22 @@ class BotService:
             self._traceroute_history.append(current_time)
 
             # Register this as a pending traceroute so we can send results
-            self._pending_traceroutes[sender_id] = (
-                sender_id,
-                sender_name,
-                channel_index,
-                current_time,
-            )
+            with self._traceroute_lock:
+                self._pending_traceroutes[sender_id] = (
+                    sender_id,
+                    sender_name,
+                    channel_index,
+                    current_time,
+                )
 
-            # Send traceroute to the requesting node
-            publisher._interface.sendTraceRoute(
-                dest=sender_id,
-                hopLimit=7,
-            )
+            # Send traceroute in a background thread. sendTraceRoute() blocks while
+            # waiting for responses, which would stall the pubsub receive callback.
+            threading.Thread(
+                target=self._send_traceroute_packet,
+                args=(sender_id, publisher),
+                name=f"traceroute-{sender_id:08x}",
+                daemon=True,
+            ).start()
 
             display_name = sender_name or f"!{sender_id:08x}"
             # Truncate name to fit payload
@@ -1239,6 +1392,24 @@ class BotService:
         except Exception as e:
             logger.error(f"Error executing traceroute: {e}")
             return "Traceroute failed"
+
+    def _send_traceroute_packet(self, sender_id: int, publisher: Any) -> None:
+        """Send a traceroute request without blocking pubsub callbacks."""
+        try:
+            if publisher._interface is None:
+                return
+
+            publisher._interface.sendTraceRoute(
+                dest=sender_id,
+                hopLimit=7,
+            )
+        except Exception as e:
+            logger.error(
+                "Traceroute send/wait failed for !%08x: %s",
+                sender_id,
+                e,
+                exc_info=True,
+            )
 
     def _process_queued_traceroutes(self) -> None:
         """Process any queued traceroute requests if rate limit allows."""
@@ -1301,18 +1472,20 @@ class BotService:
         timed_out = []
 
         # Find timed-out traceroutes
-        for dest_id, (
-            requester_id,
-            requester_name,
-            channel_index,
-            start_time,
-        ) in self._pending_traceroutes.items():
-            if current_time - start_time > self._traceroute_timeout:
-                timed_out.append((dest_id, requester_id, requester_name, channel_index))
+        with self._traceroute_lock:
+            for dest_id, (
+                requester_id,
+                requester_name,
+                channel_index,
+                start_time,
+            ) in self._pending_traceroutes.items():
+                if current_time - start_time > self._traceroute_timeout:
+                    timed_out.append((dest_id, requester_id, requester_name, channel_index))
 
         # Process timed-out traceroutes
         for dest_id, requester_id, requester_name, channel_index in timed_out:
-            del self._pending_traceroutes[dest_id]
+            with self._traceroute_lock:
+                self._pending_traceroutes.pop(dest_id, None)
 
             display_name = requester_name or f"!{requester_id:08x}"
             if len(display_name) > 15:
