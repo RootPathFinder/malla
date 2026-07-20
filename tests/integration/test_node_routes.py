@@ -180,6 +180,13 @@ class TestNodeRoutes:
         assert 'class="live-spark-wrap"' in response_text
         assert "renderLiveSparkline" in response_text
         assert "poll-bar" in response_text
+        # Expanded rotating live pool tiles
+        assert 'id="live-humidity-tile"' in response_text
+        assert 'id="live-online-nodes-tile"' in response_text
+        assert 'id="live-ch1-voltage-tile"' in response_text
+        assert 'id="live-pm25-tile"' in response_text
+        assert "LIVE_TELEMETRY_TYPE_ROTATION" in response_text
+        assert "local_stats" in response_text
         # Old Plotly live chart containers should be gone from diagnostics
         assert 'id="live-chart-battery"' not in response_text
         assert 'id="live-charts-container"' not in response_text

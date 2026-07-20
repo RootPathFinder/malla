@@ -18,6 +18,7 @@ from serial.tools import list_ports
 
 from ..config import get_config
 from ..utils.telemetry_request import (
+    apply_telemetry_request_type,
     complete_pending_telemetry,
     extract_from_node_id,
     extract_portnum,
@@ -1517,19 +1518,7 @@ class SerialPublisher:
         try:
             # Create telemetry request
             telemetry = telemetry_pb2.Telemetry()
-
-            # Set the appropriate metrics type to request
-            if telemetry_type == "environment_metrics":
-                telemetry.environment_metrics.CopyFrom(
-                    telemetry_pb2.EnvironmentMetrics()
-                )
-            elif telemetry_type == "power_metrics":
-                telemetry.power_metrics.CopyFrom(telemetry_pb2.PowerMetrics())
-            elif telemetry_type == "local_stats":
-                telemetry.local_stats.CopyFrom(telemetry_pb2.LocalStats())
-            else:
-                # Default to device_metrics
-                telemetry.device_metrics.CopyFrom(telemetry_pb2.DeviceMetrics())
+            telemetry_type = apply_telemetry_request_type(telemetry, telemetry_type)
 
             # Set up tracking for this request
             response_event = threading.Event()
