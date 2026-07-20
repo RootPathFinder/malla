@@ -1154,6 +1154,34 @@ class TracerouteService:
                 logger.warning(f"Error fetching location data: {e}")
                 location_map = {}
 
+            # Enrich with role / short / long names from node_info
+            node_meta_map: dict[int, dict[str, Any]] = {}
+            if node_ids:
+                try:
+                    from ..database import get_db_connection
+
+                    conn = get_db_connection()
+                    cursor = conn.cursor()
+                    placeholders = ",".join("?" * len(node_ids))
+                    cursor.execute(
+                        f"""
+                        SELECT node_id, short_name, long_name, role, hw_model
+                        FROM node_info
+                        WHERE node_id IN ({placeholders})
+                        """,
+                        node_ids,
+                    )
+                    for row in cursor.fetchall():
+                        node_meta_map[int(row["node_id"])] = {
+                            "short_name": row["short_name"],
+                            "long_name": row["long_name"],
+                            "role": row["role"],
+                            "hw_model": row["hw_model"],
+                        }
+                    conn.close()
+                except Exception as e:
+                    logger.warning(f"Error fetching node roles/names: {e}")
+
             # Process direct links - calculate average SNR and strength
             processed_links = []
             for link_data in direct_links.values():
@@ -1218,10 +1246,24 @@ class TracerouteService:
 
                 # Get location data for this node
                 location = location_map.get(node_data["id"])
+                meta = node_meta_map.get(node_data["id"], {})
+                short_name = (meta.get("short_name") or "").strip() or None
+                long_name = (meta.get("long_name") or "").strip() or None
+                role = (meta.get("role") or "").strip() or None
+                display_name = (
+                    long_name
+                    or short_name
+                    or node_data["name"]
+                    or f"!{node_data['id']:08x}"
+                )
 
                 node_info = {
                     "id": node_data["id"],
-                    "name": node_data["name"],
+                    "name": display_name,
+                    "short_name": short_name,
+                    "long_name": long_name,
+                    "role": role,
+                    "hw_model": meta.get("hw_model"),
                     "packet_count": node_data["packet_count"],
                     "connections": node_data["connections"],
                     "avg_snr": avg_snr,

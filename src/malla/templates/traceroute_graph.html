@@ -67,14 +67,20 @@
             <h6><i class="bi bi-badge-3d"></i> View Mode</h6>
             <div class="btn-group w-100 mb-2" role="group" aria-label="Graph view mode">
                 <input type="radio" class="btn-check" name="graphViewMode" id="graphView3d" value="3d" autocomplete="off" checked>
-                <label class="btn btn-outline-primary btn-sm" for="graphView3d">3D</label>
+                <label class="btn btn-outline-primary btn-sm" for="graphView3d">3D Orbital</label>
                 <input type="radio" class="btn-check" name="graphViewMode" id="graphView2d" value="2d" autocomplete="off">
                 <label class="btn btn-outline-primary btn-sm" for="graphView2d">2D</label>
             </div>
             <div class="form-check form-switch mb-1">
                 <input class="form-check-input" type="checkbox" id="graphAutoRotate" checked>
                 <label class="form-check-label" for="graphAutoRotate">
-                    Auto-spin (3D)
+                    Orbit camera
+                </label>
+            </div>
+            <div class="form-check form-switch mb-1">
+                <input class="form-check-input" type="checkbox" id="graphShowLabels" checked>
+                <label class="form-check-label" for="graphShowLabels">
+                    Node &amp; role labels
                 </label>
             </div>
             <div class="form-check form-switch">
@@ -83,7 +89,7 @@
                     Live packet paths
                 </label>
             </div>
-            <small class="text-muted d-block mt-1">Drag to orbit · scroll to zoom · packets travel as particles</small>
+            <small class="text-muted d-block mt-1">Drag to orbit · scroll to zoom · routers sit on inner rings</small>
         </div>
 
         <!-- Auto-Refresh Control -->
@@ -212,15 +218,19 @@
         </div>
 
         {% set legend_items = [
-            {"type": "icon", "class": "bi bi-circle-fill text-primary", "text": "Active nodes"},
+            {"type": "icon", "class": "bi bi-circle-fill", "style": "color:#f59e0b", "text": "Router"},
+            {"type": "icon", "class": "bi bi-circle-fill", "style": "color:#ef4444", "text": "Repeater"},
+            {"type": "icon", "class": "bi bi-circle-fill", "style": "color:#38bdf8", "text": "Client"},
+            {"type": "icon", "class": "bi bi-circle-fill", "style": "color:#34d399", "text": "Sensor"},
             {"type": "line", "class": "direct", "text": "Direct RF links"},
             {"type": "line", "class": "indirect", "text": "Multi-hop paths"}
         ] %}
         {% call legend_section(legend_items) %}
             <div class="legend-item mt-2">
-                <small class="text-muted">Node size = traffic volume<br>
-                Link thickness = signal strength<br>
-                Colors = SNR quality</small>
+                <small class="text-muted">
+                    3D: orbital rings by role (routers inward)<br>
+                    Labels show name + role · size ≈ traffic
+                </small>
             </div>
         {% endcall %}
     {% endcall %}
@@ -485,6 +495,7 @@
 {{ sidebar_styles() }}
 
 <script src="https://d3js.org/d3.v7.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/three@0.160.0/build/three.min.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/3d-force-graph@1.73.3/dist/3d-force-graph.min.js"></script>
 <script src="{{ url_for('static', filename='js/network-graph-3d.js') }}"></script>
 <script>
@@ -569,6 +580,14 @@ function initializeInterface() {
         rotateToggle.addEventListener('change', () => {
             if (window.NetworkGraph3D) {
                 NetworkGraph3D.setAutoRotate(rotateToggle.checked);
+            }
+        });
+    }
+    const labelsToggle = document.getElementById('graphShowLabels');
+    if (labelsToggle) {
+        labelsToggle.addEventListener('change', () => {
+            if (window.NetworkGraph3D) {
+                NetworkGraph3D.setShowLabels(labelsToggle.checked);
             }
         });
     }
@@ -1595,11 +1614,20 @@ function clearSearchResults() {
 
 function showSelectedNodeDetails(node) {
     const nodeIdHex = node.id.toString(16).padStart(8, '0');
+    const roleLabel = node.role || 'Unknown';
+    const longName = node.long_name || node.name || `!${nodeIdHex}`;
+    const shortBadge = node.short_name
+        ? ` <span class="badge bg-secondary">${String(node.short_name).replace(/</g, '&lt;')}</span>`
+        : '';
     const content = `
         <div class="row">
             <div class="col-12">
-                <h6>${node.name}</h6>
-                <p class="text-muted">Node ID: !${nodeIdHex}</p>
+                <h6>${String(longName).replace(/</g, '&lt;')}${shortBadge}</h6>
+                <p class="text-muted mb-1">Node ID: !${nodeIdHex}</p>
+                <div class="mb-2">
+                    <span class="badge text-bg-dark">${String(roleLabel).replace(/</g, '&lt;')}</span>
+                    ${node.hw_model ? `<span class="badge bg-secondary ms-1">${String(node.hw_model).replace(/</g, '&lt;')}</span>` : ''}
+                </div>
                 <div class="alert alert-info py-2 px-2 small mb-2">
                     <i class="bi bi-lightbulb"></i> Click another node to show paths between them
                 </div>
@@ -1928,8 +1956,9 @@ function showNodeHoverDetails(node) {
     }
 
     const content = `
-        <div><strong>${node.name}</strong></div>
+        <div><strong>${node.long_name || node.name}</strong>${node.short_name ? ` <span class="text-muted">(${node.short_name})</span>` : ''}</div>
         <div class="text-muted">!${nodeIdHex}</div>
+        <div class="mt-1"><span class="badge text-bg-dark">${node.role || 'Unknown'}</span></div>
         <hr class="my-2">
         ${pathInfo}
         ${pathInfo ? '<hr class="my-2">' : ''}
