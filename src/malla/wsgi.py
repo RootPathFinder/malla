@@ -76,7 +76,8 @@ def main():
             "worker_connections": 1000,
             "max_requests": 1000,
             "max_requests_jitter": 50,
-            "timeout": 30,
+            # Live multi-hop telemetry polls can wait up to ~55s per request.
+            "timeout": 90,
             "keepalive": 2,
             "preload_app": True,
             "access_log_format": '%(h)s %(l)s %(u)s %(t)s "%(r)s" %(s)s %(b)s "%(f)s" "%(a)s" %(D)s',

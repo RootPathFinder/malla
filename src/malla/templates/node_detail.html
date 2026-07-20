@@ -1210,7 +1210,7 @@
 </script>
 {% endif %}
 
-<script data-node-id="{{ node.node_id }}">
+<script data-node-id="{{ node.node_id }}" data-avg-hops="{% if node.avg_hops is not none %}{{ node.avg_hops }}{% endif %}">
 document.addEventListener('DOMContentLoaded', function() {
     // Set progress bar widths from data attributes
     document.querySelectorAll('.progress-bar[data-width]').forEach(function(bar) {
@@ -2974,16 +2974,60 @@ let liveTelemetryCountdownInterval = null;
 let liveTelemetryPollTimeout = null;
 let liveTelemetryIsPolling = false;
 
-// Adaptive polling configuration
+// Adaptive polling configuration (hop-aware; defaults assume near node)
 let liveTelemetryPollInterval = 5000; // Start at 5 seconds
-const LIVE_TELEMETRY_MIN_INTERVAL = 3000; // 3 seconds minimum (near real-time)
-const LIVE_TELEMETRY_MAX_INTERVAL = 20000; // 20 seconds maximum
+let LIVE_TELEMETRY_MIN_INTERVAL = 3000; // raised for multi-hop
+let LIVE_TELEMETRY_MAX_INTERVAL = 30000;
+let liveTelemetryMinGapMs = 1000;
+let liveTelemetryEstimatedHops = null;
 let liveTelemetrySelectedDuration = 60000; // Default 1 minute
 let liveTelemetryLastResponseTime = 0;
 let liveTelemetryConsecutiveSlowResponses = 0;
 let liveTelemetryConsecutiveFastResponses = 0;
 let liveTelemetryAbortController = null;
 let liveTelemetryPollStartedAt = 0;
+
+function getPageAvgHops() {
+    const scriptTag = document.querySelector('script[data-node-id]');
+    const raw = scriptTag ? scriptTag.getAttribute('data-avg-hops') : '';
+    if (raw === null || raw === undefined || raw === '') return null;
+    const n = Number(raw);
+    return Number.isFinite(n) ? n : null;
+}
+
+/** Client-side hop budget mirror of server live_telemetry_budget(). */
+function liveTelemetryBudgetForHops(estimatedHops) {
+    let hops = (estimatedHops === null || estimatedHops === undefined) ? 1 : Math.round(Number(estimatedHops));
+    if (!Number.isFinite(hops)) hops = 1;
+    hops = Math.max(0, Math.min(hops, 7));
+
+    const timeoutS = Math.min(55, 8 + 7 * hops);
+    let pollIntervalMs, minGapMs;
+    if (hops <= 0) {
+        pollIntervalMs = 4000;
+        minGapMs = 1000;
+    } else if (hops === 1) {
+        pollIntervalMs = 7000;
+        minGapMs = 2000;
+    } else if (hops === 2) {
+        pollIntervalMs = 12000;
+        minGapMs = 3000;
+    } else {
+        pollIntervalMs = Math.min(30000, 8000 + hops * 4000);
+        minGapMs = Math.min(8000, 2500 + hops * 800);
+    }
+    return { hops, timeoutS, pollIntervalMs, minGapMs };
+}
+
+function applyLiveTelemetryHopBudget(estimatedHops) {
+    const budget = liveTelemetryBudgetForHops(estimatedHops);
+    liveTelemetryEstimatedHops = budget.hops;
+    liveTelemetryPollInterval = budget.pollIntervalMs;
+    liveTelemetryMinGapMs = budget.minGapMs;
+    LIVE_TELEMETRY_MIN_INTERVAL = budget.pollIntervalMs;
+    LIVE_TELEMETRY_MAX_INTERVAL = Math.max(budget.pollIntervalMs + 10000, 20000);
+    return budget;
+}
 
 // Live chart data storage
 let liveChartData = {
@@ -3181,8 +3225,8 @@ function startLiveTelemetry() {
     const pollingMetrics = document.getElementById('polling-metrics-container');
     const durationSelector = document.getElementById('live-duration-selector');
 
-    // Reset adaptive polling - start at 5s, will speed up if responses are fast
-    liveTelemetryPollInterval = 5000;
+    // Hop-aware cadence: farther nodes poll slower and wait longer per request
+    const hopBudget = applyLiveTelemetryHopBudget(getPageAvgHops());
     liveTelemetryConsecutiveSlowResponses = 0;
     liveTelemetryConsecutiveFastResponses = 0;
 
@@ -3209,7 +3253,8 @@ function startLiveTelemetry() {
 
     liveTelemetryStartTime = Date.now();
     liveTelemetryIsPolling = true;
-    status.innerHTML = '<i class="bi bi-broadcast text-success"></i> Polling for live telemetry data...';
+    const hopLabel = hopBudget.hops === 0 ? 'direct (0 hop)' : `${hopBudget.hops}-hop`;
+    status.innerHTML = `<i class="bi bi-broadcast text-success"></i> Polling live telemetry (${hopLabel}, up to ${hopBudget.timeoutS}s/request)...`;
 
     // Initialize empty charts
     initializeLiveCharts();
@@ -3505,10 +3550,10 @@ function updatePollingMetrics(pollInterval, responseTime, success) {
 function scheduleNextPoll() {
     if (!liveTelemetryIsPolling) return;
 
-    // Wall-clock cadence: schedule from when this poll started, not from when
-    // it finished, so slow responses don't permanently stretch the interval.
+    // Wall-clock cadence from poll start, but never shorter than the hop-aware
+    // min gap — multi-hop needs channel recovery time between sends.
     const elapsed = Date.now() - (liveTelemetryPollStartedAt || Date.now());
-    const delay = Math.max(250, liveTelemetryPollInterval - elapsed);
+    const delay = Math.max(liveTelemetryMinGapMs, liveTelemetryPollInterval - elapsed);
 
     if (liveTelemetryPollTimeout) {
         clearTimeout(liveTelemetryPollTimeout);
@@ -3541,20 +3586,20 @@ async function pollLiveTelemetry() {
     const signal = liveTelemetryAbortController.signal;
 
     try {
-        // Timeout is in *seconds* for the API. Convert from poll interval ms
-        // and leave a small buffer so the HTTP call finishes before the next poll.
-        // (Previously this used ms values as seconds, forcing a 25s timeout always.)
-        const requestTimeoutSec = Math.min(
-            Math.max(Math.round((liveTelemetryPollInterval - 1500) / 1000), 5),
-            20
+        // Prefer server hop budget; client timeout is a hint that the API floors
+        // to the hop-aware minimum so multi-hop waits are not starved.
+        const hopBudget = liveTelemetryBudgetForHops(
+            liveTelemetryEstimatedHops !== null ? liveTelemetryEstimatedHops : getPageAvgHops()
         );
+        const requestTimeoutSec = hopBudget.timeoutS;
 
         const response = await fetch(`/api/admin/node/${nodeId}/telemetry/live`, {
             method: 'POST',
             headers: {'Content-Type': 'application/json'},
             body: JSON.stringify({
                 telemetry_type: 'device_metrics',
-                timeout: requestTimeoutSec
+                timeout: requestTimeoutSec,
+                estimated_hops: hopBudget.hops
             }),
             signal
         });
@@ -3563,6 +3608,18 @@ async function pollLiveTelemetry() {
 
         const responseTime = Date.now() - pollStartTime;
         const data = await response.json();
+
+        // Adopt server hop estimate when available (traceroute > page avg)
+        if (data.estimated_hops !== undefined && data.estimated_hops !== null) {
+            if (liveTelemetryEstimatedHops !== data.estimated_hops) {
+                applyLiveTelemetryHopBudget(data.estimated_hops);
+            } else {
+                liveTelemetryEstimatedHops = data.estimated_hops;
+            }
+        }
+        if (data.budget && data.budget.min_gap_ms) {
+            liveTelemetryMinGapMs = data.budget.min_gap_ms;
+        }
 
         // Update polling metrics visualization
         updatePollingMetrics(liveTelemetryPollInterval, responseTime, data.success);
@@ -3580,7 +3637,9 @@ async function pollLiveTelemetry() {
             const intervalSec = Math.round(liveTelemetryPollInterval / 1000);
             const responseSec = (responseTime / 1000).toFixed(1);
             const retryNote = data.attempts > 1 ? ' (retried)' : '';
-            statusIndicator.innerHTML = `<span class="badge bg-success">Live</span> <small class="text-muted ms-2">Response: ${responseSec}s${retryNote} | Next poll: ${intervalSec}s</small>`;
+            const hops = data.estimated_hops !== undefined ? data.estimated_hops : hopBudget.hops;
+            const hopNote = hops === 0 ? 'direct' : `${hops} hop`;
+            statusIndicator.innerHTML = `<span class="badge bg-success">Live</span> <small class="text-muted ms-2">${hopNote} · ${responseSec}s${retryNote} · next ${intervalSec}s</small>`;
             adjustPollingInterval(responseTime, true);
 
             const telemetry = data.telemetry;
@@ -3599,7 +3658,11 @@ async function pollLiveTelemetry() {
             // Add failed result to timeline
             addPollResult(false, responseTime);
 
-            statusIndicator.innerHTML = '<span class="badge bg-warning">No Response</span> <small class="text-muted ms-2">Node didn\'t respond (may be sleeping, distant, or not configured to reply). Retrying...</small>';
+            const hops = data.estimated_hops !== undefined ? data.estimated_hops : hopBudget.hops;
+            const farHint = hops >= 2
+                ? ' Multi-hop paths are less reliable — keeping longer waits.'
+                : ' Node may be sleeping, busy, or not configured to reply.';
+            statusIndicator.innerHTML = `<span class="badge bg-warning">No Response</span> <small class="text-muted ms-2">${hops}-hop path timed out.${farHint} Retrying...</small>`;
             adjustPollingInterval(responseTime, false);
             scheduleNextPoll();
             return;

@@ -245,8 +245,117 @@ def complete_pending_telemetry(
     return True
 
 
+# Max wall-clock wait for a single live-telemetry HTTP request. Must stay under
+# the Gunicorn worker timeout (raised to 90s for multi-hop monitoring).
+LIVE_TELEMETRY_MAX_BUDGET_S = 55.0
+
+
+def clamp_estimated_hops(estimated_hops: int | float | None) -> int:
+    """Normalize hop estimates into 0..7 (typical Meshtastic hop_limit range)."""
+    if estimated_hops is None:
+        # Unknown path: assume 1 hop so we are not overly aggressive
+        return 1
+    try:
+        hops = int(round(float(estimated_hops)))
+    except (TypeError, ValueError):
+        return 1
+    return max(0, min(hops, 7))
+
+
+def live_telemetry_budget(estimated_hops: int | float | None) -> dict[str, Any]:
+    """
+    Recommend wait/retry/send settings for live telemetry at a given hop distance.
+
+    Farther nodes need longer round-trip budgets and mesh ACKs; 0-hop stays snappy.
+    Multi-hop will still be less reliable — this only makes monitoring feasible.
+    """
+    hops = clamp_estimated_hops(estimated_hops)
+
+    # Round-trip LoRa mesh: request path + response path, plus channel contention.
+    # Empirically ~7s/hop covers slow/lossy links without starving near nodes.
+    base_s = 8.0
+    per_hop_s = 7.0
+    timeout_s = min(LIVE_TELEMETRY_MAX_BUDGET_S, base_s + per_hop_s * hops)
+
+    if hops <= 0:
+        attempts = 2
+        poll_interval_ms = 4000
+        min_gap_ms = 1000
+        want_ack = False
+        hop_limit = 3
+        retry_delay_s = 0.35
+    elif hops == 1:
+        attempts = 2
+        poll_interval_ms = 7000
+        min_gap_ms = 2000
+        want_ack = True
+        hop_limit = 3
+        retry_delay_s = 0.75
+    elif hops == 2:
+        attempts = 2
+        poll_interval_ms = 12000
+        min_gap_ms = 3000
+        want_ack = True
+        hop_limit = 4
+        retry_delay_s = 1.25
+    else:
+        attempts = 3
+        poll_interval_ms = min(30000, 8000 + hops * 4000)
+        min_gap_ms = min(8000, 2500 + hops * 800)
+        want_ack = True
+        hop_limit = min(7, hops + 2)
+        retry_delay_s = min(3.0, 0.75 + 0.4 * hops)
+
+    return {
+        "estimated_hops": hops,
+        "timeout_s": round(timeout_s, 1),
+        "attempts": attempts,
+        "poll_interval_ms": poll_interval_ms,
+        "min_gap_ms": min_gap_ms,
+        "want_ack": want_ack,
+        "hop_limit": hop_limit,
+        "retry_delay_s": retry_delay_s,
+    }
+
+
+def split_live_telemetry_attempts(
+    timeout: float, attempts: int = 2
+) -> list[float]:
+    """
+    Split a total wait budget across sequential send attempts.
+
+    First attempt gets most of the budget; later attempts are shorter catch-ups
+    so a single flaky reply does not consume the whole window.
+    """
+    budget = max(5.0, float(timeout))
+    budget = min(budget, LIVE_TELEMETRY_MAX_BUDGET_S)
+    attempts = max(1, min(int(attempts), 3))
+
+    if attempts == 1 or budget < 12.0:
+        return [budget]
+
+    if attempts == 2:
+        retry = min(max(5.0, budget * 0.30), 12.0)
+        primary = max(5.0, budget - retry)
+        return [round(primary, 2), round(retry, 2)]
+
+    # 3 attempts: ~50% / 30% / remainder
+    first = max(5.0, budget * 0.50)
+    second = max(5.0, budget * 0.30)
+    third = max(5.0, budget - first - second)
+    # Keep total from drifting above budget due to floors
+    total = first + second + third
+    if total > budget:
+        scale = budget / total
+        first *= scale
+        second *= scale
+        third *= scale
+    return [round(first, 2), round(second, 2), round(third, 2)]
+
+
 __all__ = [
     "TELEMETRY_TYPE_KEYS",
+    "LIVE_TELEMETRY_MAX_BUDGET_S",
     "normalize_mesh_node_id",
     "normalize_request_id",
     "extract_request_id",
@@ -255,4 +364,7 @@ __all__ = [
     "telemetry_has_requested_metrics",
     "find_matching_telemetry_request",
     "complete_pending_telemetry",
+    "clamp_estimated_hops",
+    "live_telemetry_budget",
+    "split_live_telemetry_attempts",
 ]

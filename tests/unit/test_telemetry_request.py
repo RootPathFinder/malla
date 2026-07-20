@@ -1,7 +1,7 @@
 """Unit tests for live telemetry request correlation helpers."""
 
 import threading
-from unittest.mock import MagicMock
+from unittest.mock import MagicMock, patch
 
 import pytest
 
@@ -14,8 +14,10 @@ from malla.utils.telemetry_request import (
     extract_from_node_id,
     extract_request_id,
     find_matching_telemetry_request,
+    live_telemetry_budget,
     normalize_mesh_node_id,
     normalize_request_id,
+    split_live_telemetry_attempts,
     telemetry_has_requested_metrics,
     telemetry_to_dict,
 )
@@ -164,13 +166,44 @@ class TestFindMatchingTelemetryRequest:
 
 
 @pytest.mark.unit
+class TestLiveTelemetryHopBudget:
+    def test_zero_hop_is_snappy(self):
+        budget = live_telemetry_budget(0)
+        assert budget["estimated_hops"] == 0
+        assert budget["timeout_s"] == 8.0
+        assert budget["want_ack"] is False
+        assert budget["attempts"] == 2
+        assert budget["poll_interval_ms"] <= 5000
+
+    def test_far_hops_get_longer_budget_and_acks(self):
+        near = live_telemetry_budget(1)
+        far = live_telemetry_budget(4)
+        assert far["timeout_s"] > near["timeout_s"]
+        assert far["attempts"] >= near["attempts"]
+        assert far["want_ack"] is True
+        assert far["hop_limit"] >= 4
+        assert far["poll_interval_ms"] > near["poll_interval_ms"]
+        assert far["timeout_s"] <= 55.0
+
+    def test_split_attempts_for_multi_hop(self):
+        two = split_live_telemetry_attempts(25, attempts=2)
+        assert len(two) == 2
+        assert sum(two) == pytest.approx(25.0, abs=0.05)
+
+        three = split_live_telemetry_attempts(40, attempts=3)
+        assert len(three) == 3
+        assert sum(three) == pytest.approx(40.0, abs=0.05)
+        assert three[0] >= three[1] >= three[2] - 0.01
+
+
+@pytest.mark.unit
 class TestLiveTelemetryApiRetryHelpers:
     def test_attempt_timeout_split(self):
         assert _live_telemetry_attempt_timeouts(10) == [10.0]
-        attempts = _live_telemetry_attempt_timeouts(25)
+        attempts = _live_telemetry_attempt_timeouts(25, attempts=2)
         assert len(attempts) == 2
-        assert sum(attempts) == pytest.approx(25.0)
-        assert attempts[1] <= 8.0
+        assert sum(attempts) == pytest.approx(25.0, abs=0.05)
+        assert attempts[1] <= 12.0
 
     def test_retry_helper_retries_once_on_failure(self):
         publisher = MagicMock()
@@ -178,13 +211,24 @@ class TestLiveTelemetryApiRetryHelpers:
             None,
             {"telemetry": {"device_metrics": {"battery_level": 50}}},
         ]
-        result, attempts = _request_live_telemetry_with_retry(
-            publisher, 0x1234, "device_metrics", 20
-        )
+        with patch("malla.routes.admin_routes.time.sleep"):
+            result, attempts = _request_live_telemetry_with_retry(
+                publisher,
+                0x1234,
+                "device_metrics",
+                20,
+                attempts=2,
+                hop_limit=4,
+                want_ack=True,
+                retry_delay_s=0.5,
+            )
         assert attempts == 2
         assert result is not None
         assert result["retry_attempt"] == 1
         assert publisher.send_telemetry_request.call_count == 2
+        kwargs = publisher.send_telemetry_request.call_args.kwargs
+        assert kwargs["hop_limit"] == 4
+        assert kwargs["want_ack"] is True
 
     def test_retry_helper_stops_on_first_success(self):
         publisher = MagicMock()
@@ -192,11 +236,29 @@ class TestLiveTelemetryApiRetryHelpers:
             "telemetry": {"device_metrics": {"battery_level": 50}}
         }
         result, attempts = _request_live_telemetry_with_retry(
-            publisher, 0x1234, "device_metrics", 20
+            publisher, 0x1234, "device_metrics", 20, attempts=3
         )
         assert attempts == 1
         assert result is not None
         assert "retry_attempt" not in result
+
+    def test_retry_helper_three_attempts_for_far_nodes(self):
+        publisher = MagicMock()
+        publisher.send_telemetry_request.return_value = None
+        with patch("malla.routes.admin_routes.time.sleep") as sleep_mock:
+            result, attempts = _request_live_telemetry_with_retry(
+                publisher,
+                0x1234,
+                "device_metrics",
+                40,
+                attempts=3,
+                hop_limit=6,
+                want_ack=True,
+                retry_delay_s=1.0,
+            )
+        assert result is None
+        assert attempts == 3
+        assert sleep_mock.call_count == 2
 
 
 @pytest.mark.unit

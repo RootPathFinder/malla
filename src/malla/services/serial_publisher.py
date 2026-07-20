@@ -1394,6 +1394,8 @@ class SerialPublisher:
         target_node_id: int,
         telemetry_type: str = "device_metrics",
         timeout: float = 25.0,
+        hop_limit: int | None = None,
+        want_ack: bool = False,
     ) -> dict[str, Any] | None:
         """
         Request telemetry from a target node and wait for response.
@@ -1409,6 +1411,8 @@ class SerialPublisher:
             telemetry_type: Type of telemetry to request
                            (device_metrics, environment_metrics, etc.)
             timeout: Timeout in seconds to wait for response (default 25s for mesh)
+            hop_limit: Optional mesh hopLimit for multi-hop reachability
+            want_ack: Request mesh-layer ACK/retries (helpful beyond 0 hops)
 
         Returns:
             Dictionary with telemetry data if successful, None otherwise
@@ -1480,17 +1484,22 @@ class SerialPublisher:
             try:
                 logger.info(
                     f"Sending telemetry request to !{target_node_id:08x} "
-                    f"(type={telemetry_type}) via serial"
+                    f"(type={telemetry_type}, hop_limit={hop_limit}, "
+                    f"want_ack={want_ack}) via serial"
                 )
 
-                mesh_packet = self._interface.sendData(
-                    data=telemetry,
-                    destinationId=target_node_id,
-                    portNum=portnums_pb2.TELEMETRY_APP,
-                    wantAck=False,
-                    wantResponse=True,
-                    onResponse=self._match_and_complete_telemetry,
-                )
+                send_kwargs: dict[str, Any] = {
+                    "data": telemetry,
+                    "destinationId": target_node_id,
+                    "portNum": portnums_pb2.TELEMETRY_APP,
+                    "wantAck": want_ack,
+                    "wantResponse": True,
+                    "onResponse": self._match_and_complete_telemetry,
+                }
+                if hop_limit is not None:
+                    send_kwargs["hopLimit"] = int(hop_limit)
+
+                mesh_packet = self._interface.sendData(**send_kwargs)
 
                 request_id = self._normalize_request_id(
                     getattr(mesh_packet, "id", None)
