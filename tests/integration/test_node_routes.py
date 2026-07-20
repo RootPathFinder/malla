@@ -172,12 +172,14 @@ class TestNodeRoutes:
         assert response.status_code == 200
         response_text = response.data.decode("utf-8")
 
-        # Sparkline hosts live behind metric values
+        # Labeled mini charts under metric values (min/max axis + poll bars)
         assert 'id="live-spark-battery"' in response_text
-        assert 'id="live-spark-voltage"' in response_text
+        assert 'id="live-spark-battery-max"' in response_text
+        assert 'id="live-spark-voltage-min"' in response_text
         assert 'class="live-metric-tile"' in response_text
+        assert 'class="live-spark-wrap"' in response_text
         assert "renderLiveSparkline" in response_text
-        assert "poll-dot" in response_text
+        assert "poll-bar" in response_text
         # Old Plotly live chart containers should be gone from diagnostics
         assert 'id="live-chart-battery"' not in response_text
         assert 'id="live-charts-container"' not in response_text
