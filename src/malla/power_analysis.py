@@ -258,7 +258,6 @@ def classify_power_source(
             )
 
         # Linear trend for battery-only decline
-        n = len(valid_voltages)
         # Align voltages with their timestamps
         paired = [
             (ts, v)
