@@ -53,17 +53,45 @@ class PKIErrorCodes:
     }
 
     @classmethod
-    def is_recoverable_session_error(cls, error_reason: str) -> bool:
+    def normalize_error_reason(cls, error_reason: Any) -> str:
+        """Normalize routing error reasons to canonical string names."""
+        if error_reason is None or error_reason == "":
+            return "NONE"
+        if isinstance(error_reason, bytes):
+            try:
+                error_reason = error_reason.decode("utf-8")
+            except Exception:
+                error_reason = str(error_reason)
+        if isinstance(error_reason, int):
+            try:
+                from meshtastic import mesh_pb2
+
+                name = mesh_pb2.Routing.Error.Name(error_reason)
+                return str(name)
+            except Exception:
+                return str(error_reason)
+        text = str(error_reason).strip()
+        # Handle "Routing.Error.ADMIN_BAD_SESSION_KEY" / "Error.ADMIN_BAD_SESSION_KEY"
+        if "." in text:
+            text = text.rsplit(".", 1)[-1]
+        return text
+
+    @classmethod
+    def is_recoverable_session_error(cls, error_reason: Any) -> bool:
         """Check if an error indicates a stale session that can be recovered."""
-        return error_reason in cls.RECOVERABLE_SESSION_ERRORS
+        return (
+            cls.normalize_error_reason(error_reason) in cls.RECOVERABLE_SESSION_ERRORS
+        )
 
     @classmethod
-    def is_key_configuration_error(cls, error_reason: str) -> bool:
+    def is_key_configuration_error(cls, error_reason: Any) -> bool:
         """Check if an error requires manual key configuration on remote node."""
-        return error_reason in cls.REQUIRES_KEY_CONFIGURATION
+        return (
+            cls.normalize_error_reason(error_reason) in cls.REQUIRES_KEY_CONFIGURATION
+        )
 
     @classmethod
-    def is_pki_related(cls, error_reason: str) -> bool:
+    def is_pki_related(cls, error_reason: Any) -> bool:
         """Check if an error is related to PKI/key synchronization."""
         return cls.is_recoverable_session_error(
             error_reason
@@ -658,11 +686,15 @@ class TCPPublisher:
             # Handle routing packets (ACK/NAK responses)
             if portnum == "ROUTING_APP":
                 routing = decoded.get("routing", {})
-                error_reason = routing.get("errorReason", "NONE")
+                error_reason = PKIErrorCodes.normalize_error_reason(
+                    routing.get("errorReason", "NONE")
+                )
                 # Meshtastic puts requestId on decoded; some paths also copy it top-level
-                request_id = packet.get("requestId") or decoded.get("requestId")
+                request_id = self._normalize_request_id(
+                    packet.get("requestId") or decoded.get("requestId")
+                )
 
-                if request_id:
+                if request_id is not None:
                     logger.info(
                         f"Received routing response for request {request_id}: {error_reason}"
                     )
@@ -869,6 +901,16 @@ class TCPPublisher:
 
         except Exception as e:
             logger.error(f"Error processing received packet: {e}")
+
+    @staticmethod
+    def _normalize_request_id(request_id: Any) -> int | None:
+        """Normalize packet/request ids to unsigned 32-bit ints for dict keys."""
+        if request_id is None or request_id == "":
+            return None
+        try:
+            return int(request_id) & 0xFFFFFFFF
+        except (TypeError, ValueError):
+            return None
 
     def get_response(
         self, packet_id: int, timeout: float = 30.0
@@ -1130,8 +1172,17 @@ class TCPPublisher:
                 )
                 return result
 
-            error_reason = response.get("error_reason", "NONE")
+            error_reason = PKIErrorCodes.normalize_error_reason(
+                response.get("error_reason", "NONE")
+            )
             is_nak = bool(response.get("is_nak"))
+            # Trust the canonical reason even if is_nak was computed from a
+            # non-normalized value upstream.
+            if error_reason != "NONE":
+                is_nak = True
+            response["error_reason"] = error_reason
+            response["is_nak"] = is_nak
+            response["is_ack"] = not is_nak
 
             if error_reason == "NONE" and not is_nak:
                 result["success"] = True

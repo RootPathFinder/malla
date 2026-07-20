@@ -268,6 +268,10 @@ class SerialPublisher:
         self._response_lock = threading.Lock()
         self._response_events: dict[int, threading.Event] = {}
 
+        # Session passkeys for remote admin writes (node_id -> bytes)
+        self._session_passkeys: dict[int, bytes] = {}
+        self._session_passkey_lock = threading.Lock()
+
         # General admin response tracking
         self._last_admin_response: dict[str, Any] | None = None
         self._admin_response_event = threading.Event()
@@ -436,11 +440,19 @@ class SerialPublisher:
 
             # Handle routing ACK/NAK responses (wantAck delivery confirmation)
             if port_num == "ROUTING_APP" or port_num == portnums_pb2.ROUTING_APP:
-                routing = decoded.get("routing", {})
-                error_reason = routing.get("errorReason", "NONE")
-                request_id = packet.get("requestId") or decoded.get("requestId")
+                from .tcp_publisher import PKIErrorCodes
 
-                if request_id:
+                routing = decoded.get("routing", {})
+                error_reason = PKIErrorCodes.normalize_error_reason(
+                    routing.get("errorReason", "NONE")
+                )
+                request_id = packet.get("requestId") or decoded.get("requestId")
+                try:
+                    request_id = int(request_id) & 0xFFFFFFFF if request_id else None
+                except (TypeError, ValueError):
+                    request_id = None
+
+                if request_id is not None:
                     response_data = {
                         "packet": packet,
                         "received_at": time.time(),
@@ -479,18 +491,76 @@ class SerialPublisher:
         try:
             decoded = packet.get("decoded", {})
             request_id = packet.get("requestId") or decoded.get("requestId", 0)
+            try:
+                request_id = int(request_id) & 0xFFFFFFFF
+            except (TypeError, ValueError):
+                request_id = 0
 
             admin_message = None
-            if "admin" in decoded:
+            session_passkey = None
+            payload = decoded.get("payload")
+
+            if payload and isinstance(payload, bytes):
+                try:
+                    admin_message = admin_pb2.AdminMessage()
+                    admin_message.ParseFromString(payload)
+                    if admin_message.session_passkey:
+                        session_passkey = bytes(admin_message.session_passkey)
+                except Exception as e:
+                    logger.debug(f"Failed to parse admin payload bytes: {e}")
+
+            if admin_message is None and "admin" in decoded:
                 admin_message = decoded["admin"]
+                if isinstance(admin_message, dict) and admin_message.get(
+                    "session_passkey"
+                ):
+                    session_passkey = admin_message["session_passkey"]
+                elif hasattr(admin_message, "session_passkey"):
+                    session_passkey = admin_message.session_passkey
+
+            if isinstance(session_passkey, str):
+                import base64
+
+                try:
+                    session_passkey = base64.b64decode(session_passkey)
+                except Exception:
+                    try:
+                        session_passkey = bytes.fromhex(session_passkey)
+                    except Exception:
+                        session_passkey = session_passkey.encode()
+
+            from_node = packet.get("fromId") or packet.get("from")
+            if isinstance(session_passkey, bytes) and len(session_passkey) > 0:
+                node_id: int | None = None
+                if isinstance(from_node, int):
+                    node_id = from_node
+                elif isinstance(from_node, str):
+                    try:
+                        node_id = int(from_node.lstrip("!"), 16)
+                    except ValueError:
+                        node_id = None
+                if node_id is not None:
+                    key = (
+                        session_passkey[:8]
+                        if len(session_passkey) >= 8
+                        else session_passkey
+                    )
+                    with self._session_passkey_lock:
+                        self._session_passkeys[node_id] = key
+                    logger.info(
+                        f"Stored session_passkey for node !{node_id:08x} "
+                        f"({len(key)} bytes)"
+                    )
 
             response_data = {
                 "packet": packet,
                 "admin_message": admin_message,
-                "from_node": packet.get("fromId"),
+                "from_node": from_node,
                 "received_at": time.time(),
                 "is_ack": True,
                 "is_nak": False,
+                "error_reason": "NONE",
+                "decoded": decoded,
             }
 
             # Check if this is a response to a specific request
@@ -629,6 +699,18 @@ class SerialPublisher:
             return None
 
         try:
+            # Attach session passkey for remote admin writes when we have one
+            with self._session_passkey_lock:
+                if target_node_id in self._session_passkeys:
+                    session_passkey = self._session_passkeys[target_node_id]
+                    admin_message.session_passkey = session_passkey
+                    logger.info(
+                        f"Including session_passkey for !{target_node_id:08x} "
+                        f"({len(session_passkey)} bytes)"
+                    )
+                elif admin_message.session_passkey:
+                    admin_message.ClearField("session_passkey")
+
             # Send the admin message; wantAck requests a routing ACK/NAK
             mesh_packet = self._interface.sendData(
                 data=admin_message,
@@ -660,6 +742,49 @@ class SerialPublisher:
         except Exception as e:
             logger.error(f"Failed to send admin message: {e}")
             return None
+
+    def has_session_passkey(self, node_id: int) -> bool:
+        """Return True if a session passkey is cached for the node."""
+        with self._session_passkey_lock:
+            return node_id in self._session_passkeys
+
+    def clear_session_passkey(self, node_id: int | str | None = None) -> int:
+        """Clear stored session passkeys for one node or all nodes."""
+        with self._session_passkey_lock:
+            if node_id is None:
+                count = len(self._session_passkeys)
+                self._session_passkeys.clear()
+                return count
+            if isinstance(node_id, str):
+                try:
+                    node_id = int(node_id.lstrip("!"), 16)
+                except ValueError:
+                    return 0
+            if node_id in self._session_passkeys:
+                del self._session_passkeys[node_id]
+                return 1
+            return 0
+
+    def refresh_session_passkey(
+        self,
+        target_node_id: int,
+        timeout: float = 30.0,
+    ) -> bool:
+        """
+        Fetch a fresh session passkey via get_device_metadata.
+        """
+        self.clear_session_passkey(target_node_id)
+        logger.info(
+            f"Refreshing session passkey for !{target_node_id:08x} "
+            f"via get_device_metadata"
+        )
+        packet_id = self.send_get_device_metadata(target_node_id)
+        if packet_id is None:
+            return False
+        response = self.get_response(packet_id, timeout=timeout)
+        if not response or response.get("is_nak"):
+            return False
+        return self.has_session_passkey(target_node_id)
 
     def send_get_device_metadata(
         self,

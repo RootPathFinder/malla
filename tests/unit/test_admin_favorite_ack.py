@@ -141,6 +141,32 @@ class TestFavoriteWriteAck:
         assert {int(r["node_id"]) for r in tracked} == {0x33333333}
 
 
+    @pytest.mark.unit
+    def test_set_favorite_fetches_passkey_when_missing(self, service, admin_db):
+        publisher = MagicMock()
+        publisher.has_session_passkey.return_value = False
+        publisher.refresh_session_passkey.return_value = True
+        publisher.send_set_favorite_node.return_value = 0xABCD
+        publisher.get_response.return_value = {
+            "is_ack": True,
+            "is_nak": False,
+            "error_reason": "NONE",
+        }
+
+        with patch.object(service, "_get_publisher", return_value=publisher):
+            result = service.set_favorite_node(0x22222222, 0x33333333)
+
+        assert result.success is True
+        publisher.refresh_session_passkey.assert_called_once_with(
+            0x22222222, timeout=30.0
+        )
+        assert result.retry_info is not None
+        assert any(
+            "No session passkey" in line
+            for line in result.retry_info[0]["recovery_log"]
+        )
+
+
 class TestFavoriteSessionKeyRecovery:
     @pytest.mark.unit
     def test_set_favorite_retries_after_bad_session_key(self, service, admin_db):

@@ -510,8 +510,12 @@ class AdminService:
                 )
                 return result
 
-            error_reason = response.get("error_reason", "NONE")
-            is_nak = bool(response.get("is_nak"))
+            error_reason = PKIErrorCodes.normalize_error_reason(
+                response.get("error_reason", "NONE")
+            )
+            is_nak = bool(response.get("is_nak")) or error_reason != "NONE"
+            response["error_reason"] = error_reason
+            response["is_nak"] = is_nak
 
             if error_reason == "NONE" and not is_nak:
                 result["success"] = True
@@ -531,9 +535,10 @@ class AdminService:
                 )
                 return result
 
-            can_refresh = callable(
-                getattr(type(publisher), "refresh_session_passkey", None)
-            ) or callable(getattr(publisher, "refresh_session_passkey", None))
+            # Prefer a real refresh method; MagicMock auto-attrs are fine here
+            # because production publishers either implement it or don't.
+            refresh_fn = getattr(publisher, "refresh_session_passkey", None)
+            can_refresh = callable(refresh_fn)
 
             if (
                 PKIErrorCodes.is_recoverable_session_error(error_reason)
@@ -556,10 +561,16 @@ class AdminService:
                 continue
 
             if PKIErrorCodes.is_recoverable_session_error(error_reason):
-                result["error"] = (
-                    f"PKI key sync error: {error_reason} "
-                    f"after {attempt} attempt(s)."
-                )
+                if not can_refresh:
+                    result["error"] = (
+                        f"PKI key sync error: {error_reason}. "
+                        "Publisher cannot refresh session passkeys."
+                    )
+                else:
+                    result["error"] = (
+                        f"PKI key sync error: {error_reason} "
+                        f"after {attempt} attempt(s)."
+                    )
                 return result
 
             result["error"] = f"Routing error: {error_reason or 'NAK'}"
@@ -587,7 +598,35 @@ class AdminService:
         Treats a non-NAK response as verified success, timeout as unacked
         success (packet was queued), and session-key NAKs as recoverable
         for up to max_attempts sends.
+
+        Before the first attempt, ensures a session passkey is cached when
+        the publisher supports it (remote writes require one).
         """
+        if max_attempts is None:
+            max_attempts = PKIErrorCodes.MAX_SESSION_RECOVERY_ATTEMPTS
+
+        recovery_log: list[str] = []
+
+        # Remote admin writes require a session_passkey. Obtain one up front
+        # when missing so the first attempt isn't a guaranteed NAK.
+        if callable(getattr(publisher, "has_session_passkey", None)) and callable(
+            getattr(publisher, "refresh_session_passkey", None)
+        ):
+            if not publisher.has_session_passkey(target_node_id):
+                recovery_log.append(
+                    f"No session passkey for !{target_node_id:08x}; fetching via get_device_metadata"
+                )
+                logger.info(recovery_log[-1])
+                if not publisher.refresh_session_passkey(
+                    target_node_id, timeout=30.0
+                ):
+                    recovery_log.append(
+                        "Failed to obtain session passkey before write; continuing anyway"
+                    )
+                    logger.warning(recovery_log[-1])
+                else:
+                    recovery_log.append("Session passkey obtained")
+
         outcome = self._send_and_await_with_session_recovery(
             publisher=publisher,
             target_node_id=target_node_id,
@@ -597,6 +636,12 @@ class AdminService:
         )
 
         packet_id = outcome.get("packet_id")
+        attempts = int(outcome.get("attempts") or 1)
+        if outcome.get("recovered"):
+            recovery_log.append(
+                f"Recovered after session refresh ({attempts} attempt(s))"
+            )
+
         if packet_id is None and not outcome.get("response"):
             AdminRepository.update_admin_log_status(
                 log_id=log_id,
@@ -607,6 +652,8 @@ class AdminService:
                 success=False,
                 log_id=log_id,
                 error=send_failure_message,
+                attempts=attempts,
+                retry_info=[{"recovery_log": recovery_log}] if recovery_log else None,
             )
 
         # Timeout with a packet id: soft success (same policy as prior write paths)
@@ -616,7 +663,7 @@ class AdminService:
             and packet_id is not None
             and not outcome.get("error_reason")
         ):
-            return self._finalize_admin_write_ack(
+            result = self._finalize_admin_write_ack(
                 packet_id=packet_id,
                 log_id=log_id,
                 response=None,
@@ -625,9 +672,13 @@ class AdminService:
                 nak_prefix=nak_prefix,
                 recovered=bool(outcome.get("recovered")),
             )
+            result.attempts = attempts
+            if recovery_log:
+                result.retry_info = [{"recovery_log": recovery_log}]
+            return result
 
         if outcome.get("success"):
-            return self._finalize_admin_write_ack(
+            result = self._finalize_admin_write_ack(
                 packet_id=packet_id,
                 log_id=log_id,
                 response=outcome.get("response"),
@@ -636,23 +687,30 @@ class AdminService:
                 nak_prefix=nak_prefix,
                 recovered=bool(outcome.get("recovered")),
             )
+            result.attempts = attempts
+            if recovery_log:
+                result.retry_info = [{"recovery_log": recovery_log}]
+            return result
 
-        error_reason = outcome.get("error_reason") or ""
-        error_msg = outcome.get("error") or f"{nak_prefix}: {error_reason or 'NAK'}"
-        if error_reason and not str(error_msg).startswith(nak_prefix):
-            # Prefer the command-specific NAK prefix for UI consistency
-            if PKIErrorCodes.is_recoverable_session_error(error_reason) or error_reason:
-                error_msg = f"{nak_prefix}: {error_reason}"
-                if "Failed to refresh" in str(outcome.get("error") or ""):
-                    error_msg = (
-                        f"{nak_prefix}: {error_reason} "
-                        "(failed to refresh session passkey)"
-                    )
-                elif "after" in str(outcome.get("error") or ""):
-                    error_msg = (
-                        f"{nak_prefix}: {error_reason} "
-                        f"after {outcome.get('attempts', 1)} attempt(s)"
-                    )
+        error_reason = PKIErrorCodes.normalize_error_reason(
+            outcome.get("error_reason") or ""
+        )
+        raw_error = str(outcome.get("error") or "")
+        if PKIErrorCodes.is_recoverable_session_error(error_reason):
+            if "Failed to refresh" in raw_error:
+                error_msg = (
+                    f"{nak_prefix}: {error_reason} "
+                    "(failed to refresh session passkey)"
+                )
+            else:
+                error_msg = (
+                    f"{nak_prefix}: {error_reason} "
+                    f"after {attempts} attempt(s) with session refresh"
+                )
+        elif error_reason and error_reason != "NONE":
+            error_msg = f"{nak_prefix}: {error_reason}"
+        else:
+            error_msg = raw_error or f"{nak_prefix}: NAK"
 
         AdminRepository.update_admin_log_status(
             log_id=log_id,
@@ -664,6 +722,8 @@ class AdminService:
             packet_id=packet_id,
             log_id=log_id,
             error=error_msg,
+            attempts=attempts,
+            retry_info=[{"recovery_log": recovery_log}] if recovery_log else None,
         )
 
     @property

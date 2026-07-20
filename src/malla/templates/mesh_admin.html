@@ -5574,6 +5574,18 @@
         confirmRemoveFavoriteFromList(nodeToUnfavorite, nodeToUnfavorite);
     }
 
+    function logFavoriteRecoveryInfo(data) {
+        if (data.attempts && data.attempts > 1) {
+            addCommandLog(`Session recovery used ${data.attempts} send attempt(s)`);
+        }
+        const logs = data.retry_info && data.retry_info[0] && data.retry_info[0].recovery_log;
+        if (Array.isArray(logs)) {
+            for (const line of logs) {
+                addCommandLog(line);
+            }
+        }
+    }
+
     // Send set favorite node command
     async function sendSetFavoriteNode(targetNodeId, nodeToFavorite) {
         initCommandLog();
@@ -5588,13 +5600,14 @@
             });
 
             const data = await response.json();
+            logFavoriteRecoveryInfo(data);
 
             if (data.success) {
                 if (data.acknowledged) {
-                    finalizeCommandLog(`✓ ${data.message}`);
+                    finalizeCommandLog(data.message);
                     showAlert('success', data.message);
                 } else {
-                    finalizeCommandLog(`⚠ ${data.message}`);
+                    finalizeCommandLog(data.message || 'Command sent but no ACK from remote node');
                     showAlert('warning', data.message || 'Command sent but no ACK from remote node');
                 }
                 const favInput = document.getElementById('favoriteNodeInput');
@@ -5610,11 +5623,11 @@
                     await requestDeviceFavorites();
                 }
             } else {
-                finalizeCommandLog(`✗ Failed: ${data.error}`, false);
+                finalizeCommandLog(`Failed: ${data.error}`, false);
                 showAlert('danger', data.error);
             }
         } catch (error) {
-            finalizeCommandLog(`✗ Error: ${error.message}`, false);
+            finalizeCommandLog(`Error: ${error.message}`, false);
             showAlert('danger', `Error: ${error.message}`);
         }
     }
@@ -5633,13 +5646,14 @@
             });
 
             const data = await response.json();
+            logFavoriteRecoveryInfo(data);
 
             if (data.success) {
                 if (data.acknowledged) {
-                    finalizeCommandLog(`✓ ${data.message}`);
+                    finalizeCommandLog(data.message);
                     showAlert('success', data.message);
                 } else {
-                    finalizeCommandLog(`⚠ ${data.message}`);
+                    finalizeCommandLog(data.message || 'Command sent but no ACK from remote node');
                     showAlert('warning', data.message || 'Command sent but no ACK from remote node');
                 }
                 if (Array.isArray(data.favorites)) {
@@ -5650,11 +5664,11 @@
                     await requestDeviceFavorites();
                 }
             } else {
-                finalizeCommandLog(`✗ Failed: ${data.error}`, false);
+                finalizeCommandLog(`Failed: ${data.error}`, false);
                 showAlert('danger', data.error);
             }
         } catch (error) {
-            finalizeCommandLog(`✗ Error: ${error.message}`, false);
+            finalizeCommandLog(`Error: ${error.message}`, false);
             showAlert('danger', `Error: ${error.message}`);
         }
     }

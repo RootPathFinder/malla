@@ -87,6 +87,18 @@ class TestPKIErrorCodes:
         assert len(overlap) == 0, f"Unexpected overlap: {overlap}"
 
 
+    def test_normalize_error_reason_handles_int_and_qualified_names(self):
+        assert PKIErrorCodes.normalize_error_reason(36) == "ADMIN_BAD_SESSION_KEY"
+        assert (
+            PKIErrorCodes.normalize_error_reason("Error.ADMIN_BAD_SESSION_KEY")
+            == "ADMIN_BAD_SESSION_KEY"
+        )
+        assert PKIErrorCodes.is_recoverable_session_error(36)
+        assert PKIErrorCodes.is_recoverable_session_error(
+            "Routing.Error.ADMIN_BAD_SESSION_KEY"
+        )
+
+
 class TestSessionPasskeyRefresh:
     """Tests for refreshing session passkeys after ADMIN_BAD_SESSION_KEY."""
 
