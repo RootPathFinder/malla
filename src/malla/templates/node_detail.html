@@ -114,6 +114,12 @@
     .live-metric-tile .live-spark .area {
         opacity: 0.18;
     }
+    .live-metric-tile .live-spark .poll-dot {
+        opacity: 0.9;
+    }
+    .live-metric-tile .live-spark .poll-dot-latest {
+        opacity: 1;
+    }
     .live-metric-tile .live-metric-body {
         position: relative;
         z-index: 1;
@@ -3370,7 +3376,7 @@ function renderLiveSparkline(seriesKey) {
     if (!svg) return;
 
     const values = liveChartData[seriesKey].filter(v => v !== null && v !== undefined);
-    if (values.length < 2) {
+    if (values.length < 1) {
         svg.innerHTML = '';
         return;
     }
@@ -3388,18 +3394,33 @@ function renderLiveSparkline(seriesKey) {
     }
     const range = (maxVal - minVal) || 1;
 
-    const points = values.map((v, i) => {
-        const x = values.length === 1 ? width : (i / (values.length - 1)) * width;
+    const coords = values.map((v, i) => {
+        const x = values.length === 1 ? width * 0.5 : (i / (values.length - 1)) * width;
         const y = height - padY - ((v - minVal) / range) * (height - padY * 2);
-        return `${x.toFixed(2)},${y.toFixed(2)}`;
+        return { x, y, v };
     });
-    const linePoints = points.join(' ');
-    const areaPoints = `0,${height} ${linePoints} ${width},${height}`;
+    const linePoints = coords.map(p => `${p.x.toFixed(2)},${p.y.toFixed(2)}`).join(' ');
 
-    svg.innerHTML = `
-        <polygon class="area" points="${areaPoints}" fill="${cfg.color}"></polygon>
-        <polyline fill="none" stroke="${cfg.color}" stroke-width="1.75" stroke-linejoin="round" stroke-linecap="round" points="${linePoints}"></polyline>
-    `;
+    // Shrink dots slightly when many samples so the line stays readable
+    const baseR = values.length > 24 ? 1.1 : values.length > 12 ? 1.35 : 1.7;
+    const latestR = baseR + 0.55;
+
+    let html = '';
+    if (coords.length >= 2) {
+        const areaPoints = `0,${height} ${linePoints} ${width},${height}`;
+        html += `<polygon class="area" points="${areaPoints}" fill="${cfg.color}"></polygon>`;
+        html += `<polyline fill="none" stroke="${cfg.color}" stroke-width="1.75" stroke-linejoin="round" stroke-linecap="round" points="${linePoints}"></polyline>`;
+    }
+
+    // One dot per poll sample; latest sample is slightly larger
+    coords.forEach((p, i) => {
+        const isLatest = i === coords.length - 1;
+        const r = isLatest ? latestR : baseR;
+        const cls = isLatest ? 'poll-dot poll-dot-latest' : 'poll-dot';
+        html += `<circle class="${cls}" cx="${p.x.toFixed(2)}" cy="${p.y.toFixed(2)}" r="${r.toFixed(2)}" fill="${cfg.color}" stroke="#fff" stroke-width="0.6"></circle>`;
+    });
+
+    svg.innerHTML = html;
 }
 
 function updateLiveCharts(dm, env) {

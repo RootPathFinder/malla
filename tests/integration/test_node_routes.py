@@ -177,6 +177,7 @@ class TestNodeRoutes:
         assert 'id="live-spark-voltage"' in response_text
         assert 'class="live-metric-tile"' in response_text
         assert "renderLiveSparkline" in response_text
+        assert "poll-dot" in response_text
         # Old Plotly live chart containers should be gone from diagnostics
         assert 'id="live-chart-battery"' not in response_text
         assert 'id="live-charts-container"' not in response_text
