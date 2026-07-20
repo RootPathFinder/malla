@@ -2762,7 +2762,7 @@ class BotService:
             lowbat_count = self._get_recent_lowbat_count()
             top_names = self._get_digest_top_names(limit=3)
             nodes_delta = self._get_active_nodes_delta()
-            new_nodes = self._get_new_nodes_24h(limit=2)
+            new_nodes = self._get_new_nodes_24h(name_limit=3)
             longest_tr = self._get_longest_traceroute_24h()
 
             return self._format_daily_digest(
@@ -2786,14 +2786,14 @@ class BotService:
         offline_routers: list[str],
         lowbat_count: int,
         top_names: list[str],
-        new_nodes: list[str] | None = None,
+        new_nodes: dict[str, Any] | None = None,
         longest_tr: dict[str, Any] | None = None,
         when: time.struct_time | None = None,
     ) -> str:
         """Format digest fields into a Meshtastic-friendly message."""
         when = when or time.localtime()
         date_label = f"{when.tm_mon}/{when.tm_mday}"
-        new_nodes = new_nodes or []
+        new_nodes = new_nodes or {"count": 0, "names": []}
 
         nodes = int(vitals.get("active_nodes_24h") or 0)
         packets = int(vitals.get("packets_24h") or 0)
@@ -2826,8 +2826,12 @@ class BotService:
                 names = ", ".join(offline_routers[:2])
                 lines.append(f"Routers: {names}")
 
-        if new_nodes:
-            lines.append(f"New: {', '.join(new_nodes)}")
+        new_line = self._format_new_nodes_line(
+            int(new_nodes.get("count") or 0),
+            list(new_nodes.get("names") or []),
+        )
+        if new_line:
+            lines.append(new_line)
 
         if longest_tr and longest_tr.get("hops", 0) > 0:
             from_name = longest_tr.get("from_name") or "?"
@@ -2867,6 +2871,17 @@ class BotService:
         if value >= 1000:
             return f"{value / 1000:.1f}k".replace(".0k", "k")
         return str(value)
+
+    def _format_new_nodes_line(self, count: int, names: list[str]) -> str | None:
+        """Format new-node summary as count plus sample names."""
+        if count <= 0:
+            return None
+        if not names:
+            return f"New: {count}"
+        shown = ", ".join(names)
+        if count > len(names):
+            return f"New: {count} ({shown}…)"
+        return f"New: {count} ({shown})"
 
     def _get_active_nodes_delta(self) -> int | None:
         """Return 24h active-node count minus prior-day active-node count."""
@@ -3041,14 +3056,30 @@ class BotService:
             logger.error(f"Error getting digest top names: {e}", exc_info=True)
             return []
 
-    def _get_new_nodes_24h(self, limit: int = 2) -> list[str]:
-        """Return names of nodes first seen in the last 24 hours."""
+    def _get_new_nodes_24h(self, name_limit: int = 3) -> dict[str, Any]:
+        """Return count + sample names of nodes first seen in the last 24 hours."""
+        empty: dict[str, Any] = {"count": 0, "names": []}
         try:
             from ..database.connection import get_db_connection
 
             conn = get_db_connection()
             cursor = conn.cursor()
             since = time.time() - (24 * 3600)
+            cursor.execute(
+                """
+                SELECT COUNT(*) as cnt
+                FROM node_info
+                WHERE COALESCE(archived, 0) = 0
+                  AND first_seen IS NOT NULL
+                  AND first_seen > ?
+                """,
+                (since,),
+            )
+            count = int(cursor.fetchone()["cnt"] or 0)
+            if count == 0:
+                conn.close()
+                return empty
+
             cursor.execute(
                 """
                 SELECT node_id, short_name, long_name, first_seen
@@ -3059,20 +3090,23 @@ class BotService:
                 ORDER BY first_seen DESC
                 LIMIT ?
                 """,
-                (since, limit),
+                (since, name_limit),
             )
             rows = cursor.fetchall()
             conn.close()
 
-            return [
-                self._digest_node_label(
-                    row["node_id"], row["short_name"], row["long_name"]
-                )
-                for row in rows
-            ]
+            return {
+                "count": count,
+                "names": [
+                    self._digest_node_label(
+                        row["node_id"], row["short_name"], row["long_name"]
+                    )
+                    for row in rows
+                ],
+            }
         except Exception as e:
             logger.error(f"Error getting new nodes for digest: {e}", exc_info=True)
-            return []
+            return empty
 
     def _get_longest_traceroute_24h(self) -> dict[str, Any] | None:
         """Find the traceroute with the most hops in the last 24 hours.

@@ -34,7 +34,7 @@ class TestDailyDigestFormatting:
             offline_routers=["HillTop", "Bridge"],
             lowbat_count=2,
             top_names=["Alpha", "Bravo", "Charlie"],
-            new_nodes=["Newbie", "Fresh"],
+            new_nodes={"count": 7, "names": ["Newbie", "Fresh", "Rookie"]},
             longest_tr={
                 "hops": 5,
                 "from_name": "Alpha",
@@ -50,7 +50,7 @@ class TestDailyDigestFormatting:
         assert "Lowbat: 2" in message
         assert "Off routers: 2" in message
         assert "Routers: HillTop, Bridge" in message
-        assert "New: Newbie, Fresh" in message
+        assert "New: 7 (Newbie, Fresh, Rookie…)" in message
         assert "Long TR: 5 hops Alpha→Zulu" in message
         assert "Top: Alpha, Bravo, Charlie" in message
 
@@ -69,7 +69,7 @@ class TestDailyDigestFormatting:
             offline_routers=[],
             lowbat_count=0,
             top_names=["Alpha"],
-            new_nodes=[],
+            new_nodes={"count": 0, "names": []},
             longest_tr=None,
             when=when,
         )
@@ -80,6 +80,15 @@ class TestDailyDigestFormatting:
         assert "New:" not in message
         assert "Long TR:" not in message
         assert "Top: Alpha" in message
+
+    @pytest.mark.unit
+    def test_format_new_nodes_line_variants(self, bot_service: BotService):
+        assert bot_service._format_new_nodes_line(0, []) is None
+        assert bot_service._format_new_nodes_line(2, ["A", "B"]) == "New: 2 (A, B)"
+        assert (
+            bot_service._format_new_nodes_line(7, ["A", "B", "C"])
+            == "New: 7 (A, B, C…)"
+        )
 
 
 class TestDailyDigestFilters:
@@ -145,6 +154,7 @@ class TestDailyDigestExtras:
     @pytest.mark.unit
     def test_new_nodes_query_uses_first_seen_24h_window(self, bot_service: BotService):
         cursor = MagicMock()
+        cursor.fetchone.return_value = {"cnt": 7}
         cursor.fetchall.return_value = [
             {
                 "node_id": 11,
@@ -159,14 +169,17 @@ class TestDailyDigestExtras:
         with patch(
             "src.malla.database.connection.get_db_connection", return_value=conn
         ):
-            names = bot_service._get_new_nodes_24h(limit=2)
+            result = bot_service._get_new_nodes_24h(name_limit=3)
 
-        assert names == ["Newbie"]
-        sql = cursor.execute.call_args[0][0]
-        params = cursor.execute.call_args[0][1]
-        assert "first_seen > ?" in sql
-        assert params[0] == pytest.approx(time.time() - 24 * 3600, abs=5)
-        assert params[1] == 2
+        assert result == {"count": 7, "names": ["Newbie"]}
+        assert cursor.execute.call_count == 2
+        count_sql = cursor.execute.call_args_list[0][0][0]
+        names_sql = cursor.execute.call_args_list[1][0][0]
+        names_params = cursor.execute.call_args_list[1][0][1]
+        assert "COUNT(*)" in count_sql
+        assert "first_seen > ?" in names_sql
+        assert names_params[0] == pytest.approx(time.time() - 24 * 3600, abs=5)
+        assert names_params[1] == 3
 
     @pytest.mark.unit
     def test_longest_traceroute_picks_max_hops(self, bot_service: BotService):
