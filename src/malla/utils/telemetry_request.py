@@ -138,6 +138,23 @@ def telemetry_has_requested_metrics(
     return False
 
 
+def extract_portnum(packet: dict[str, Any]) -> str | None:
+    """Return decoded portnum name if present."""
+    decoded = packet.get("decoded") or {}
+    portnum = decoded.get("portnum") or packet.get("portnum")
+    if portnum is None:
+        return None
+    return str(portnum)
+
+
+def is_routing_no_response(packet: dict[str, Any]) -> bool:
+    """True when mesh reports the destination did not produce an app response."""
+    decoded = packet.get("decoded") or {}
+    routing = decoded.get("routing") or {}
+    reason = str(routing.get("errorReason") or routing.get("error_reason") or "")
+    return reason.upper() == "NO_RESPONSE"
+
+
 def find_matching_telemetry_request(
     pending_by_node: dict[int, dict[str, Any]],
     *,
@@ -150,22 +167,25 @@ def find_matching_telemetry_request(
 
     Preference order:
     1. Exact ``request_id`` match (most reliable)
-    2. Same ``from_node_id`` when the pending request has no request_id yet
-       (race between send return and response) and metrics type matches
-    3. Same ``from_node_id`` with matching metrics when the packet has no
-       requestId (legacy / gateway quirks) — only if pending also lacks a
-       stored request_id, to avoid stealing waits with unsolicited broadcasts
+    2. Same ``from_node_id`` with the requested metric type
+
+    Some firmware/gateway paths omit ``requestId`` on the telemetry reply even
+    when the request used ``want_response``. While a solicited wait is active,
+    same-node metrics are accepted so nearby monitoring does not time out.
     """
     if not pending_by_node:
         return None
 
-    # 1) Strong match on request id
+    # 1) Strong match on request id (requires real metrics, not routing/empty)
     if request_id is not None:
         for node_id, pending in pending_by_node.items():
             if pending.get("completed"):
                 continue
             pending_rid = normalize_request_id(pending.get("request_id"))
-            if pending_rid is not None and pending_rid == request_id:
+            if pending_rid is None or pending_rid != request_id:
+                continue
+            telemetry_type = pending.get("telemetry_type") or "device_metrics"
+            if telemetry_has_requested_metrics(telemetry, telemetry_type):
                 return node_id, pending
 
     if from_node_id is None or from_node_id not in pending_by_node:
@@ -186,24 +206,11 @@ def find_matching_telemetry_request(
     ):
         return None
 
-    # 2) Response arrived before we stored packet id — accept if metrics match
-    if pending_rid is None and telemetry_has_requested_metrics(telemetry, telemetry_type):
-        return from_node_id, pending
-
-    # 3) No requestId on packet: only accept if we also never got a packet id
-    #    (otherwise unsolicited telemetry would falsely complete the wait)
-    if request_id is None and pending_rid is None:
-        if telemetry_has_requested_metrics(telemetry, telemetry_type):
-            return from_node_id, pending
-
-    # 4) requestId present and matches node pending that somehow missed index —
-    #    already handled in (1). If packet has requestId but pending has none
-    #    and metrics match, accept and bind.
-    if (
-        request_id is not None
-        and pending_rid is None
-        and telemetry_has_requested_metrics(telemetry, telemetry_type)
-    ):
+    # 2) Same-node reply with the requested metrics — covers:
+    #    - response before we stored packet id
+    #    - firmware that omits requestId on TELEMETRY_APP replies
+    #    - useful unsolicited telemetry while a live wait is active
+    if telemetry_has_requested_metrics(telemetry, telemetry_type):
         return from_node_id, pending
 
     return None
@@ -266,32 +273,32 @@ def live_telemetry_budget(estimated_hops: int | float | None) -> dict[str, Any]:
     """
     Recommend wait/retry/send settings for live telemetry at a given hop distance.
 
-    Farther nodes need longer round-trip budgets and mesh ACKs; 0-hop stays snappy.
-    Multi-hop will still be less reliable — this only makes monitoring feasible.
+    ``timeout_s`` is the wait **per send attempt**. Nearby nodes use mesh ACK and
+    full-length retries (short catch-up splits were timing out healthy 0-hop
+    replies). Farther nodes remain less reliable; this only makes monitoring
+    feasible.
     """
     hops = clamp_estimated_hops(estimated_hops)
 
-    # Round-trip LoRa mesh: request path + response path, plus channel contention.
-    # Empirically ~7s/hop covers slow/lossy links without starving near nodes.
-    base_s = 8.0
-    per_hop_s = 7.0
-    timeout_s = min(LIVE_TELEMETRY_MAX_BUDGET_S, base_s + per_hop_s * hops)
-
     if hops <= 0:
+        # 20ft / direct: still lose packets to channel contention — ACK + retries
+        per_attempt_s = 12.0
         attempts = 2
-        poll_interval_ms = 4000
-        min_gap_ms = 1000
-        want_ack = False
+        poll_interval_ms = 5000
+        min_gap_ms = 1500
+        want_ack = True
         hop_limit = 3
-        retry_delay_s = 0.35
+        retry_delay_s = 0.5
     elif hops == 1:
+        per_attempt_s = 14.0
         attempts = 2
-        poll_interval_ms = 7000
+        poll_interval_ms = 8000
         min_gap_ms = 2000
         want_ack = True
         hop_limit = 3
         retry_delay_s = 0.75
     elif hops == 2:
+        per_attempt_s = 18.0
         attempts = 2
         poll_interval_ms = 12000
         min_gap_ms = 3000
@@ -299,6 +306,7 @@ def live_telemetry_budget(estimated_hops: int | float | None) -> dict[str, Any]:
         hop_limit = 4
         retry_delay_s = 1.25
     else:
+        per_attempt_s = min(22.0, 12.0 + 2.5 * hops)
         attempts = 3
         poll_interval_ms = min(30000, 8000 + hops * 4000)
         min_gap_ms = min(8000, 2500 + hops * 800)
@@ -306,9 +314,15 @@ def live_telemetry_budget(estimated_hops: int | float | None) -> dict[str, Any]:
         hop_limit = min(7, hops + 2)
         retry_delay_s = min(3.0, 0.75 + 0.4 * hops)
 
+    total_budget_s = min(
+        LIVE_TELEMETRY_MAX_BUDGET_S,
+        per_attempt_s * attempts + retry_delay_s * max(0, attempts - 1),
+    )
+
     return {
         "estimated_hops": hops,
-        "timeout_s": round(timeout_s, 1),
+        "timeout_s": round(per_attempt_s, 1),
+        "total_budget_s": round(total_budget_s, 1),
         "attempts": attempts,
         "poll_interval_ms": poll_interval_ms,
         "min_gap_ms": min_gap_ms,
@@ -322,35 +336,21 @@ def split_live_telemetry_attempts(
     timeout: float, attempts: int = 2
 ) -> list[float]:
     """
-    Split a total wait budget across sequential send attempts.
+    Build per-attempt wait windows.
 
-    First attempt gets most of the budget; later attempts are shorter catch-ups
-    so a single flaky reply does not consume the whole window.
+    Each attempt gets the full ``timeout`` (capped). Nearby links were failing
+    when a shared budget was split into a tiny final retry (~2s).
     """
-    budget = max(5.0, float(timeout))
-    budget = min(budget, LIVE_TELEMETRY_MAX_BUDGET_S)
+    per_attempt = max(5.0, float(timeout))
+    per_attempt = min(per_attempt, LIVE_TELEMETRY_MAX_BUDGET_S)
     attempts = max(1, min(int(attempts), 3))
 
-    if attempts == 1 or budget < 12.0:
-        return [budget]
+    # Keep cumulative wait under the global HTTP budget.
+    max_total = LIVE_TELEMETRY_MAX_BUDGET_S
+    if per_attempt * attempts > max_total:
+        per_attempt = max(5.0, max_total / attempts)
 
-    if attempts == 2:
-        retry = min(max(5.0, budget * 0.30), 12.0)
-        primary = max(5.0, budget - retry)
-        return [round(primary, 2), round(retry, 2)]
-
-    # 3 attempts: ~50% / 30% / remainder
-    first = max(5.0, budget * 0.50)
-    second = max(5.0, budget * 0.30)
-    third = max(5.0, budget - first - second)
-    # Keep total from drifting above budget due to floors
-    total = first + second + third
-    if total > budget:
-        scale = budget / total
-        first *= scale
-        second *= scale
-        third *= scale
-    return [round(first, 2), round(second, 2), round(third, 2)]
+    return [round(per_attempt, 2)] * attempts
 
 
 __all__ = [
@@ -360,6 +360,8 @@ __all__ = [
     "normalize_request_id",
     "extract_request_id",
     "extract_from_node_id",
+    "extract_portnum",
+    "is_routing_no_response",
     "telemetry_to_dict",
     "telemetry_has_requested_metrics",
     "find_matching_telemetry_request",

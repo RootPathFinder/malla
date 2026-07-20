@@ -3001,18 +3001,22 @@ function liveTelemetryBudgetForHops(estimatedHops) {
     if (!Number.isFinite(hops)) hops = 1;
     hops = Math.max(0, Math.min(hops, 7));
 
-    const timeoutS = Math.min(55, 8 + 7 * hops);
-    let pollIntervalMs, minGapMs;
+    // timeoutS is per send attempt (server retries with a full window each time)
+    let timeoutS, pollIntervalMs, minGapMs;
     if (hops <= 0) {
-        pollIntervalMs = 4000;
-        minGapMs = 1000;
+        timeoutS = 12;
+        pollIntervalMs = 5000;
+        minGapMs = 1500;
     } else if (hops === 1) {
-        pollIntervalMs = 7000;
+        timeoutS = 14;
+        pollIntervalMs = 8000;
         minGapMs = 2000;
     } else if (hops === 2) {
+        timeoutS = 18;
         pollIntervalMs = 12000;
         minGapMs = 3000;
     } else {
+        timeoutS = Math.min(22, 12 + 2.5 * hops);
         pollIntervalMs = Math.min(30000, 8000 + hops * 4000);
         minGapMs = Math.min(8000, 2500 + hops * 800);
     }
@@ -3639,8 +3643,14 @@ async function pollLiveTelemetry() {
             const retryNote = data.attempts > 1 ? ' (retried)' : '';
             const hops = data.estimated_hops !== undefined ? data.estimated_hops : hopBudget.hops;
             const hopNote = hops === 0 ? 'direct' : `${hops} hop`;
-            statusIndicator.innerHTML = `<span class="badge bg-success">Live</span> <small class="text-muted ms-2">${hopNote} · ${responseSec}s${retryNote} · next ${intervalSec}s</small>`;
-            adjustPollingInterval(responseTime, true);
+            const source = data.source || 'live';
+            const badge = source === 'last_known'
+                ? '<span class="badge bg-info">Cached</span>'
+                : '<span class="badge bg-success">Live</span>';
+            const sourceNote = source === 'last_known' ? ' · last-known' : (source === 'late_cache' ? ' · late' : '');
+            statusIndicator.innerHTML = `${badge} <small class="text-muted ms-2">${hopNote} · ${responseSec}s${retryNote}${sourceNote} · next ${intervalSec}s</small>`;
+            // Treat last-known as soft success for adaptive interval (don't back off hard)
+            adjustPollingInterval(responseTime, source !== 'last_known' ? true : responseTime < 8000);
 
             const telemetry = data.telemetry;
             // Handle both snake_case and camelCase keys from API

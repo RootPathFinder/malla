@@ -113,15 +113,17 @@ class TestFindMatchingTelemetryRequest:
         assert match is not None
         assert match[0] == 0x1111
 
-    def test_rejects_unsolicited_when_request_id_known(self):
+    def test_accepts_same_node_metrics_even_without_packet_request_id(self):
+        # Some firmware omits requestId on TELEMETRY replies; nearby monitoring
+        # must still complete while a solicited wait is active.
         pending = {0x1111: self._pending(request_id=0xABCD)}
         match = find_matching_telemetry_request(
             pending,
             from_node_id=0x1111,
-            request_id=None,  # broadcast / unsolicited
+            request_id=None,
             telemetry={"device_metrics": {"battery_level": 1}},
         )
-        assert match is None
+        assert match is not None
 
     def test_accepts_node_match_before_request_id_stored(self):
         pending = {0x1111: self._pending(request_id=None)}
@@ -140,6 +142,16 @@ class TestFindMatchingTelemetryRequest:
             from_node_id=0x1111,
             request_id=None,
             telemetry={"environment_metrics": {"temperature": 21}},
+        )
+        assert match is None
+
+    def test_rejects_empty_telemetry_on_request_id_match(self):
+        pending = {0x1111: self._pending(request_id=0xABCD)}
+        match = find_matching_telemetry_request(
+            pending,
+            from_node_id=0x1111,
+            request_id=0xABCD,
+            telemetry={},
         )
         assert match is None
 
@@ -167,43 +179,40 @@ class TestFindMatchingTelemetryRequest:
 
 @pytest.mark.unit
 class TestLiveTelemetryHopBudget:
-    def test_zero_hop_is_snappy(self):
+    def test_zero_hop_uses_ack_and_full_retries(self):
         budget = live_telemetry_budget(0)
         assert budget["estimated_hops"] == 0
-        assert budget["timeout_s"] == 8.0
-        assert budget["want_ack"] is False
+        assert budget["timeout_s"] >= 12.0
+        assert budget["want_ack"] is True
         assert budget["attempts"] == 2
-        assert budget["poll_interval_ms"] <= 5000
+        assert budget["poll_interval_ms"] <= 6000
 
     def test_far_hops_get_longer_budget_and_acks(self):
         near = live_telemetry_budget(1)
         far = live_telemetry_budget(4)
-        assert far["timeout_s"] > near["timeout_s"]
+        assert far["timeout_s"] >= near["timeout_s"]
         assert far["attempts"] >= near["attempts"]
         assert far["want_ack"] is True
         assert far["hop_limit"] >= 4
         assert far["poll_interval_ms"] > near["poll_interval_ms"]
         assert far["timeout_s"] <= 55.0
 
-    def test_split_attempts_for_multi_hop(self):
-        two = split_live_telemetry_attempts(25, attempts=2)
-        assert len(two) == 2
-        assert sum(two) == pytest.approx(25.0, abs=0.05)
+    def test_attempts_use_full_per_attempt_windows(self):
+        two = split_live_telemetry_attempts(12, attempts=2)
+        assert two == [12.0, 12.0]
 
-        three = split_live_telemetry_attempts(40, attempts=3)
+        three = split_live_telemetry_attempts(18, attempts=3)
         assert len(three) == 3
-        assert sum(three) == pytest.approx(40.0, abs=0.05)
-        assert three[0] >= three[1] >= three[2] - 0.01
+        assert three[0] == three[1] == three[2]
+        assert sum(three) <= 55.0
 
 
 @pytest.mark.unit
 class TestLiveTelemetryApiRetryHelpers:
     def test_attempt_timeout_split(self):
-        assert _live_telemetry_attempt_timeouts(10) == [10.0]
-        attempts = _live_telemetry_attempt_timeouts(25, attempts=2)
-        assert len(attempts) == 2
-        assert sum(attempts) == pytest.approx(25.0, abs=0.05)
-        assert attempts[1] <= 12.0
+        assert _live_telemetry_attempt_timeouts(10, attempts=1) == [10.0]
+        attempts = _live_telemetry_attempt_timeouts(12, attempts=2)
+        assert attempts == [12.0, 12.0]
 
     def test_retry_helper_retries_once_on_failure(self):
         publisher = MagicMock()
@@ -269,6 +278,8 @@ class TestTcpTelemetryMatchPath:
         pub = TCPPublisher.__new__(TCPPublisher)
         pub._pending_telemetry_requests = {}
         pub._pending_telemetry_lock = threading.Lock()
+        pub._telemetry_late_by_request = {}
+        pub._telemetry_latest_by_node = {}
 
         event = threading.Event()
         response_data: dict = {}
