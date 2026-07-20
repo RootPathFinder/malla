@@ -1,12 +1,14 @@
 """
-Power analysis module for solar/battery monitoring.
+Unified power analysis for mesh nodes.
 
-This module provides algorithms for:
-- Detecting power source types (solar, battery, mains)
-- Calculating battery health scores
-- Predicting battery runtime
-- Predicting solar availability windows
+Single source of truth for:
+- Power source classification (solar / battery / mains)
+- Charge state and runtime outlook
+- Solar battery/charger degradation signals
+- Persisted node_info updates
 """
+
+from __future__ import annotations
 
 import logging
 import time
@@ -15,405 +17,859 @@ from typing import Any
 
 logger = logging.getLogger(__name__)
 
+CRITICAL_VOLTAGE = 3.2
+WARNING_VOLTAGE = 3.4
+FULL_CHARGE_VOLTAGE = 4.10
+NEAR_FULL_BATTERY_PCT = 95
+DAY_HOURS = range(6, 18)
+MORNING_HOURS = range(6, 11)
+AFTERNOON_HOURS = range(14, 19)
 
-def detect_power_type(node_id: int, db_connection: Any) -> tuple[str, str]:
-    """
-    Analyze voltage patterns over last 7 days to determine power type.
 
-    Detection logic:
-    - Solar: Shows charging pattern during daylight hours (voltage increases)
-    - Battery: Voltage only decreases over time
-    - Mains: Voltage stays constant (4.1-4.2V typically)
-    - Unknown: Insufficient data
+def normalize_voltage(voltage: float | None) -> float | None:
+    """Normalize telemetry voltage to volts (handles mV-as-fraction mistakes)."""
+    if voltage is None:
+        return None
+    try:
+        value = float(voltage)
+    except (TypeError, ValueError):
+        return None
+    if value <= 0:
+        return None
+    # Common bad encoding: millivolts stored as 0.0039..0.0043
+    if value < 1.0:
+        value *= 1000.0
+    # Occasional raw millivolts
+    if value > 20:
+        value /= 1000.0
+    if value < 2.0 or value > 5.5:
+        return None
+    return value
 
-    Args:
-        node_id: The numeric node ID to analyze
-        db_connection: SQLite database connection
 
-    Returns:
-        Tuple of (Power type, Reason)
-        Power type: 'solar', 'battery', 'mains', or 'unknown'
-        Reason: Explanation of the detection logic
-    """
+def _utc_hour(ts: float) -> int:
+    return datetime.fromtimestamp(ts, tz=UTC).hour
+
+
+def _utc_day_key(ts: float) -> str:
+    return datetime.fromtimestamp(ts, tz=UTC).strftime("%Y-%m-%d")
+
+
+def _fetch_telemetry_rows(
+    db_connection: Any, node_id: int, days: int = 7
+) -> list[dict[str, Any]]:
     cursor = db_connection.cursor()
-
-    # Get voltage data from last 7 days
-    seven_days_ago = time.time() - (7 * 24 * 3600)
-
+    cutoff = time.time() - (days * 24 * 3600)
     cursor.execute(
         """
-        SELECT timestamp, voltage
+        SELECT timestamp, voltage, battery_level
         FROM telemetry_data
-        WHERE node_id = ? AND voltage IS NOT NULL AND timestamp > ?
+        WHERE node_id = ?
+          AND timestamp > ?
+          AND (voltage IS NOT NULL OR battery_level IS NOT NULL)
         ORDER BY timestamp ASC
-    """,
-        (node_id, seven_days_ago),
+        """,
+        (node_id, cutoff),
     )
+    rows = cursor.fetchall()
+    # Row factory may be sqlite3.Row or tuple
+    result: list[dict[str, Any]] = []
+    for row in rows:
+        if hasattr(row, "keys"):
+            result.append(
+                {
+                    "timestamp": float(row["timestamp"]),
+                    "voltage": row["voltage"],
+                    "battery_level": row["battery_level"],
+                }
+            )
+        else:
+            result.append(
+                {
+                    "timestamp": float(row[0]),
+                    "voltage": row[1],
+                    "battery_level": row[2],
+                }
+            )
+    return result
 
-    voltage_data = cursor.fetchall()
 
-    if len(voltage_data) < 10:
-        # Insufficient data
+def _prepare_series(
+    rows: list[dict[str, Any]],
+) -> tuple[list[float], list[float | None], list[int | None]]:
+    timestamps: list[float] = []
+    voltages: list[float | None] = []
+    batteries: list[int | None] = []
+    for row in rows:
+        timestamps.append(float(row["timestamp"]))
+        voltages.append(normalize_voltage(row.get("voltage")))
+        level = row.get("battery_level")
+        try:
+            batteries.append(int(level) if level is not None else None)
+        except (TypeError, ValueError):
+            batteries.append(None)
+    return timestamps, voltages, batteries
+
+
+def classify_power_source(
+    timestamps: list[float],
+    voltages: list[float | None],
+    battery_levels: list[int | None],
+) -> tuple[str, str, float]:
+    """
+    Classify power source.
+
+    Returns:
+        (power_type, reason, confidence 0..1)
+    """
+    valid_levels = [b for b in battery_levels if b is not None]
+    valid_voltages = [v for v in voltages if v is not None]
+
+    if len(timestamps) < 5 and len(valid_voltages) < 5:
         return (
             "unknown",
-            f"Insufficient telemetry data ({len(voltage_data)} packets) in last 7 days",
+            f"Insufficient telemetry data ({len(timestamps)} samples)",
+            0.2,
         )
 
-    voltages = [row["voltage"] for row in voltage_data]
-    timestamps = [row["timestamp"] for row in voltage_data]
-
-    # Calculate voltage statistics
-    min_voltage = min(voltages)
-    max_voltage = max(voltages)
-    avg_voltage = sum(voltages) / len(voltages)
-    voltage_range = max_voltage - min_voltage
-
-    # Check if voltage is very stable (mains power characteristic)
-    # Mains-powered devices typically stay at 4.1-4.2V with minimal variation
-    if voltage_range < 0.1 and avg_voltage > 4.0:
-        return (
-            "mains",
-            f"Voltage is stable (avg {avg_voltage:.2f}V, range {voltage_range:.2f}V)",
-        )
-
-    # Analyze daily patterns for solar detection
-    # Group by hour of day and check for charging patterns
-    hourly_averages = {}
-    for i, ts in enumerate(timestamps):
-        dt = datetime.fromtimestamp(ts, tz=UTC)
-        hour = dt.hour
-        if hour not in hourly_averages:
-            hourly_averages[hour] = []
-        hourly_averages[hour].append(voltages[i])
-
-    # Calculate average voltage for each hour
-    hourly_avg_voltage = {
-        hour: sum(vals) / len(vals) for hour, vals in hourly_averages.items()
-    }
-
-    # Check for daylight charging pattern (6am-6pm higher voltage)
-    if len(hourly_avg_voltage) >= 8:  # Need reasonable coverage
-        daytime_hours = [h for h in range(6, 18) if h in hourly_avg_voltage]
-        nighttime_hours = [
-            h
-            for h in list(range(0, 6)) + list(range(18, 24))
-            if h in hourly_avg_voltage
-        ]
-
-        if daytime_hours and nighttime_hours:
-            daytime_avg = sum(hourly_avg_voltage[h] for h in daytime_hours) / len(
-                daytime_hours
+    # Fast path: Meshtastic USB/mains marker
+    if valid_levels:
+        count_101 = sum(1 for b in valid_levels if b == 101)
+        if count_101 / len(valid_levels) >= 0.5:
+            return (
+                "mains",
+                f"USB/mains marker (battery_level=101 in {count_101}/{len(valid_levels)} readings)",
+                0.95,
             )
-            nighttime_avg = sum(hourly_avg_voltage[h] for h in nighttime_hours) / len(
-                nighttime_hours
+        if sum(1 for b in valid_levels if b == 100) / len(valid_levels) > 0.95:
+            return "mains", "Constant 100% battery (powered)", 0.9
+
+    # Battery % cycling strongly indicates solar charging
+    if len(valid_levels) >= 5:
+        bat_min = min(valid_levels)
+        bat_max = max(valid_levels)
+        bat_range = bat_max - bat_min
+        if bat_max >= 98 and bat_range > 10:
+            return (
+                "solar",
+                f"Battery cycling {bat_min}-{bat_max}% indicates solar charging",
+                0.9,
             )
 
-            # Solar nodes show higher voltage during day (charging)
-            if daytime_avg > nighttime_avg + 0.15:
+        # Daytime charging curve even when never hitting 98%
+        hourly: dict[int, list[int]] = {}
+        for ts, level in zip(timestamps, battery_levels, strict=False):
+            if level is None or level >= 101:
+                continue
+            hourly.setdefault(_utc_hour(ts), []).append(level)
+        hourly_avg = {h: sum(v) / len(v) for h, v in hourly.items()}
+        morning = [hourly_avg[h] for h in MORNING_HOURS if h in hourly_avg]
+        afternoon = [hourly_avg[h] for h in AFTERNOON_HOURS if h in hourly_avg]
+        if len(morning) >= 2 and len(afternoon) >= 2:
+            morning_avg = sum(morning) / len(morning)
+            afternoon_avg = sum(afternoon) / len(afternoon)
+            if afternoon_avg > morning_avg + 1.0:
                 return (
                     "solar",
-                    f"Daytime voltage ({daytime_avg:.2f}V) significantly higher than nighttime ({nighttime_avg:.2f}V)",
+                    f"Daytime charging pattern ({morning_avg:.0f}% AM → {afternoon_avg:.0f}% PM UTC)",
+                    0.8,
                 )
 
-    # Check overall trend: if voltage only decreases, it's battery
-    # Calculate linear trend
-    n = len(voltages)
-    x_mean = sum(range(n)) / n
-    y_mean = sum(voltages) / n
+    # Voltage day/night pattern (UTC)
+    if len(valid_voltages) >= 10:
+        hourly_v: dict[int, list[float]] = {}
+        for ts, voltage in zip(timestamps, voltages, strict=False):
+            if voltage is None:
+                continue
+            hourly_v.setdefault(_utc_hour(ts), []).append(voltage)
+        if len(hourly_v) >= 8:
+            day = [sum(hourly_v[h]) / len(hourly_v[h]) for h in DAY_HOURS if h in hourly_v]
+            night = [
+                sum(hourly_v[h]) / len(hourly_v[h])
+                for h in list(range(0, 6)) + list(range(18, 24))
+                if h in hourly_v
+            ]
+            if day and night:
+                day_avg = sum(day) / len(day)
+                night_avg = sum(night) / len(night)
+                if day_avg > night_avg + 0.12:
+                    return (
+                        "solar",
+                        f"Daytime voltage ({day_avg:.2f}V) higher than nighttime ({night_avg:.2f}V)",
+                        0.75,
+                    )
 
-    numerator = sum((i - x_mean) * (voltages[i] - y_mean) for i in range(n))
-    denominator = sum((i - x_mean) ** 2 for i in range(n))
+        v_min = min(valid_voltages)
+        v_max = max(valid_voltages)
+        v_avg = sum(valid_voltages) / len(valid_voltages)
+        v_range = v_max - v_min
 
-    if denominator > 0:
-        slope = numerator / denominator
-
-        # Negative slope indicates declining voltage (battery discharge)
-        # Positive slope might indicate charging or mains
-        if slope < -0.0001 and voltage_range > 0.2:
+        if v_range < 0.1 and v_avg >= 4.0:
             return (
-                "battery",
-                f"Voltage shows downward trend (discharge pattern, slope {slope:.5f})",
+                "mains",
+                f"Voltage stable (avg {v_avg:.2f}V, range {v_range:.2f}V)",
+                0.85,
             )
 
-    return "unknown", "No distinct power pattern detected"
+        # Linear trend for battery-only decline
+        n = len(valid_voltages)
+        # Align voltages with their timestamps
+        paired = [
+            (ts, v)
+            for ts, v in zip(timestamps, voltages, strict=False)
+            if v is not None
+        ]
+        paired.sort(key=lambda item: item[0])
+        ys = [v for _, v in paired]
+        xs = list(range(len(ys)))
+        if len(ys) >= 5:
+            x_mean = sum(xs) / len(xs)
+            y_mean = sum(ys) / len(ys)
+            denom = sum((x - x_mean) ** 2 for x in xs)
+            slope = (
+                sum((x - x_mean) * (y - y_mean) for x, y in zip(xs, ys, strict=False))
+                / denom
+                if denom
+                else 0.0
+            )
+            # Negative slope across samples + meaningful range → battery
+            if slope < -0.002 and v_range > 0.15:
+                return (
+                    "battery",
+                    f"Declining voltage trend ({v_max:.2f}→{v_min:.2f}V)",
+                    0.7,
+                )
+
+        if valid_levels and max(valid_levels) < 98 and v_avg < 4.05:
+            return (
+                "battery",
+                f"No recharge observed (max battery {max(valid_levels)}%, avg {v_avg:.2f}V)",
+                0.55,
+            )
+
+        if v_min >= 4.0 and v_range < 0.2:
+            return "mains", f"High stable voltage ({v_min:.2f}V+)", 0.65
+
+    if len(valid_levels) >= 8 and max(valid_levels) < 98:
+        return (
+            "battery",
+            f"Battery discharging without full recharge (max {max(valid_levels)}%)",
+            0.5,
+        )
+
+    return "unknown", "No clear solar/battery/mains pattern yet", 0.3
 
 
-def calculate_battery_health_score(node_id: int, db_connection: Any) -> int | None:
-    """
-    Calculate battery health score (0-100) based on various metrics.
-
-    Factors considered:
-    - Voltage stability (less variation = healthier)
-    - Discharge rate consistency
-    - Minimum voltage observed (below 3.3V indicates degradation)
-    - Age of battery (time since first seen)
-
-    Args:
-        node_id: The numeric node ID to analyze
-        db_connection: SQLite database connection
-
-    Returns:
-        Health score (0-100) or None if insufficient data
-    """
-    cursor = db_connection.cursor()
-
-    # Get voltage data from last 30 days
-    thirty_days_ago = time.time() - (30 * 24 * 3600)
-
-    cursor.execute(
-        """
-        SELECT timestamp, voltage
-        FROM telemetry_data
-        WHERE node_id = ? AND voltage IS NOT NULL AND timestamp > ?
-        ORDER BY timestamp ASC
-    """,
-        (node_id, thirty_days_ago),
-    )
-
-    voltage_data = cursor.fetchall()
-
-    if len(voltage_data) < 5:
+def _recent_discharge_rate_vph(
+    timestamps: list[float], voltages: list[float | None], hours: float = 48.0
+) -> float | None:
+    cutoff = time.time() - hours * 3600
+    paired = [
+        (ts, v)
+        for ts, v in zip(timestamps, voltages, strict=False)
+        if v is not None and ts >= cutoff
+    ]
+    if len(paired) < 5:
         return None
+    paired.sort(key=lambda item: item[0])
+    span_h = (paired[-1][0] - paired[0][0]) / 3600.0
+    if span_h < 1.0:
+        return None
+    drop = paired[0][1] - paired[-1][1]
+    if drop <= 0:
+        return None
+    return drop / span_h
 
-    voltages = [row["voltage"] for row in voltage_data]
 
-    # Start with 100 points
+def predict_hours_to_critical(
+    timestamps: list[float],
+    voltages: list[float | None],
+    *,
+    critical_voltage: float = CRITICAL_VOLTAGE,
+) -> float | None:
+    """Estimate hours until voltage hits critical, or None if not discharging."""
+    valid = [v for v in voltages if v is not None]
+    if not valid:
+        return None
+    current = valid[-1]
+    if current > 4.15:
+        return None
+    if current <= critical_voltage:
+        return 0.0
+    rate = _recent_discharge_rate_vph(timestamps, voltages)
+    if rate is None or rate <= 0:
+        return None
+    hours = (current - critical_voltage) / rate
+    return min(max(hours, 0.0), 168.0)
+
+
+def _infer_charge_state(
+    timestamps: list[float],
+    voltages: list[float | None],
+    battery_levels: list[int | None],
+    power_type: str,
+) -> str:
+    if power_type == "mains":
+        return "powered"
+
+    # Look at last ~6 hours of trend
+    cutoff = time.time() - 6 * 3600
+    recent_b = [
+        (ts, b)
+        for ts, b in zip(timestamps, battery_levels, strict=False)
+        if b is not None and b < 101 and ts >= cutoff
+    ]
+    recent_v = [
+        (ts, v)
+        for ts, v in zip(timestamps, voltages, strict=False)
+        if v is not None and ts >= cutoff
+    ]
+
+    def _trend(pairs: list[tuple[float, float]]) -> float | None:
+        if len(pairs) < 3:
+            return None
+        pairs = sorted(pairs, key=lambda item: item[0])
+        span = pairs[-1][0] - pairs[0][0]
+        if span <= 0:
+            return None
+        return (pairs[-1][1] - pairs[0][1]) / (span / 3600.0)
+
+    bat_trend = _trend([(ts, float(b)) for ts, b in recent_b])
+    volt_trend = _trend(recent_v)
+
+    if bat_trend is not None:
+        if bat_trend > 0.5:
+            return "charging"
+        if bat_trend < -0.5:
+            return "discharging"
+    if volt_trend is not None:
+        if volt_trend > 0.01:
+            return "charging"
+        if volt_trend < -0.01:
+            return "discharging"
+    if power_type in ("solar", "battery"):
+        return "stable"
+    return "unknown"
+
+
+def analyze_solar_degradation(
+    timestamps: list[float],
+    voltages: list[float | None],
+    battery_levels: list[int | None],
+) -> dict[str, Any]:
+    """
+    Detect early battery/charger problems on solar nodes.
+
+    Signals:
+    - days since near-full charge
+    - consecutive days without daytime charge gain
+    - declining daily peak charge
+    - deeper overnight lows vs prior baseline
+    """
+    issues: list[str] = []
+    now = time.time()
+
+    # Group by UTC day
+    by_day: dict[str, dict[str, Any]] = {}
+    for ts, voltage, level in zip(timestamps, voltages, battery_levels, strict=False):
+        day = _utc_day_key(ts)
+        bucket = by_day.setdefault(
+            day,
+            {
+                "levels": [],
+                "voltages": [],
+                "morning": [],
+                "afternoon": [],
+                "night": [],
+            },
+        )
+        hour = _utc_hour(ts)
+        if level is not None and level < 101:
+            bucket["levels"].append(level)
+            if hour in MORNING_HOURS:
+                bucket["morning"].append(level)
+            if hour in AFTERNOON_HOURS:
+                bucket["afternoon"].append(level)
+            if hour < 6 or hour >= 18:
+                bucket["night"].append(level)
+        if voltage is not None:
+            bucket["voltages"].append(voltage)
+
+    days_sorted = sorted(by_day.keys())
+    days_since_full = None
+    last_full_ts = None
+    for ts, voltage, level in zip(timestamps, voltages, battery_levels, strict=False):
+        near_full = (level is not None and level >= NEAR_FULL_BATTERY_PCT) or (
+            voltage is not None and voltage >= FULL_CHARGE_VOLTAGE
+        )
+        if near_full:
+            last_full_ts = ts
+    if last_full_ts is not None:
+        days_since_full = max(0, int((now - last_full_ts) / 86400))
+    elif days_sorted:
+        days_since_full = len(days_sorted)
+
+    # Daytime gain: afternoon avg - morning avg
+    no_gain_streak = 0
+    daily_peaks: list[tuple[str, float]] = []
+    overnight_mins: list[tuple[str, float]] = []
+    for day in days_sorted:
+        bucket = by_day[day]
+        if bucket["levels"]:
+            daily_peaks.append((day, float(max(bucket["levels"]))))
+        elif bucket["voltages"]:
+            # Map voltage peak into a pseudo-% scale for trend only
+            daily_peaks.append((day, float(max(bucket["voltages"]) * 20)))
+
+        if len(bucket["morning"]) >= 1 and len(bucket["afternoon"]) >= 1:
+            gain = (sum(bucket["afternoon"]) / len(bucket["afternoon"])) - (
+                sum(bucket["morning"]) / len(bucket["morning"])
+            )
+            if gain < 1.0:
+                no_gain_streak += 1
+            else:
+                no_gain_streak = 0
+        if bucket["night"]:
+            overnight_mins.append((day, float(min(bucket["night"]))))
+
+    peak_trend = "unknown"
+    if len(daily_peaks) >= 5:
+        recent = [p for _, p in daily_peaks[-3:]]
+        prior = [p for _, p in daily_peaks[:-3]]
+        if prior:
+            recent_avg = sum(recent) / len(recent)
+            prior_avg = sum(prior) / len(prior)
+            if recent_avg < prior_avg - 5:
+                peak_trend = "declining"
+            elif recent_avg > prior_avg + 5:
+                peak_trend = "improving"
+            else:
+                peak_trend = "stable"
+
+    overnight_min = overnight_mins[-1][1] if overnight_mins else None
+    baseline_overnight = None
+    if len(overnight_mins) >= 4:
+        baseline_overnight = sum(m for _, m in overnight_mins[:-2]) / max(
+            1, len(overnight_mins) - 2
+        )
+
+    if days_since_full is not None and days_since_full >= 3:
+        issues.append(f"No near-full charge in {days_since_full} day(s)")
+    if no_gain_streak >= 2:
+        issues.append(
+            f"Weak/no daytime charge gain for {no_gain_streak} consecutive day(s)"
+        )
+    if peak_trend == "declining":
+        issues.append("Daily peak charge is declining versus prior days")
+    if (
+        overnight_min is not None
+        and baseline_overnight is not None
+        and overnight_min < baseline_overnight - 8
+    ):
+        issues.append(
+            f"Deeper overnight low ({overnight_min:.0f}% vs typical {baseline_overnight:.0f}%)"
+        )
+
+    # Condition severity
+    condition = "healthy"
+    if (
+        (days_since_full is not None and days_since_full >= 5)
+        or no_gain_streak >= 3
+        or (peak_trend == "declining" and no_gain_streak >= 2)
+    ):
+        condition = "at_risk"
+    elif issues:
+        condition = "watching"
+
+    return {
+        "days_since_full_charge": days_since_full,
+        "days_without_daytime_gain": no_gain_streak,
+        "peak_charge_trend": peak_trend,
+        "overnight_min_pct": overnight_min,
+        "baseline_overnight_min_pct": baseline_overnight,
+        "issues": issues,
+        "condition": condition,
+    }
+
+
+def _score_from_issues(
+    power_type: str,
+    voltages: list[float | None],
+    solar_info: dict[str, Any] | None,
+    hours_to_critical: float | None,
+) -> int | None:
+    valid = [v for v in voltages if v is not None]
+    if len(valid) < 5 and power_type != "mains":
+        return None
+    if power_type == "mains":
+        return 100
+
     score = 100
+    if valid:
+        min_v = min(valid)
+        max_v = max(valid)
+        avg_v = sum(valid) / len(valid)
+        v_range = max_v - min_v
+        if min_v < 3.0:
+            score -= 45
+        elif min_v <= CRITICAL_VOLTAGE:
+            score -= 30
+        elif min_v < WARNING_VOLTAGE:
+            score -= 18
+        if avg_v < 3.5:
+            score -= 12
+        # Large swing often means an unhealthy pack (or untracked solar)
+        if v_range > 0.7:
+            score -= 15
+        elif v_range > 0.4:
+            score -= 8
 
-    # Factor 1: Minimum voltage (critical indicator)
-    min_voltage = min(voltages)
-    if min_voltage < 3.0:
-        score -= 50  # Critical low voltage
-    elif min_voltage < 3.2:
-        score -= 30
-    elif min_voltage < 3.4:
-        score -= 15
+    if hours_to_critical is not None:
+        if hours_to_critical <= 6:
+            score -= 35
+        elif hours_to_critical <= 24:
+            score -= 20
+        elif hours_to_critical <= 48:
+            score -= 10
 
-    # Factor 2: Voltage range (stability)
-    voltage_range = max(voltages) - min(voltages)
-    if voltage_range > 1.0:
-        score -= 20  # High variation indicates issues
-    elif voltage_range > 0.7:
-        score -= 10
+    if solar_info:
+        for _ in solar_info.get("issues") or []:
+            score -= 12
+        if solar_info.get("condition") == "at_risk":
+            score -= 10
 
-    # Factor 3: Average voltage level
-    avg_voltage = sum(voltages) / len(voltages)
-    if avg_voltage < 3.5:
-        score -= 15
-    elif avg_voltage > 4.0:
-        score += 5  # Bonus for healthy voltage
-
-    # Factor 4: Check for rapid discharge events
-    rapid_drops = 0
-    for i in range(1, len(voltages)):
-        voltage_drop = voltages[i - 1] - voltages[i]
-        time_diff = voltage_data[i]["timestamp"] - voltage_data[i - 1]["timestamp"]
-        if time_diff > 0 and voltage_drop > 0.2 and time_diff < 3600:
-            rapid_drops += 1
-
-    score -= min(rapid_drops * 5, 20)  # Penalize rapid drops
-
-    # Ensure score stays in valid range
     return max(0, min(100, score))
 
 
-def predict_battery_runtime(node_id: int, db_connection: Any) -> float | None:
-    """
-    Predict hours until battery depleted based on discharge rate.
+def build_power_status(
+    timestamps: list[float],
+    voltages: list[float | None],
+    battery_levels: list[int | None],
+    *,
+    stored_power_type: str | None = None,
+) -> dict[str, Any]:
+    """Build explained power status for UI/API from prepared series."""
+    power_type, reason, confidence = classify_power_source(
+        timestamps, voltages, battery_levels
+    )
+    # Prefer a stored high-confidence type if current window is thin
+    if (
+        stored_power_type in ("solar", "battery", "mains")
+        and power_type == "unknown"
+        and len(timestamps) < 10
+    ):
+        power_type = stored_power_type
+        reason = reason or "Using previously detected power type"
+        confidence = min(confidence, 0.5)
 
-    Args:
-        node_id: The numeric node ID to analyze
-        db_connection: SQLite database connection
+    state = _infer_charge_state(timestamps, voltages, battery_levels, power_type)
+    hours_to_critical = None
+    if power_type in ("solar", "battery") and state in ("discharging", "stable"):
+        hours_to_critical = predict_hours_to_critical(timestamps, voltages)
 
-    Returns:
-        Estimated hours remaining (float) or None if insufficient data
-    """
-    cursor = db_connection.cursor()
+    solar_info = None
+    issues: list[str] = []
+    if power_type == "solar":
+        solar_info = analyze_solar_degradation(timestamps, voltages, battery_levels)
+        issues.extend(solar_info.get("issues") or [])
 
-    # Get recent voltage data (last 48 hours)
-    forty_eight_hours_ago = time.time() - (48 * 3600)
+    valid_v = [v for v in voltages if v is not None]
+    if valid_v:
+        latest_v = valid_v[-1]
+        if latest_v < CRITICAL_VOLTAGE:
+            issues.append(f"Voltage critically low ({latest_v:.2f}V)")
+        elif latest_v < WARNING_VOLTAGE:
+            issues.append(f"Voltage low ({latest_v:.2f}V)")
 
-    cursor.execute(
-        """
-        SELECT timestamp, voltage
-        FROM telemetry_data
-        WHERE node_id = ? AND voltage IS NOT NULL AND timestamp > ?
-        ORDER BY timestamp ASC
-    """,
-        (node_id, forty_eight_hours_ago),
+    if hours_to_critical is not None and hours_to_critical <= 24:
+        issues.append(f"Estimated {hours_to_critical:.0f}h until critical voltage")
+
+    health_score = _score_from_issues(
+        power_type, voltages, solar_info, hours_to_critical
     )
 
-    voltage_data = cursor.fetchall()
+    if power_type == "mains":
+        condition = "powered"
+    elif not issues:
+        condition = "healthy"
+    elif solar_info and solar_info.get("condition") == "at_risk":
+        condition = "at_risk"
+    elif any("critical" in i.lower() for i in issues) or (
+        hours_to_critical is not None and hours_to_critical <= 12
+    ):
+        condition = "at_risk"
+    else:
+        condition = "watching"
 
-    if len(voltage_data) < 5:
-        return None
+    outlook = _format_outlook(power_type, state, hours_to_critical, solar_info)
 
-    voltages = [row["voltage"] for row in voltage_data]
-    timestamps = [row["timestamp"] for row in voltage_data]
+    labels = {
+        "solar": "Solar",
+        "battery": "Battery only",
+        "mains": "Mains / USB",
+        "unknown": "Unknown",
+    }
+    condition_labels = {
+        "healthy": "Healthy",
+        "watching": "Watching",
+        "at_risk": "At risk",
+        "powered": "Powered",
+        "unknown": "Unknown",
+    }
+    state_labels = {
+        "charging": "Charging",
+        "discharging": "Discharging",
+        "stable": "Stable",
+        "powered": "Powered",
+        "unknown": "Unknown",
+    }
 
-    current_voltage = voltages[-1]
+    return {
+        "power_type": power_type,
+        "power_type_label": labels.get(power_type, power_type),
+        "confidence": round(confidence, 2),
+        "state": state,
+        "state_label": state_labels.get(state, state),
+        "reason": reason,
+        "health_score": health_score,
+        "condition": condition,
+        "condition_label": condition_labels.get(condition, condition),
+        "outlook": outlook,
+        "hours_to_critical": (
+            round(hours_to_critical, 1) if hours_to_critical is not None else None
+        ),
+        "issues": issues,
+        "solar": solar_info,
+        "analyzed_at": time.time(),
+    }
 
-    # Don't predict for mains-powered or fully charged
-    if current_voltage > 4.15:
-        return None
 
-    # Calculate discharge rate (volts per hour)
-    time_span_hours = (timestamps[-1] - timestamps[0]) / 3600
-    if time_span_hours < 1:
-        return None
+def _format_outlook(
+    power_type: str,
+    state: str,
+    hours_to_critical: float | None,
+    solar_info: dict[str, Any] | None,
+) -> str:
+    if power_type == "mains":
+        return "Externally powered — battery not the limiting factor"
+    if power_type == "unknown":
+        return "Need more telemetry to forecast power"
 
-    voltage_drop = voltages[0] - current_voltage
+    if hours_to_critical is not None:
+        if hours_to_critical <= 0:
+            return "At or below critical voltage now"
+        if hours_to_critical < 24:
+            return f"About {hours_to_critical:.0f} hours to critical at current drain"
+        days = hours_to_critical / 24.0
+        return f"About {days:.1f} days to critical at current drain"
 
-    # Only predict if voltage is actually dropping
-    if voltage_drop <= 0:
-        return None
+    if power_type == "solar":
+        if state == "charging":
+            return "Charging from solar — watching for full recovery"
+        if solar_info and solar_info.get("days_since_full_charge") is not None:
+            days = solar_info["days_since_full_charge"]
+            if days == 0:
+                return "Reached near-full charge recently"
+            return f"Last near-full charge ~{days} day(s) ago"
+        return "Solar node — no clear discharge slope for ETA yet"
 
-    discharge_rate_per_hour = voltage_drop / time_span_hours
+    if state == "discharging":
+        return "Discharging — not enough history for a reliable ETA"
+    return "No active discharge trend detected"
 
-    # Critical voltage threshold (node will likely shut down)
-    critical_voltage = 3.2
 
-    if current_voltage <= critical_voltage:
-        return 0.0
+def analyze_node_power(node_id: int, db_connection: Any) -> dict[str, Any]:
+    """Full power analysis for a node from telemetry_data (+ stored type hint)."""
+    rows = _fetch_telemetry_rows(db_connection, node_id, days=7)
+    if len(rows) < 3:
+        rows = _fetch_telemetry_rows(db_connection, node_id, days=30)
 
-    voltage_remaining = current_voltage - critical_voltage
+    stored_type = None
+    try:
+        cursor = db_connection.cursor()
+        cursor.execute(
+            "SELECT power_type FROM node_info WHERE node_id = ?",
+            (node_id,),
+        )
+        row = cursor.fetchone()
+        if row:
+            stored_type = row["power_type"] if hasattr(row, "keys") else row[0]
+    except Exception:
+        stored_type = None
 
-    if discharge_rate_per_hour > 0:
-        hours_remaining = voltage_remaining / discharge_rate_per_hour
-        # Cap prediction at reasonable maximum (7 days)
-        return min(hours_remaining, 168.0)
+    timestamps, voltages, batteries = _prepare_series(rows)
+    if not timestamps:
+        return {
+            "power_type": stored_type or "unknown",
+            "power_type_label": "Unknown",
+            "confidence": 0.0,
+            "state": "unknown",
+            "state_label": "Unknown",
+            "reason": "No telemetry samples available",
+            "health_score": None,
+            "condition": "unknown",
+            "condition_label": "Unknown",
+            "outlook": "No telemetry samples available",
+            "hours_to_critical": None,
+            "issues": ["No telemetry samples available"],
+            "solar": None,
+            "analyzed_at": time.time(),
+        }
 
-    return None
+    return build_power_status(
+        timestamps,
+        voltages,
+        batteries,
+        stored_power_type=stored_type,
+    )
+
+
+# ---------------------------------------------------------------------------
+# Backward-compatible wrappers (used by existing tests / MQTT worker)
+# ---------------------------------------------------------------------------
+
+
+def detect_power_type(node_id: int, db_connection: Any) -> tuple[str, str]:
+    """Analyze voltage/battery patterns to determine power type."""
+    status = analyze_node_power(node_id, db_connection)
+    return status["power_type"], status.get("reason") or "No reason"
+
+
+def calculate_battery_health_score(node_id: int, db_connection: Any) -> int | None:
+    """Calculate battery/solar health score (0-100)."""
+    status = analyze_node_power(node_id, db_connection)
+    return status.get("health_score")
+
+
+def predict_battery_runtime(node_id: int, db_connection: Any) -> float | None:
+    """Predict hours until battery depleted based on discharge rate."""
+    rows = _fetch_telemetry_rows(db_connection, node_id, days=2)
+    timestamps, voltages, _batteries = _prepare_series(rows)
+    return predict_hours_to_critical(timestamps, voltages)
 
 
 def predict_solar_availability(
     node_id: int, db_connection: Any
 ) -> list[tuple[datetime, datetime]]:
-    """
-    For solar nodes, predict availability windows for next 7 days.
-
-    This is a simplified prediction based on historical charging patterns.
-    Future versions could integrate actual sunrise/sunset times and weather.
-
-    Args:
-        node_id: The numeric node ID to analyze
-        db_connection: SQLite database connection
-
-    Returns:
-        List of (datetime_start, datetime_end) tuples for predicted availability
-    """
+    """Placeholder solar availability windows (historical pattern later)."""
     cursor = db_connection.cursor()
-
-    # Check if this is a solar node
     cursor.execute(
         "SELECT power_type FROM node_info WHERE node_id = ?",
         (node_id,),
     )
     row = cursor.fetchone()
-
-    if not row or row["power_type"] != "solar":
+    power_type = None
+    if row:
+        power_type = row["power_type"] if hasattr(row, "keys") else row[0]
+    if power_type != "solar":
         return []
 
-    # Get historical charging patterns
-    seven_days_ago = time.time() - (7 * 24 * 3600)
-
-    cursor.execute(
-        """
-        SELECT timestamp, voltage
-        FROM telemetry_data
-        WHERE node_id = ? AND voltage IS NOT NULL AND timestamp > ?
-        ORDER BY timestamp ASC
-    """,
-        (node_id, seven_days_ago),
-    )
-
-    voltage_data = cursor.fetchall()
-
-    if len(voltage_data) < 20:
-        return []
-
-    # Simple prediction: assume similar pattern for next 7 days
-    # This is a placeholder - real implementation would use sunrise/sunset
-    # and analyze actual voltage patterns for availability windows
     now = datetime.now(tz=UTC)
     predictions = []
-
     for day_offset in range(7):
-        # Predict availability from 8am to 8pm (typical solar charging window)
-        start_time = now + timedelta(days=day_offset, hours=8 - now.hour)
+        start_time = (now + timedelta(days=day_offset)).replace(
+            hour=8, minute=0, second=0, microsecond=0
+        )
         end_time = start_time + timedelta(hours=12)
-
         predictions.append((start_time, end_time))
-
     return predictions
 
 
-def update_power_analysis_for_node(node_id: int, db_connection: Any) -> None:
+def update_power_analysis_for_node(node_id: int, db_connection: Any) -> dict[str, Any]:
     """
-    Update power analysis for a single node.
+    Persist unified power analysis for a single node.
 
-    This function:
-    1. Detects power type
-    2. Calculates battery health score
-    3. Updates node_info table
-
-    Args:
-        node_id: The numeric node ID to analyze
-        db_connection: SQLite database connection
+    Returns the status dict that was stored.
     """
     cursor = db_connection.cursor()
-
+    status = analyze_node_power(node_id, db_connection)
     try:
-        # Detect power type
-        power_type, reason = detect_power_type(node_id, db_connection)
-
-        # Calculate health score if battery-powered
-        health_score = None
-        if power_type in ("solar", "battery"):
-            health_score = calculate_battery_health_score(node_id, db_connection)
-
-        current_time = time.time()
-
-        # Update node_info
         cursor.execute(
             """
             UPDATE node_info
-            SET power_type = ?, battery_health_score = ?, power_type_reason = ?, power_analysis_timestamp = ?
+            SET power_type = ?,
+                battery_health_score = ?,
+                power_type_reason = ?,
+                power_analysis_timestamp = ?
             WHERE node_id = ?
-        """,
-            (power_type, health_score, reason, current_time, node_id),
+            """,
+            (
+                status["power_type"],
+                status.get("health_score"),
+                status.get("reason"),
+                status.get("analyzed_at") or time.time(),
+                node_id,
+            ),
         )
-
         db_connection.commit()
-
         logger.debug(
-            f"Updated power analysis for node {node_id}: type={power_type}, health={health_score}, reason={reason}"
+            "Updated power analysis for node %s: type=%s condition=%s score=%s",
+            node_id,
+            status["power_type"],
+            status.get("condition"),
+            status.get("health_score"),
+        )
+    except Exception as e:
+        logger.error("Error updating power analysis for node %s: %s", node_id, e)
+        try:
+            db_connection.rollback()
+        except Exception:
+            pass
+    return status
+
+
+def update_power_analysis_batch(
+    db_connection: Any, *, force_update: bool = False
+) -> dict[str, int]:
+    """
+    Re-analyze nodes needing updates. Used by MQTT worker and power monitor.
+    """
+    cursor = db_connection.cursor()
+    current_time = time.time()
+    reanalysis_threshold = current_time - (24 * 3600)
+
+    if force_update:
+        cursor.execute(
+            """
+            SELECT DISTINCT ni.node_id
+            FROM node_info ni
+            INNER JOIN telemetry_data td ON ni.node_id = td.node_id
+            WHERE td.voltage IS NOT NULL OR td.battery_level IS NOT NULL
+            """
+        )
+    else:
+        cursor.execute(
+            """
+            SELECT DISTINCT ni.node_id
+            FROM node_info ni
+            INNER JOIN telemetry_data td ON ni.node_id = td.node_id
+            WHERE (td.voltage IS NOT NULL OR td.battery_level IS NOT NULL)
+              AND (
+                ni.power_type IS NULL
+                OR ni.power_type = 'unknown'
+                OR ni.power_analysis_timestamp IS NULL
+                OR ni.power_analysis_timestamp < ?
+              )
+            """,
+            (reanalysis_threshold,),
         )
 
-    except Exception as e:
-        logger.error(f"Error updating power analysis for node {node_id}: {e}")
-        db_connection.rollback()
+    node_ids = [row["node_id"] if hasattr(row, "keys") else row[0] for row in cursor.fetchall()]
+    counts = {"solar": 0, "battery": 0, "mains": 0, "unknown": 0, "updated": 0}
+    for node_id in node_ids:
+        status = update_power_analysis_for_node(node_id, db_connection)
+        ptype = status.get("power_type") or "unknown"
+        counts[ptype] = counts.get(ptype, 0) + 1
+        counts["updated"] += 1
+    return counts
 
 
 def check_battery_alerts(
     db_connection: Any, critical_voltage: float = 3.2, warning_voltage: float = 3.4
 ) -> list[dict[str, Any]]:
-    """
-    Check for nodes with low battery and return alert information.
-
-    Args:
-        db_connection: SQLite database connection
-        critical_voltage: Voltage threshold for critical alerts
-        warning_voltage: Voltage threshold for warning alerts
-
-    Returns:
-        List of alert dictionaries with node info and voltage
-    """
+    """Check for nodes with low battery and return alert information."""
     cursor = db_connection.cursor()
-
     alerts = []
-
-    # Get nodes with recent low voltage
     one_hour_ago = time.time() - 3600
 
     cursor.execute(
@@ -429,24 +885,30 @@ def check_battery_alerts(
         JOIN telemetry_data td ON ni.node_id = td.node_id
         WHERE td.voltage IS NOT NULL
           AND td.timestamp > ?
-          AND td.voltage < ?
           AND ni.power_type IN ('solar', 'battery')
           AND COALESCE(ni.archived, 0) = 0
-        ORDER BY td.voltage ASC
-    """,
-        (one_hour_ago, warning_voltage),
+        ORDER BY td.timestamp DESC
+        """,
+        (one_hour_ago,),
     )
 
+    seen: set[int] = set()
     for row in cursor.fetchall():
-        alert_type = "critical" if row["voltage"] < critical_voltage else "warning"
+        node_id = row["node_id"]
+        if node_id in seen:
+            continue
+        seen.add(node_id)
+        voltage = normalize_voltage(row["voltage"])
+        if voltage is None or voltage >= warning_voltage:
+            continue
+        alert_type = "critical" if voltage < critical_voltage else "warning"
         node_name = row["long_name"] or row["short_name"] or row["hex_id"]
-
         alerts.append(
             {
-                "node_id": row["node_id"],
+                "node_id": node_id,
                 "hex_id": row["hex_id"],
                 "name": node_name,
-                "voltage": row["voltage"],
+                "voltage": voltage,
                 "alert_type": alert_type,
                 "timestamp": row["timestamp"],
             }

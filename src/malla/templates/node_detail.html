@@ -2225,41 +2225,90 @@ async function loadTelemetryData() {
 
         html += '<table class="table table-sm table-borderless mb-0" style="font-size: 0.9rem;">';
 
-        // Power Type (from analysis)
-        if (telemetry.power_type && telemetry.power_type !== 'unknown') {
-            const powerIcons = {
-                'mains': '<i class="bi bi-plug-fill text-primary"></i>',
-                'solar': '<i class="bi bi-sun-fill text-warning"></i>',
-                'battery': '<i class="bi bi-battery-full text-success"></i>',
-                'usb': '<i class="bi bi-usb-symbol text-info"></i>'
-            };
-            const powerLabels = {
-                'mains': 'Mains Power',
-                'solar': 'Solar Powered',
-                'battery': 'Battery Only',
-                'usb': 'USB Power'
-            };
-            const icon = powerIcons[telemetry.power_type] || '<i class="bi bi-lightning-charge"></i>';
-            const label = powerLabels[telemetry.power_type] || telemetry.power_type;
-            const tooltip = telemetry.power_type_reason ? ' title="' + telemetry.power_type_reason + '"' : '';
+        // Explained power status (preferred) with legacy fallback
+        const ps = telemetry.power_status || null;
+        const powerType = (ps && ps.power_type) || telemetry.power_type;
+        const powerIcons = {
+            'mains': '<i class="bi bi-plug-fill text-primary"></i>',
+            'solar': '<i class="bi bi-sun-fill text-warning"></i>',
+            'battery': '<i class="bi bi-battery-full text-success"></i>',
+            'usb': '<i class="bi bi-usb-symbol text-info"></i>',
+            'unknown': '<i class="bi bi-question-circle text-secondary"></i>'
+        };
+        const powerLabels = {
+            'mains': 'Mains / USB',
+            'solar': 'Solar',
+            'battery': 'Battery only',
+            'usb': 'USB Power',
+            'unknown': 'Unknown'
+        };
+        if (powerType) {
+            const icon = powerIcons[powerType] || '<i class="bi bi-lightning-charge"></i>';
+            const label = (ps && ps.power_type_label) || powerLabels[powerType] || powerType;
+            const stateLabel = ps && ps.state_label ? ' · ' + ps.state_label : '';
+            const reason = (ps && ps.reason) || telemetry.power_type_reason || '';
+            const tooltip = reason ? ' title="' + String(reason).replace(/"/g, '&quot;') + '"' : '';
             html += '<tr>';
-            html += '<td class="text-muted" style="width: 50%;">Power Source</td>';
-            html += '<td class="text-end fw-bold"' + tooltip + ' data-bs-toggle="tooltip">' + icon + ' ' + label + '</td>';
+            html += '<td class="text-muted" style="width: 50%;">Power source</td>';
+            html += '<td class="text-end fw-bold"' + tooltip + ' data-bs-toggle="tooltip">' + icon + ' ' + label + stateLabel + '</td>';
             html += '</tr>';
         }
 
-        if (telemetry.battery_health_score !== undefined && telemetry.battery_health_score !== null) {
+        if (ps && ps.condition_label) {
+            const cond = ps.condition || 'unknown';
+            const condClass = cond === 'healthy' || cond === 'powered'
+                ? 'text-success'
+                : cond === 'watching'
+                    ? 'text-warning'
+                    : cond === 'at_risk'
+                        ? 'text-danger'
+                        : 'text-secondary';
+            html += '<tr>';
+            html += '<td class="text-muted">Condition</td>';
+            html += '<td class="text-end"><span class="' + condClass + ' fw-bold">' + ps.condition_label + '</span></td>';
+            html += '</tr>';
+        } else if (telemetry.battery_health_score !== undefined && telemetry.battery_health_score !== null) {
             const bhs = Number(telemetry.battery_health_score);
             const bhsClass = bhs >= 80 ? 'text-success' : bhs >= 50 ? 'text-warning' : 'text-danger';
             html += '<tr>';
-            html += '<td class="text-muted">Battery Health Score</td>';
+            html += '<td class="text-muted">Battery health</td>';
             html += '<td class="text-end"><span class="' + bhsClass + ' fw-bold">' + bhs.toFixed(0) + '</span></td>';
             html += '</tr>';
         }
-        if (telemetry.power_analysis_timestamp) {
+
+        if (ps && ps.outlook) {
             html += '<tr>';
-            html += '<td class="text-muted">Power Analysis</td>';
-            html += '<td class="text-end small">' + formatTelemetryAge(telemetry.power_analysis_timestamp) + ' ago</td>';
+            html += '<td class="text-muted">Outlook</td>';
+            html += '<td class="text-end small">' + ps.outlook + '</td>';
+            html += '</tr>';
+        }
+
+        if (ps && Array.isArray(ps.issues) && ps.issues.length) {
+            html += '<tr>';
+            html += '<td class="text-muted align-top">Issues</td>';
+            html += '<td class="text-end small">';
+            html += '<ul class="list-unstyled mb-0">';
+            ps.issues.slice(0, 4).forEach(function(issue) {
+                html += '<li class="text-warning">' + issue + '</li>';
+            });
+            html += '</ul></td></tr>';
+        }
+
+        if (ps && ps.solar && ps.solar.days_since_full_charge != null && powerType === 'solar') {
+            html += '<tr>';
+            html += '<td class="text-muted">Last full charge</td>';
+            html += '<td class="text-end small">';
+            html += ps.solar.days_since_full_charge === 0
+                ? 'Today'
+                : (ps.solar.days_since_full_charge + ' day(s) ago');
+            html += '</td></tr>';
+        }
+
+        const analysisTs = (ps && ps.analyzed_at) || telemetry.power_analysis_timestamp;
+        if (analysisTs) {
+            html += '<tr>';
+            html += '<td class="text-muted">Power analysis</td>';
+            html += '<td class="text-end small">' + formatTelemetryAge(analysisTs) + ' ago</td>';
             html += '</tr>';
         }
 

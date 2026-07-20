@@ -5,14 +5,18 @@ Unit tests for power analysis module
 import sqlite3
 import tempfile
 import time
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 
 import pytest
 
 from malla.power_analysis import (
+    analyze_node_power,
+    analyze_solar_degradation,
     calculate_battery_health_score,
     check_battery_alerts,
+    classify_power_source,
     detect_power_type,
+    normalize_voltage,
     predict_battery_runtime,
 )
 
@@ -410,3 +414,90 @@ def test_no_alerts_for_healthy_nodes(db_with_telemetry):
     )
 
     assert len(alerts) == 0, f"Expected no alerts for healthy node, got {len(alerts)}"
+
+
+def test_normalize_voltage_handles_encodings():
+    assert normalize_voltage(4.12) == pytest.approx(4.12)
+    assert normalize_voltage(0.00412) == pytest.approx(4.12)
+    assert normalize_voltage(4120) == pytest.approx(4.12)
+    assert normalize_voltage(None) is None
+    assert normalize_voltage(0) is None
+
+
+def test_classify_usb_mains_marker():
+    now = time.time()
+    timestamps = [now - i * 3600 for i in range(10)][::-1]
+    voltages = [4.2] * 10
+    batteries = [101] * 10
+    power_type, reason, confidence = classify_power_source(
+        timestamps, voltages, batteries
+    )
+    assert power_type == "mains"
+    assert "101" in reason
+    assert confidence >= 0.9
+
+
+def test_solar_degradation_detects_no_full_charge_and_weak_days():
+    """Solar node that stops reaching full charge and loses daytime gain."""
+    now = datetime.now(UTC).replace(hour=12, minute=0, second=0, microsecond=0)
+    timestamps: list[float] = []
+    voltages: list[float | None] = []
+    batteries: list[int | None] = []
+
+    # 6 days: morning low, afternoon barely moves (<1% gain), never near-full
+    for day in range(6):
+        day_base = now - timedelta(days=5 - day)
+        for hour, level, voltage in [
+            (7, 40, 3.55),
+            (9, 41, 3.56),
+            (15, 41, 3.57),  # essentially no daytime gain
+            (17, 41, 3.57),
+            (21, 38, 3.50),
+        ]:
+            ts = day_base.replace(hour=hour).timestamp()
+            timestamps.append(ts)
+            voltages.append(voltage)
+            batteries.append(level)
+
+    solar = analyze_solar_degradation(timestamps, voltages, batteries)
+    assert solar["days_since_full_charge"] is not None
+    assert solar["days_since_full_charge"] >= 3
+    assert solar["days_without_daytime_gain"] >= 2
+    assert solar["condition"] in ("watching", "at_risk")
+    assert solar["issues"]
+    assert any("full charge" in i.lower() or "daytime" in i.lower() for i in solar["issues"])
+
+
+def test_analyze_node_power_returns_explained_status(db_with_telemetry):
+    cursor = db_with_telemetry.cursor()
+    node_id = 6001
+    cursor.execute(
+        "INSERT INTO node_info (node_id, hex_id, long_name) VALUES (?, ?, ?)",
+        (node_id, "!00001771", "Explained Solar"),
+    )
+
+    current_dt = datetime.now(UTC).replace(hour=0, minute=0, second=0, microsecond=0)
+    current_time = current_dt.timestamp()
+    for day in range(5):
+        base_time = current_time - ((4 - day) * 24 * 3600)
+        for hour in range(0, 24, 2):
+            timestamp = base_time + hour * 3600
+            if 6 <= hour < 18:
+                voltage, battery = 4.15, 96
+            else:
+                voltage, battery = 3.70, 55
+            cursor.execute(
+                """
+                INSERT INTO telemetry_data (timestamp, node_id, voltage, battery_level)
+                VALUES (?, ?, ?, ?)
+                """,
+                (timestamp, node_id, voltage, battery),
+            )
+    db_with_telemetry.commit()
+
+    status = analyze_node_power(node_id, db_with_telemetry)
+    assert status["power_type"] == "solar"
+    assert status["condition"] in ("healthy", "watching", "at_risk", "powered")
+    assert status["outlook"]
+    assert "issues" in status
+    assert status["solar"] is not None
