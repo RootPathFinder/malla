@@ -66,8 +66,11 @@ class PKIErrorCodes:
             try:
                 from meshtastic import mesh_pb2
 
-                name = mesh_pb2.Routing.Error.Name(error_reason)
-                return str(name)
+                values_by_number = mesh_pb2.Routing.Error.items()
+                for name, number in values_by_number:
+                    if number == error_reason:
+                        return str(name)
+                return str(error_reason)
             except Exception:
                 return str(error_reason)
         text = str(error_reason).strip()

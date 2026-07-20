@@ -678,6 +678,7 @@ class AdminService:
             return result
 
         if outcome.get("success"):
+            assert packet_id is not None
             result = self._finalize_admin_write_ack(
                 packet_id=packet_id,
                 log_id=log_id,

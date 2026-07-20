@@ -511,13 +511,14 @@ class SerialPublisher:
 
             if admin_message is None and "admin" in decoded:
                 admin_message = decoded["admin"]
-                if isinstance(admin_message, dict) and admin_message.get(
-                    "session_passkey"
+                if isinstance(admin_message, dict):
+                    raw_key = admin_message.get("session_passkey")
+                    if raw_key:
+                        session_passkey = raw_key
+                elif admin_message is not None and hasattr(
+                    admin_message, "session_passkey"
                 ):
-                    session_passkey = admin_message["session_passkey"]
-                elif hasattr(admin_message, "session_passkey"):
-                    session_passkey = admin_message.session_passkey
-
+                    session_passkey = getattr(admin_message, "session_passkey", None)
             if isinstance(session_passkey, str):
                 import base64
 
