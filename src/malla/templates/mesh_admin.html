@@ -1017,7 +1017,8 @@
                                     </button>
                                 </div>
                                 <div id="deviceFavoritesNote" class="form-text mb-2">
-                                    Request the target node's favorites list, then add or remove entries.
+                                    Live favorites load only for the <strong>connected radio</strong>.
+                                    Remote nodes can be add/remove’d, but firmware cannot return their list.
                                 </div>
                                 <div id="deviceFavoritesList" class="border rounded bg-body-tertiary p-2 mb-2"
                                      style="max-height: 220px; overflow-y: auto;">
@@ -5430,14 +5431,22 @@
 
         if (noteEl) {
             const count = deviceFavoritesCache.length;
+            noteEl.classList.remove('text-warning', 'text-success', 'text-muted');
             if (meta.note) {
                 noteEl.textContent = meta.note;
             } else if (meta.source === 'device') {
                 noteEl.textContent = `${count} favorite${count === 1 ? '' : 's'} from connected radio NodeDB.`;
             } else if (meta.source === 'tracked') {
-                noteEl.textContent = `${count} favorite${count === 1 ? '' : 's'} managed from Malla for this remote node.`;
+                noteEl.textContent = `${count} favorite${count === 1 ? '' : 's'} managed from Malla (remote live fetch unsupported).`;
             } else {
-                noteEl.textContent = 'Request the target node\'s favorites list, then add or remove entries.';
+                noteEl.textContent = 'Live favorites load only for the connected radio. Remote nodes can be add/remove’d, but firmware cannot return their list.';
+            }
+            if (meta.fetchable === false) {
+                noteEl.classList.add('text-warning');
+            } else if (meta.source === 'device') {
+                noteEl.classList.add('text-success');
+            } else {
+                noteEl.classList.add('text-muted');
             }
         }
 
@@ -5504,9 +5513,22 @@
                 throw new Error(data.error || `HTTP ${response.status}`);
             }
             renderDeviceFavoritesList(data.favorites || [], data);
-            finalizeCommandLog(
-                `✓ Favorites list loaded (${data.count ?? (data.favorites || []).length}, source=${data.source})`
-            );
+            const count = data.count ?? (data.favorites || []).length;
+            if (data.fetchable === false) {
+                finalizeCommandLog(
+                    `⚠ Live remote favorites cannot be fetched (firmware limitation). Showing ${count} Malla-managed entr${count === 1 ? 'y' : 'ies'}.`,
+                    false
+                );
+                showAlert(
+                    'warning',
+                    data.note ||
+                        'Meshtastic cannot return a remote node\'s favorites list. Select the connected radio for a live NodeDB read, or add/remove favorites here to track them.'
+                );
+            } else {
+                finalizeCommandLog(
+                    `✓ Favorites list loaded (${count}, source=${data.source})`
+                );
+            }
         } catch (error) {
             finalizeCommandLog(`✗ Failed to request favorites: ${error.message}`, false);
             showAlert('danger', `Failed to request favorites: ${error.message}`);

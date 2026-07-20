@@ -2554,11 +2554,11 @@ def api_remove_node_from_nodedb(node_id):
 @admin_bp.route("/api/admin/node/<node_id>/favorites", methods=["GET"])
 def api_get_device_favorites(node_id):
     """
-    Request/list on-device favorites for a target node.
+    List on-device favorites for a target node.
 
-    For the connected gateway radio, returns live NodeDB favorites.
-    For remote targets, returns favorites previously managed from Malla
-    (firmware has no remote get-favorites API).
+    Live NodeDB favorites are returned only when the target is the connected
+    radio. Remote targets return Malla-tracked favorites only — Meshtastic
+    firmware has no remote get-favorites admin command (`fetchable: false`).
     """
     try:
         target_node_id = convert_node_id(node_id)
