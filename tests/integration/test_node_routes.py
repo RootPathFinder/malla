@@ -164,7 +164,7 @@ class TestNodeRoutes:
             "connection_type": "tcp",
         }
         monkeypatch.setattr(
-            "malla.routes.node_routes.get_admin_service", lambda: mock_admin
+            "src.malla.routes.node_routes.get_admin_service", lambda: mock_admin
         )
 
         node_id = 1128074276  # Test Gateway Alpha
