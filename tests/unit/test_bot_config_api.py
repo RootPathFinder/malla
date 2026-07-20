@@ -35,7 +35,12 @@ class TestBotConfigDict:
         assert config["command_prefix"] == "?"
         assert config["min_send_interval"] == 3.5
         assert config["traceroute_format"] == "hops"
-        assert config["traceroute_formats"] == ["names", "chain", "hops"]
+        assert config["traceroute_formats"] == [
+            "names",
+            "longnames",
+            "chain",
+            "hops",
+        ]
         assert config["welcome_new_nodes_enabled"] is False
         assert "listen_channels" in config
         assert "respond_channel_index" in config

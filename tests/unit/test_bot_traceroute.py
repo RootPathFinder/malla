@@ -154,9 +154,37 @@ class TestBotTracerouteFormatting:
             )
 
         fetch.assert_called_once()
+        assert fetch.call_args.kwargs.get("prefer_long") in (None, False)
         assert "TR to You (2 hops)" in result
         assert "Alpha → Hill(-5) → You(-8)" in result
         assert "← You → Hill(-7) → Alpha(-6)" in result
+
+    @pytest.mark.unit
+    def test_format_longnames_style_prefers_long_names(self, bot_service: BotService):
+        long_map = {
+            0x12345678: "Alpha Node",
+            0x11111111: "Hill Top",
+            0x87654321: "Your Node",
+        }
+        with patch.object(
+            bot_service, "_fetch_node_labels", return_value=long_map
+        ) as fetch:
+            result = bot_service._format_traceroute_result(
+                route=[0x11111111],
+                route_back=[0x11111111],
+                snr_towards=[-5.0, -8.0],
+                snr_back=[-7.0, -6.0],
+                source_id=0x12345678,
+                dest_id=0x87654321,
+                style="longnames",
+            )
+
+        fetch.assert_called_once()
+        assert fetch.call_args.kwargs["prefer_long"] is True
+        assert fetch.call_args.kwargs["max_len"] == 12
+        assert "TR to Your Node (2 hops)" in result
+        assert "Alpha Node → Hill Top(-5) → Your Node(-8)" in result
+        assert "← Your Node → Hill Top(-7) → Alpha Node(-6)" in result
 
     @pytest.mark.unit
     def test_format_chain_style_includes_names(self, bot_service: BotService):
@@ -245,6 +273,38 @@ class TestBotTracerouteFormatting:
         assert labels[0x12345678] == "Alpha"
         assert labels[0x87654321] == "VeryLo"
         assert labels[0x11111111] == "HillTo"
+
+    @pytest.mark.unit
+    def test_fetch_node_labels_prefer_long(self, bot_service: BotService):
+        cursor = MagicMock()
+        cursor.fetchall.return_value = [
+            {
+                "node_id": 0x12345678,
+                "short_name": "Alpha",
+                "long_name": "Alpha Node",
+            },
+            {
+                "node_id": 0x87654321,
+                "short_name": "You",
+                "long_name": "Your Node",
+            },
+        ]
+        conn = MagicMock()
+        conn.cursor.return_value = cursor
+
+        with patch(
+            "src.malla.database.connection.get_db_connection", return_value=conn
+        ):
+            labels = bot_service._fetch_node_labels(
+                [0x12345678, 0x87654321],
+                max_len=12,
+                overrides={0x87654321: "You"},
+                prefer_long=True,
+            )
+
+        assert labels[0x12345678] == "Alpha Node"
+        # DB long name wins over short override when prefer_long=True
+        assert labels[0x87654321] == "Your Node"
 
     @pytest.mark.unit
     def test_get_node_name_reads_node_info_directly(self, bot_service: BotService):

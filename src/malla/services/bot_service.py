@@ -175,9 +175,9 @@ class BotService:
         self._daily_digest_hour = 8  # Local hour (0-23) to broadcast
         self._last_daily_digest_date: str | None = None
         self._last_digest_text: str | None = None
-        # Traceroute reply style: names (default) | chain | hops
+        # Traceroute reply style: names (default) | longnames | chain | hops
         self._traceroute_format = "names"
-        self._traceroute_formats = ("names", "chain", "hops")
+        self._traceroute_formats = ("names", "longnames", "chain", "hops")
 
         # Welcome newly discovered nodes (rate-limited)
         self._welcome_new_nodes_enabled = True
@@ -964,11 +964,19 @@ class BotService:
         *,
         max_len: int = 6,
         overrides: dict[int, str] | None = None,
+        prefer_long: bool = False,
     ) -> dict[int, str]:
-        """Bulk-resolve compact node labels from node_info (short > long > hex)."""
+        """Bulk-resolve compact node labels from node_info.
+
+        By default prefers short_name, then long_name, then hex.
+        When prefer_long=True, prefers long_name, then short_name, then hex.
+        """
         ids = [nid for nid in dict.fromkeys(node_ids) if nid]
         labels: dict[int, str] = {}
-        if overrides:
+
+        # For short-name styles, allow caller overrides (e.g. requester name) first.
+        # For long-name style, prefer DB long names and only fill gaps later.
+        if overrides and not prefer_long:
             for nid, name in overrides.items():
                 if nid and name:
                     cleaned = str(name).strip()
@@ -994,7 +1002,10 @@ class BotService:
                     missing,
                 )
                 for row in cursor.fetchall():
-                    name = (row["short_name"] or row["long_name"] or "").strip()
+                    if prefer_long:
+                        name = (row["long_name"] or row["short_name"] or "").strip()
+                    else:
+                        name = (row["short_name"] or row["long_name"] or "").strip()
                     if name:
                         labels[row["node_id"]] = (
                             name[:max_len] if len(name) > max_len else name
@@ -1002,6 +1013,16 @@ class BotService:
                 conn.close()
             except Exception as e:
                 logger.debug("Traceroute node label lookup failed: %s", e)
+
+        if overrides and prefer_long:
+            for nid, name in overrides.items():
+                if not nid or not name or nid in labels:
+                    continue
+                cleaned = str(name).strip()
+                if cleaned:
+                    labels[nid] = (
+                        cleaned[:max_len] if len(cleaned) > max_len else cleaned
+                    )
 
         for nid in ids:
             if nid not in labels:
@@ -1140,11 +1161,22 @@ class BotService:
         if fmt not in self._traceroute_formats:
             fmt = "names"
 
-        # Prefer node names in every style; fall back to 4-char hex when unknown.
-        labels = self._fetch_node_labels(
-            self._collect_traceroute_node_ids(route, route_back, source_id, dest_id),
-            overrides=known_names,
+        node_ids = self._collect_traceroute_node_ids(
+            route, route_back, source_id, dest_id
         )
+        # Prefer node names in every style; fall back to 4-char hex when unknown.
+        if fmt == "longnames":
+            labels = self._fetch_node_labels(
+                node_ids,
+                max_len=12,
+                overrides=known_names,
+                prefer_long=True,
+            )
+        else:
+            labels = self._fetch_node_labels(
+                node_ids,
+                overrides=known_names,
+            )
 
         if fmt == "hops":
             message = self._format_traceroute_hops_style(
@@ -1167,6 +1199,7 @@ class BotService:
                 labels=labels,
             )
         else:
+            # names + longnames share the same layout; only labels differ
             message = self._format_traceroute_names_style(
                 route,
                 route_back,
