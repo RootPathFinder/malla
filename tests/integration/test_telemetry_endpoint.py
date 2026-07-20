@@ -405,3 +405,134 @@ class TestTelemetryEndpoint:
 
         # Should get the latest (90%) not the old (30%)
         assert telemetry_data["device_metrics"]["battery_level"] == 90
+
+    def test_live_telemetry_persists_into_normal_history(self, client, temp_database):
+        """Successful live samples should appear in /api/node/.../telemetry."""
+        from malla.database.repositories import NodeRepository
+
+        conn = get_db_connection()
+        cursor = conn.cursor()
+        node_id = 42424242
+        cursor.execute(
+            """
+            INSERT INTO node_info (node_id, hex_id, long_name, short_name, first_seen, last_updated)
+            VALUES (?, ?, ?, ?, ?, ?)
+            """,
+            (
+                node_id,
+                f"!{node_id:08x}",
+                "Live Persist Node",
+                "LIVE",
+                time.time(),
+                time.time(),
+            ),
+        )
+        conn.commit()
+        conn.close()
+
+        # No telemetry yet
+        response = client.get(f"/api/node/{node_id}/telemetry")
+        assert response.status_code == 200
+        assert json.loads(response.data)["telemetry"] is None
+
+        sample_ts = time.time()
+        row_id = NodeRepository.persist_telemetry_sample(
+            node_id,
+            {
+                "device_metrics": {
+                    "battery_level": 71,
+                    "voltage": 4.11,
+                    "channel_utilization": 9.5,
+                    "air_util_tx": 2.0,
+                    "uptime_seconds": 999,
+                }
+            },
+            timestamp=sample_ts,
+            source="live",
+            mesh_packet_id=0xABCDEF01,
+        )
+        assert row_id is not None
+
+        response = client.get(f"/api/node/{node_id}/telemetry")
+        assert response.status_code == 200
+        data = json.loads(response.data)
+        telemetry_data = data["telemetry"]
+        assert telemetry_data is not None
+        assert telemetry_data["device_metrics"]["battery_level"] == 71
+        assert abs(telemetry_data["device_metrics"]["voltage"] - 4.11) < 0.01
+
+        # Also lands in telemetry_data + node_info voltage cache
+        conn = get_db_connection()
+        cursor = conn.cursor()
+        cursor.execute(
+            """
+            SELECT battery_level, voltage FROM telemetry_data
+            WHERE node_id = ? ORDER BY timestamp DESC LIMIT 1
+            """,
+            (node_id,),
+        )
+        tel_row = cursor.fetchone()
+        assert tel_row is not None
+        assert tel_row["battery_level"] == 71
+        assert abs(tel_row["voltage"] - 4.11) < 0.01
+
+        cursor.execute(
+            "SELECT last_battery_voltage FROM node_info WHERE node_id = ?",
+            (node_id,),
+        )
+        node_row = cursor.fetchone()
+        assert abs(node_row["last_battery_voltage"] - 4.11) < 0.01
+
+        cursor.execute(
+            """
+            SELECT topic, portnum_name FROM packet_history
+            WHERE id = ?
+            """,
+            (row_id,),
+        )
+        pkt = cursor.fetchone()
+        conn.close()
+        assert pkt["portnum_name"] == "TELEMETRY_APP"
+        assert pkt["topic"] == "live/telemetry"
+
+    def test_live_environment_sample_updates_coverage(self, client, temp_database):
+        """Environment live polls should also feed normal telemetry history."""
+        from malla.database.repositories import NodeRepository
+
+        conn = get_db_connection()
+        cursor = conn.cursor()
+        node_id = 43434343
+        cursor.execute(
+            """
+            INSERT INTO node_info (node_id, hex_id, long_name, short_name, first_seen, last_updated)
+            VALUES (?, ?, ?, ?, ?, ?)
+            """,
+            (
+                node_id,
+                f"!{node_id:08x}",
+                "Env Live Node",
+                "ENVL",
+                time.time(),
+                time.time(),
+            ),
+        )
+        conn.commit()
+        conn.close()
+
+        NodeRepository.persist_telemetry_sample(
+            node_id,
+            {
+                "environment_metrics": {
+                    "temperature": 23.4,
+                    "relative_humidity": 48.0,
+                    "barometric_pressure": 1008.5,
+                }
+            },
+            source="late_cache",
+        )
+
+        response = client.get(f"/api/node/{node_id}/telemetry")
+        assert response.status_code == 200
+        telemetry_data = json.loads(response.data)["telemetry"]
+        assert abs(telemetry_data["environment_metrics"]["temperature"] - 23.4) < 0.01
+        assert abs(telemetry_data["environment_metrics"]["relative_humidity"] - 48.0) < 0.01

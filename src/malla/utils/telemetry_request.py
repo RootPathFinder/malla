@@ -170,6 +170,59 @@ def telemetry_to_dict(telemetry_data: Any) -> dict[str, Any]:
     return {}
 
 
+def _snake_to_camel(name: str) -> str:
+    """Convert snake_case identifiers to camelCase for protobuf JSON parsing."""
+    if not name or "_" not in name:
+        return name
+    parts = name.split("_")
+    return parts[0] + "".join(part[:1].upper() + part[1:] for part in parts[1:] if part)
+
+
+def _keys_to_camel(value: Any) -> Any:
+    """Recursively rewrite dict keys from snake_case to camelCase."""
+    if isinstance(value, dict):
+        return {
+            _snake_to_camel(str(key)): _keys_to_camel(item)
+            for key, item in value.items()
+            if key != "raw"
+        }
+    if isinstance(value, list):
+        return [_keys_to_camel(item) for item in value]
+    return value
+
+
+def serialize_telemetry_dict(telemetry: dict[str, Any] | None) -> bytes | None:
+    """
+    Serialize a live telemetry dict into TELEMETRY_APP payload bytes.
+
+    Accepts snake_case (from ``telemetry_to_dict``) or camelCase (meshtastic
+    decode) dictionaries. Returns None when serialization fails or the payload
+    would be empty.
+    """
+    if not telemetry or not isinstance(telemetry, dict):
+        return None
+
+    try:
+        from google.protobuf.json_format import ParseDict
+        from meshtastic import telemetry_pb2
+
+        # Drop non-proto bookkeeping keys that may ride along
+        cleaned = {
+            key: value
+            for key, value in telemetry.items()
+            if key not in {"raw", "timestamp", "timestamp_unix", "timestamp_relative"}
+        }
+        if not cleaned:
+            return None
+
+        proto = telemetry_pb2.Telemetry()
+        ParseDict(_keys_to_camel(cleaned), proto, ignore_unknown_fields=True)
+        payload = proto.SerializeToString()
+        return payload or None
+    except Exception:
+        return None
+
+
 def telemetry_has_requested_metrics(
     telemetry: dict[str, Any] | None, telemetry_type: str
 ) -> bool:
@@ -413,6 +466,7 @@ __all__ = [
     "extract_portnum",
     "is_routing_no_response",
     "telemetry_to_dict",
+    "serialize_telemetry_dict",
     "telemetry_has_requested_metrics",
     "find_matching_telemetry_request",
     "complete_pending_telemetry",

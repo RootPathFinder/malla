@@ -20,6 +20,7 @@ from malla.utils.telemetry_request import (
     next_live_telemetry_type,
     normalize_mesh_node_id,
     normalize_request_id,
+    serialize_telemetry_dict,
     split_live_telemetry_attempts,
     telemetry_has_requested_metrics,
     telemetry_to_dict,
@@ -418,3 +419,46 @@ class TestApplyTelemetryRequestType:
         applied = apply_telemetry_request_type(tel, "not_a_real_type")
         assert applied == "device_metrics"
         assert tel.HasField("device_metrics")
+
+
+@pytest.mark.unit
+class TestSerializeTelemetryDict:
+    def test_serializes_snake_case_device_metrics(self):
+        from meshtastic import telemetry_pb2
+
+        payload = serialize_telemetry_dict(
+            {
+                "device_metrics": {
+                    "battery_level": 66,
+                    "voltage": 3.95,
+                    "channel_utilization": 10.0,
+                }
+            }
+        )
+        assert payload
+        tel = telemetry_pb2.Telemetry()
+        tel.ParseFromString(payload)
+        assert tel.device_metrics.battery_level == 66
+        assert abs(tel.device_metrics.voltage - 3.95) < 0.001
+
+    def test_serializes_camel_case_environment_metrics(self):
+        from meshtastic import telemetry_pb2
+
+        payload = serialize_telemetry_dict(
+            {
+                "environmentMetrics": {
+                    "temperature": 18.25,
+                    "relativeHumidity": 55.0,
+                }
+            }
+        )
+        assert payload
+        tel = telemetry_pb2.Telemetry()
+        tel.ParseFromString(payload)
+        assert abs(tel.environment_metrics.temperature - 18.25) < 0.001
+        assert abs(tel.environment_metrics.relative_humidity - 55.0) < 0.001
+
+    def test_empty_or_invalid_returns_none(self):
+        assert serialize_telemetry_dict(None) is None
+        assert serialize_telemetry_dict({}) is None
+        assert serialize_telemetry_dict({"raw": b"x"}) is None
