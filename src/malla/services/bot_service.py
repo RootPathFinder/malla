@@ -228,7 +228,7 @@ class BotService:
         self.register_command("quality", self._cmd_quality, "Your link quality")
         self.register_command("distance", self._cmd_distance, "Distance to node")
         self.register_command("time", self._cmd_time, "Server time")
-        self.register_command("weather", self._cmd_weather, "Environment sensors")
+        self.register_command("wx", self._cmd_wx, "Weather by zip (!wx 90210)")
         self.register_command("lastseen", self._cmd_lastseen, "Node last activity")
         self.register_command("top", self._cmd_top, "Most active nodes")
         # Channel directory commands
@@ -2434,8 +2434,181 @@ class BotService:
         except Exception:
             return None
 
-    def _cmd_weather(self, ctx: CommandContext) -> str:
-        """Handle !weather command - environment sensor data."""
+    def _http_get_json(self, url: str, timeout: float = 3.0) -> dict[str, Any] | None:
+        """Fetch JSON from a URL with a short timeout."""
+        import json
+        import urllib.request
+
+        try:
+            req = urllib.request.Request(
+                url,
+                headers={"User-Agent": "Malla/1.0 (Meshtastic Mesh Bot)"},
+            )
+            with urllib.request.urlopen(req, timeout=timeout) as response:
+                return json.loads(response.read().decode())
+        except Exception as e:
+            logger.debug("HTTP JSON fetch failed for %s: %s", url, e)
+            return None
+
+    def _wmo_weather_label(self, code: int | None) -> str:
+        """Map WMO weather codes to short labels."""
+        if code is None:
+            return "Unknown"
+        mapping = {
+            0: "Clear",
+            1: "Mainly clear",
+            2: "Partly cloudy",
+            3: "Overcast",
+            45: "Fog",
+            48: "Fog",
+            51: "Drizzle",
+            53: "Drizzle",
+            55: "Drizzle",
+            61: "Rain",
+            63: "Rain",
+            65: "Heavy rain",
+            66: "Freezing rain",
+            67: "Freezing rain",
+            71: "Snow",
+            73: "Snow",
+            75: "Heavy snow",
+            77: "Snow grains",
+            80: "Showers",
+            81: "Showers",
+            82: "Heavy showers",
+            85: "Snow showers",
+            86: "Snow showers",
+            95: "Thunder",
+            96: "Thunder",
+            99: "Thunder",
+        }
+        return mapping.get(int(code), "Weather")
+
+    def _lookup_zip_location(self, zip_code: str) -> dict[str, Any] | None:
+        """Resolve a postal/zip code to coordinates via Open-Meteo geocoding."""
+        import re
+        import urllib.parse
+
+        compact = zip_code.replace(" ", "").replace("-", "")
+        # Prefer US geocoding for 5-digit / ZIP+4 codes
+        us_match = re.fullmatch(r"(\d{5})(\d{4})?", compact)
+        if us_match:
+            query = us_match.group(1)
+            url = (
+                "https://geocoding-api.open-meteo.com/v1/search"
+                f"?name={query}&countryCode=US&count=1"
+            )
+        else:
+            query = urllib.parse.quote(zip_code.strip())
+            url = f"https://geocoding-api.open-meteo.com/v1/search?name={query}&count=1"
+
+        data = self._http_get_json(url)
+        if not data:
+            return None
+        results = data.get("results") or []
+        if not results:
+            return None
+        place = results[0]
+        return {
+            "name": place.get("name") or zip_code,
+            "admin1": place.get("admin1"),
+            "country_code": place.get("country_code"),
+            "latitude": place.get("latitude"),
+            "longitude": place.get("longitude"),
+        }
+
+    def _fetch_wx_report(self, latitude: float, longitude: float) -> dict[str, Any] | None:
+        """Fetch a compact current weather report from Open-Meteo."""
+        url = (
+            "https://api.open-meteo.com/v1/forecast"
+            f"?latitude={latitude}&longitude={longitude}"
+            "&current=temperature_2m,relative_humidity_2m,weather_code,"
+            "wind_speed_10m,precipitation"
+            "&temperature_unit=fahrenheit&wind_speed_unit=mph"
+            "&timezone=auto"
+        )
+        data = self._http_get_json(url)
+        if not data:
+            return None
+        current = data.get("current") or {}
+        if "temperature_2m" not in current:
+            return None
+        return current
+
+    def _format_wx_report(
+        self, zip_code: str, place: dict[str, Any], current: dict[str, Any]
+    ) -> str:
+        """Format a short LoRa-friendly weather report."""
+        place_name = str(place.get("name") or zip_code)
+        admin1 = place.get("admin1")
+        if admin1 and str(admin1) not in place_name:
+            # Prefer short region label when useful (e.g. California -> CA is long; keep city)
+            label = place_name
+        else:
+            label = place_name
+        if len(label) > 16:
+            label = label[:16]
+
+        temp = current.get("temperature_2m")
+        humidity = current.get("relative_humidity_2m")
+        wind = current.get("wind_speed_10m")
+        precip = current.get("precipitation")
+        condition = self._wmo_weather_label(current.get("weather_code"))
+
+        lines = [f"🌤️ {zip_code} {label}"]
+        if temp is not None:
+            lines.append(f"{float(temp):.0f}°F {condition}")
+        else:
+            lines.append(condition)
+
+        extras: list[str] = []
+        if wind is not None:
+            extras.append(f"Wind {float(wind):.0f}mph")
+        if humidity is not None:
+            extras.append(f"RH {float(humidity):.0f}%")
+        if precip is not None and float(precip) > 0:
+            extras.append(f"Rain {float(precip):.1f}mm")
+        if extras:
+            lines.append(" | ".join(extras))
+
+        message = "\n".join(lines)
+        if len(message.encode("utf-8")) > 220:
+            message = message.encode("utf-8")[:217].decode("utf-8", errors="ignore")
+            message = message.rstrip() + "..."
+        return message
+
+    def _cmd_wx(self, ctx: CommandContext) -> str:
+        """Handle !wx <zip> — quick weather report, or !wx sensors for mesh env data."""
+        try:
+            if not ctx.args:
+                return f"Usage: {self._command_prefix}wx <zip>  (or sensors)"
+
+            if ctx.args[0].lower() == "sensors":
+                return self._cmd_wx_sensors(ctx)
+
+            zip_code = " ".join(ctx.args).strip().upper()
+            # Allow common postal formats: 90210, 90210-1234, M5V 2T6
+            compact = zip_code.replace(" ", "").replace("-", "")
+            if len(compact) < 3 or len(compact) > 10 or not any(c.isalnum() for c in compact):
+                return f"Usage: {self._command_prefix}wx <zip>"
+
+            place = self._lookup_zip_location(zip_code)
+            if not place or place.get("latitude") is None or place.get("longitude") is None:
+                return f"🌤️ Zip '{zip_code}' not found"
+
+            current = self._fetch_wx_report(
+                float(place["latitude"]), float(place["longitude"])
+            )
+            if not current:
+                return "🌤️ Weather unavailable"
+
+            return self._format_wx_report(zip_code, place, current)
+        except Exception as e:
+            logger.error(f"WX command error: {e}", exc_info=True)
+            return "🌤️ Weather unavailable"
+
+    def _cmd_wx_sensors(self, ctx: CommandContext) -> str:
+        """Show recent mesh environment sensor readings."""
         try:
             from meshtastic.protobuf import mesh_pb2, telemetry_pb2
 
@@ -2519,7 +2692,7 @@ class BotService:
 
             conn.close()
 
-            lines = ["🌡️ Environment:"]
+            lines = ["🌡️ Mesh sensors:"]
             for r in env_readings:
                 name = r["name"]
                 if len(name) > 8:
@@ -2540,7 +2713,7 @@ class BotService:
             return "\n".join(lines) if len(lines) > 1 else "🌡️ No readings"
 
         except Exception as e:
-            logger.error(f"Weather data error: {e}", exc_info=True)
+            logger.error(f"Weather sensor data error: {e}", exc_info=True)
             return "🌡️ Weather data unavailable"
 
     def _cmd_lastseen(self, ctx: CommandContext) -> str:
