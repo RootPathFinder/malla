@@ -57,6 +57,30 @@ class TestDailyDigestFormatting:
         assert len(message.encode("utf-8")) <= 220
 
     @pytest.mark.unit
+    def test_format_includes_solar_at_risk(self, bot_service: BotService):
+        when = time.strptime("2026-07-20 08:00", "%Y-%m-%d %H:%M")
+        message = bot_service._format_daily_digest(
+            vitals={
+                "active_nodes_24h": 12,
+                "packets_24h": 400,
+                "avg_snr": -6.0,
+                "packets_trend": 0.0,
+                "signal_trend": 0.0,
+                "solar_at_risk_nodes": 2,
+            },
+            nodes_delta=0,
+            offline_routers=[],
+            lowbat_count=0,
+            top_names=[],
+            new_nodes={"count": 0, "names": []},
+            longest_tr=None,
+            when=when,
+            solar_at_risk_count=2,
+        )
+        assert "Solar⚠: 2" in message
+        assert "Lowbat" not in message
+
+    @pytest.mark.unit
     def test_format_omits_stale_alert_lines_when_empty(self, bot_service: BotService):
         when = time.strptime("2026-07-20 08:00", "%Y-%m-%d %H:%M")
         message = bot_service._format_daily_digest(

@@ -2808,9 +2808,10 @@ class BotService:
             return "Busy data unavailable"
 
     def _cmd_lowbat(self, ctx: CommandContext) -> str:
-        """Handle !lowbat command - nodes with low battery."""
+        """Handle !lowbat command - low battery and solar at-risk nodes."""
         try:
             from ..database.connection import get_db_connection
+            from ..power_analysis import get_solar_power_conditions
 
             conn = get_db_connection()
             cursor = conn.cursor()
@@ -2833,18 +2834,43 @@ class BotService:
                 (one_day_ago,),
             )
             rows = cursor.fetchall()
+
+            solar_at_risk = []
+            try:
+                conditions = get_solar_power_conditions(conn)
+                solar_at_risk = (conditions.get("at_risk") or [])[:5]
+            except Exception as solar_err:
+                logger.debug(f"lowbat solar conditions skipped: {solar_err}")
+
             conn.close()
 
-            if not rows:
+            if not rows and not solar_at_risk:
                 return "🔋 No low battery nodes"
 
-            lines = ["🔋 Low battery:"]
-            for row in rows:
-                name = row["short_name"] or row["long_name"] or f"!{row['node_id']:08x}"
-                if len(name) > 10:
-                    name = name[:10]
-                v = f"{row['voltage']:.1f}V" if row["voltage"] else ""
-                lines.append(f"{name}: {row['battery_level']}% {v}")
+            lines: list[str] = []
+            if rows:
+                lines.append("🔋 Low battery:")
+                for row in rows:
+                    name = (
+                        row["short_name"]
+                        or row["long_name"]
+                        or f"!{row['node_id']:08x}"
+                    )
+                    if len(name) > 10:
+                        name = name[:10]
+                    v = f"{row['voltage']:.1f}V" if row["voltage"] else ""
+                    lines.append(f"{name}: {row['battery_level']}% {v}")
+
+            if solar_at_risk:
+                lines.append("☀️ Solar at risk:")
+                for node in solar_at_risk:
+                    name = node.get("short_name") or node.get("name") or "?"
+                    if len(name) > 10:
+                        name = name[:10]
+                    issue = (node.get("issues") or ["degrading"])[0]
+                    if len(issue) > 28:
+                        issue = issue[:25] + "..."
+                    lines.append(f"{name}: {issue}")
 
             return "\n".join(lines)
         except Exception as e:
@@ -3936,6 +3962,7 @@ class BotService:
             vitals = AlertService.get_network_vitals()
             offline_routers = self._get_recently_offline_routers()
             lowbat_count = self._get_recent_lowbat_count()
+            solar_at_risk_count = int(vitals.get("solar_at_risk_nodes") or 0)
             top_names = self._get_digest_top_names(limit=3)
             nodes_delta = self._get_active_nodes_delta()
             new_nodes = self._get_new_nodes_24h(name_limit=3)
@@ -3951,6 +3978,7 @@ class BotService:
                 new_nodes=new_nodes,
                 longest_tr=longest_tr,
                 when=when,
+                solar_at_risk_count=solar_at_risk_count,
             )
         except Exception as e:
             logger.error(f"Error building daily digest: {e}", exc_info=True)
@@ -3966,6 +3994,7 @@ class BotService:
         new_nodes: dict[str, Any] | None = None,
         longest_tr: dict[str, Any] | None = None,
         when: time.struct_time | None = None,
+        solar_at_risk_count: int = 0,
     ) -> str:
         """Format digest fields into a Meshtastic-friendly message."""
         when = when or time.localtime()
@@ -3976,6 +4005,8 @@ class BotService:
         packets = int(vitals.get("packets_24h") or 0)
         avg_snr = vitals.get("avg_snr")
         packets_trend = float(vitals.get("packets_trend") or 0)
+        if solar_at_risk_count <= 0:
+            solar_at_risk_count = int(vitals.get("solar_at_risk_nodes") or 0)
 
         lines = [f"📡 Net {date_label}"]
         lines.append(f"Nodes: {nodes}{self._format_count_delta(nodes_delta)}")
@@ -3995,6 +4026,8 @@ class BotService:
         alert_parts: list[str] = []
         if lowbat_count > 0:
             alert_parts.append(f"Lowbat: {lowbat_count}")
+        if solar_at_risk_count > 0:
+            alert_parts.append(f"Solar⚠: {solar_at_risk_count}")
         if offline_routers:
             alert_parts.append(f"Off routers: {len(offline_routers)}")
         if alert_parts:

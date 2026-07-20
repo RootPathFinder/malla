@@ -41,11 +41,71 @@
             <h1 class="h2">
                 <i class="bi bi-battery-charging"></i> Battery &amp; Power Analytics
             </h1>
+            <p class="text-muted mb-0">Ops view for solar health, battery risk, and power sources</p>
         </div>
         <div class="col-md-4 text-end">
             <div class="text-muted">
                 <i class="bi bi-info-circle"></i> Auto-updates every 10 minutes
                 <span id="last-update-time" class="ms-2"></span>
+            </div>
+        </div>
+    </div>
+
+    {% set sc = solar_conditions or {} %}
+    {% set at_risk = sc.get('at_risk', []) %}
+    {% set watching = sc.get('watching', []) %}
+    {% set sc_counts = sc.get('counts', {}) %}
+
+    <!-- Solar ops: At risk / Watching -->
+    <div class="row mb-4">
+        <div class="col-md-6 mb-3 mb-md-0">
+            <div class="border-start border-4 border-danger ps-3">
+                <div class="d-flex justify-content-between align-items-baseline mb-2">
+                    <h5 class="mb-0 text-danger">
+                        <i class="bi bi-exclamation-octagon"></i> At risk
+                    </h5>
+                    <span class="badge text-bg-danger">{{ sc_counts.get('at_risk', at_risk|length) }}</span>
+                </div>
+                <p class="small text-muted mb-2">Solar nodes not recovering charge as expected</p>
+                {% if at_risk %}
+                <ul class="list-unstyled mb-0">
+                    {% for node in at_risk %}
+                    <li class="mb-2">
+                        <a href="/node/{{ node.node_id }}" class="fw-semibold text-decoration-none">{{ node.name }}</a>
+                        <div class="small text-muted">
+                            {% if node.issues %}{{ node.issues[0] }}{% else %}{{ node.outlook or 'Degrading' }}{% endif %}
+                        </div>
+                    </li>
+                    {% endfor %}
+                </ul>
+                {% else %}
+                <p class="small text-success mb-0"><i class="bi bi-check-circle"></i> No solar nodes at risk</p>
+                {% endif %}
+            </div>
+        </div>
+        <div class="col-md-6">
+            <div class="border-start border-4 border-warning ps-3">
+                <div class="d-flex justify-content-between align-items-baseline mb-2">
+                    <h5 class="mb-0 text-warning">
+                        <i class="bi bi-eye"></i> Watching
+                    </h5>
+                    <span class="badge text-bg-warning text-dark">{{ sc_counts.get('watching', watching|length) }}</span>
+                </div>
+                <p class="small text-muted mb-2">Early signs of weaker daytime gain or deeper overnight lows</p>
+                {% if watching %}
+                <ul class="list-unstyled mb-0">
+                    {% for node in watching %}
+                    <li class="mb-2">
+                        <a href="/node/{{ node.node_id }}" class="fw-semibold text-decoration-none">{{ node.name }}</a>
+                        <div class="small text-muted">
+                            {% if node.issues %}{{ node.issues[0] }}{% else %}{{ node.outlook or 'Needs attention' }}{% endif %}
+                        </div>
+                    </li>
+                    {% endfor %}
+                </ul>
+                {% else %}
+                <p class="small text-muted mb-0"><i class="bi bi-check-circle"></i> Nothing on the watch list</p>
+                {% endif %}
             </div>
         </div>
     </div>

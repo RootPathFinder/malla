@@ -54,8 +54,11 @@ def db_with_telemetry():
             long_name TEXT,
             short_name TEXT,
             power_type TEXT DEFAULT 'unknown',
+            power_type_reason TEXT,
+            power_type_locked INTEGER DEFAULT 0,
             battery_health_score INTEGER,
             last_battery_voltage REAL,
+            power_analysis_timestamp REAL,
             archived INTEGER DEFAULT 0
         )
     """)
@@ -501,3 +504,121 @@ def test_analyze_node_power_returns_explained_status(db_with_telemetry):
     assert status["outlook"]
     assert "issues" in status
     assert status["solar"] is not None
+
+
+def test_power_type_override_locks_auto_detect(db_with_telemetry):
+    """Manual override must persist and block auto-detect overwrite."""
+    from malla.power_analysis import (
+        set_power_type_override,
+        update_power_analysis_for_node,
+    )
+
+    cursor = db_with_telemetry.cursor()
+    node_id = 7001
+    cursor.execute(
+        "INSERT INTO node_info (node_id, hex_id, long_name, power_type) VALUES (?, ?, ?, ?)",
+        (node_id, "!00001b59", "Override Node", "unknown"),
+    )
+
+    # Strong solar pattern that would normally auto-detect as solar
+    current_time = time.time()
+    for day in range(5):
+        base_time = current_time - ((4 - day) * 24 * 3600)
+        for hour in range(0, 24, 2):
+            timestamp = base_time + hour * 3600
+            if 6 <= hour < 18:
+                voltage, battery = 4.2, 98
+            else:
+                voltage, battery = 3.65, 50
+            cursor.execute(
+                """
+                INSERT INTO telemetry_data (timestamp, node_id, voltage, battery_level)
+                VALUES (?, ?, ?, ?)
+                """,
+                (timestamp, node_id, voltage, battery),
+            )
+    db_with_telemetry.commit()
+
+    status = set_power_type_override(
+        node_id, "battery", db_with_telemetry, locked=True
+    )
+    assert status["power_type"] == "battery"
+    assert status["power_type_locked"] is True
+
+    # Re-run auto analysis — type must stay battery
+    updated = update_power_analysis_for_node(node_id, db_with_telemetry)
+    assert updated["power_type"] == "battery"
+    assert updated["power_type_locked"] is True
+
+    cursor.execute(
+        "SELECT power_type, power_type_locked FROM node_info WHERE node_id = ?",
+        (node_id,),
+    )
+    row = cursor.fetchone()
+    assert row["power_type"] == "battery"
+    assert row["power_type_locked"] == 1
+
+
+def test_get_solar_power_conditions_groups_nodes(db_with_telemetry):
+    from malla.power_analysis import get_solar_power_conditions
+
+    cursor = db_with_telemetry.cursor()
+    healthy_id = 8001
+    at_risk_id = 8002
+
+    cursor.execute(
+        "INSERT INTO node_info (node_id, hex_id, long_name, power_type) VALUES (?, ?, ?, ?)",
+        (healthy_id, "!00001f41", "Healthy Solar", "solar"),
+    )
+    cursor.execute(
+        "INSERT INTO node_info (node_id, hex_id, long_name, power_type) VALUES (?, ?, ?, ?)",
+        (at_risk_id, "!00001f42", "At Risk Solar", "solar"),
+    )
+
+    now = datetime.now(UTC).replace(minute=0, second=0, microsecond=0)
+    # Healthy: daily full charge
+    for day in range(6):
+        day_base = now - timedelta(days=5 - day)
+        for hour, level, voltage in [
+            (7, 55, 3.7),
+            (12, 90, 4.1),
+            (15, 95, 4.15),
+            (21, 70, 3.85),
+        ]:
+            ts = day_base.replace(hour=hour).timestamp()
+            cursor.execute(
+                """
+                INSERT INTO telemetry_data (timestamp, node_id, voltage, battery_level)
+                VALUES (?, ?, ?, ?)
+                """,
+                (ts, healthy_id, voltage, level),
+            )
+
+    # At risk: no full charge, no daytime gain for many days
+    for day in range(7):
+        day_base = now - timedelta(days=6 - day)
+        for hour, level, voltage in [
+            (7, 35, 3.45),
+            (9, 36, 3.46),
+            (15, 36, 3.47),
+            (21, 30, 3.35),
+        ]:
+            ts = day_base.replace(hour=hour).timestamp()
+            cursor.execute(
+                """
+                INSERT INTO telemetry_data (timestamp, node_id, voltage, battery_level)
+                VALUES (?, ?, ?, ?)
+                """,
+                (ts, at_risk_id, voltage, level),
+            )
+    db_with_telemetry.commit()
+
+    conditions = get_solar_power_conditions(db_with_telemetry)
+    assert conditions["total"] == 2
+    assert conditions["counts"]["at_risk"] + conditions["counts"]["watching"] >= 1
+    at_risk_ids = {n["node_id"] for n in conditions["at_risk"]}
+    watching_ids = {n["node_id"] for n in conditions["watching"]}
+    # Degraded node should be watching or at_risk
+    assert at_risk_id in at_risk_ids or at_risk_id in watching_ids
+    # Healthy node should not be at_risk
+    assert healthy_id not in at_risk_ids

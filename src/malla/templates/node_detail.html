@@ -2090,6 +2090,52 @@ function updateHeroVitals(telemetry) {
     }
 }
 
+function bindPowerTypeOverride(nodeId) {
+    const saveBtn = document.getElementById('power-type-save-btn');
+    const selectEl = document.getElementById('power-type-override');
+    const lockEl = document.getElementById('power-type-lock');
+    const statusEl = document.getElementById('power-type-override-status');
+    if (!saveBtn || !selectEl || !lockEl) {
+        return;
+    }
+    saveBtn.addEventListener('click', async function() {
+        const powerType = selectEl.value;
+        const locked = !!lockEl.checked;
+        saveBtn.disabled = true;
+        if (statusEl) {
+            statusEl.textContent = 'Saving...';
+            statusEl.className = 'small text-muted mt-1';
+        }
+        try {
+            const resp = await fetch(`/api/node/${nodeId}/power-type`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ power_type: powerType, locked: locked })
+            });
+            const data = await resp.json();
+            if (!resp.ok) {
+                throw new Error(data.error || 'Save failed');
+            }
+            if (statusEl) {
+                statusEl.textContent = locked
+                    ? 'Locked — auto-detect will not change this'
+                    : 'Saved (unlocked — auto-detect may update)';
+                statusEl.className = 'small text-success mt-1';
+            }
+            // Refresh telemetry so condition/outlook reflect the new type
+            setTimeout(function() { loadTelemetryData(); }, 400);
+        } catch (err) {
+            console.error('Power type override failed:', err);
+            if (statusEl) {
+                statusEl.textContent = err.message || 'Save failed';
+                statusEl.className = 'small text-danger mt-1';
+            }
+        } finally {
+            saveBtn.disabled = false;
+        }
+    });
+}
+
 async function loadTelemetryData() {
     const scriptTag = document.querySelector('script[data-node-id]');
     const nodeId = scriptTag.getAttribute('data-node-id');
@@ -2275,6 +2321,28 @@ async function loadTelemetryData() {
             html += '<td class="text-end"><span class="' + bhsClass + ' fw-bold">' + bhs.toFixed(0) + '</span></td>';
             html += '</tr>';
         }
+
+        // Manual power-type override (locks auto-detect)
+        const locked = !!(ps && ps.power_type_locked) || !!telemetry.power_type_locked;
+        const currentType = powerType || 'unknown';
+        html += '<tr>';
+        html += '<td class="text-muted align-middle">Override</td>';
+        html += '<td class="text-end">';
+        html += '<div class="d-inline-flex align-items-center gap-1 flex-wrap justify-content-end">';
+        html += '<select id="power-type-override" class="form-select form-select-sm" style="width: auto; min-width: 7.5rem;">';
+        ['solar', 'battery', 'mains', 'unknown'].forEach(function(opt) {
+            const labels = { solar: 'Solar', battery: 'Battery', mains: 'Mains/USB', unknown: 'Unknown' };
+            html += '<option value="' + opt + '"' + (opt === currentType ? ' selected' : '') + '>' + labels[opt] + '</option>';
+        });
+        html += '</select>';
+        html += '<div class="form-check form-check-inline m-0">';
+        html += '<input class="form-check-input" type="checkbox" id="power-type-lock"' + (locked ? ' checked' : '') + '>';
+        html += '<label class="form-check-label small" for="power-type-lock">Lock</label>';
+        html += '</div>';
+        html += '<button type="button" class="btn btn-sm btn-outline-secondary" id="power-type-save-btn" title="Save power type override">Save</button>';
+        html += '</div>';
+        html += '<div id="power-type-override-status" class="small text-muted mt-1"></div>';
+        html += '</td></tr>';
 
         if (ps && ps.outlook) {
             html += '<tr>';
@@ -2535,6 +2603,9 @@ async function loadTelemetryData() {
 
         // Update content
         telemetryContent.innerHTML = html;
+
+        // Wire power-type override controls
+        bindPowerTypeOverride(nodeId);
 
         // Reinitialize tooltips
         const tooltipTriggerList = telemetryContent.querySelectorAll('[data-bs-toggle="tooltip"]');

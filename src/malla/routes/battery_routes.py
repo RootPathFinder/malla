@@ -19,6 +19,8 @@ battery_bp = Blueprint("battery", __name__)
 def battery_analytics():
     """Battery analytics dashboard page."""
     try:
+        from ..power_analysis import get_solar_power_conditions
+
         # Get power source summary
         power_summary = BatteryAnalyticsRepository.get_power_source_summary()
         logger.debug(f"Power summary: {power_summary}")
@@ -48,6 +50,24 @@ def battery_analytics():
         )
         logger.debug(f"Nodes with telemetry: {nodes_with_telemetry}")
 
+        # Unified solar ops lists (At risk / Watching)
+        solar_conditions = {
+            "at_risk": [],
+            "watching": [],
+            "healthy": [],
+            "unknown": [],
+            "counts": {"at_risk": 0, "watching": 0, "healthy": 0, "unknown": 0},
+            "total": 0,
+        }
+        try:
+            conn = get_db_connection()
+            try:
+                solar_conditions = get_solar_power_conditions(conn)
+            finally:
+                conn.close()
+        except Exception as solar_err:
+            logger.warning(f"Solar power conditions unavailable: {solar_err}")
+
         return render_template(
             "battery_analytics.html",
             power_summary=power_summary,
@@ -55,6 +75,7 @@ def battery_analytics():
             battery_health=battery_health,
             critical_batteries=critical_batteries,
             nodes_with_telemetry=nodes_with_telemetry,
+            solar_conditions=solar_conditions,
         )
     except Exception as e:
         logger.error(f"Error loading battery analytics: {e}", exc_info=True)
@@ -82,6 +103,14 @@ def battery_analytics():
             battery_health=[],
             critical_batteries=[],
             nodes_with_telemetry=[],
+            solar_conditions={
+                "at_risk": [],
+                "watching": [],
+                "healthy": [],
+                "unknown": [],
+                "counts": {"at_risk": 0, "watching": 0, "healthy": 0, "unknown": 0},
+                "total": 0,
+            },
         )
 
 
@@ -276,6 +305,76 @@ def voltage_trends():
     except Exception as e:
         logger.error(f"Error getting voltage trends: {e}", exc_info=True)
         return jsonify({"error": str(e), "nodes": {}, "count": 0}), 500
+
+
+@battery_bp.route("/api/solar-power-conditions", methods=["GET"])
+def solar_power_conditions_api():
+    """API: unified solar At risk / Watching / Healthy conditions."""
+    try:
+        from ..power_analysis import get_solar_power_conditions
+
+        conn = get_db_connection()
+        try:
+            conditions = get_solar_power_conditions(conn)
+        finally:
+            conn.close()
+        return jsonify(conditions)
+    except Exception as e:
+        logger.error(f"Error getting solar power conditions: {e}", exc_info=True)
+        return jsonify({"error": str(e), "at_risk": [], "watching": [], "counts": {}}), 500
+
+
+@battery_bp.route("/api/node/<node_id>/power-type", methods=["POST"])
+def set_node_power_type(node_id):
+    """Manually set / lock a node's power type so auto-detect does not clobber it.
+
+    JSON body:
+        power_type: solar | battery | mains | unknown
+        locked: bool (default true)
+    """
+    try:
+        from ..power_analysis import set_power_type_override
+        from ..utils.node_utils import convert_node_id
+
+        node_id_int = convert_node_id(node_id)
+        payload = request.get_json(silent=True) or {}
+        power_type = (payload.get("power_type") or "").strip().lower()
+        locked = payload.get("locked", True)
+        if isinstance(locked, str):
+            locked = locked.lower() in ("1", "true", "yes", "on")
+
+        if power_type not in ("solar", "battery", "mains", "unknown"):
+            return (
+                jsonify(
+                    {
+                        "error": "power_type must be one of: solar, battery, mains, unknown"
+                    }
+                ),
+                400,
+            )
+
+        conn = get_db_connection()
+        try:
+            status = set_power_type_override(
+                node_id_int, power_type, conn, locked=bool(locked)
+            )
+        finally:
+            conn.close()
+
+        return jsonify(
+            {
+                "message": "Power type updated",
+                "node_id": node_id_int,
+                "power_type": status.get("power_type"),
+                "power_type_locked": status.get("power_type_locked"),
+                "power_status": status,
+            }
+        )
+    except ValueError as e:
+        return jsonify({"error": str(e)}), 400
+    except Exception as e:
+        logger.error(f"Error setting power type for node {node_id}: {e}", exc_info=True)
+        return jsonify({"error": str(e)}), 500
 
 
 @battery_bp.route("/api/solar-charging-status", methods=["GET"])

@@ -547,13 +547,23 @@ def build_power_status(
     battery_levels: list[int | None],
     *,
     stored_power_type: str | None = None,
+    force_power_type: bool = False,
+    power_type_locked: bool = False,
 ) -> dict[str, Any]:
     """Build explained power status for UI/API from prepared series."""
     power_type, reason, confidence = classify_power_source(
         timestamps, voltages, battery_levels
     )
-    # Prefer a stored high-confidence type if current window is thin
+    # Manual override / lock always wins over auto-detection
     if (
+        force_power_type
+        and stored_power_type in ("solar", "battery", "mains", "unknown")
+    ):
+        power_type = stored_power_type
+        reason = "Manual power-type override"
+        confidence = 1.0
+    # Prefer a stored high-confidence type if current window is thin
+    elif (
         stored_power_type in ("solar", "battery", "mains")
         and power_type == "unknown"
         and len(timestamps) < 10
@@ -627,6 +637,7 @@ def build_power_status(
     return {
         "power_type": power_type,
         "power_type_label": labels.get(power_type, power_type),
+        "power_type_locked": bool(power_type_locked or force_power_type),
         "confidence": round(confidence, 2),
         "state": state,
         "state_label": state_labels.get(state, state),
@@ -678,30 +689,64 @@ def _format_outlook(
     return "No active discharge trend detected"
 
 
+def _read_stored_power_meta(
+    db_connection: Any, node_id: int
+) -> tuple[str | None, bool]:
+    """Return (power_type, locked) from node_info, tolerating missing columns."""
+    stored_type = None
+    locked = False
+    try:
+        cursor = db_connection.cursor()
+        try:
+            cursor.execute(
+                """
+                SELECT power_type, COALESCE(power_type_locked, 0) as power_type_locked
+                FROM node_info WHERE node_id = ?
+                """,
+                (node_id,),
+            )
+            row = cursor.fetchone()
+            if row:
+                if hasattr(row, "keys"):
+                    stored_type = row["power_type"]
+                    locked = bool(row["power_type_locked"])
+                else:
+                    stored_type = row[0]
+                    locked = bool(row[1]) if len(row) > 1 else False
+        except Exception:
+            cursor.execute(
+                "SELECT power_type FROM node_info WHERE node_id = ?",
+                (node_id,),
+            )
+            row = cursor.fetchone()
+            if row:
+                stored_type = row["power_type"] if hasattr(row, "keys") else row[0]
+    except Exception:
+        pass
+    return stored_type, locked
+
+
 def analyze_node_power(node_id: int, db_connection: Any) -> dict[str, Any]:
     """Full power analysis for a node from telemetry_data (+ stored type hint)."""
     rows = _fetch_telemetry_rows(db_connection, node_id, days=7)
     if len(rows) < 3:
         rows = _fetch_telemetry_rows(db_connection, node_id, days=30)
 
-    stored_type = None
-    try:
-        cursor = db_connection.cursor()
-        cursor.execute(
-            "SELECT power_type FROM node_info WHERE node_id = ?",
-            (node_id,),
-        )
-        row = cursor.fetchone()
-        if row:
-            stored_type = row["power_type"] if hasattr(row, "keys") else row[0]
-    except Exception:
-        stored_type = None
+    stored_type, locked = _read_stored_power_meta(db_connection, node_id)
 
     timestamps, voltages, batteries = _prepare_series(rows)
     if not timestamps:
+        labels = {
+            "solar": "Solar",
+            "battery": "Battery only",
+            "mains": "Mains / USB",
+            "unknown": "Unknown",
+        }
+        ptype = stored_type or "unknown"
         return {
-            "power_type": stored_type or "unknown",
-            "power_type_label": "Unknown",
+            "power_type": ptype,
+            "power_type_label": labels.get(ptype, ptype),
+            "power_type_locked": locked,
             "confidence": 0.0,
             "state": "unknown",
             "state_label": "Unknown",
@@ -721,6 +766,8 @@ def analyze_node_power(node_id: int, db_connection: Any) -> dict[str, Any]:
         voltages,
         batteries,
         stored_power_type=stored_type,
+        force_power_type=locked,
+        power_type_locked=locked,
     )
 
 
@@ -779,35 +826,55 @@ def update_power_analysis_for_node(node_id: int, db_connection: Any) -> dict[str
     """
     Persist unified power analysis for a single node.
 
-    Returns the status dict that was stored.
+    When power_type_locked is set, auto-detection will not overwrite power_type.
+    Returns the status dict that was stored / computed.
     """
     cursor = db_connection.cursor()
     status = analyze_node_power(node_id, db_connection)
+    locked = bool(status.get("power_type_locked"))
     try:
-        cursor.execute(
-            """
-            UPDATE node_info
-            SET power_type = ?,
-                battery_health_score = ?,
-                power_type_reason = ?,
-                power_analysis_timestamp = ?
-            WHERE node_id = ?
-            """,
-            (
-                status["power_type"],
-                status.get("health_score"),
-                status.get("reason"),
-                status.get("analyzed_at") or time.time(),
-                node_id,
-            ),
-        )
+        if locked:
+            cursor.execute(
+                """
+                UPDATE node_info
+                SET battery_health_score = ?,
+                    power_type_reason = ?,
+                    power_analysis_timestamp = ?
+                WHERE node_id = ?
+                """,
+                (
+                    status.get("health_score"),
+                    status.get("reason"),
+                    status.get("analyzed_at") or time.time(),
+                    node_id,
+                ),
+            )
+        else:
+            cursor.execute(
+                """
+                UPDATE node_info
+                SET power_type = ?,
+                    battery_health_score = ?,
+                    power_type_reason = ?,
+                    power_analysis_timestamp = ?
+                WHERE node_id = ?
+                """,
+                (
+                    status["power_type"],
+                    status.get("health_score"),
+                    status.get("reason"),
+                    status.get("analyzed_at") or time.time(),
+                    node_id,
+                ),
+            )
         db_connection.commit()
         logger.debug(
-            "Updated power analysis for node %s: type=%s condition=%s score=%s",
+            "Updated power analysis for node %s: type=%s condition=%s score=%s locked=%s",
             node_id,
             status["power_type"],
             status.get("condition"),
             status.get("health_score"),
+            locked,
         )
     except Exception as e:
         logger.error("Error updating power analysis for node %s: %s", node_id, e)
@@ -816,6 +883,142 @@ def update_power_analysis_for_node(node_id: int, db_connection: Any) -> dict[str
         except Exception:
             pass
     return status
+
+
+def set_power_type_override(
+    node_id: int,
+    power_type: str,
+    db_connection: Any,
+    *,
+    locked: bool = True,
+) -> dict[str, Any]:
+    """
+    Manually set a node's power type and optionally lock it against auto-detect.
+
+    Returns the refreshed power status.
+    """
+    allowed = {"solar", "battery", "mains", "unknown"}
+    if power_type not in allowed:
+        raise ValueError(f"Invalid power_type '{power_type}'. Allowed: {sorted(allowed)}")
+
+    cursor = db_connection.cursor()
+    reason = "Manual power-type override" if locked else "Manual power-type set (unlocked)"
+    try:
+        cursor.execute(
+            """
+            UPDATE node_info
+            SET power_type = ?,
+                power_type_locked = ?,
+                power_type_reason = ?,
+                power_analysis_timestamp = ?
+            WHERE node_id = ?
+            """,
+            (power_type, 1 if locked else 0, reason, time.time(), node_id),
+        )
+        if cursor.rowcount == 0:
+            raise ValueError(f"Node {node_id} not found")
+        db_connection.commit()
+    except ValueError:
+        raise
+    except Exception as e:
+        try:
+            db_connection.rollback()
+        except Exception:
+            pass
+        raise RuntimeError(f"Failed to set power type override: {e}") from e
+
+    return analyze_node_power(node_id, db_connection)
+
+
+def get_solar_power_conditions(db_connection: Any) -> dict[str, Any]:
+    """
+    Analyze all non-archived solar nodes and group by condition.
+
+    Returns:
+        {
+          "at_risk": [...],
+          "watching": [...],
+          "healthy": [...],
+          "unknown": [...],
+          "counts": {...},
+        }
+    """
+    cursor = db_connection.cursor()
+    cursor.execute(
+        """
+        SELECT node_id, hex_id, long_name, short_name, power_type,
+               COALESCE(power_type_locked, 0) as power_type_locked
+        FROM node_info
+        WHERE power_type = 'solar' AND COALESCE(archived, 0) = 0
+        ORDER BY long_name COLLATE NOCASE, hex_id
+        """
+    )
+    try:
+        rows = cursor.fetchall()
+    except Exception:
+        # Older DBs without power_type_locked
+        cursor.execute(
+            """
+            SELECT node_id, hex_id, long_name, short_name, power_type
+            FROM node_info
+            WHERE power_type = 'solar' AND COALESCE(archived, 0) = 0
+            ORDER BY long_name COLLATE NOCASE, hex_id
+            """
+        )
+        rows = cursor.fetchall()
+
+    groups: dict[str, list[dict[str, Any]]] = {
+        "at_risk": [],
+        "watching": [],
+        "healthy": [],
+        "unknown": [],
+    }
+
+    for row in rows:
+        node_id = row["node_id"] if hasattr(row, "keys") else row[0]
+        hex_id = row["hex_id"] if hasattr(row, "keys") else row[1]
+        long_name = row["long_name"] if hasattr(row, "keys") else row[2]
+        short_name = row["short_name"] if hasattr(row, "keys") else row[3]
+        locked = False
+        if hasattr(row, "keys"):
+            try:
+                locked = bool(row["power_type_locked"])
+            except (KeyError, IndexError):
+                locked = False
+
+        status = analyze_node_power(node_id, db_connection)
+        condition = status.get("condition") or "unknown"
+        if condition == "powered":
+            condition = "healthy"
+        if condition not in groups:
+            condition = "unknown"
+
+        name = long_name or short_name or hex_id or f"!{int(node_id):08x}"
+        entry = {
+            "node_id": node_id,
+            "hex_id": hex_id or f"!{int(node_id):08x}",
+            "name": name,
+            "short_name": short_name,
+            "power_type": status.get("power_type") or "solar",
+            "power_type_locked": locked or bool(status.get("power_type_locked")),
+            "condition": condition,
+            "condition_label": status.get("condition_label") or condition,
+            "state": status.get("state"),
+            "state_label": status.get("state_label"),
+            "outlook": status.get("outlook"),
+            "issues": status.get("issues") or [],
+            "health_score": status.get("health_score"),
+            "hours_to_critical": status.get("hours_to_critical"),
+            "solar": status.get("solar"),
+            "reason": status.get("reason"),
+        }
+        groups[condition].append(entry)
+
+    return {
+        **groups,
+        "counts": {k: len(v) for k, v in groups.items()},
+        "total": sum(len(v) for v in groups.values()),
+    }
 
 
 def update_power_analysis_batch(

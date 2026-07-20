@@ -1964,21 +1964,36 @@ class NodeRepository:
             power_info = None
             try:
                 cursor.execute(
-                    "SELECT power_type, power_type_reason, power_analysis_timestamp, battery_health_score FROM node_info WHERE node_id = ?",
+                    """
+                    SELECT power_type, power_type_reason, power_analysis_timestamp,
+                           battery_health_score, COALESCE(power_type_locked, 0) as power_type_locked
+                    FROM node_info WHERE node_id = ?
+                    """,
                     (node_id,),
                 )
                 power_info = cursor.fetchone()
             except Exception:
-                # battery_health_score may be missing on older DBs — retry without it
+                # Older DBs may lack power_type_locked and/or battery_health_score
                 try:
                     cursor.execute(
-                        "SELECT power_type, power_type_reason, power_analysis_timestamp FROM node_info WHERE node_id = ?",
+                        """
+                        SELECT power_type, power_type_reason, power_analysis_timestamp,
+                               battery_health_score
+                        FROM node_info WHERE node_id = ?
+                        """,
                         (node_id,),
                     )
                     power_info = cursor.fetchone()
                 except Exception:
-                    # Columns might not exist yet if migration hasn't run or old DB
-                    pass
+                    try:
+                        cursor.execute(
+                            "SELECT power_type, power_type_reason, power_analysis_timestamp FROM node_info WHERE node_id = ?",
+                            (node_id,),
+                        )
+                        power_info = cursor.fetchone()
+                    except Exception:
+                        # Columns might not exist yet if migration hasn't run or old DB
+                        pass
 
             conn.close()
 
@@ -2125,6 +2140,10 @@ class NodeRepository:
                     telemetry_dict["battery_health_score"] = power_info[
                         "battery_health_score"
                     ]
+                if "power_type_locked" in power_info.keys():
+                    telemetry_dict["power_type_locked"] = bool(
+                        power_info["power_type_locked"]
+                    )
 
             timestamp = datetime.fromtimestamp(latest_timestamp, UTC)
             telemetry_dict["timestamp"] = timestamp.strftime("%Y-%m-%d %H:%M:%S UTC")
@@ -2159,6 +2178,10 @@ class NodeRepository:
                     telemetry_dict["battery_health_score"] = power_status[
                         "health_score"
                     ]
+                if "power_type_locked" in power_status:
+                    telemetry_dict["power_type_locked"] = bool(
+                        power_status.get("power_type_locked")
+                    )
             except Exception as e:
                 logger.debug("Could not build power_status for node %s: %s", node_id, e)
 
