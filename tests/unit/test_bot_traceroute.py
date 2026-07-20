@@ -127,9 +127,7 @@ class TestBotTracerouteMatching:
 
 class TestBotTracerouteFormatting:
     @pytest.mark.unit
-    def test_format_traceroute_result_with_forward_and_return_hops(
-        self, bot_service: BotService
-    ):
+    def test_format_chain_style(self, bot_service: BotService):
         result = bot_service._format_traceroute_result(
             route=[0x11111111],
             route_back=[0x11111111],
@@ -137,15 +135,57 @@ class TestBotTracerouteFormatting:
             snr_back=[-7.0, -6.0],
             source_id=0x12345678,
             dest_id=0x87654321,
+            style="chain",
         )
 
-        assert "1.5678→1111 -5.0dB" in result
-        assert "2.1111→4321 -8.0dB" in result
-        assert "1.4321→1111 -7.0dB" in result
-        assert "2.1111→5678 -6.0dB" in result
+        assert "TR → 5678 > 1111(-5.0) > 4321(-8.0)" in result
+        assert "← 4321 > 1111(-7.0) > 5678(-6.0)" in result
 
     @pytest.mark.unit
-    def test_format_traceroute_result_direct_hop(self, bot_service: BotService):
+    def test_format_hops_style(self, bot_service: BotService):
+        result = bot_service._format_traceroute_result(
+            route=[0x11111111],
+            route_back=[0x11111111],
+            snr_towards=[-5.0, -8.0],
+            snr_back=[-7.0, -6.0],
+            source_id=0x12345678,
+            dest_id=0x87654321,
+            style="hops",
+        )
+
+        assert "TR to 4321 (2 hops)" in result
+        assert "1 5678→1111 -5.0" in result
+        assert "2 1111→4321 -8.0" in result
+        assert "← 4321→1111 -7.0 →5678 -6.0" in result
+
+    @pytest.mark.unit
+    def test_format_names_style(self, bot_service: BotService):
+        def fake_details(node_id: int):
+            return {
+                0x12345678: {"short_name": "Alpha", "long_name": "Alpha Node"},
+                0x11111111: {"short_name": "Hill", "long_name": "Hill Top"},
+                0x87654321: {"short_name": "You", "long_name": "Your Node"},
+            }.get(node_id)
+
+        with patch(
+            "src.malla.database.repositories.NodeRepository.get_node_details",
+            side_effect=fake_details,
+        ):
+            result = bot_service._format_traceroute_result(
+                route=[0x11111111],
+                route_back=[0x11111111],
+                snr_towards=[-5.0, -8.0],
+                snr_back=[-7.0, -6.0],
+                source_id=0x12345678,
+                dest_id=0x87654321,
+                style="names",
+            )
+
+        assert "TR Alpha → Hill(-5.0) → You(-8.0)" in result
+        assert "← You → Hill(-7.0) → Alpha(-6.0)" in result
+
+    @pytest.mark.unit
+    def test_format_chain_direct_hop(self, bot_service: BotService):
         result = bot_service._format_traceroute_result(
             route=[],
             route_back=[],
@@ -153,9 +193,10 @@ class TestBotTracerouteFormatting:
             snr_back=[],
             source_id=0x12345678,
             dest_id=0x87654321,
+            style="chain",
         )
 
-        assert result == "🔍 TR: → 1.5678→4321 -4.0dB"
+        assert result == "TR → 5678 > 4321(-4.0)"
 
     @pytest.mark.unit
     def test_handle_traceroute_packet_sends_formatted_response(
@@ -163,6 +204,7 @@ class TestBotTracerouteFormatting:
     ):
         dest_id = 0x87654321
         local_id = 0x12345678
+        bot_service._traceroute_format = "chain"
         bot_service._pending_traceroutes[dest_id] = (
             dest_id,
             "Requester",
@@ -192,6 +234,6 @@ class TestBotTracerouteFormatting:
 
         queue_message.assert_called_once()
         response = queue_message.call_args.kwargs["text"]
-        assert response.startswith("🔍 TR:")
-        assert "1.5678→1111 -5.0dB" in response
+        assert response.startswith("TR →")
+        assert "5678 > 1111(-5.0) > 4321(-8.0)" in response
         assert dest_id not in bot_service._pending_traceroutes

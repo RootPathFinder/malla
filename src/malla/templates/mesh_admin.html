@@ -1777,6 +1777,14 @@
                                             </label>
                                         </div>
                                     </div>
+                                    <div class="mb-2">
+                                        <label class="form-label small mb-1" for="botTracerouteFormat"><strong>Traceroute format</strong></label>
+                                        <select class="form-select form-select-sm" id="botTracerouteFormat">
+                                            <option value="chain">Chain — A &gt; B(-5.0) &gt; C</option>
+                                            <option value="hops">Hops — numbered hop list</option>
+                                            <option value="names">Names — use node names</option>
+                                        </select>
+                                    </div>
                                     <hr class="my-2">
                                     <div class="small fw-semibold mb-2">Daily Net Update</div>
                                     <div class="d-flex align-items-center justify-content-between gap-2 mb-2">
@@ -9920,6 +9928,7 @@
             setIfBlurred('botRespondChannelIndex', data.respond_channel_index ?? 1);
             setIfBlurred('botDailyDigestHour', data.daily_digest_hour ?? 8);
             setIfBlurred('botBroadcastIntervalHours', data.broadcast_interval_hours ?? 12);
+            setIfBlurred('botTracerouteFormat', data.traceroute_format || 'chain');
 
             const waitEl = document.getElementById('botWaitForJobs');
             if (waitEl && document.activeElement !== waitEl) {
@@ -10206,6 +10215,7 @@
         const dailyDigestHour = parseInt(document.getElementById('botDailyDigestHour').value, 10);
         const channelBroadcastEnabled = document.getElementById('botChannelBroadcastEnabled').checked;
         const broadcastIntervalHours = parseFloat(document.getElementById('botBroadcastIntervalHours').value);
+        const tracerouteFormat = document.getElementById('botTracerouteFormat').value || 'chain';
 
         try {
             const response = await fetch('/api/bot/config', {
@@ -10220,7 +10230,8 @@
                     daily_digest_enabled: dailyDigestEnabled,
                     daily_digest_hour: Number.isFinite(dailyDigestHour) ? dailyDigestHour : 8,
                     channel_broadcast_enabled: channelBroadcastEnabled,
-                    broadcast_interval_hours: Number.isFinite(broadcastIntervalHours) ? broadcastIntervalHours : 12
+                    broadcast_interval_hours: Number.isFinite(broadcastIntervalHours) ? broadcastIntervalHours : 12,
+                    traceroute_format: tracerouteFormat
                 })
             });
             const data = await response.json();

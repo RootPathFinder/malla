@@ -173,6 +173,9 @@ class BotService:
         self._daily_digest_hour = 8  # Local hour (0-23) to broadcast
         self._last_daily_digest_date: str | None = None
         self._last_digest_text: str | None = None
+        # Traceroute reply style: chain | hops | names
+        self._traceroute_format = "chain"
+        self._traceroute_formats = ("chain", "hops", "names")
         # Only report routers offline within this window (skip long-dead nodes)
         self._digest_offline_max_hours = 24.0
         self._digest_offline_min_hours = 1.0
@@ -939,30 +942,81 @@ class BotService:
         """Return a compact node identifier for mesh payloads."""
         return f"{node_id:08x}"[-4:]
 
-    def _format_path_trace(
+    def _traceroute_label(self, node_id: int, *, use_names: bool = False) -> str:
+        """Return a compact node label for traceroute output."""
+        if not node_id:
+            return "?"
+        if use_names:
+            try:
+                from ..database.repositories import NodeRepository
+
+                node = NodeRepository.get_node_details(node_id)
+                if node:
+                    name = node.get("short_name") or node.get("long_name")
+                    if name:
+                        return name[:10] if len(name) > 10 else name
+            except Exception:
+                pass
+        return self._short_node_id(node_id)
+
+    def _format_snr(self, snr: float | None, *, compact: bool = False) -> str:
+        """Format an SNR value for traceroute output."""
+        if snr is None:
+            return "?"
+        if compact:
+            return f"{snr:.0f}" if float(snr).is_integer() else f"{snr:.1f}"
+        return f"{snr:.1f}"
+
+    def _format_traceroute_chain(
         self,
         start_id: int,
         intermediates: list[int],
         end_id: int,
         snrs: list[float | None],
+        *,
+        use_names: bool = False,
     ) -> str:
-        """Format one traceroute direction with per-hop SNR values."""
+        """Format a path as: A > B(-5.0) > C(-8.0)."""
         if not start_id or not end_id:
             return ""
 
-        hops: list[str] = []
         path_nodes = [start_id, *intermediates, end_id]
+        parts = [self._traceroute_label(path_nodes[0], use_names=use_names)]
+        for index in range(1, len(path_nodes)):
+            label = self._traceroute_label(path_nodes[index], use_names=use_names)
+            snr = snrs[index - 1] if index - 1 < len(snrs) else None
+            if snr is None and index - 1 >= len(snrs):
+                parts.append(label)
+            elif snr is None:
+                parts.append(f"{label}(?)")
+            else:
+                parts.append(f"{label}({self._format_snr(snr)})")
+        return " > ".join(parts)
 
+    def _format_traceroute_hops(
+        self,
+        start_id: int,
+        intermediates: list[int],
+        end_id: int,
+        snrs: list[float | None],
+    ) -> list[str]:
+        """Format a path as numbered hop lines."""
+        if not start_id or not end_id:
+            return []
+
+        path_nodes = [start_id, *intermediates, end_id]
+        lines: list[str] = []
         for index in range(len(path_nodes) - 1):
-            from_short = self._short_node_id(path_nodes[index])
-            to_short = self._short_node_id(path_nodes[index + 1])
+            from_label = self._short_node_id(path_nodes[index])
+            to_label = self._short_node_id(path_nodes[index + 1])
             snr = snrs[index] if index < len(snrs) else None
             if snr is None:
-                hops.append(f"{index + 1}.{from_short}→{to_short}")
+                lines.append(f"{index + 1} {from_label}→{to_label}")
             else:
-                hops.append(f"{index + 1}.{from_short}→{to_short} {snr:.1f}dB")
-
-        return " ".join(hops)
+                lines.append(
+                    f"{index + 1} {from_label}→{to_label} {self._format_snr(snr)}"
+                )
+        return lines
 
     def _format_traceroute_result(
         self,
@@ -972,29 +1026,135 @@ class BotService:
         snr_back: list[float | None],
         source_id: int = 0,
         dest_id: int = 0,
+        style: str | None = None,
     ) -> str:
-        """Format traceroute results for sending back to channel."""
-        lines: list[str] = []
+        """Format traceroute results using the configured output style."""
+        fmt = (style or self._traceroute_format or "chain").lower()
+        if fmt not in self._traceroute_formats:
+            fmt = "chain"
 
-        forward_trace = self._format_path_trace(
+        if fmt == "hops":
+            message = self._format_traceroute_hops_style(
+                route, route_back, snr_towards, snr_back, source_id, dest_id
+            )
+        elif fmt == "names":
+            message = self._format_traceroute_names_style(
+                route, route_back, snr_towards, snr_back, source_id, dest_id
+            )
+        else:
+            message = self._format_traceroute_chain_style(
+                route, route_back, snr_towards, snr_back, source_id, dest_id
+            )
+
+        if len(message.encode("utf-8")) > 220:
+            message = message.encode("utf-8")[:217].decode("utf-8", errors="ignore")
+            message = message.rstrip() + "..."
+        return message
+
+    def _format_traceroute_chain_style(
+        self,
+        route: list[int],
+        route_back: list[int],
+        snr_towards: list[float | None],
+        snr_back: list[float | None],
+        source_id: int,
+        dest_id: int,
+    ) -> str:
+        """Classic chain format with SNR on arrival."""
+        lines: list[str] = []
+        forward = self._format_traceroute_chain(
             source_id, route, dest_id, snr_towards
         )
-        if forward_trace:
-            lines.append(f"→ {forward_trace}")
-
+        if forward:
+            lines.append(f"TR → {forward}")
         if route_back or snr_back:
-            return_trace = self._format_path_trace(
+            back = self._format_traceroute_chain(
                 dest_id, route_back, source_id, snr_back
             )
-            if return_trace:
-                lines.append(f"← {return_trace}")
-
+            if back:
+                lines.append(f"← {back}")
         if not lines:
-            src_short = self._short_node_id(source_id) if source_id else "?"
-            dst_short = self._short_node_id(dest_id) if dest_id else "?"
-            lines.append(f"→ 1.{src_short}→{dst_short} (no SNR)")
+            src = self._short_node_id(source_id) if source_id else "?"
+            dst = self._short_node_id(dest_id) if dest_id else "?"
+            lines.append(f"TR → {src} > {dst}")
+        return "\n".join(lines)
 
-        return "🔍 TR: " + " | ".join(lines)
+    def _format_traceroute_hops_style(
+        self,
+        route: list[int],
+        route_back: list[int],
+        snr_towards: list[float | None],
+        snr_back: list[float | None],
+        source_id: int,
+        dest_id: int,
+    ) -> str:
+        """Numbered hop-list format."""
+        hop_lines = self._format_traceroute_hops(
+            source_id, route, dest_id, snr_towards
+        )
+        forward_hops = len(hop_lines) if hop_lines else (
+            1 if source_id and dest_id else 0
+        )
+
+        dst_label = self._short_node_id(dest_id) if dest_id else "?"
+        lines = [f"TR to {dst_label} ({forward_hops} hops)"]
+        if hop_lines:
+            lines.extend(hop_lines)
+        else:
+            src = self._short_node_id(source_id) if source_id else "?"
+            lines.append(f"1 {src}→{dst_label}")
+
+        if route_back or snr_back:
+            back_nodes = [dest_id, *route_back, source_id]
+            parts: list[str] = []
+            for index in range(len(back_nodes) - 1):
+                to_label = self._short_node_id(back_nodes[index + 1])
+                snr = snr_back[index] if index < len(snr_back) else None
+                if index == 0:
+                    from_label = self._short_node_id(back_nodes[index])
+                    if snr is None:
+                        parts.append(f"{from_label}→{to_label}")
+                    else:
+                        parts.append(
+                            f"{from_label}→{to_label} {self._format_snr(snr)}"
+                        )
+                else:
+                    if snr is None:
+                        parts.append(f"→{to_label}")
+                    else:
+                        parts.append(f"→{to_label} {self._format_snr(snr)}")
+            if parts:
+                lines.append("← " + " ".join(parts))
+
+        return "\n".join(lines)
+
+    def _format_traceroute_names_style(
+        self,
+        route: list[int],
+        route_back: list[int],
+        snr_towards: list[float | None],
+        snr_back: list[float | None],
+        source_id: int,
+        dest_id: int,
+    ) -> str:
+        """Names-first chain format with short-ID fallback."""
+        lines: list[str] = []
+        forward = self._format_traceroute_chain(
+            source_id, route, dest_id, snr_towards, use_names=True
+        )
+        if forward:
+            lines.append("TR " + forward.replace(" > ", " → "))
+        if route_back or snr_back:
+            back = self._format_traceroute_chain(
+                dest_id, route_back, source_id, snr_back, use_names=True
+            )
+            if back:
+                lines.append("← " + back.replace(" > ", " → "))
+        if not lines:
+            src = self._traceroute_label(source_id, use_names=True)
+            dst = self._traceroute_label(dest_id, use_names=True)
+            lines.append(f"TR {src} → {dst}")
+        return "\n".join(lines)
 
     def _worker_loop(self) -> None:
         """Worker loop that sends queued messages."""

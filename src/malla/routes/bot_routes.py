@@ -28,6 +28,8 @@ def _bot_config_dict(bot: BotService) -> dict:
         "daily_digest_hour": bot._daily_digest_hour,
         "channel_broadcast_enabled": bot._channel_broadcast_enabled,
         "broadcast_interval_hours": bot._broadcast_interval_hours,
+        "traceroute_format": bot._traceroute_format,
+        "traceroute_formats": list(bot._traceroute_formats),
     }
 
 
@@ -193,6 +195,19 @@ def api_bot_update_config():
                     {"error": "broadcast_interval_hours must be 1-168"}
                 ), 400
             bot._broadcast_interval_hours = hours
+
+        if "traceroute_format" in data:
+            fmt = str(data["traceroute_format"]).strip().lower()
+            if fmt not in bot._traceroute_formats:
+                return jsonify(
+                    {
+                        "error": (
+                            "traceroute_format must be one of: "
+                            + ", ".join(bot._traceroute_formats)
+                        )
+                    }
+                ), 400
+            bot._traceroute_format = fmt
 
         return jsonify(
             {
