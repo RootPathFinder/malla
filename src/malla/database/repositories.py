@@ -4253,8 +4253,12 @@ class BatteryAnalyticsRepository:
 
         if len(timestamps) < 3:
             return None
-        levels = battery_levels or [None] * len(timestamps)
-        norm_v = [normalize_voltage(v) for v in voltages]
+        levels: list[int | None]
+        if battery_levels is not None:
+            levels = list(battery_levels)
+        else:
+            levels = [None for _ in range(len(timestamps))]
+        norm_v: list[float | None] = [normalize_voltage(v) for v in voltages]
         # Pad voltages to timestamps length if caller only passed voltage samples
         if len(norm_v) != len(timestamps):
             # Best-effort: zip truncates in classify; ensure equal length
