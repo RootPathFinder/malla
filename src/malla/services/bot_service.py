@@ -2539,13 +2539,7 @@ class BotService:
         self, zip_code: str, place: dict[str, Any], current: dict[str, Any]
     ) -> str:
         """Format a short LoRa-friendly weather report."""
-        place_name = str(place.get("name") or zip_code)
-        admin1 = place.get("admin1")
-        if admin1 and str(admin1) not in place_name:
-            # Prefer short region label when useful (e.g. California -> CA is long; keep city)
-            label = place_name
-        else:
-            label = place_name
+        label = str(place.get("name") or zip_code)
         if len(label) > 16:
             label = label[:16]
 
