@@ -2953,6 +2953,27 @@ def api_request_live_telemetry(node_id):
                 "budget": budget,
             }
 
+        def _persist_live_sample(result: dict[str, Any], source: str) -> None:
+            """Fold successful live polls into the node's normal telemetry history."""
+            if source == "last_known":
+                return
+            try:
+                from ..database.repositories import NodeRepository
+
+                NodeRepository.persist_telemetry_sample(
+                    node_id_int,
+                    result.get("telemetry"),
+                    timestamp=result.get("timestamp"),
+                    source=source,
+                    mesh_packet_id=result.get("request_id"),
+                )
+            except Exception as e:
+                logger.warning(
+                    "Could not persist live telemetry for !%08x: %s",
+                    node_id_int,
+                    e,
+                )
+
         def _failure_or_last_known(publisher: Any, attempts: int):
             # Keep charts alive across brief RF misses using very fresh cache
             cached: dict[str, Any] | None = None
@@ -2967,6 +2988,7 @@ def api_request_live_telemetry(node_id):
                     "timestamp": cached.get("timestamp"),
                     "stats": publisher.get_telemetry_stats(node_id_int),
                 }
+                # Do not persist last_known — it is already (or never was) in history
                 payload = _success_payload(
                     cached_result, attempts, source="last_known"
                 )
@@ -3014,6 +3036,7 @@ def api_request_live_telemetry(node_id):
 
             if result:
                 source = "late_cache" if result.get("late_cache") else "live"
+                _persist_live_sample(result, source)
                 return jsonify(_success_payload(result, attempts, source=source))
 
             return _failure_or_last_known(tcp_publisher, attempts)
@@ -3038,6 +3061,7 @@ def api_request_live_telemetry(node_id):
 
             if result:
                 source = "late_cache" if result.get("late_cache") else "live"
+                _persist_live_sample(result, source)
                 return jsonify(_success_payload(result, attempts, source=source))
 
             return _failure_or_last_known(serial_publisher, attempts)

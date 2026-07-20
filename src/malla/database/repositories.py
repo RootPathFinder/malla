@@ -1927,6 +1927,163 @@ class NodeRepository:
             raise
 
     @staticmethod
+    def persist_telemetry_sample(
+        node_id: int,
+        telemetry: dict[str, Any] | None,
+        *,
+        timestamp: float | None = None,
+        source: str = "live",
+        mesh_packet_id: int | None = None,
+        raw_payload: bytes | None = None,
+    ) -> int | None:
+        """
+        Persist a live (or equivalent) telemetry sample into normal history.
+
+        Writes a TELEMETRY_APP row to ``packet_history`` so node detail / coverage
+        / charts see the sample. When device metrics are present, also appends to
+        ``telemetry_data`` and updates ``node_info.last_battery_voltage``.
+        """
+        if not telemetry and not raw_payload:
+            return None
+
+        try:
+            from meshtastic import portnums_pb2
+
+            from ..utils.telemetry_request import (
+                serialize_telemetry_dict,
+                telemetry_to_dict,
+            )
+
+            telemetry_dict = telemetry_to_dict(telemetry) if telemetry else {}
+            payload = raw_payload or serialize_telemetry_dict(telemetry_dict)
+            if not payload:
+                return None
+
+            sample_time = float(timestamp) if timestamp is not None else time.time()
+            topic = f"{source}/telemetry"
+            gateway_id = f"!{int(node_id) & 0xFFFFFFFF:08x}"
+            portnum = int(portnums_pb2.PortNum.TELEMETRY_APP)
+
+            conn = get_db_connection()
+            cursor = conn.cursor()
+            cursor.execute(
+                """
+                INSERT INTO packet_history
+                (timestamp, topic, from_node_id, to_node_id, portnum, portnum_name,
+                 gateway_id, mesh_packet_id, payload_length, raw_payload,
+                 processed_successfully)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    sample_time,
+                    topic,
+                    int(node_id) & 0xFFFFFFFF,
+                    int(node_id) & 0xFFFFFFFF,
+                    portnum,
+                    "TELEMETRY_APP",
+                    gateway_id,
+                    mesh_packet_id,
+                    len(payload),
+                    payload,
+                    1,
+                ),
+            )
+            packet_row_id = cursor.lastrowid
+
+            device = telemetry_dict.get("device_metrics") or telemetry_dict.get(
+                "deviceMetrics"
+            )
+            if isinstance(device, dict) and device:
+                battery_level = device.get("battery_level", device.get("batteryLevel"))
+                voltage = device.get("voltage")
+                channel_util = device.get(
+                    "channel_utilization", device.get("channelUtilization")
+                )
+                air_util_tx = device.get("air_util_tx", device.get("airUtilTx"))
+                uptime = device.get("uptime_seconds", device.get("uptimeSeconds"))
+
+                # Align with MQTT capture: store volts as reported (mV -> V if needed)
+                voltage_value = None
+                if voltage is not None:
+                    try:
+                        voltage_value = float(voltage)
+                        if voltage_value > 1000:
+                            voltage_value = voltage_value / 1000.0
+                    except (TypeError, ValueError):
+                        voltage_value = None
+
+                # Use savepoints so optional side-tables cannot abort the
+                # packet_history insert on older/partial schemas.
+                try:
+                    cursor.execute("SAVEPOINT live_telemetry_device")
+                    cursor.execute(
+                        """
+                        INSERT INTO telemetry_data (
+                            timestamp, node_id, battery_level, voltage,
+                            channel_utilization, air_util_tx, uptime_seconds
+                        ) VALUES (?, ?, ?, ?, ?, ?, ?)
+                        """,
+                        (
+                            sample_time,
+                            int(node_id) & 0xFFFFFFFF,
+                            int(battery_level) if battery_level is not None else None,
+                            voltage_value,
+                            float(channel_util) if channel_util is not None else None,
+                            float(air_util_tx) if air_util_tx is not None else None,
+                            int(uptime) if uptime is not None else None,
+                        ),
+                    )
+                    cursor.execute("RELEASE SAVEPOINT live_telemetry_device")
+                except Exception as e:
+                    try:
+                        cursor.execute(
+                            "ROLLBACK TO SAVEPOINT live_telemetry_device"
+                        )
+                    except Exception:
+                        pass
+                    logger.debug(
+                        "Could not insert telemetry_data for live sample: %s", e
+                    )
+
+                if voltage_value is not None:
+                    try:
+                        cursor.execute("SAVEPOINT live_telemetry_voltage")
+                        cursor.execute(
+                            """
+                            UPDATE node_info
+                            SET last_battery_voltage = ?, last_updated = ?
+                            WHERE node_id = ?
+                            """,
+                            (
+                                voltage_value,
+                                sample_time,
+                                int(node_id) & 0xFFFFFFFF,
+                            ),
+                        )
+                        cursor.execute("RELEASE SAVEPOINT live_telemetry_voltage")
+                    except Exception as e:
+                        try:
+                            cursor.execute(
+                                "ROLLBACK TO SAVEPOINT live_telemetry_voltage"
+                            )
+                        except Exception:
+                            pass
+                        logger.debug(
+                            "Could not update last_battery_voltage from live sample: %s",
+                            e,
+                        )
+
+            conn.commit()
+            conn.close()
+            return int(packet_row_id) if packet_row_id is not None else None
+
+        except Exception as e:
+            logger.error(
+                "Failed to persist live telemetry for node %s: %s", node_id, e
+            )
+            return None
+
+    @staticmethod
     def get_latest_telemetry(node_id: int) -> dict[str, Any] | None:
         """Get the latest telemetry data for a specific node.
 
