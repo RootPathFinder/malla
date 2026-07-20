@@ -78,7 +78,7 @@
             {% if item.type == "span" %}
             <{{ item.type }} class="{{ item.class }}"{% if item.style %} style="{{ item.style }}"{% endif %}>{{ item.content }}</{{ item.type }}>
             {% else %}
-            <i class="{{ item.class }}"></i>
+            <i class="{{ item.class }}"{% if item.style %} style="{{ item.style }}"{% endif %}></i>
             {% endif %}
             <small>{{ item.text }}</small>
         </div>
