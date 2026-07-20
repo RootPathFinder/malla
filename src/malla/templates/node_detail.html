@@ -6,8 +6,6 @@
 {% block head_libs %}
 <!-- Plotly.js for telemetry charts -->
 <script src="https://cdn.plot.ly/plotly-2.30.0.min.js" integrity="sha384-H7GB7Kme/VbPI/0S4LNq7OixFNVRgRGE8kyqTntBuiXle1KBm8KWLQh/Ah6bXCYW" crossorigin="anonymous"></script>
-<!-- Chart.js for additional visualizations -->
-<script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js" integrity="sha384-e6nUZLBkQ86NJ6TVVKAeSaK8jWa3NhkYWZFomE39AvDbQWeie9PlQqM3pmYW5d1g" crossorigin="anonymous"></script>
 {% endblock head_libs %}
 
 {% block extra_css %}
@@ -63,6 +61,37 @@
         display: flex;
         align-items: center;
     }
+    .vitals-strip {
+        display: grid;
+        grid-template-columns: repeat(auto-fit, minmax(120px, 1fr));
+        gap: 0.75rem;
+        padding: 1rem 1.25rem;
+        border-radius: 0.5rem;
+        background: var(--bs-tertiary-bg, #f8f9fa);
+        border: 1px solid var(--bs-border-color, #dee2e6);
+    }
+    .vital-item {
+        min-width: 0;
+    }
+    .vital-item .vital-value {
+        font-size: 1.35rem;
+        font-weight: 700;
+        line-height: 1.2;
+    }
+    .vital-item .vital-label {
+        font-size: 0.75rem;
+        color: var(--bs-secondary-color, #6c757d);
+        text-transform: uppercase;
+        letter-spacing: 0.02em;
+    }
+    .vital-meta {
+        font-size: 0.85rem;
+        color: var(--bs-secondary-color, #6c757d);
+    }
+    .signal-poor {
+        background: #f8d7da;
+        color: #842029;
+    }
 </style>
 {% endblock %}
 
@@ -111,43 +140,37 @@
         </div>
     </div>
 
-    <!-- Overview Cards -->
-    <div class="row mb-4">
-        <div class="col-md-3">
-            <div class="card card-metric">
-                <div class="card-body">
-                    <div class="metric-value">{{ node.total_packets }}</div>
-                    <div class="metric-label">Total Packets</div>
-                </div>
+    <!-- Hero vitals: answers "is this node OK?" before deeper sections -->
+    <div class="mb-4" id="hero-vitals">
+        <div class="vitals-strip">
+            <div class="vital-item">
+                <div class="vital-value" id="vital-battery">--</div>
+                <div class="vital-label">Battery</div>
+            </div>
+            <div class="vital-item">
+                <div class="vital-value" id="vital-channel-util">--</div>
+                <div class="vital-label">Channel util</div>
+            </div>
+            <div class="vital-item">
+                <div class="vital-value" id="vital-telemetry-age">--</div>
+                <div class="vital-label">Telemetry age</div>
+            </div>
+            <div class="vital-item">
+                <div class="vital-value">{{ node.last_seen_relative }}</div>
+                <div class="vital-label">Last seen</div>
+            </div>
+            <div class="vital-item">
+                <div class="vital-value">{% if node.avg_hops is not none %}{{ node.avg_hops }}{% else %}?{% endif %}</div>
+                <div class="vital-label">Avg hops</div>
+            </div>
+            <div class="vital-item">
+                <div class="vital-value">{% if node.avg_rssi %}{{ node.avg_rssi|format_rssi }}{% else %}?{% endif %}</div>
+                <div class="vital-label">Avg RSSI</div>
             </div>
         </div>
-        <div class="col-md-3">
-            <div class="card card-metric">
-                <div class="card-body">
-                    <div class="metric-value">{{ node.unique_destinations or 0 }}</div>
-                    <div class="metric-label">Destinations</div>
-                </div>
-            </div>
-        </div>
-        <div class="col-md-3">
-            <div class="card card-metric">
-                <div class="card-body">
-                    <div class="metric-value">
-                        {% if node.avg_rssi %}{{ node.avg_rssi|format_rssi }}{% else %}?{% endif %}
-                    </div>
-                    <div class="metric-label">Avg RSSI (dBm)</div>
-                </div>
-            </div>
-        </div>
-        <div class="col-md-3">
-            <div class="card card-metric">
-                <div class="card-body">
-                    <div class="metric-value">
-                        {% if node.avg_hops %}{{ node.avg_hops }}{% else %}?{% endif %}
-                    </div>
-                    <div class="metric-label">Avg Hops</div>
-                </div>
-            </div>
+        <div class="vital-meta mt-2">
+            {{ node.total_packets }} packets · {{ node.unique_destinations or 0 }} destinations · {{ node.unique_gateways or 0 }} gateways
+            <span id="vital-signals" class="ms-2"></span>
         </div>
     </div>
 
@@ -239,9 +262,11 @@
                                             {% if node.avg_rssi >= -60 %}
                                                 <span class="signal-indicator signal-excellent">{{ node.avg_rssi|format_rssi }} dBm</span>
                                             {% elif node.avg_rssi >= -70 %}
-                                                                                <span class="signal-indicator signal-good">{{ node.avg_rssi|format_rssi }} dBm</span>
-                            {% elif node.avg_rssi >= -80 %}
-                                <span class="signal-indicator signal-fair">{{ node.avg_rssi|format_rssi }} dBm</span>
+                                                <span class="signal-indicator signal-good">{{ node.avg_rssi|format_rssi }} dBm</span>
+                                            {% elif node.avg_rssi >= -80 %}
+                                                <span class="signal-indicator signal-fair">{{ node.avg_rssi|format_rssi }} dBm</span>
+                                            {% else %}
+                                                <span class="signal-indicator signal-poor">{{ node.avg_rssi|format_rssi }} dBm</span>
                                             {% endif %}
                                         {% else %}
                                             <span class="text-muted">Unknown</span>
@@ -264,14 +289,14 @@
                                         {% endif %}
                                     </td>
                                 </tr>
-                                <tr>
-                                    <th>Firmware Version:</th>
+                                <tr id="device-firmware-row" class="d-none">
+                                    <th>Device firmware:</th>
                                     <td>
-                                        <span id="firmwareVersion" class="text-muted">Not available</span>
+                                        <span id="firmwareVersion" class="badge bg-info"></span>
                                         <i id="firmwareInfoTooltip" class="bi bi-info-circle text-muted ms-1"
                                            data-bs-toggle="tooltip"
                                            data-bs-placement="top"
-                                           title="Firmware version information requires admin access. If this node is administrable, it will be displayed automatically."></i>
+                                           title="Firmware reported by the device via admin connection."></i>
                                     </td>
                                 </tr>
                                 <tr>
@@ -445,16 +470,18 @@
                                    data-bs-toggle="tooltip" data-bs-placement="top"
                                    title="Requests real-time telemetry from the node. Not all nodes respond: Routers typically do, but Client/Tracker/Sensor roles or sleeping nodes may not."></i>
                             </h5>
-                            <small class="text-muted" id="live-telemetry-interval-info">Adaptive polling (3-20s based on response time)</small>
+                            <small class="text-muted" id="live-telemetry-interval-info">Hop-aware polling with mesh ACK retries</small>
                         </div>
                         <div class="d-flex align-items-center gap-2 flex-wrap">
-                            <!-- Duration selector -->
                             <div class="btn-group btn-group-sm" role="group" id="live-duration-selector">
                                 <button type="button" class="btn btn-outline-secondary active" data-duration="60">1m</button>
                                 <button type="button" class="btn btn-outline-secondary" data-duration="300">5m</button>
                                 <button type="button" class="btn btn-outline-secondary" data-duration="600">10m</button>
                             </div>
                             <span id="live-telemetry-timer" class="badge bg-secondary d-none">60s</span>
+                            <button id="live-poll-once-btn" class="btn btn-sm btn-outline-secondary" onclick="pollLiveTelemetryOnce()" title="Request a single telemetry sample">
+                                <i class="bi bi-arrow-repeat"></i> Poll once
+                            </button>
                             <button id="live-telemetry-btn" class="btn btn-sm btn-outline-primary" onclick="toggleLiveTelemetry()">
                                 <i class="bi bi-play-fill"></i> Start Live
                             </button>
@@ -462,47 +489,45 @@
                     </div>
                 </div>
                 <div class="card-body" id="live-telemetry-content">
-                    <!-- Current values row -->
-                    <div class="row g-3">
-                        <div class="col-md-3 col-6">
+                    <div class="row g-3" id="live-values-row">
+                        <!-- Metric tiles stay hidden until a live sample provides that field -->
+                        <div class="col-md-3 col-6" id="live-battery-tile" style="display: none;">
                             <div class="text-center p-3 bg-light rounded">
                                 <div class="h4 mb-0" id="live-battery">--</div>
                                 <small class="text-muted">Battery</small>
                             </div>
                         </div>
-                        <div class="col-md-3 col-6">
+                        <div class="col-md-3 col-6" id="live-voltage-tile" style="display: none;">
                             <div class="text-center p-3 bg-light rounded">
                                 <div class="h4 mb-0" id="live-voltage">--</div>
                                 <small class="text-muted">Voltage</small>
                             </div>
                         </div>
-                        <div class="col-md-3 col-6">
+                        <div class="col-md-3 col-6" id="live-channel-util-tile" style="display: none;">
                             <div class="text-center p-3 bg-light rounded">
                                 <div class="h4 mb-0" id="live-channel-util">--</div>
                                 <small class="text-muted">Channel Util</small>
                             </div>
                         </div>
-                        <div class="col-md-3 col-6">
+                        <div class="col-md-3 col-6" id="live-air-util-tile" style="display: none;">
                             <div class="text-center p-3 bg-light rounded">
                                 <div class="h4 mb-0" id="live-air-util">--</div>
                                 <small class="text-muted">Air Util TX</small>
                             </div>
                         </div>
-                    </div>
-                    <div class="row g-3 mt-1">
-                        <div class="col-md-4 col-6">
+                        <div class="col-md-4 col-6" id="live-uptime-tile" style="display: none;">
                             <div class="text-center p-2 bg-light rounded">
                                 <div class="h5 mb-0" id="live-uptime">--</div>
                                 <small class="text-muted">Uptime</small>
                             </div>
                         </div>
-                        <div class="col-md-4 col-6">
+                        <div class="col-md-4 col-6" id="live-temperature-tile" style="display: none;">
                             <div class="text-center p-2 bg-light rounded">
                                 <div class="h5 mb-0" id="live-temperature">--</div>
                                 <small class="text-muted">Temperature</small>
                             </div>
                         </div>
-                        <div class="col-md-4 col-12">
+                        <div class="col-md-4 col-12" id="live-last-update-tile" style="display: none;">
                             <div class="text-center p-2 bg-light rounded">
                                 <div class="h5 mb-0" id="live-last-update">--</div>
                                 <small class="text-muted">Last Update</small>
@@ -510,113 +535,105 @@
                         </div>
                     </div>
 
-                    <!-- Polling Metrics Bar Graph (hidden until polling starts) -->
-                    <div id="polling-metrics-container" class="mt-3" style="display: none;">
-                        <div class="d-flex justify-content-between align-items-center mb-1">
-                            <small class="text-muted"><i class="bi bi-clock-history"></i> Adaptive Polling</small>
-                            <small class="text-muted" id="polling-metrics-label">--</small>
-                        </div>
-                        <div class="position-relative" style="height: 24px; background: #e9ecef; border-radius: 4px; overflow: hidden;">
-                            <!-- Poll interval bar (gray background showing max range) -->
-                            <div id="poll-interval-bar" style="position: absolute; height: 100%; background: linear-gradient(90deg, #6c757d 0%, #adb5bd 100%); width: 0%; transition: width 0.3s ease;"></div>
-                            <!-- Response time bar (overlaid, shows actual response) -->
-                            <div id="response-time-bar" style="position: absolute; height: 100%; background: linear-gradient(90deg, #198754 0%, #20c997 100%); width: 0%; transition: width 0.3s ease;"></div>
-                            <!-- Labels inside the bar -->
-                            <div style="position: absolute; width: 100%; height: 100%; display: flex; align-items: center; justify-content: space-between; padding: 0 8px; font-size: 11px; font-weight: 500;">
-                                <span id="response-label" style="color: white; text-shadow: 0 0 2px rgba(0,0,0,0.5);">--</span>
-                                <span id="interval-label" style="color: #333;">--</span>
-                            </div>
-                        </div>
-                        <div class="d-flex justify-content-between mt-1">
-                            <small class="text-muted">0s</small>
-                            <small class="text-muted">20s (max)</small>
-                        </div>
-
-                        <!-- Poll Results Timeline - Visual indicator of success/failure -->
-                        <div class="mt-3">
-                            <div class="d-flex justify-content-between align-items-center mb-1">
-                                <small class="text-muted"><i class="bi bi-reception-4"></i> Poll Results Timeline</small>
-                                <small class="text-muted" id="poll-timeline-summary">--</small>
-                            </div>
-                            <div id="poll-timeline" class="d-flex align-items-center gap-1 flex-wrap p-2 rounded" style="background: var(--bs-tertiary-bg); min-height: 32px;">
-                                <span class="text-muted small">Waiting for first poll...</span>
-                            </div>
-                            <div class="d-flex justify-content-between mt-1">
-                                <small class="text-muted">
-                                    <span style="display: inline-block; width: 10px; height: 10px; background: #198754; border-radius: 50%; margin-right: 3px;"></span>Success
-                                    <span style="display: inline-block; width: 10px; height: 10px; background: #dc3545; border-radius: 50%; margin-left: 10px; margin-right: 3px;"></span>Failed
-                                    <span style="display: inline-block; width: 10px; height: 10px; background: #ffc107; border-radius: 50%; margin-left: 10px; margin-right: 3px;"></span>Slow
-                                </small>
-                                <small class="text-muted" id="poll-timeline-oldest">← oldest</small>
-                            </div>
-                        </div>
+                    <div class="mt-3">
+                        <small class="text-muted" id="live-telemetry-status">
+                            <i class="bi bi-info-circle"></i> Poll once for a sample, or Start Live for continuous monitoring.
+                        </small>
                     </div>
 
-                    <!-- Live Charts (hidden until polling starts) -->
-                    <div id="live-charts-container" class="mt-4" style="display: none;">
-                        <h6 class="mb-3"><i class="bi bi-graph-up"></i> Live Trends</h6>
-                        <div class="row g-3">
-                            <div class="col-md-6">
-                                <div class="card">
-                                    <div class="card-body p-2">
+                    <!-- Diagnostics collapsed by default -->
+                    <div class="mt-3">
+                        <button class="btn btn-sm btn-link text-decoration-none px-0" type="button"
+                                data-bs-toggle="collapse" data-bs-target="#live-polling-diagnostics"
+                                aria-expanded="false" aria-controls="live-polling-diagnostics">
+                            <i class="bi bi-chevron-down"></i> Polling diagnostics
+                        </button>
+                        <div class="collapse" id="live-polling-diagnostics">
+                            <div id="polling-metrics-container" class="mt-2">
+                                <div class="d-flex justify-content-between align-items-center mb-1">
+                                    <small class="text-muted"><i class="bi bi-clock-history"></i> Adaptive Polling</small>
+                                    <small class="text-muted" id="polling-metrics-label">--</small>
+                                </div>
+                                <div class="position-relative" style="height: 24px; background: #e9ecef; border-radius: 4px; overflow: hidden;">
+                                    <div id="poll-interval-bar" style="position: absolute; height: 100%; background: linear-gradient(90deg, #6c757d 0%, #adb5bd 100%); width: 0%; transition: width 0.3s ease;"></div>
+                                    <div id="response-time-bar" style="position: absolute; height: 100%; background: linear-gradient(90deg, #198754 0%, #20c997 100%); width: 0%; transition: width 0.3s ease;"></div>
+                                    <div style="position: absolute; width: 100%; height: 100%; display: flex; align-items: center; justify-content: space-between; padding: 0 8px; font-size: 11px; font-weight: 500;">
+                                        <span id="response-label" style="color: white; text-shadow: 0 0 2px rgba(0,0,0,0.5);">--</span>
+                                        <span id="interval-label" style="color: #333;">--</span>
+                                    </div>
+                                </div>
+                                <div class="d-flex justify-content-between mt-1">
+                                    <small class="text-muted">0s</small>
+                                    <small class="text-muted">30s (max)</small>
+                                </div>
+
+                                <div class="mt-3">
+                                    <div class="d-flex justify-content-between align-items-center mb-1">
+                                        <small class="text-muted"><i class="bi bi-reception-4"></i> Poll Results Timeline</small>
+                                        <small class="text-muted" id="poll-timeline-summary">--</small>
+                                    </div>
+                                    <div id="poll-timeline" class="d-flex align-items-center gap-1 flex-wrap p-2 rounded" style="background: var(--bs-tertiary-bg); min-height: 32px;">
+                                        <span class="text-muted small">Waiting for first poll...</span>
+                                    </div>
+                                    <div class="d-flex justify-content-between mt-1">
+                                        <small class="text-muted">
+                                            <span style="display: inline-block; width: 10px; height: 10px; background: #198754; border-radius: 50%; margin-right: 3px;"></span>Success
+                                            <span style="display: inline-block; width: 10px; height: 10px; background: #dc3545; border-radius: 50%; margin-left: 10px; margin-right: 3px;"></span>Failed
+                                            <span style="display: inline-block; width: 10px; height: 10px; background: #ffc107; border-radius: 50%; margin-left: 10px; margin-right: 3px;"></span>Slow
+                                        </small>
+                                        <small class="text-muted" id="poll-timeline-oldest">← oldest</small>
+                                    </div>
+                                </div>
+
+                                <div id="live-telemetry-stats" class="mt-2 d-none">
+                                    <small class="text-muted">
+                                        <span class="me-3">
+                                            <i class="bi bi-arrow-repeat"></i> Requests: <span id="stats-requests">0</span>
+                                        </span>
+                                        <span class="me-3 text-success">
+                                            <i class="bi bi-check-circle"></i> Success: <span id="stats-successes">0</span>
+                                        </span>
+                                        <span class="me-3 text-warning">
+                                            <i class="bi bi-clock"></i> Timeouts: <span id="stats-timeouts">0</span>
+                                        </span>
+                                        <span class="badge" id="stats-success-rate-badge">
+                                            <span id="stats-success-rate">0</span>% success
+                                        </span>
+                                    </small>
+                                </div>
+                            </div>
+
+                            <div id="live-charts-container" class="mt-3">
+                                <h6 class="mb-3"><i class="bi bi-graph-up"></i> Live Trends</h6>
+                                <div class="row g-3">
+                                    <div class="col-md-6">
                                         <div id="live-chart-battery" style="height: 150px;"></div>
                                     </div>
-                                </div>
-                            </div>
-                            <div class="col-md-6">
-                                <div class="card">
-                                    <div class="card-body p-2">
+                                    <div class="col-md-6">
                                         <div id="live-chart-voltage" style="height: 150px;"></div>
                                     </div>
-                                </div>
-                            </div>
-                            <div class="col-md-6">
-                                <div class="card">
-                                    <div class="card-body p-2">
+                                    <div class="col-md-6">
                                         <div id="live-chart-channel-util" style="height: 150px;"></div>
                                     </div>
-                                </div>
-                            </div>
-                            <div class="col-md-6">
-                                <div class="card">
-                                    <div class="card-body p-2">
+                                    <div class="col-md-6">
                                         <div id="live-chart-air-util" style="height: 150px;"></div>
                                     </div>
                                 </div>
                             </div>
                         </div>
                     </div>
-
-                    <div class="mt-3">
-                        <small class="text-muted" id="live-telemetry-status">
-                            <i class="bi bi-info-circle"></i> Select duration and click "Start Live" to begin polling.
-                        </small>
-                        <!-- Telemetry Stats Display -->
-                        <div id="live-telemetry-stats" class="mt-2 d-none">
-                            <small class="text-muted">
-                                <span class="me-3">
-                                    <i class="bi bi-arrow-repeat"></i> Requests: <span id="stats-requests">0</span>
-                                </span>
-                                <span class="me-3 text-success">
-                                    <i class="bi bi-check-circle"></i> Success: <span id="stats-successes">0</span>
-                                </span>
-                                <span class="me-3 text-warning">
-                                    <i class="bi bi-clock"></i> Timeouts: <span id="stats-timeouts">0</span>
-                                </span>
-                                <span class="badge" id="stats-success-rate-badge">
-                                    <span id="stats-success-rate">0</span>% success
-                                </span>
-                            </small>
-                        </div>
-                    </div>
                 </div>
             </div>
             {% endif %}
 
-            <!-- 7-Day Availability Visualization -->
+            <!-- Telemetry coverage (sample presence, not mesh uptime) -->
             <div class="card mb-4">
                 <div class="card-header py-2">
-                    <h6 class="mb-0"><i class="bi bi-clock-history"></i> 7-Day Availability</h6>
+                    <h6 class="mb-0">
+                        <i class="bi bi-clock-history"></i> Telemetry coverage (7d)
+                        <i class="bi bi-info-circle text-muted ms-1" style="font-size: 0.75rem; cursor: help;"
+                           data-bs-toggle="tooltip" title="Hours with at least one telemetry sample heard. Not the same as node uptime or mesh reachability."></i>
+                    </h6>
                 </div>
                 <div class="card-body py-2">
                     {% set container_id = "node-uptime-viz-" ~ node.node_id %}
@@ -1246,16 +1263,17 @@ async function checkAdminStatus() {
                 adminButton.classList.remove('d-none');
             }
 
-            // Display firmware version if available
+            // Display device firmware when admin check returns it
             if (data.details && data.details.firmware_version) {
+                const firmwareRow = document.getElementById('device-firmware-row');
                 const firmwareEl = document.getElementById('firmwareVersion');
                 const tooltipEl = document.getElementById('firmwareInfoTooltip');
+                if (firmwareRow) {
+                    firmwareRow.classList.remove('d-none');
+                }
                 if (firmwareEl) {
                     firmwareEl.textContent = data.details.firmware_version;
-                    firmwareEl.classList.remove('text-muted');
-                    firmwareEl.classList.add('text-success');
                 }
-                // Hide the info tooltip since we have the data
                 if (tooltipEl) {
                     tooltipEl.classList.add('d-none');
                 }
@@ -1781,107 +1799,76 @@ document.addEventListener('DOMContentLoaded', function() {
 
     // Load telemetry data
     loadTelemetryData();
-
-    // Load health warnings
-    loadHealthWarnings();
 });
 
-async function loadHealthWarnings() {
-    const scriptTag = document.querySelector('script[data-node-id]');
-    const nodeId = scriptTag.getAttribute('data-node-id');
-    const warningsContainer = document.getElementById('health-warnings-container');
-    const warningsContent = document.getElementById('health-warnings-content');
+function formatTelemetryAge(timestampUnix) {
+    if (!timestampUnix) return null;
+    const ageSec = Math.max(0, (Date.now() / 1000) - Number(timestampUnix));
+    if (ageSec < 60) return Math.round(ageSec) + 's';
+    if (ageSec < 3600) return Math.round(ageSec / 60) + 'm';
+    if (ageSec < 86400) return (ageSec / 3600).toFixed(1) + 'h';
+    return (ageSec / 86400).toFixed(1) + 'd';
+}
 
-    try {
-        const response = await fetch(`/api/health/node/${nodeId}?hours=24`);
-        const data = await response.json();
+function updateHeroVitals(telemetry) {
+    const dm = (telemetry && telemetry.device_metrics) || {};
+    const batteryEl = document.getElementById('vital-battery');
+    const channelEl = document.getElementById('vital-channel-util');
+    const ageEl = document.getElementById('vital-telemetry-age');
+    const signalsEl = document.getElementById('vital-signals');
 
-        if (data.error) {
-            // Error fetching health data - show error message
-            warningsContainer.style.display = 'block';
-            warningsContent.innerHTML = `<div class="alert alert-warning mb-0"><small>${data.error}</small></div>`;
-            return;
+    if (batteryEl) {
+        if (dm.battery_level !== undefined) {
+            batteryEl.textContent = dm.battery_level + '%';
+            batteryEl.className = 'vital-value ' + (
+                dm.battery_level < 20 ? 'text-danger' :
+                dm.battery_level < 50 ? 'text-warning' : 'text-success'
+            );
+        } else {
+            batteryEl.textContent = '--';
+            batteryEl.className = 'vital-value';
         }
-
-        // Always show the health status, even if no warnings
-        warningsContainer.style.display = 'block';
-
-        // Build warnings HTML
-        let html = '';
-
-        // Show issues if any exist
-        if (data.issues && data.issues.length > 0) {
-            // Filter out info-level issues, show only warnings and critical
-            const importantIssues = data.issues.filter(i => i.severity !== 'info');
-
-            if (importantIssues.length > 0) {
-                html += '<div class="d-flex flex-wrap gap-1 mb-2">';
-                for (const issue of importantIssues) {
-                    const severityClass = issue.severity === 'critical' ? 'danger' : 'warning';
-                    const severityIcon = issue.severity === 'critical' ? 'exclamation-circle-fill' : 'exclamation-triangle-fill';
-
-                    // Shorten the message - extract just the key part
-                    let shortMsg = issue.message;
-                    // Remove category prefix like "behavior: ", "signal: ", "connectivity: "
-                    shortMsg = shortMsg.replace(/^(behavior|signal|connectivity|battery|gateway):\s*/i, '');
-                    // Truncate long messages and remove parenthetical info
-                    shortMsg = shortMsg.replace(/\s*\([^)]+\)\s*/g, ' ').trim();
-                    // Further shorten common phrases
-                    shortMsg = shortMsg.replace('Abnormally low activity', 'Low activity');
-                    shortMsg = shortMsg.replace('Average RSSI', 'RSSI');
-                    shortMsg = shortMsg.replace('Average SNR', 'SNR');
-                    shortMsg = shortMsg.replace('Only heard by one gateway', '1 gateway');
-                    shortMsg = shortMsg.replace('expected', 'exp');
-                    shortMsg = shortMsg.replace('baseline', 'base');
-                    // Cap length
-                    if (shortMsg.length > 35) shortMsg = shortMsg.substring(0, 32) + '...';
-
-                    html += `<span class="badge bg-${severityClass}" style="font-size: 0.6rem; font-weight: 500; cursor: help;"
-                                   data-bs-toggle="tooltip" title="${issue.message.replace(/"/g, '&quot;')}">`;
-                    html += `<i class="bi bi-${severityIcon}"></i> ${shortMsg}`;
-                    html += '</span>';
-                }
-                html += '</div>';
-            }
+    }
+    if (channelEl) {
+        if (dm.channel_utilization !== undefined) {
+            channelEl.textContent = dm.channel_utilization.toFixed(1) + '%';
+            channelEl.className = 'vital-value ' + (
+                dm.channel_utilization > 80 ? 'text-danger' :
+                dm.channel_utilization > 50 ? 'text-warning' : ''
+            );
+        } else {
+            channelEl.textContent = '--';
+            channelEl.className = 'vital-value';
         }
+    }
+    if (ageEl) {
+        const age = formatTelemetryAge(telemetry && telemetry.timestamp_unix);
+        ageEl.textContent = age || '--';
+    }
 
-        // Always show health score and confidence
-        if (data.health_score !== undefined) {
-            const scoreClass = data.health_status === 'healthy' ? 'success' :
-                              data.health_status === 'degraded' ? 'warning' :
-                              data.health_status === 'poor' ? 'danger' : 'dark';
-
-            const confidenceClass = data.confidence_score >= 80 ? 'success' :
-                                   data.confidence_score >= 60 ? 'warning' : 'danger';
-
-            html += `<div class="d-flex justify-content-center gap-1 flex-wrap">`;
-            html += `<span class="badge bg-${scoreClass}" style="font-size: 0.7rem;">${data.health_score}/100</span>`;
-            html += `<span class="badge bg-${confidenceClass}" style="font-size: 0.7rem;" data-bs-toggle="tooltip"
-                            title="Confidence: ${data.confidence_score}%. ${data.confidence_factors ? data.confidence_factors.join('; ') : ''}">
-                        <i class="bi bi-check-circle"></i> ${data.confidence_score}%</span>`;
-            html += '</div>';
+    // Honest signal badges derived only from known telemetry (no fake /100 score)
+    const signals = [];
+    if (telemetry && telemetry.timestamp_unix) {
+        const ageH = (Date.now() / 1000 - Number(telemetry.timestamp_unix)) / 3600;
+        if (ageH > 24) signals.push(['danger', 'Stale telemetry']);
+        else if (ageH > 6) signals.push(['warning', 'Telemetry aging']);
+    }
+    if (dm.battery_level !== undefined && dm.battery_level < 20) {
+        signals.push(['danger', 'Low battery']);
+    } else if (dm.battery_level !== undefined && dm.battery_level < 50) {
+        signals.push(['warning', 'Battery &lt;50%']);
+    }
+    if (dm.channel_utilization !== undefined && dm.channel_utilization > 80) {
+        signals.push(['warning', 'High channel util']);
+    }
+    if (signalsEl) {
+        if (!signals.length) {
+            signalsEl.innerHTML = '<span class="badge bg-success-subtle text-success border border-success-subtle">No telemetry concerns</span>';
+        } else {
+            signalsEl.innerHTML = signals.map(([cls, text]) =>
+                `<span class="badge bg-${cls}">${text}</span>`
+            ).join(' ');
         }
-
-        // Add baseline info if available
-        if (data.baseline && data.baseline.has_baseline) {
-            html += `<div class="mt-2"><small class="text-muted">`;
-            html += `<i class="bi bi-graph-up"></i> Baseline: ${data.baseline.avg_packets_per_day.toFixed(1)} packets/day `;
-            html += `(${data.baseline.total_days.toFixed(0)} days, ${data.baseline.total_packets} packets)`;
-            html += '</small></div>';
-        }
-
-        warningsContent.innerHTML = html;
-
-        // Reinitialize tooltips
-        const tooltipTriggerList = warningsContent.querySelectorAll('[data-bs-toggle="tooltip"]');
-        [...tooltipTriggerList].forEach(tooltipTriggerEl => {
-            if (typeof bootstrap !== 'undefined' && bootstrap.Tooltip) {
-                new bootstrap.Tooltip(tooltipTriggerEl);
-            }
-        });
-
-    } catch (error) {
-        console.error('Error loading health warnings:', error);
     }
 }
 
@@ -1925,165 +1912,90 @@ async function loadTelemetryData() {
         // Build comprehensive telemetry HTML
         let html = '';
 
-        // Fetch comprehensive health data from the health API
-        let nodeHealth = {};
-        try {
-            const healthResponse = await fetch(`/api/health/node/${nodeId}?hours=24`);
-            if (healthResponse.ok) {
-                const healthData = await healthResponse.json();
-                nodeHealth = healthData;
-            }
-        } catch (error) {
-            console.debug('Could not load health data:', error);
-        }
+        // Honest telemetry signals from last-heard age + device metrics (no fake /100 score)
+        const lastHeard = Number(telemetry.timestamp_unix || 0);
+        const ageSeconds = lastHeard ? Math.max(0, (Date.now() / 1000) - lastHeard) : null;
+        // Page-level packet stats already rendered in the hero strip
+        const pageMetrics = {
+            total_packets: {{ node.total_packets or 0 }},
+            avg_rssi: {% if node.avg_rssi is not none %}{{ node.avg_rssi }}{% else %}null{% endif %},
+            avg_snr: {% if node.avg_snr is not none %}{{ node.avg_snr }}{% else %}null{% endif %},
+            unique_gateways: {{ node.unique_gateways or 0 }}
+        };
 
-        // Use health data from API
-        let healthScore = nodeHealth.health_score !== undefined ? nodeHealth.health_score : 100;
-        let healthStatus = nodeHealth.health_status || 'unknown';
-        let issues = nodeHealth.issues || [];
-        let metrics = nodeHealth.metrics || {};
-        let confidenceScore = nodeHealth.confidence_score !== undefined ? nodeHealth.confidence_score : 100;
-        let baseline = nodeHealth.baseline || {};
-
-        // Fallback to telemetry-based health if API data unavailable
-        if (healthScore === 100 && telemetry.device_metrics) {
-            const dm = telemetry.device_metrics;
-
-            // Evaluate battery
-            if (dm.battery_level !== undefined) {
-                if (dm.battery_level < 20) {
-                    healthScore -= 30;
-                } else if (dm.battery_level < 50) {
-                    healthScore -= 15;
-                }
-            }
-
-            // Evaluate channel utilization
-            if (dm.channel_utilization !== undefined && dm.channel_utilization > 80) {
-                healthScore -= 15;
-            }
-        }
-
-        // Determine health color
-        let healthColor = 'success';
-        let healthStatusText = 'Healthy';
-        if (healthScore >= 80) {
-            healthColor = 'success';
-            healthStatusText = 'Healthy';
-        } else if (healthScore >= 60) {
-            healthColor = 'warning';
-            healthStatusText = 'Degraded';
-        } else if (healthScore >= 40) {
-            healthColor = 'danger';
-            healthStatusText = 'Poor';
-        } else {
-            healthColor = 'danger';
-            healthStatusText = 'Critical';
-        }
-
-        // Build health alerts from issues
+        let healthColor = 'secondary';
+        let healthStatusText = 'Unknown';
         let healthAlerts = [];
-        let detailedIssues = [];
-        issues.forEach(issue => {
-            // Create badge for quick view
-            let badgeClass = 'bg-info text-dark';
-            if (issue.severity === 'critical') {
-                badgeClass = 'bg-danger';
-            } else if (issue.severity === 'warning') {
-                badgeClass = 'bg-warning text-dark';
+
+        if (ageSeconds !== null) {
+            if (ageSeconds < 3600) {
+                healthColor = 'success';
+                healthStatusText = 'Fresh';
+            } else if (ageSeconds < 6 * 3600) {
+                healthColor = 'warning';
+                healthStatusText = 'Stale';
+                healthAlerts.push('<span class="badge bg-warning text-dark">Telemetry older than 1h</span>');
+            } else if (ageSeconds < 24 * 3600) {
+                healthColor = 'danger';
+                healthStatusText = 'Very stale';
+                healthAlerts.push('<span class="badge bg-danger">Telemetry older than 6h</span>');
+            } else {
+                healthColor = 'danger';
+                healthStatusText = 'Offline / no recent telemetry';
+                healthAlerts.push('<span class="badge bg-danger">No telemetry in 24h+</span>');
             }
+        } else {
+            healthAlerts.push('<span class="badge bg-secondary">No telemetry timestamp</span>');
+        }
 
-            // Format issue with category if available
-            let issueText = issue.message;
-            if (issue.category) {
-                issueText = issue.category + ': ' + issue.message;
+        if (telemetry.device_metrics) {
+            const dm = telemetry.device_metrics;
+            if (dm.battery_level !== undefined && dm.battery_level < 20) {
+                healthAlerts.push('<span class="badge bg-danger">Low battery (' + dm.battery_level + '%)</span>');
+            } else if (dm.battery_level !== undefined && dm.battery_level < 50) {
+                healthAlerts.push('<span class="badge bg-warning text-dark">Battery ' + dm.battery_level + '%</span>');
             }
+            if (dm.channel_utilization !== undefined && dm.channel_utilization > 50) {
+                healthAlerts.push('<span class="badge bg-warning text-dark">High channel util (' + dm.channel_utilization.toFixed(1) + '%)</span>');
+            }
+        }
 
-            healthAlerts.push('<span class="badge ' + badgeClass + '">' + issueText + '</span>');
+        if (pageMetrics.avg_rssi !== null && pageMetrics.avg_rssi < -110) {
+            healthAlerts.push('<span class="badge bg-warning text-dark">Weak RSSI (' + Number(pageMetrics.avg_rssi).toFixed(1) + ' dBm)</span>');
+        }
 
-            // Store detailed issues for display
-            detailedIssues.push({
-                severity: issue.severity,
-                category: issue.category || 'Other',
-                message: issue.message,
-                outage_details: issue.outage_details || []
-            });
-        });
-
-        // Health Summary Row
+        // Telemetry signals (honest status — not a fake /100 score)
         html += '<div class="row mb-3 pb-3 border-bottom">';
         html += '<div class="col-12">';
         html += '<div class="d-flex justify-content-between align-items-start mb-2">';
         html += '<div>';
-        html += '<h5 class="mb-1"><i class="bi bi-heart-pulse text-' + healthColor + '"></i> <strong>Health: <span class="text-' + healthColor + '">' + healthStatusText + ' (' + Math.round(healthScore) + '/100)</span></strong></h5>';
-        html += '<small class="text-muted">Confidence: <span class="badge bg-secondary">' + Math.round(confidenceScore) + '%</span></small>';
+        html += '<h5 class="mb-1"><i class="bi bi-broadcast text-' + healthColor + '"></i> <strong>Telemetry: <span class="text-' + healthColor + '">' + healthStatusText + '</span></strong></h5>';
+        html += '<small class="text-muted">Based on last-heard age and device metrics — not a composite score.</small>';
         html += '</div>';
         html += '<small class="text-muted text-end" id="telemetry-timestamp-small"></small>';
         html += '</div>';
 
         if (healthAlerts.length > 0) {
             html += '<div class="d-flex flex-wrap gap-2 mt-2">' + healthAlerts.join('') + '</div>';
-
-            // Show detailed outage information if available
-            detailedIssues.forEach(issue => {
-                if (issue.outage_details && issue.outage_details.length > 0) {
-                    html += '<div class="mt-2 small alert alert-warning mb-0">';
-                    html += '<strong>' + issue.category + ' Details:</strong><ul class="mt-1 mb-0">';
-                    issue.outage_details.forEach(outage => {
-                        // Format timestamps based on timezone preference
-                        const startTime = typeof formatTimestamp === 'function'
-                            ? formatTimestamp(outage.start_timestamp, 'time')
-                            : outage.start_time;
-                        const endTime = typeof formatTimestamp === 'function'
-                            ? formatTimestamp(outage.end_timestamp, 'time')
-                            : outage.end_time;
-                        html += '<li>' + outage.duration_formatted + ' - ' + startTime + ' to ' + endTime + '</li>';
-                    });
-                    html += '</ul></div>';
-                }
-            });
-        } else if (issues.length === 0) {
-            html += '<small class="text-success"><i class="bi bi-check-circle"></i> No issues detected</small>';
         }
 
-        // Show metrics summary if available
-        if (metrics.total_packets !== undefined) {
-            html += '<div class="mt-2 pt-2 border-top" style="font-size: 0.85rem;">';
-            html += '<small class="text-muted">24h Metrics: ';
-            html += '<strong>' + metrics.total_packets + ' packets</strong>';
-            if (metrics.avg_rssi !== undefined && metrics.avg_rssi !== null) {
-                html += ' • RSSI: <strong>' + metrics.avg_rssi.toFixed(1) + ' dBm</strong>';
-            }
-            if (metrics.avg_snr !== undefined && metrics.avg_snr !== null) {
-                html += ' • SNR: <strong>' + metrics.avg_snr.toFixed(1) + ' dB</strong>';
-            }
-            if (metrics.unique_gateways !== undefined) {
-                html += ' • <strong>' + metrics.unique_gateways + ' gateway(s)</strong>';
-            }
-            if (metrics.activity_gaps !== undefined && metrics.activity_gaps > 0) {
-                html += ' • <strong>' + metrics.activity_gaps + ' activity gap(s)</strong>';
-            }
-            if (metrics.long_outages !== undefined && metrics.long_outages > 0) {
-                html += ' • <span class="text-warning"><strong>' + metrics.long_outages + ' outage(s)</strong></span>';
-            }
-            html += '</small>';
-            html += '</div>';
+        html += '<div class="mt-2 pt-2 border-top" style="font-size: 0.85rem;">';
+        html += '<small class="text-muted">Packet activity: ';
+        html += '<strong>' + pageMetrics.total_packets + ' packets</strong>';
+        if (pageMetrics.avg_rssi !== null) {
+            html += ' • RSSI: <strong>' + Number(pageMetrics.avg_rssi).toFixed(1) + ' dBm</strong>';
         }
-
-        // Show baseline information if available
-        if (baseline && baseline.has_baseline) {
-            const variabilityText = baseline.coefficient_of_variation > 1.5 ? 'highly variable' :
-                                   baseline.coefficient_of_variation > 1.0 ? 'moderately variable' : 'consistent';
-            html += '<div class="mt-2 pt-2 border-top small alert alert-info mb-0" style="font-size: 0.85rem;">';
-            html += '<strong>Baseline Behavior:</strong> ';
-            html += 'Avg ' + baseline.avg_packets_per_day.toFixed(1) + ' packets/day • ';
-            html += baseline.total_packets + ' packets over ' + Math.round(baseline.total_days) + ' days • ';
-            html += variabilityText + ' pattern';
-            html += '</div>';
+        if (pageMetrics.avg_snr !== null) {
+            html += ' • SNR: <strong>' + Number(pageMetrics.avg_snr).toFixed(1) + ' dB</strong>';
         }
+        html += ' • <strong>' + pageMetrics.unique_gateways + ' gateway(s)</strong>';
+        html += '</small>';
+        html += '</div>';
 
         html += '</div>';
         html += '</div>';
+
+        updateHeroVitals(telemetry);
 
         // Main Telemetry Grid
         html += '<div class="row g-3">';
@@ -2115,6 +2027,21 @@ async function loadTelemetryData() {
             html += '<tr>';
             html += '<td class="text-muted" style="width: 50%;">Power Source</td>';
             html += '<td class="text-end fw-bold"' + tooltip + ' data-bs-toggle="tooltip">' + icon + ' ' + label + '</td>';
+            html += '</tr>';
+        }
+
+        if (telemetry.battery_health_score !== undefined && telemetry.battery_health_score !== null) {
+            const bhs = Number(telemetry.battery_health_score);
+            const bhsClass = bhs >= 80 ? 'text-success' : bhs >= 50 ? 'text-warning' : 'text-danger';
+            html += '<tr>';
+            html += '<td class="text-muted">Battery Health Score</td>';
+            html += '<td class="text-end"><span class="' + bhsClass + ' fw-bold">' + bhs.toFixed(0) + '</span></td>';
+            html += '</tr>';
+        }
+        if (telemetry.power_analysis_timestamp) {
+            html += '<tr>';
+            html += '<td class="text-muted">Power Analysis</td>';
+            html += '<td class="text-end small">' + formatTelemetryAge(telemetry.power_analysis_timestamp) + ' ago</td>';
             html += '</tr>';
         }
 
@@ -2219,6 +2146,19 @@ async function loadTelemetryData() {
                 html += '</tr>';
             }
 
+            if (em.voltage !== undefined) {
+                html += '<tr>';
+                html += '<td class="text-muted">Env Voltage</td>';
+                html += '<td class="text-end fw-bold">' + Number(em.voltage).toFixed(2) + ' V</td>';
+                html += '</tr>';
+            }
+            if (em.current !== undefined) {
+                html += '<tr>';
+                html += '<td class="text-muted">Env Current</td>';
+                html += '<td class="text-end fw-bold">' + Number(em.current).toFixed(2) + ' mA</td>';
+                html += '</tr>';
+            }
+
             html += '</table>';
             html += '</div>';
             html += '</div>';
@@ -2298,6 +2238,24 @@ async function loadTelemetryData() {
                 html += '<tr>';
                 html += '<td class="text-muted">PM10</td>';
                 html += '<td class="text-end fw-bold">' + aq.pm100_standard + ' µg/m³</td>';
+                html += '</tr>';
+            }
+            if (aq.pm10_environmental !== undefined) {
+                html += '<tr>';
+                html += '<td class="text-muted">PM1.0 (env)</td>';
+                html += '<td class="text-end fw-bold">' + aq.pm10_environmental + ' µg/m³</td>';
+                html += '</tr>';
+            }
+            if (aq.pm25_environmental !== undefined) {
+                html += '<tr>';
+                html += '<td class="text-muted">PM2.5 (env)</td>';
+                html += '<td class="text-end fw-bold">' + aq.pm25_environmental + ' µg/m³</td>';
+                html += '</tr>';
+            }
+            if (aq.pm100_environmental !== undefined) {
+                html += '<tr>';
+                html += '<td class="text-muted">PM10 (env)</td>';
+                html += '<td class="text-end fw-bold">' + aq.pm100_environmental + ' µg/m³</td>';
                 html += '</tr>';
             }
 
@@ -3225,9 +3183,8 @@ function startLiveTelemetry() {
     const btn = document.getElementById('live-telemetry-btn');
     const timer = document.getElementById('live-telemetry-timer');
     const status = document.getElementById('live-telemetry-status');
-    const chartsContainer = document.getElementById('live-charts-container');
-    const pollingMetrics = document.getElementById('polling-metrics-container');
     const durationSelector = document.getElementById('live-duration-selector');
+    const pollOnceBtn = document.getElementById('live-poll-once-btn');
 
     // Hop-aware cadence: farther nodes poll slower and wait longer per request
     const hopBudget = applyLiveTelemetryHopBudget(getPageAvgHops());
@@ -3251,16 +3208,15 @@ function startLiveTelemetry() {
     btn.classList.remove('btn-outline-primary');
     btn.classList.add('btn-danger');
     timer.classList.remove('d-none');
-    chartsContainer.style.display = 'block';
-    pollingMetrics.style.display = 'block';
     durationSelector.querySelectorAll('button').forEach(b => b.disabled = true);
+    if (pollOnceBtn) pollOnceBtn.disabled = true;
 
     liveTelemetryStartTime = Date.now();
     liveTelemetryIsPolling = true;
     const hopLabel = hopBudget.hops === 0 ? 'direct (0 hop)' : `${hopBudget.hops}-hop`;
     status.innerHTML = `<i class="bi bi-broadcast text-success"></i> Polling live telemetry (${hopLabel}, up to ${hopBudget.timeoutS}s/request)...`;
 
-    // Initialize empty charts
+    // Initialize empty charts (inside collapsed diagnostics)
     initializeLiveCharts();
 
     // Start polling immediately
@@ -3284,7 +3240,7 @@ function stopLiveTelemetry() {
     const timer = document.getElementById('live-telemetry-timer');
     const status = document.getElementById('live-telemetry-status');
     const durationSelector = document.getElementById('live-duration-selector');
-    const pollingMetrics = document.getElementById('polling-metrics-container');
+    const pollOnceBtn = document.getElementById('live-poll-once-btn');
 
     liveTelemetryIsPolling = false;
 
@@ -3318,9 +3274,9 @@ function stopLiveTelemetry() {
     btn.classList.add('btn-outline-primary');
     timer.classList.add('d-none');
     durationSelector.querySelectorAll('button').forEach(b => b.disabled = false);
-    pollingMetrics.style.display = 'none';
+    if (pollOnceBtn) pollOnceBtn.disabled = false;
 
-    status.innerHTML = '<i class="bi bi-info-circle"></i> Polling stopped. Click "Start Live" to resume.';
+    status.innerHTML = '<i class="bi bi-info-circle"></i> Polling stopped. Poll once or Start Live to continue.';
 }
 
 function updateLiveTelemetryCountdown() {
@@ -3736,94 +3692,163 @@ async function pollCachedTelemetry() {
     }
 }
 
+function setLiveTile(tileId, valueElId, text, className) {
+    const tile = document.getElementById(tileId);
+    const el = document.getElementById(valueElId);
+    if (!el) return;
+    if (text === null || text === undefined) {
+        if (tile) tile.style.display = 'none';
+        return;
+    }
+    if (tile) tile.style.display = '';
+    el.textContent = text;
+    if (className) el.className = className;
+}
+
 function updateTelemetryDisplay(dm, env) {
-    // Helper to get value from either snake_case or camelCase keys
-    const getBatteryLevel = () => dm.battery_level ?? dm.batteryLevel;
-    const getVoltage = () => dm.voltage;
-    const getChannelUtil = () => dm.channel_utilization ?? dm.channelUtilization;
-    const getAirUtilTx = () => dm.air_util_tx ?? dm.airUtilTx;
-    const getUptimeSeconds = () => dm.uptime_seconds ?? dm.uptimeSeconds;
-    const getTemperature = () => env.temperature;
+    dm = dm || {};
+    env = env || {};
+    const batteryLevel = dm.battery_level ?? dm.batteryLevel;
+    const voltage = dm.voltage;
+    const channelUtil = dm.channel_utilization ?? dm.channelUtilization;
+    const airUtilTx = dm.air_util_tx ?? dm.airUtilTx;
+    const uptimeSeconds = dm.uptime_seconds ?? dm.uptimeSeconds;
+    const temperature = env.temperature;
 
-    // Update battery
-    const batteryEl = document.getElementById('live-battery');
-    const batteryLevel = getBatteryLevel();
+    // Only update tiles for fields present in this sample (keep prior values otherwise)
     if (batteryLevel !== undefined) {
-        batteryEl.textContent = batteryLevel + '%';
-        batteryEl.className = 'h4 mb-0 ' + (batteryLevel < 20 ? 'text-danger' : batteryLevel < 50 ? 'text-warning' : 'text-success');
-    } else {
-        batteryEl.textContent = '--';
-        batteryEl.className = 'h4 mb-0';
+        setLiveTile(
+            'live-battery-tile', 'live-battery',
+            batteryLevel + '%',
+            'h4 mb-0 ' + (batteryLevel < 20 ? 'text-danger' : batteryLevel < 50 ? 'text-warning' : 'text-success')
+        );
     }
-
-    // Update voltage
-    const voltageEl = document.getElementById('live-voltage');
-    const voltage = getVoltage();
     if (voltage !== undefined) {
-        voltageEl.textContent = voltage.toFixed(2) + 'V';
-        voltageEl.className = 'h4 mb-0 ' + (voltage < 3.3 ? 'text-danger' : voltage < 3.6 ? 'text-warning' : 'text-success');
-    } else {
-        voltageEl.textContent = '--';
-        voltageEl.className = 'h4 mb-0';
+        setLiveTile(
+            'live-voltage-tile', 'live-voltage',
+            voltage.toFixed(2) + 'V',
+            'h4 mb-0 ' + (voltage < 3.3 ? 'text-danger' : voltage < 3.6 ? 'text-warning' : 'text-success')
+        );
     }
-
-    // Update channel utilization
-    const chUtilEl = document.getElementById('live-channel-util');
-    const channelUtil = getChannelUtil();
     if (channelUtil !== undefined) {
-        chUtilEl.textContent = channelUtil.toFixed(1) + '%';
-        chUtilEl.className = 'h4 mb-0 ' + (channelUtil > 80 ? 'text-danger' : channelUtil > 50 ? 'text-warning' : '');
-    } else {
-        chUtilEl.textContent = '--';
-        chUtilEl.className = 'h4 mb-0';
+        setLiveTile(
+            'live-channel-util-tile', 'live-channel-util',
+            channelUtil.toFixed(1) + '%',
+            'h4 mb-0 ' + (channelUtil > 80 ? 'text-danger' : channelUtil > 50 ? 'text-warning' : '')
+        );
     }
-
-    // Update air util TX
-    const airUtilEl = document.getElementById('live-air-util');
-    const airUtilTx = getAirUtilTx();
     if (airUtilTx !== undefined) {
-        airUtilEl.textContent = airUtilTx.toFixed(1) + '%';
-        airUtilEl.className = 'h4 mb-0 ' + (airUtilTx > 25 ? 'text-danger' : airUtilTx > 10 ? 'text-warning' : '');
-    } else {
-        airUtilEl.textContent = '--';
-        airUtilEl.className = 'h4 mb-0';
+        setLiveTile(
+            'live-air-util-tile', 'live-air-util',
+            airUtilTx.toFixed(1) + '%',
+            'h4 mb-0 ' + (airUtilTx > 25 ? 'text-danger' : airUtilTx > 10 ? 'text-warning' : '')
+        );
     }
-
-    // Update uptime
-    const uptimeEl = document.getElementById('live-uptime');
-    const uptimeSeconds = getUptimeSeconds();
     if (uptimeSeconds !== undefined) {
-        uptimeEl.textContent = formatUptime(uptimeSeconds);
-    } else {
-        uptimeEl.textContent = '--';
+        setLiveTile('live-uptime-tile', 'live-uptime', formatUptime(uptimeSeconds), 'h5 mb-0');
     }
-
-    // Update temperature
-    const tempEl = document.getElementById('live-temperature');
-    const temperature = getTemperature();
     if (temperature !== undefined) {
+        let tempText;
         const tempUnit = localStorage.getItem('temperatureUnit') || 'celsius';
         if (tempUnit === 'fahrenheit') {
-            tempEl.textContent = ((temperature * 9/5) + 32).toFixed(1) + '°F';
+            tempText = ((temperature * 9/5) + 32).toFixed(1) + '°F';
         } else {
-            tempEl.textContent = temperature.toFixed(1) + '°C';
+            tempText = temperature.toFixed(1) + '°C';
         }
-    } else {
-        tempEl.textContent = '--';
+        setLiveTile('live-temperature-tile', 'live-temperature', tempText, 'h5 mb-0');
     }
 
-    // Update last update time
     const lastUpdateEl = document.getElementById('live-last-update');
-    const now = new Date();
-    lastUpdateEl.textContent = now.toLocaleTimeString();
+    if (lastUpdateEl) {
+        lastUpdateEl.textContent = new Date().toLocaleTimeString();
+        const tile = document.getElementById('live-last-update-tile');
+        if (tile) tile.style.display = '';
+    }
 
-    // Flash effect to show update
     const card = document.getElementById('live-telemetry-content');
-    card.style.transition = 'background-color 0.3s';
-    card.style.backgroundColor = 'rgba(25, 135, 84, 0.1)';
-    setTimeout(() => {
-        card.style.backgroundColor = '';
-    }, 300);
+    if (card) {
+        card.style.transition = 'background-color 0.3s';
+        card.style.backgroundColor = 'rgba(25, 135, 84, 0.1)';
+        setTimeout(() => { card.style.backgroundColor = ''; }, 300);
+    }
+}
+
+async function pollLiveTelemetryOnce() {
+    if (liveTelemetryIsPolling) return;
+    const status = document.getElementById('live-telemetry-status');
+    const pollOnceBtn = document.getElementById('live-poll-once-btn');
+    const scriptTag = document.querySelector('script[data-node-id]');
+    const nodeId = scriptTag.getAttribute('data-node-id');
+    const hopBudget = liveTelemetryBudgetForHops(
+        liveTelemetryEstimatedHops !== null ? liveTelemetryEstimatedHops : getPageAvgHops()
+    );
+
+    if (pollOnceBtn) pollOnceBtn.disabled = true;
+    if (status) {
+        status.innerHTML = '<i class="bi bi-hourglass-split text-primary"></i> Requesting a single telemetry sample...';
+    }
+
+    try {
+        const response = await fetch(`/api/admin/node/${nodeId}/telemetry/live`, {
+            method: 'POST',
+            headers: {'Content-Type': 'application/json'},
+            body: JSON.stringify({
+                telemetry_type: 'device_metrics',
+                timeout: hopBudget.timeoutS,
+                estimated_hops: hopBudget.hops
+            })
+        });
+        const data = await response.json();
+        if (data.stats) updateTelemetryStats(data.stats);
+
+        if (data.success && data.telemetry) {
+            const telemetry = data.telemetry;
+            const dm = telemetry.device_metrics || telemetry.deviceMetrics || {};
+            const env = telemetry.environment_metrics || telemetry.environmentMetrics || {};
+            updateTelemetryDisplay(dm, env);
+            const source = data.source || 'live';
+            const note = source === 'last_known' ? ' (last-known)' : '';
+            if (status) {
+                status.innerHTML = `<span class="badge bg-success">Sample</span> <small class="text-muted ms-2">Received${note}. Poll once again or Start Live.</small>`;
+            }
+            // Optionally fetch environment metrics when temperature is missing
+            if (env.temperature === undefined) {
+                try {
+                    const envResp = await fetch(`/api/admin/node/${nodeId}/telemetry/live`, {
+                        method: 'POST',
+                        headers: {'Content-Type': 'application/json'},
+                        body: JSON.stringify({
+                            telemetry_type: 'environment_metrics',
+                            timeout: hopBudget.timeoutS,
+                            estimated_hops: hopBudget.hops
+                        })
+                    });
+                    const envData = await envResp.json();
+                    if (envData.success && envData.telemetry) {
+                        const envOnly = envData.telemetry.environment_metrics
+                            || envData.telemetry.environmentMetrics || {};
+                        if (Object.keys(envOnly).length) {
+                            updateTelemetryDisplay(dm, envOnly);
+                        }
+                    }
+                } catch (e) {
+                    // ignore optional env follow-up
+                }
+            }
+            return;
+        }
+
+        if (status) {
+            status.innerHTML = `<span class="badge bg-warning">No Response</span> <small class="text-muted ms-2">${data.error || 'Node did not reply'}</small>`;
+        }
+    } catch (error) {
+        console.error('Poll once failed:', error);
+        if (status) {
+            status.innerHTML = '<span class="badge bg-danger">Error</span> <small class="text-muted ms-2">Request failed</small>';
+        }
+    } finally {
+        if (pollOnceBtn) pollOnceBtn.disabled = false;
+    }
 }
 </script>
 {% endblock %}
