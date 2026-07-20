@@ -164,6 +164,7 @@ class BotService:
 
         # Channel directory broadcast scheduling
         self._broadcast_thread: threading.Thread | None = None
+        self._channel_broadcast_enabled = True
         self._broadcast_interval_hours = 12  # Broadcast every 12 hours
         self._last_broadcast_time: float = 0.0
 
@@ -2646,7 +2647,7 @@ class BotService:
                 elapsed = now - self._last_broadcast_time
                 interval_seconds = self._broadcast_interval_hours * 3600
 
-                if elapsed >= interval_seconds:
+                if self._channel_broadcast_enabled and elapsed >= interval_seconds:
                     self._broadcast_channel_directory()
                     self._last_broadcast_time = now
 

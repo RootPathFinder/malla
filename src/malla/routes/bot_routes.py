@@ -9,11 +9,26 @@ import logging
 
 from flask import Blueprint, jsonify, request
 
-from ..services.bot_service import BotMessagePriority, get_bot_service
+from ..services.bot_service import BotMessagePriority, BotService, get_bot_service
 
 logger = logging.getLogger(__name__)
 
 bot_bp = Blueprint("bot", __name__)
+
+
+def _bot_config_dict(bot: BotService) -> dict:
+    """Serialize runtime bot configuration for API responses."""
+    return {
+        "command_prefix": bot._command_prefix,
+        "listen_channels": list(bot._listen_channels),
+        "respond_channel_index": bot._respond_channel_index,
+        "wait_for_jobs": bot._wait_for_jobs,
+        "min_send_interval": bot._min_send_interval,
+        "daily_digest_enabled": bot._daily_digest_enabled,
+        "daily_digest_hour": bot._daily_digest_hour,
+        "channel_broadcast_enabled": bot._channel_broadcast_enabled,
+        "broadcast_interval_hours": bot._broadcast_interval_hours,
+    }
 
 
 # ============================================================================
@@ -32,10 +47,7 @@ def api_bot_status():
                 "enabled": bot.is_enabled,
                 "running": bot.is_running,
                 "queue_size": bot.get_queue_size(),
-                "command_prefix": bot._command_prefix,
-                "listen_channels": list(bot._listen_channels),
-                "respond_channel_index": bot._respond_channel_index,
-                "wait_for_jobs": bot._wait_for_jobs,
+                **_bot_config_dict(bot),
                 "commands": [
                     {
                         "name": name,
@@ -125,18 +137,7 @@ def api_bot_get_config():
     """Get bot configuration."""
     try:
         bot = get_bot_service()
-
-        return jsonify(
-            {
-                "command_prefix": bot._command_prefix,
-                "listen_channels": list(bot._listen_channels),
-                "respond_channel_index": bot._respond_channel_index,
-                "wait_for_jobs": bot._wait_for_jobs,
-                "min_send_interval": bot._min_send_interval,
-                "daily_digest_enabled": bot._daily_digest_enabled,
-                "daily_digest_hour": bot._daily_digest_hour,
-            }
-        )
+        return jsonify(_bot_config_dict(bot))
 
     except Exception as e:
         logger.error(f"Error getting bot config: {e}")
@@ -151,7 +152,10 @@ def api_bot_update_config():
         data = request.get_json() or {}
 
         if "command_prefix" in data:
-            bot._command_prefix = str(data["command_prefix"])
+            prefix = str(data["command_prefix"]).strip()
+            if not prefix or len(prefix) > 3:
+                return jsonify({"error": "command_prefix must be 1-3 characters"}), 400
+            bot._command_prefix = prefix
 
         if "listen_channels" in data:
             channels = data["listen_channels"]
@@ -165,7 +169,10 @@ def api_bot_update_config():
             bot._wait_for_jobs = bool(data["wait_for_jobs"])
 
         if "min_send_interval" in data:
-            bot._min_send_interval = float(data["min_send_interval"])
+            interval = float(data["min_send_interval"])
+            if interval < 0.5 or interval > 60:
+                return jsonify({"error": "min_send_interval must be 0.5-60 seconds"}), 400
+            bot._min_send_interval = interval
 
         if "daily_digest_enabled" in data:
             bot._daily_digest_enabled = bool(data["daily_digest_enabled"])
@@ -176,19 +183,22 @@ def api_bot_update_config():
                 return jsonify({"error": "daily_digest_hour must be 0-23"}), 400
             bot._daily_digest_hour = hour
 
+        if "channel_broadcast_enabled" in data:
+            bot._channel_broadcast_enabled = bool(data["channel_broadcast_enabled"])
+
+        if "broadcast_interval_hours" in data:
+            hours = float(data["broadcast_interval_hours"])
+            if hours < 1 or hours > 168:
+                return jsonify(
+                    {"error": "broadcast_interval_hours must be 1-168"}
+                ), 400
+            bot._broadcast_interval_hours = hours
+
         return jsonify(
             {
                 "message": "Configuration updated",
                 "success": True,
-                "config": {
-                    "command_prefix": bot._command_prefix,
-                    "listen_channels": list(bot._listen_channels),
-                    "respond_channel_index": bot._respond_channel_index,
-                    "wait_for_jobs": bot._wait_for_jobs,
-                    "min_send_interval": bot._min_send_interval,
-                    "daily_digest_enabled": bot._daily_digest_enabled,
-                    "daily_digest_hour": bot._daily_digest_hour,
-                },
+                "config": _bot_config_dict(bot),
             }
         )
 

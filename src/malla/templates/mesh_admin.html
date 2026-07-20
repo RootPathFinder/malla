@@ -1747,6 +1747,18 @@
                                     <i class="bi bi-gear"></i> Configuration
                                 </div>
                                 <div class="card-body">
+                                    <div class="row g-2 mb-2">
+                                        <div class="col-6">
+                                            <label class="form-label small mb-1"><strong>Prefix</strong></label>
+                                            <input type="text" class="form-control form-control-sm" id="botCommandPrefix"
+                                                   maxlength="3" value="!" placeholder="!">
+                                        </div>
+                                        <div class="col-6">
+                                            <label class="form-label small mb-1"><strong>Send interval (s)</strong></label>
+                                            <input type="number" class="form-control form-control-sm" id="botMinSendInterval"
+                                                   min="0.5" max="60" step="0.5" value="2">
+                                        </div>
+                                    </div>
                                     <div class="mb-2">
                                         <label class="form-label small mb-1"><strong>Listen Channels</strong></label>
                                         <input type="text" class="form-control form-control-sm" id="botListenChannels"
@@ -1763,6 +1775,40 @@
                                             <label class="form-check-label small" for="botWaitForJobs">
                                                 Wait for admin jobs
                                             </label>
+                                        </div>
+                                    </div>
+                                    <hr class="my-2">
+                                    <div class="small fw-semibold mb-2">Daily Net Update</div>
+                                    <div class="d-flex align-items-center justify-content-between gap-2 mb-2">
+                                        <div class="form-check form-switch mb-0">
+                                            <input class="form-check-input" type="checkbox" id="botDailyDigestEnabled" checked>
+                                            <label class="form-check-label small" for="botDailyDigestEnabled">
+                                                Enable broadcast
+                                            </label>
+                                        </div>
+                                        <div class="d-flex align-items-center gap-1">
+                                            <label class="form-label small mb-0" for="botDailyDigestHour">Hour</label>
+                                            <input type="number" class="form-control form-control-sm"
+                                                   id="botDailyDigestHour" min="0" max="23" value="8"
+                                                   style="width: 4.5rem;">
+                                        </div>
+                                    </div>
+                                    <div class="text-muted small mb-2">Local time. Use <code>!net</code> anytime.</div>
+                                    <hr class="my-2">
+                                    <div class="small fw-semibold mb-2">Channel Directory Broadcast</div>
+                                    <div class="d-flex align-items-center justify-content-between gap-2 mb-2">
+                                        <div class="form-check form-switch mb-0">
+                                            <input class="form-check-input" type="checkbox" id="botChannelBroadcastEnabled" checked>
+                                            <label class="form-check-label small" for="botChannelBroadcastEnabled">
+                                                Enable broadcast
+                                            </label>
+                                        </div>
+                                        <div class="d-flex align-items-center gap-1">
+                                            <label class="form-label small mb-0" for="botBroadcastIntervalHours">Every</label>
+                                            <input type="number" class="form-control form-control-sm"
+                                                   id="botBroadcastIntervalHours" min="1" max="168" value="12"
+                                                   style="width: 4.5rem;">
+                                            <span class="small text-muted">h</span>
                                         </div>
                                     </div>
                                     <button class="btn btn-primary btn-sm w-100" onclick="saveBotConfig()">
@@ -9858,25 +9904,42 @@
             }
 
             // Update commands table with toggle switches
-            updateBotCommandsTable(data.commands || []);
+            updateBotCommandsTable(data.commands || [], data.command_prefix || '!');
 
             // Update config fields (only if not focused)
-            const listenChannelsEl = document.getElementById('botListenChannels');
-            if (document.activeElement !== listenChannelsEl) {
-                listenChannelsEl.value = (data.listen_channels || []).join(', ');
+            const setIfBlurred = (id, value) => {
+                const el = document.getElementById(id);
+                if (!el) return;
+                if (document.activeElement !== el) {
+                    el.value = value;
+                }
+            };
+            setIfBlurred('botCommandPrefix', data.command_prefix || '!');
+            setIfBlurred('botMinSendInterval', data.min_send_interval ?? 2);
+            setIfBlurred('botListenChannels', (data.listen_channels || []).join(', '));
+            setIfBlurred('botRespondChannelIndex', data.respond_channel_index ?? 1);
+            setIfBlurred('botDailyDigestHour', data.daily_digest_hour ?? 8);
+            setIfBlurred('botBroadcastIntervalHours', data.broadcast_interval_hours ?? 12);
+
+            const waitEl = document.getElementById('botWaitForJobs');
+            if (waitEl && document.activeElement !== waitEl) {
+                waitEl.checked = data.wait_for_jobs !== false;
             }
-            const respondChannelEl = document.getElementById('botRespondChannelIndex');
-            if (document.activeElement !== respondChannelEl) {
-                respondChannelEl.value = data.respond_channel_index || 1;
+            const digestEl = document.getElementById('botDailyDigestEnabled');
+            if (digestEl && document.activeElement !== digestEl) {
+                digestEl.checked = data.daily_digest_enabled !== false;
             }
-            document.getElementById('botWaitForJobs').checked = data.wait_for_jobs !== false;
+            const channelBroadcastEl = document.getElementById('botChannelBroadcastEnabled');
+            if (channelBroadcastEl && document.activeElement !== channelBroadcastEl) {
+                channelBroadcastEl.checked = data.channel_broadcast_enabled !== false;
+            }
 
         } catch (error) {
             console.error('Error fetching bot status:', error);
         }
     }
 
-    function updateBotCommandsTable(commands) {
+    function updateBotCommandsTable(commands, commandPrefix = '!') {
         const tbody = document.getElementById('botCommandsTable');
         if (!commands || commands.length === 0) {
             tbody.innerHTML = `
@@ -9887,6 +9950,7 @@
             return;
         }
 
+        const prefix = escapeHtml(commandPrefix || '!');
         tbody.innerHTML = commands.map(cmd => {
             const isEnabled = cmd.enabled !== false;
             return `
@@ -9899,7 +9963,7 @@
                                    title="${isEnabled ? 'Click to disable' : 'Click to enable'}">
                         </div>
                     </td>
-                    <td><code class="${isEnabled ? '' : 'text-muted'}">!${escapeHtml(cmd.name)}</code></td>
+                    <td><code class="${isEnabled ? '' : 'text-muted'}">${prefix}${escapeHtml(cmd.name)}</code></td>
                     <td class="small ${isEnabled ? '' : 'text-muted'}">${escapeHtml(cmd.description || '')}</td>
                 </tr>
             `;
@@ -10136,21 +10200,34 @@
             .filter(c => c.length > 0);
         const respondChannelIndex = parseInt(document.getElementById('botRespondChannelIndex').value) || 1;
         const waitForJobs = document.getElementById('botWaitForJobs').checked;
+        const commandPrefix = (document.getElementById('botCommandPrefix').value || '!').trim();
+        const minSendInterval = parseFloat(document.getElementById('botMinSendInterval').value);
+        const dailyDigestEnabled = document.getElementById('botDailyDigestEnabled').checked;
+        const dailyDigestHour = parseInt(document.getElementById('botDailyDigestHour').value, 10);
+        const channelBroadcastEnabled = document.getElementById('botChannelBroadcastEnabled').checked;
+        const broadcastIntervalHours = parseFloat(document.getElementById('botBroadcastIntervalHours').value);
 
         try {
             const response = await fetch('/api/bot/config', {
                 method: 'PUT',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({
+                    command_prefix: commandPrefix,
                     listen_channels: listenChannels,
                     respond_channel_index: respondChannelIndex,
-                    wait_for_jobs: waitForJobs
+                    wait_for_jobs: waitForJobs,
+                    min_send_interval: Number.isFinite(minSendInterval) ? minSendInterval : 2,
+                    daily_digest_enabled: dailyDigestEnabled,
+                    daily_digest_hour: Number.isFinite(dailyDigestHour) ? dailyDigestHour : 8,
+                    channel_broadcast_enabled: channelBroadcastEnabled,
+                    broadcast_interval_hours: Number.isFinite(broadcastIntervalHours) ? broadcastIntervalHours : 12
                 })
             });
             const data = await response.json();
 
             if (data.success) {
                 showAlert('success', 'Bot configuration saved');
+                refreshBotStatus();
             } else {
                 showAlert('danger', data.error || 'Failed to save configuration');
             }
