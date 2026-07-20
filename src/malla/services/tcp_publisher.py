@@ -16,6 +16,13 @@ from meshtastic.tcp_interface import TCPInterface
 from pubsub import pub
 
 from ..config import get_config
+from ..utils.telemetry_request import (
+    complete_pending_telemetry,
+    extract_from_node_id,
+    extract_request_id,
+    find_matching_telemetry_request,
+    telemetry_to_dict,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -724,54 +731,7 @@ class TCPPublisher:
                     self._admin_response_event.set()
 
             elif portnum == "TELEMETRY_APP":
-                # Handle telemetry responses for pending requests
-                from_node_id = from_id
-                # Convert hex string to int if needed
-                if isinstance(from_node_id, str) and from_node_id.startswith("!"):
-                    try:
-                        from_node_id = int(from_node_id[1:], 16)
-                    except ValueError:
-                        pass
-                elif isinstance(from_node_id, str):
-                    # Try to convert plain string to int
-                    try:
-                        from_node_id = int(from_node_id)
-                    except ValueError:
-                        pass
-
-                logger.info(
-                    f"Received TELEMETRY_APP packet from {from_id} "
-                    f"(converted node_id={from_node_id}, type={type(from_node_id).__name__})"
-                )
-
-                with self._pending_telemetry_lock:
-                    # Log pending requests for debugging
-                    pending_keys = list(self._pending_telemetry_requests.keys())
-                    logger.info(
-                        f"Pending telemetry requests: {pending_keys} "
-                        f"(looking for {from_node_id})"
-                    )
-
-                    # Check if we have a pending request for this node
-                    if from_node_id in self._pending_telemetry_requests:
-                        request_info = self._pending_telemetry_requests[from_node_id]
-                        telemetry_data = decoded.get("telemetry", {})
-
-                        # Convert to JSON-serializable dict
-                        telemetry_dict = convert_to_dict(telemetry_data)
-
-                        request_info["response_data"]["telemetry"] = telemetry_dict
-                        request_info["response_data"]["from_id"] = str(from_id)
-                        request_info["response_data"]["timestamp"] = time.time()
-                        request_info["event"].set()
-                        logger.info(
-                            f"Telemetry response matched pending request for node {from_node_id}"
-                        )
-                    else:
-                        logger.warning(
-                            f"No pending telemetry request for node {from_node_id} "
-                            f"(pending: {pending_keys})"
-                        )
+                self._match_and_complete_telemetry(packet)
 
             elif portnum == "ADMIN_APP":
                 from_node = packet.get("fromId") or packet.get("from")
@@ -914,6 +874,62 @@ class TCPPublisher:
             return int(request_id) & 0xFFFFFFFF
         except (TypeError, ValueError):
             return None
+
+    def _match_and_complete_telemetry(self, packet: dict[str, Any]) -> bool:
+        """
+        Correlate a TELEMETRY_APP packet with a pending live request.
+
+        Used by both pubsub ``_on_receive`` and the meshtastic ``onResponse``
+        callback so either delivery path can complete the wait.
+        """
+        from_node_id = extract_from_node_id(packet)
+        request_id = extract_request_id(packet)
+        decoded = packet.get("decoded") or {}
+        telemetry_dict = telemetry_to_dict(decoded.get("telemetry", {}))
+
+        logger.info(
+            "Received TELEMETRY_APP packet from=%s node_id=%s request_id=%s "
+            "metrics=%s",
+            packet.get("fromId") or packet.get("from"),
+            f"!{from_node_id:08x}" if from_node_id is not None else None,
+            request_id,
+            sorted(k for k in telemetry_dict.keys() if k != "time"),
+        )
+
+        with self._pending_telemetry_lock:
+            pending_keys = list(self._pending_telemetry_requests.keys())
+            match = find_matching_telemetry_request(
+                self._pending_telemetry_requests,
+                from_node_id=from_node_id,
+                request_id=request_id,
+                telemetry=telemetry_dict,
+            )
+            if match is None:
+                if pending_keys:
+                    logger.debug(
+                        "TELEMETRY_APP ignored (no pending match); pending=%s "
+                        "from=%s request_id=%s",
+                        pending_keys,
+                        from_node_id,
+                        request_id,
+                    )
+                return False
+
+            node_id, pending = match
+            completed = complete_pending_telemetry(
+                pending,
+                telemetry=telemetry_dict,
+                from_node_id=from_node_id if from_node_id is not None else node_id,
+                request_id=request_id,
+            )
+            if completed:
+                logger.info(
+                    "Telemetry response matched pending request for !%08x "
+                    "(request_id=%s)",
+                    node_id,
+                    request_id or pending.get("request_id"),
+                )
+            return completed
 
     def get_response(
         self, packet_id: int, timeout: float = 30.0
@@ -2387,6 +2403,8 @@ class TCPPublisher:
         target_node_id: int,
         telemetry_type: str = "device_metrics",
         timeout: float = 25.0,
+        hop_limit: int | None = None,
+        want_ack: bool = False,
     ) -> dict[str, Any] | None:
         """
         Request telemetry from a target node and wait for response.
@@ -2394,11 +2412,17 @@ class TCPPublisher:
         This sends a telemetry request to the target node and waits for
         the response containing current device metrics.
 
+        Correlation uses the mesh packet id (requestId) plus metric-type
+        validation. Responses are accepted via pubsub ``_on_receive`` and/or
+        the meshtastic ``onResponse`` callback (dual-path for reliability).
+
         Args:
             target_node_id: The destination node ID
             telemetry_type: Type of telemetry to request
                            (device_metrics, environment_metrics, etc.)
             timeout: Timeout in seconds to wait for response (default 25s for mesh)
+            hop_limit: Optional mesh hopLimit for multi-hop reachability
+            want_ack: Request mesh-layer ACK/retries (helpful beyond 0 hops)
 
         Returns:
             Dictionary with telemetry data if successful, None otherwise
@@ -2430,9 +2454,11 @@ class TCPPublisher:
                 telemetry.device_metrics.CopyFrom(telemetry_pb2.DeviceMetrics())
 
             # Set up class-level tracking for this request
-            # This allows _on_receive to handle the telemetry response
+            # Generation token ensures cleanup cannot remove a newer request
+            # for the same node if polls overlap.
             response_event = threading.Event()
             response_data: dict[str, Any] = {}
+            generation = time.time_ns()
 
             with self._pending_telemetry_lock:
                 self._pending_telemetry_requests[target_node_id] = {
@@ -2440,6 +2466,9 @@ class TCPPublisher:
                     "response_data": response_data,
                     "telemetry_type": telemetry_type,
                     "requested_at": time.time(),
+                    "generation": generation,
+                    "request_id": None,
+                    "completed": False,
                 }
 
             # Track statistics - increment request count
@@ -2465,26 +2494,35 @@ class TCPPublisher:
                 )
 
             try:
-                # Send telemetry request
-                # Note: We don't use onResponse because it's unreliable in the
-                # meshtastic library (~50% callback loss). Instead, we register
-                # the pending request and catch the response via pubsub in _on_receive.
+                # Dual-path delivery: meshtastic onResponse can drop callbacks,
+                # and pubsub can race; either path completes the pending wait.
                 logger.info(
                     f"Sending telemetry request to !{target_node_id:08x} "
-                    f"(type={telemetry_type})"
+                    f"(type={telemetry_type}, hop_limit={hop_limit}, "
+                    f"want_ack={want_ack})"
                 )
 
-                # sendData returns a MeshPacket with the assigned requestId
-                mesh_packet = self._interface.sendData(
-                    data=telemetry,
-                    destinationId=target_node_id,
-                    portNum=portnums_pb2.PortNum.TELEMETRY_APP,
-                    wantAck=False,  # Don't wait for ACK
-                    wantResponse=True,  # Request a response
-                )
+                send_kwargs: dict[str, Any] = {
+                    "data": telemetry,
+                    "destinationId": target_node_id,
+                    "portNum": portnums_pb2.PortNum.TELEMETRY_APP,
+                    "wantAck": want_ack,
+                    "wantResponse": True,
+                    "onResponse": self._match_and_complete_telemetry,
+                }
+                if hop_limit is not None:
+                    send_kwargs["hopLimit"] = int(hop_limit)
 
-                # Log the request ID for debugging
-                request_id = getattr(mesh_packet, "id", None)
+                mesh_packet = self._interface.sendData(**send_kwargs)
+
+                request_id = self._normalize_request_id(
+                    getattr(mesh_packet, "id", None)
+                )
+                with self._pending_telemetry_lock:
+                    pending = self._pending_telemetry_requests.get(target_node_id)
+                    if pending and pending.get("generation") == generation:
+                        pending["request_id"] = request_id
+
                 logger.info(
                     f"Telemetry request sent, packet_id={request_id} "
                     f"(target=!{target_node_id:08x})"
@@ -2494,7 +2532,6 @@ class TCPPublisher:
                 self._last_activity_time = time.time()
 
                 # Wait for response with timeout
-                # Response handled by _on_receive via pubsub
                 if response_event.wait(timeout=timeout):
                     if "error" in response_data:
                         logger.warning(
@@ -2529,7 +2566,8 @@ class TCPPublisher:
                     return response_data
                 else:
                     logger.warning(
-                        f"Telemetry request timeout for !{target_node_id:08x}"
+                        f"Telemetry request timeout for !{target_node_id:08x} "
+                        f"(packet_id={request_id})"
                     )
                     # Track timeout
                     with self._telemetry_stats_lock:
@@ -2540,9 +2578,11 @@ class TCPPublisher:
                     return None
 
             finally:
-                # Always clean up the pending request
+                # Only remove our generation — never clobber a newer poll
                 with self._pending_telemetry_lock:
-                    self._pending_telemetry_requests.pop(target_node_id, None)
+                    pending = self._pending_telemetry_requests.get(target_node_id)
+                    if pending and pending.get("generation") == generation:
+                        self._pending_telemetry_requests.pop(target_node_id, None)
 
         except Exception as e:
             logger.error(f"Failed to send telemetry request: {e}")

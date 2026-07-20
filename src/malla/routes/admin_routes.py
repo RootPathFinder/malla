@@ -7,6 +7,7 @@ Provides REST API endpoints and page routes for the Mesh Admin functionality.
 import json
 import logging
 import time
+from typing import Any
 
 from flask import (
     Blueprint,
@@ -26,6 +27,11 @@ from ..services.serial_publisher import discover_serial_ports, get_serial_publis
 from ..services.tcp_publisher import get_tcp_publisher
 from ..utils.config_compare import deep_compare_config
 from ..utils.node_utils import convert_node_id
+from ..utils.telemetry_request import (
+    LIVE_TELEMETRY_MAX_BUDGET_S,
+    live_telemetry_budget,
+    split_live_telemetry_attempts,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -2780,6 +2786,108 @@ def api_factory_reset(node_id):
         return jsonify({"error": str(e)}), 500
 
 
+def _live_telemetry_attempt_timeouts(
+    timeout: float, attempts: int = 2
+) -> list[float]:
+    """Split a live-telemetry wait budget into hop-aware attempt windows."""
+    return split_live_telemetry_attempts(timeout, attempts=attempts)
+
+
+def _estimate_hops_from_recent_packets(node_id: int) -> int | None:
+    """Fallback hop estimate from recent packet hop_start/hop_limit fields."""
+    try:
+        from ..database.connection import get_db_connection
+
+        conn = get_db_connection()
+        cursor = conn.cursor()
+        cursor.execute(
+            """
+            SELECT AVG(hop_start - hop_limit) AS avg_hops
+            FROM packet_history
+            WHERE from_node_id = ?
+              AND hop_start IS NOT NULL
+              AND hop_limit IS NOT NULL
+              AND hop_start >= hop_limit
+              AND timestamp > ?
+            """,
+            (node_id, time.time() - 7 * 86400),
+        )
+        row = cursor.fetchone()
+        conn.close()
+        if not row or row["avg_hops"] is None:
+            return None
+        return int(round(float(row["avg_hops"])))
+    except Exception as e:
+        logger.debug(f"Packet hop estimate failed for !{node_id:08x}: {e}")
+        return None
+
+
+def _resolve_live_telemetry_hops(
+    node_id_int: int, client_hops: Any = None
+) -> tuple[int, str]:
+    """
+    Resolve hop distance for live telemetry budgeting.
+
+    Preference: traceroute estimate -> client hint -> recent packet avg -> 1.
+    """
+    # Traceroute-based estimate (gateway path)
+    try:
+        from ..services.job_service import JobService
+
+        estimated = JobService()._estimate_hop_count(node_id_int)
+        if estimated is not None:
+            return int(estimated), "traceroute"
+    except Exception as e:
+        logger.debug(f"Traceroute hop estimate failed for !{node_id_int:08x}: {e}")
+
+    if client_hops is not None and client_hops != "":
+        try:
+            return int(round(float(client_hops))), "client"
+        except (TypeError, ValueError):
+            pass
+
+    packet_hops = _estimate_hops_from_recent_packets(node_id_int)
+    if packet_hops is not None:
+        return packet_hops, "packets"
+
+    return 1, "default"
+
+
+def _request_live_telemetry_with_retry(
+    publisher: Any,
+    node_id_int: int,
+    telemetry_type: str,
+    timeout: float,
+    *,
+    attempts: int = 2,
+    hop_limit: int | None = None,
+    want_ack: bool = False,
+    retry_delay_s: float = 0.5,
+) -> tuple[dict[str, Any] | None, int]:
+    """Try live telemetry with hop-aware retries. Returns (result, attempts_used)."""
+    attempts_used = 0
+    result = None
+    attempt_timeouts = _live_telemetry_attempt_timeouts(timeout, attempts=attempts)
+    for idx, attempt_timeout in enumerate(attempt_timeouts):
+        attempts_used += 1
+        result = publisher.send_telemetry_request(
+            target_node_id=node_id_int,
+            telemetry_type=telemetry_type,
+            timeout=attempt_timeout,
+            hop_limit=hop_limit,
+            want_ack=want_ack,
+        )
+        if result:
+            if attempts_used > 1:
+                result = dict(result)
+                result["retry_attempt"] = attempts_used - 1
+            return result, attempts_used
+        # Brief pause before re-send so multi-hop airtime can clear
+        if idx < len(attempt_timeouts) - 1 and retry_delay_s > 0:
+            time.sleep(retry_delay_s)
+    return None, attempts_used
+
+
 @admin_bp.route("/api/admin/node/<node_id>/telemetry/live", methods=["POST"])
 def api_request_live_telemetry(node_id):
     """
@@ -2790,7 +2898,8 @@ def api_request_live_telemetry(node_id):
 
     Request body (optional):
         telemetry_type: Type of telemetry (device_metrics, environment_metrics)
-        timeout: Timeout in seconds (default: 25, max: 60)
+        timeout: Timeout hint in seconds (server floors to hop budget, max 55)
+        estimated_hops: Optional hop-distance hint from the UI
 
     Returns:
         Telemetry data if successful, or error information
@@ -2800,10 +2909,32 @@ def api_request_live_telemetry(node_id):
 
         data = request.get_json() or {}
         telemetry_type = data.get("telemetry_type", "device_metrics")
-        timeout = min(data.get("timeout", 25), 60)  # Max 60 seconds for mesh
+
+        estimated_hops, hop_source = _resolve_live_telemetry_hops(
+            node_id_int, data.get("estimated_hops")
+        )
+        budget = live_telemetry_budget(estimated_hops)
+
+        # Floor client timeout to the hop budget so multi-hop is not starved by
+        # a short poll-interval hint; allow a longer client request up to max.
+        client_timeout = data.get("timeout")
+        if client_timeout is None:
+            timeout = budget["timeout_s"]
+        else:
+            timeout = min(
+                LIVE_TELEMETRY_MAX_BUDGET_S,
+                max(float(client_timeout), float(budget["timeout_s"])),
+            )
 
         admin_service = get_admin_service()
         connection_type = admin_service.connection_type.value
+
+        retry_kwargs = {
+            "attempts": budget["attempts"],
+            "hop_limit": budget["hop_limit"],
+            "want_ack": budget["want_ack"],
+            "retry_delay_s": budget["retry_delay_s"],
+        }
 
         if connection_type == "tcp":
             tcp_publisher = get_tcp_publisher()
@@ -2815,10 +2946,12 @@ def api_request_live_telemetry(node_id):
                     }
                 ), 400
 
-            result = tcp_publisher.send_telemetry_request(
-                target_node_id=node_id_int,
-                telemetry_type=telemetry_type,
-                timeout=timeout,
+            result, attempts = _request_live_telemetry_with_retry(
+                tcp_publisher,
+                node_id_int,
+                telemetry_type,
+                timeout,
+                **retry_kwargs,
             )
 
             if result:
@@ -2831,20 +2964,30 @@ def api_request_live_telemetry(node_id):
                         "timestamp": result.get("timestamp"),
                         "stats": result.get("stats", {}),
                         "live": True,
+                        "attempts": attempts,
+                        "estimated_hops": budget["estimated_hops"],
+                        "hop_source": hop_source,
+                        "budget": budget,
                     }
                 )
-            else:
-                # Get stats even on failure
-                stats = tcp_publisher.get_telemetry_stats(node_id_int)
-                return jsonify(
-                    {
-                        "success": False,
-                        "error": f"No response from node within {timeout}s",
-                        "node_id": node_id_int,
-                        "hex_id": f"!{node_id_int:08x}",
-                        "stats": stats,
-                    }
-                ), 408  # Request Timeout
+
+            stats = tcp_publisher.get_telemetry_stats(node_id_int)
+            return jsonify(
+                {
+                    "success": False,
+                    "error": (
+                        f"No response from node within {timeout}s "
+                        f"({budget['estimated_hops']}-hop path)"
+                    ),
+                    "node_id": node_id_int,
+                    "hex_id": f"!{node_id_int:08x}",
+                    "stats": stats,
+                    "attempts": attempts,
+                    "estimated_hops": budget["estimated_hops"],
+                    "hop_source": hop_source,
+                    "budget": budget,
+                }
+            ), 408
 
         elif connection_type == "serial":
             serial_publisher = get_serial_publisher()
@@ -2856,10 +2999,12 @@ def api_request_live_telemetry(node_id):
                     }
                 ), 400
 
-            result = serial_publisher.send_telemetry_request(
-                target_node_id=node_id_int,
-                telemetry_type=telemetry_type,
-                timeout=timeout,
+            result, attempts = _request_live_telemetry_with_retry(
+                serial_publisher,
+                node_id_int,
+                telemetry_type,
+                timeout,
+                **retry_kwargs,
             )
 
             if result:
@@ -2872,20 +3017,30 @@ def api_request_live_telemetry(node_id):
                         "timestamp": result.get("timestamp"),
                         "stats": result.get("stats", {}),
                         "live": True,
+                        "attempts": attempts,
+                        "estimated_hops": budget["estimated_hops"],
+                        "hop_source": hop_source,
+                        "budget": budget,
                     }
                 )
-            else:
-                # Get stats even on failure
-                stats = serial_publisher.get_telemetry_stats(node_id_int)
-                return jsonify(
-                    {
-                        "success": False,
-                        "error": f"No response from node within {timeout}s",
-                        "node_id": node_id_int,
-                        "hex_id": f"!{node_id_int:08x}",
-                        "stats": stats,
-                    }
-                ), 408  # Request Timeout
+
+            stats = serial_publisher.get_telemetry_stats(node_id_int)
+            return jsonify(
+                {
+                    "success": False,
+                    "error": (
+                        f"No response from node within {timeout}s "
+                        f"({budget['estimated_hops']}-hop path)"
+                    ),
+                    "node_id": node_id_int,
+                    "hex_id": f"!{node_id_int:08x}",
+                    "stats": stats,
+                    "attempts": attempts,
+                    "estimated_hops": budget["estimated_hops"],
+                    "hop_source": hop_source,
+                    "budget": budget,
+                }
+            ), 408
 
         elif connection_type == "mqtt":
             # MQTT is fire-and-forget, we can't wait for response here
