@@ -1818,7 +1818,7 @@ class AdminService:
         success_acked_message: str,
         success_unacked_message: str,
         nak_prefix: str,
-        timeout: float = 10.0,
+        timeout: float = 20.0,
     ) -> AdminCommandResult:
         """
         Wait for a routing ACK/NAK (or admin response) after an admin write.
