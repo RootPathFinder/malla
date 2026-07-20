@@ -244,23 +244,68 @@ class TestDailyDigestExtras:
 class TestDailyDigestScheduling:
     @pytest.mark.unit
     def test_maybe_send_daily_digest_once_per_day(self, bot_service: BotService):
+        from datetime import datetime
+        from zoneinfo import ZoneInfo
+
         bot_service._daily_digest_hour = 8
+        bot_service._daily_digest_timezone = "America/New_York"
         bot_service._enabled = True
-        fixed_morning = time.struct_time((2026, 7, 20, 9, 0, 0, 0, 201, 0))
+        bot_service._last_daily_digest_date = None
+        fixed_morning = datetime(
+            2026, 7, 20, 9, 0, 0, tzinfo=ZoneInfo("America/New_York")
+        )
 
         with patch.object(
             bot_service, "_build_daily_digest", return_value="📡 Net 7/20\nNodes: 1"
         ):
             with patch.object(bot_service, "queue_message") as queue_message:
-                with patch(
-                    "src.malla.services.bot_service.time.localtime",
-                    return_value=fixed_morning,
-                ):
+                with patch.object(bot_service, "_digest_now", return_value=fixed_morning):
                     bot_service._maybe_send_daily_digest()
                     bot_service._maybe_send_daily_digest()
 
         assert queue_message.call_count == 1
         assert bot_service._last_daily_digest_date == "2026-07-20"
+
+    @pytest.mark.unit
+    def test_digest_hour_uses_configured_timezone_not_utc(self, bot_service: BotService):
+        """Hour 8 in America/New_York must not fire at 08:00 UTC (04:00 EDT)."""
+        from datetime import datetime
+        from zoneinfo import ZoneInfo
+
+        bot_service._daily_digest_hour = 8
+        bot_service._daily_digest_timezone = "America/New_York"
+        bot_service._enabled = True
+        bot_service._last_daily_digest_date = None
+
+        # 08:00 UTC == 04:00 America/New_York in July — too early
+        utc_morning = datetime(2026, 7, 20, 8, 0, 0, tzinfo=ZoneInfo("UTC"))
+        with patch.object(
+            bot_service,
+            "_digest_now",
+            return_value=utc_morning.astimezone(ZoneInfo("America/New_York")),
+        ):
+            with patch.object(bot_service, "queue_message") as queue_message:
+                with patch.object(
+                    bot_service, "_build_daily_digest", return_value="📡 Net"
+                ):
+                    bot_service._maybe_send_daily_digest()
+
+        queue_message.assert_not_called()
+
+        # 12:00 UTC == 08:00 America/New_York — should fire
+        utc_noon = datetime(2026, 7, 20, 12, 0, 0, tzinfo=ZoneInfo("UTC"))
+        with patch.object(
+            bot_service,
+            "_digest_now",
+            return_value=utc_noon.astimezone(ZoneInfo("America/New_York")),
+        ):
+            with patch.object(bot_service, "queue_message") as queue_message:
+                with patch.object(
+                    bot_service, "_build_daily_digest", return_value="📡 Net"
+                ):
+                    bot_service._maybe_send_daily_digest()
+
+        queue_message.assert_called_once()
 
     @pytest.mark.unit
     def test_cmd_net_returns_built_digest(self, bot_service: BotService):

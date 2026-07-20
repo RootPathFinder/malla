@@ -26,6 +26,8 @@ def _bot_config_dict(bot: BotService) -> dict:
         "min_send_interval": bot._min_send_interval,
         "daily_digest_enabled": bot._daily_digest_enabled,
         "daily_digest_hour": bot._daily_digest_hour,
+        "daily_digest_timezone": bot._daily_digest_timezone,
+        "daily_digest_timezones": list(bot._daily_digest_timezones),
         "channel_broadcast_enabled": bot._channel_broadcast_enabled,
         "broadcast_interval_hours": bot._broadcast_interval_hours,
         "traceroute_format": bot._traceroute_format,
@@ -185,6 +187,12 @@ def api_bot_update_config():
             if hour < 0 or hour > 23:
                 return jsonify({"error": "daily_digest_hour must be 0-23"}), 400
             bot._daily_digest_hour = hour
+
+        if "daily_digest_timezone" in data:
+            tz_name = str(data["daily_digest_timezone"]).strip()
+            if not bot._is_valid_digest_timezone(tz_name):
+                return jsonify({"error": f"Invalid timezone: {tz_name}"}), 400
+            bot._daily_digest_timezone = tz_name
 
         if "channel_broadcast_enabled" in data:
             bot._channel_broadcast_enabled = bool(data["channel_broadcast_enabled"])

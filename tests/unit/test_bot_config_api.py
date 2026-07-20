@@ -19,6 +19,7 @@ class TestBotConfigDict:
     ):
         bot_service._daily_digest_enabled = False
         bot_service._daily_digest_hour = 7
+        bot_service._daily_digest_timezone = "America/New_York"
         bot_service._channel_broadcast_enabled = False
         bot_service._broadcast_interval_hours = 6
         bot_service._command_prefix = "?"
@@ -30,6 +31,8 @@ class TestBotConfigDict:
 
         assert config["daily_digest_enabled"] is False
         assert config["daily_digest_hour"] == 7
+        assert config["daily_digest_timezone"] == "America/New_York"
+        assert "America/New_York" in config["daily_digest_timezones"]
         assert config["channel_broadcast_enabled"] is False
         assert config["broadcast_interval_hours"] == 6
         assert config["command_prefix"] == "?"
