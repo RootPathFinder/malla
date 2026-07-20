@@ -61,7 +61,6 @@ class AnalyticsService:
                 filters["hop_count"] = hop_count
 
             since_timestamp = now_ts - days * 24 * 3600
-            twenty_four_hours_ago = now_ts - 24 * 3600
             seven_days_ago = now_ts - 7 * 24 * 3600
 
             packet_stats = AnalyticsService._get_packet_statistics(
