@@ -62,7 +62,7 @@ class TestFavoriteWriteAck:
         assert result.success is True
         assert result.response["acknowledged"] is True
         assert "ACK received" in result.response["message"]
-        publisher.get_response.assert_called_once_with(0xABCD, timeout=10.0)
+        publisher.get_response.assert_called_once_with(0xABCD, timeout=20.0)
 
         tracked = AdminRepository.list_remote_device_favorites(0x22222222)
         assert {int(r["node_id"]) for r in tracked} == {0x33333333}
@@ -142,8 +142,7 @@ class TestFavoriteWriteAck:
 
 
 class TestTcpPublisherAckCorrelation:
-    @pytest.mark.unit
-    def test_routing_ack_matches_decoded_request_id(self):
+    def _make_publisher(self):
         from src.malla.services.tcp_publisher import TCPPublisher
 
         publisher = TCPPublisher.__new__(TCPPublisher)
@@ -155,6 +154,11 @@ class TestTcpPublisherAckCorrelation:
         publisher._interface = MagicMock()
         publisher._pending_telemetry_lock = __import__("threading").Lock()
         publisher._pending_telemetry_requests = {}
+        return publisher
+
+    @pytest.mark.unit
+    def test_routing_ack_matches_decoded_request_id(self):
+        publisher = self._make_publisher()
 
         packet_id = 0x12345678
         publisher._pending_responses[packet_id] = {}
@@ -175,3 +179,77 @@ class TestTcpPublisherAckCorrelation:
         assert event.is_set()
         assert publisher._pending_responses[packet_id]["is_ack"] is True
         assert publisher._pending_responses[packet_id]["is_nak"] is False
+
+    @pytest.mark.unit
+    def test_early_ack_buffered_before_get_response(self):
+        """ACK arriving before get_response starts must not be discarded."""
+        publisher = self._make_publisher()
+        packet_id = 0xABCDEF01
+
+        publisher._on_ack_nak(
+            {
+                "decoded": {
+                    "portnum": "ROUTING_APP",
+                    "requestId": packet_id,
+                    "routing": {"errorReason": "NONE"},
+                },
+                "fromId": "!75703200",
+            }
+        )
+
+        response = publisher.get_response(packet_id, timeout=1.0)
+        assert response is not None
+        assert response["is_ack"] is True
+        assert response["is_nak"] is False
+
+    @pytest.mark.unit
+    def test_on_ack_nak_accepts_delivery_ack(self):
+        publisher = self._make_publisher()
+        packet_id = 0x99
+        publisher._on_ack_nak(
+            {
+                "decoded": {
+                    "portnum": "ROUTING_APP",
+                    "requestId": str(packet_id),
+                    "routing": {"errorReason": "NONE"},
+                }
+            }
+        )
+        assert publisher._pending_responses[packet_id]["is_ack"] is True
+
+    @pytest.mark.unit
+    def test_on_admin_response_ignores_pure_ack(self):
+        publisher = self._make_publisher()
+        packet_id = 0x77
+        publisher._on_admin_response(
+            {
+                "decoded": {
+                    "portnum": "ROUTING_APP",
+                    "requestId": packet_id,
+                    "routing": {"errorReason": "NONE"},
+                }
+            }
+        )
+        assert packet_id not in publisher._pending_responses
+
+    @pytest.mark.unit
+    def test_favorite_send_uses_ack_only_flags(self):
+        publisher = self._make_publisher()
+        publisher._connected = True
+        publisher._session_passkeys = {}
+        publisher._session_passkey_lock = __import__("threading").Lock()
+        publisher._last_activity_time = 0
+        publisher.ensure_healthy_connection = MagicMock(return_value=True)
+        publisher._get_admin_channel_index = MagicMock(return_value=0)
+
+        mesh_packet = MagicMock()
+        mesh_packet.id = 0x42
+        publisher._interface.sendData.return_value = mesh_packet
+
+        packet_id = publisher.send_set_favorite_node(0x1111, 0x2222)
+        assert packet_id == 0x42
+        kwargs = publisher._interface.sendData.call_args.kwargs
+        assert kwargs["wantAck"] is True
+        assert kwargs["wantResponse"] is False
+        assert kwargs["onResponseAckPermitted"] is True
+        assert kwargs["onResponse"] == publisher._on_ack_nak

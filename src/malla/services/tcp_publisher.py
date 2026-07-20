@@ -656,9 +656,11 @@ class TCPPublisher:
                 routing = decoded.get("routing", {})
                 error_reason = routing.get("errorReason", "NONE")
                 # Meshtastic puts requestId on decoded; some paths also copy it top-level
-                request_id = packet.get("requestId") or decoded.get("requestId")
+                request_id = self._normalize_request_id(
+                    packet.get("requestId") or decoded.get("requestId")
+                )
 
-                if request_id:
+                if request_id is not None:
                     logger.info(
                         f"Received routing response for request {request_id}: {error_reason}"
                     )
@@ -674,15 +676,7 @@ class TCPPublisher:
                         "decoded": decoded,
                     }
 
-                    with self._response_lock:
-                        if request_id in self._pending_responses:
-                            self._pending_responses[request_id] = response_data
-                            if request_id in self._response_events:
-                                self._response_events[request_id].set()
-
-                    # Also update general response tracking
-                    self._last_admin_response = response_data
-                    self._admin_response_event.set()
+                    self._store_pending_response(request_id, response_data)
 
             elif portnum == "TELEMETRY_APP":
                 # Handle telemetry responses for pending requests
@@ -850,21 +844,116 @@ class TCPPublisher:
 
                 # Signal any waiting requests
                 # The meshtastic library uses 'requestId' for response correlation
-                request_id = packet.get("requestId") or decoded.get("requestId")
-                if request_id:
-                    with self._response_lock:
-                        # Store the response for any matching pending request
-                        if request_id in self._pending_responses:
-                            self._pending_responses[request_id] = response_data
-                            if request_id in self._response_events:
-                                self._response_events[request_id].set()
-
-                # Store last admin response for general use
-                self._last_admin_response = response_data
-                self._admin_response_event.set()
+                request_id = self._normalize_request_id(
+                    packet.get("requestId") or decoded.get("requestId")
+                )
+                if request_id is not None:
+                    self._store_pending_response(request_id, response_data)
+                else:
+                    # No request id — still expose as general admin response
+                    self._last_admin_response = response_data
+                    self._admin_response_event.set()
 
         except Exception as e:
             logger.error(f"Error processing received packet: {e}")
+
+    @staticmethod
+    def _normalize_request_id(request_id: Any) -> int | None:
+        """Normalize packet/request ids to unsigned 32-bit ints for dict keys."""
+        if request_id is None or request_id == "":
+            return None
+        try:
+            return int(request_id) & 0xFFFFFFFF
+        except (TypeError, ValueError):
+            return None
+
+    def _store_pending_response(
+        self, request_id: int, response_data: dict[str, Any]
+    ) -> None:
+        """Store a response for a pending request and wake waiters."""
+        with self._response_lock:
+            # Always buffer by id so get_response can pick it up even if the
+            # waiter has not registered yet (send → ACK race).
+            self._pending_responses[request_id] = response_data
+            if request_id in self._response_events:
+                self._response_events[request_id].set()
+
+        self._last_admin_response = response_data
+        self._admin_response_event.set()
+
+    def _on_ack_nak(self, packet: dict[str, Any]) -> None:
+        """
+        Meshtastic sendData callback for write operations where a routing ACK
+        alone is confirmation (favorites, etc.).
+
+        Named onAckNak so the library delivers routing ACKs to this handler.
+        """
+        self._ingest_response_callback(packet, accept_ack=True)
+
+    def _on_admin_response(self, packet: dict[str, Any]) -> None:
+        """
+        Meshtastic sendData callback for GET-style admin requests.
+
+        Ignores pure delivery ACKs and waits for an AdminMessage payload or NAK.
+        """
+        self._ingest_response_callback(packet, accept_ack=False)
+
+    def _ingest_response_callback(
+        self, packet: dict[str, Any], accept_ack: bool
+    ) -> None:
+        """Normalize and store a sendData onResponse/onAckNak packet."""
+        try:
+            decoded = packet.get("decoded", {}) or {}
+            routing = decoded.get("routing") or {}
+            request_id = self._normalize_request_id(
+                packet.get("requestId") or decoded.get("requestId")
+            )
+            if request_id is None:
+                logger.debug("Response callback received packet without requestId")
+                return
+
+            portnum = decoded.get("portnum")
+            if routing or portnum == "ROUTING_APP":
+                error_reason = routing.get("errorReason", "NONE")
+                is_ack = error_reason == "NONE"
+                if is_ack and not accept_ack:
+                    # Delivery ACK only — keep waiting for AdminMessage payload
+                    logger.debug(
+                        f"Ignoring delivery ACK for request {request_id} "
+                        "(waiting for admin response)"
+                    )
+                    return
+                response_data = {
+                    "packet": packet,
+                    "received_at": time.time(),
+                    "from_node": packet.get("fromId") or packet.get("from"),
+                    "routing": routing,
+                    "error_reason": error_reason,
+                    "is_ack": is_ack,
+                    "is_nak": not is_ack,
+                    "decoded": decoded,
+                }
+                logger.info(
+                    f"Response callback routing for request {request_id}: {error_reason}"
+                )
+            else:
+                response_data = {
+                    "packet": packet,
+                    "received_at": time.time(),
+                    "from_node": packet.get("fromId") or packet.get("from"),
+                    "admin_message": decoded.get("admin"),
+                    "decoded": decoded,
+                    "is_ack": True,
+                    "is_nak": False,
+                    "error_reason": "NONE",
+                }
+                logger.info(
+                    f"Response callback admin/data for request {request_id}"
+                )
+
+            self._store_pending_response(request_id, response_data)
+        except Exception as e:
+            logger.error(f"Error in response callback: {e}")
 
     def get_response(
         self, packet_id: int, timeout: float = 30.0
@@ -879,14 +968,11 @@ class TCPPublisher:
         Returns:
             Response data or None if timeout
         """
-        # Clear any previous general response so we don't pick up a stale one
-        self._admin_response_event.clear()
-        self._last_admin_response = None
-
+        packet_id = int(packet_id) & 0xFFFFFFFF
         event = threading.Event()
 
         with self._response_lock:
-            # If ACK/response already arrived between send and wait, return it
+            # ACK/response may already be buffered (callback before wait started)
             existing = self._pending_responses.get(packet_id)
             if existing:
                 self._pending_responses.pop(packet_id, None)
@@ -895,14 +981,29 @@ class TCPPublisher:
                 return existing
 
             self._response_events[packet_id] = event
-            self._pending_responses[packet_id] = {}  # Mark as pending
+            # Preserve empty placeholder if send already registered; otherwise mark pending
+            self._pending_responses.setdefault(packet_id, {})
+
+        # If a general response matching this packet arrived already, take it
+        last = self._last_admin_response
+        if last:
+            last_req = self._normalize_request_id(
+                (last.get("packet") or {}).get("requestId")
+                or (last.get("decoded") or {}).get("requestId")
+            )
+            if last_req == packet_id:
+                self._last_admin_response = None
+                self._admin_response_event.clear()
+                with self._response_lock:
+                    self._pending_responses.pop(packet_id, None)
+                    self._response_events.pop(packet_id, None)
+                logger.info(f"Got pre-wait general response for packet {packet_id}")
+                return last
 
         logger.debug(f"Waiting for response to packet {packet_id}, timeout={timeout}s")
 
-        # Wait for either specific packet response or general admin response
         start_time = time.time()
         while time.time() - start_time < timeout:
-            # Check for specific packet ID match
             if event.wait(timeout=0.5):
                 with self._response_lock:
                     if packet_id in self._pending_responses:
@@ -912,19 +1013,24 @@ class TCPPublisher:
                             logger.info(f"Got specific response for packet {packet_id}")
                             return response
 
-            # Check for general admin response
             if self._admin_response_event.is_set() and self._last_admin_response:
                 response = self._last_admin_response
-                self._last_admin_response = None
+                last_req = self._normalize_request_id(
+                    (response.get("packet") or {}).get("requestId")
+                    or (response.get("decoded") or {}).get("requestId")
+                )
+                # Only accept general responses that match this packet (or have no id)
+                if last_req is None or last_req == packet_id:
+                    self._last_admin_response = None
+                    self._admin_response_event.clear()
+                    logger.info(f"Got admin response from {response.get('from_node')}")
+                    with self._response_lock:
+                        self._pending_responses.pop(packet_id, None)
+                        self._response_events.pop(packet_id, None)
+                    return response
+                # Unrelated response — leave it for another waiter
                 self._admin_response_event.clear()
-                logger.info(f"Got admin response from {response.get('from_node')}")
-                # Cleanup
-                with self._response_lock:
-                    self._pending_responses.pop(packet_id, None)
-                    self._response_events.pop(packet_id, None)
-                return response
 
-        # Cleanup on timeout
         logger.debug(f"Timeout waiting for response to packet {packet_id}")
         with self._response_lock:
             self._pending_responses.pop(packet_id, None)
@@ -1154,6 +1260,7 @@ class TCPPublisher:
         admin_message: admin_pb2.AdminMessage,
         want_response: bool = True,
         verify_connection: bool = True,
+        ack_is_success: bool = False,
     ) -> int | None:
         """
         Send an admin message to a target node.
@@ -1161,8 +1268,11 @@ class TCPPublisher:
         Args:
             target_node_id: The destination node ID
             admin_message: The admin message protobuf
-            want_response: Whether to wait for a response
+            want_response: Whether to request an AdminMessage application response
             verify_connection: Whether to verify connection health before sending
+            ack_is_success: If True, a routing ACK alone confirms the write
+                (used for set_favorite / similar writes that return no admin payload).
+                Registers Meshtastic's onAckNak callback before the packet is sent.
 
         Returns:
             Packet ID if sent successfully, None otherwise
@@ -1185,10 +1295,6 @@ class TCPPublisher:
             # Get admin channel index
             admin_channel_index = self._get_admin_channel_index()
 
-            # Generate a random packet ID for tracking only if sendData does not
-            # return one (it normally assigns meshPacket.id for ACK correlation)
-            packet_id = random.getrandbits(32)
-
             # Set session_passkey on the admin message if we have one for this target
             # Session passkeys are required for admin authentication (like Android app)
             with self._session_passkey_lock:
@@ -1205,35 +1311,40 @@ class TCPPublisher:
                         f"(known nodes: {[f'!{n:08x}' for n in self._session_passkeys.keys()]})"
                     )
 
-            # Send the packet using sendData
-            # pkiEncrypted=True is required for admin messages to work on remote nodes
-            # wantAck=True requests a routing ACK/NAK from the destination
+            # Favorite-style writes: expect routing ACK only (no AdminMessage reply).
+            # GET-style: expect AdminMessage; ignore pure ACKs in the library callback.
+            expect_ack_only = ack_is_success and not want_response
+            on_response = self._on_ack_nak if expect_ack_only else self._on_admin_response
+
+            # Send via sendData. onResponse is registered BEFORE the radio TX, so an
+            # immediate ACK cannot race past our waiter registration.
             mesh_packet = self._interface.sendData(
                 data=admin_message,
                 destinationId=target_node_id,
                 portNum=portnums_pb2.PortNum.ADMIN_APP,
                 wantAck=True,
-                wantResponse=want_response,
+                wantResponse=want_response and not expect_ack_only,
+                onResponse=on_response,
+                onResponseAckPermitted=expect_ack_only,
                 channelIndex=admin_channel_index,
                 pkiEncrypted=True,
             )
 
-            # Prefer the real mesh packet id so ROUTING_APP ACKs can be matched
-            real_id = getattr(mesh_packet, "id", None)
-            if real_id:
-                packet_id = int(real_id) & 0xFFFFFFFF
+            packet_id = self._normalize_request_id(getattr(mesh_packet, "id", None))
+            if packet_id is None:
+                packet_id = random.getrandbits(32)
 
             logger.info(
                 f"Sent admin message to !{target_node_id:08x}, packet_id={packet_id}"
+                f"{' (ack-only)' if expect_ack_only else ''}"
             )
 
             # Update activity time on successful send
             self._last_activity_time = time.time()
 
-            # Initialize pending response tracking keyed by the real packet id
-            if want_response:
-                with self._response_lock:
-                    self._pending_responses[packet_id] = {}
+            # Ensure a pending slot exists (callback may already have filled it)
+            with self._response_lock:
+                self._pending_responses.setdefault(packet_id, {})
 
             return packet_id
 
@@ -2122,7 +2233,8 @@ class TCPPublisher:
         return self.send_admin_message(
             target_node_id=target_node_id,
             admin_message=admin_msg,
-            want_response=True,
+            want_response=False,
+            ack_is_success=True,
         )
 
     def send_remove_favorite_node(
@@ -2154,7 +2266,8 @@ class TCPPublisher:
         return self.send_admin_message(
             target_node_id=target_node_id,
             admin_message=admin_msg,
-            want_response=True,
+            want_response=False,
+            ack_is_success=True,
         )
 
     def send_nodedb_reset(

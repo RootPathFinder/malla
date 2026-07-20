@@ -438,9 +438,11 @@ class SerialPublisher:
             if port_num == "ROUTING_APP" or port_num == portnums_pb2.ROUTING_APP:
                 routing = decoded.get("routing", {})
                 error_reason = routing.get("errorReason", "NONE")
-                request_id = packet.get("requestId") or decoded.get("requestId")
+                request_id = self._normalize_request_id(
+                    packet.get("requestId") or decoded.get("requestId")
+                )
 
-                if request_id:
+                if request_id is not None:
                     response_data = {
                         "packet": packet,
                         "received_at": time.time(),
@@ -451,14 +453,7 @@ class SerialPublisher:
                         "is_nak": error_reason != "NONE",
                         "decoded": decoded,
                     }
-                    with self._response_lock:
-                        if request_id in self._pending_responses:
-                            self._pending_responses[request_id] = response_data
-                            if request_id in self._response_events:
-                                self._response_events[request_id].set()
-                        else:
-                            self._last_admin_response = response_data
-                            self._admin_response_event.set()
+                    self._store_pending_response(request_id, response_data)
                     logger.info(
                         f"Received routing response for request {request_id}: {error_reason}"
                     )
@@ -478,7 +473,9 @@ class SerialPublisher:
         """Handle admin app responses."""
         try:
             decoded = packet.get("decoded", {})
-            request_id = packet.get("requestId") or decoded.get("requestId", 0)
+            request_id = self._normalize_request_id(
+                packet.get("requestId") or decoded.get("requestId")
+            )
 
             admin_message = None
             if "admin" in decoded:
@@ -491,18 +488,14 @@ class SerialPublisher:
                 "received_at": time.time(),
                 "is_ack": True,
                 "is_nak": False,
+                "decoded": decoded,
             }
 
-            # Check if this is a response to a specific request
-            with self._response_lock:
-                if request_id in self._pending_responses:
-                    self._pending_responses[request_id] = response_data
-                    if request_id in self._response_events:
-                        self._response_events[request_id].set()
-                else:
-                    # Store as general admin response
-                    self._last_admin_response = response_data
-                    self._admin_response_event.set()
+            if request_id is not None:
+                self._store_pending_response(request_id, response_data)
+            else:
+                self._last_admin_response = response_data
+                self._admin_response_event.set()
 
             logger.debug(f"Received admin response, request_id={request_id}")
 
@@ -609,6 +602,7 @@ class SerialPublisher:
         target_node_id: int,
         admin_message: admin_pb2.AdminMessage,
         want_response: bool = True,
+        ack_is_success: bool = False,
     ) -> int | None:
         """
         Send an admin message to a target node.
@@ -616,7 +610,8 @@ class SerialPublisher:
         Args:
             target_node_id: The target node ID
             admin_message: The admin message to send
-            want_response: Whether to request a response
+            want_response: Whether to request an AdminMessage application response
+            ack_is_success: If True, a routing ACK alone confirms the write
 
         Returns:
             Packet ID if sent successfully
@@ -629,13 +624,17 @@ class SerialPublisher:
             return None
 
         try:
-            # Send the admin message; wantAck requests a routing ACK/NAK
+            expect_ack_only = ack_is_success and not want_response
+            on_response = self._on_ack_nak if expect_ack_only else self._on_admin_response
+
             mesh_packet = self._interface.sendData(
                 data=admin_message,
                 destinationId=target_node_id,
                 portNum=portnums_pb2.ADMIN_APP,
                 wantAck=True,
-                wantResponse=want_response,
+                wantResponse=want_response and not expect_ack_only,
+                onResponse=on_response,
+                onResponseAckPermitted=expect_ack_only,
                 channelIndex=0,
                 pkiEncrypted=True,
             )
@@ -646,20 +645,87 @@ class SerialPublisher:
             else:
                 packet_id = int(packet_id) & 0xFFFFFFFF
 
-            # Register for response keyed by the real mesh packet id
-            if want_response:
-                with self._response_lock:
+            with self._response_lock:
+                self._pending_responses.setdefault(packet_id, {})
+                if packet_id not in self._response_events:
                     self._response_events[packet_id] = threading.Event()
-                    self._pending_responses[packet_id] = {}
 
             logger.info(
                 f"Sent admin message to !{target_node_id:08x}, packet_id={packet_id}"
+                f"{' (ack-only)' if expect_ack_only else ''}"
             )
             return packet_id
 
         except Exception as e:
             logger.error(f"Failed to send admin message: {e}")
             return None
+
+    def _normalize_request_id(self, request_id: Any) -> int | None:
+        if request_id is None or request_id == "":
+            return None
+        try:
+            return int(request_id) & 0xFFFFFFFF
+        except (TypeError, ValueError):
+            return None
+
+    def _store_pending_response(
+        self, request_id: int, response_data: dict[str, Any]
+    ) -> None:
+        with self._response_lock:
+            self._pending_responses[request_id] = response_data
+            if request_id in self._response_events:
+                self._response_events[request_id].set()
+        self._last_admin_response = response_data
+        self._admin_response_event.set()
+
+    def _on_ack_nak(self, packet: dict[str, Any]) -> None:
+        self._ingest_response_callback(packet, accept_ack=True)
+
+    def _on_admin_response(self, packet: dict[str, Any]) -> None:
+        self._ingest_response_callback(packet, accept_ack=False)
+
+    def _ingest_response_callback(
+        self, packet: dict[str, Any], accept_ack: bool
+    ) -> None:
+        try:
+            decoded = packet.get("decoded", {}) or {}
+            routing = decoded.get("routing") or {}
+            request_id = self._normalize_request_id(
+                packet.get("requestId") or decoded.get("requestId")
+            )
+            if request_id is None:
+                return
+
+            portnum = decoded.get("portnum")
+            if routing or portnum == "ROUTING_APP":
+                error_reason = routing.get("errorReason", "NONE")
+                is_ack = error_reason == "NONE"
+                if is_ack and not accept_ack:
+                    return
+                response_data = {
+                    "packet": packet,
+                    "received_at": time.time(),
+                    "from_node": packet.get("fromId") or packet.get("from"),
+                    "routing": routing,
+                    "error_reason": error_reason,
+                    "is_ack": is_ack,
+                    "is_nak": not is_ack,
+                    "decoded": decoded,
+                }
+            else:
+                response_data = {
+                    "packet": packet,
+                    "received_at": time.time(),
+                    "from_node": packet.get("fromId"),
+                    "admin_message": decoded.get("admin"),
+                    "decoded": decoded,
+                    "is_ack": True,
+                    "is_nak": False,
+                    "error_reason": "NONE",
+                }
+            self._store_pending_response(request_id, response_data)
+        except Exception as e:
+            logger.error(f"Error in serial response callback: {e}")
 
     def send_get_device_metadata(
         self,
@@ -1149,7 +1215,8 @@ class SerialPublisher:
         return self.send_admin_message(
             target_node_id=target_node_id,
             admin_message=admin_msg,
-            want_response=True,
+            want_response=False,
+            ack_is_success=True,
         )
 
     def send_remove_favorite_node(
@@ -1169,7 +1236,8 @@ class SerialPublisher:
         return self.send_admin_message(
             target_node_id=target_node_id,
             admin_message=admin_msg,
-            want_response=True,
+            want_response=False,
+            ack_is_success=True,
         )
 
     def send_nodedb_reset(
