@@ -1,6 +1,7 @@
 /**
  * Temperature Unit Toggle Component
- * Provides persistent Celsius/Fahrenheit toggle using localStorage
+ * Provides persistent Celsius/Fahrenheit toggle using UserPreferences when
+ * available, with localStorage fallback for anonymous sessions.
  */
 
 class TemperatureToggle {
@@ -20,7 +21,14 @@ class TemperatureToggle {
         window.addEventListener('storage', (e) => {
             if (e.key === this.storageKey) {
                 this.applyPreference();
+                this.updateAllTemperatures();
             }
+        });
+
+        // After server prefs sync, refresh displays (profile F may arrive late)
+        window.addEventListener('userPreferencesReady', () => {
+            this.applyPreference();
+            this.updateAllTemperatures();
         });
     }
 
@@ -29,9 +37,20 @@ class TemperatureToggle {
      * @returns {string} 'C' or 'F'
      */
     getUnit() {
-        const saved = localStorage.getItem(this.storageKey);
-        if (saved && ['C', 'F'].includes(saved)) {
-            return saved;
+        if (window.UserPreferences && typeof window.UserPreferences.getTemperatureUnit === 'function') {
+            const fromPrefs = window.UserPreferences.getTemperatureUnit();
+            if (fromPrefs === 'C' || fromPrefs === 'F') {
+                return fromPrefs;
+            }
+        }
+
+        try {
+            const saved = localStorage.getItem(this.storageKey);
+            if (saved && ['C', 'F'].includes(saved)) {
+                return saved;
+            }
+        } catch (e) {
+            // ignore
         }
         return 'C'; // Default to Celsius
     }
@@ -46,7 +65,19 @@ class TemperatureToggle {
             return;
         }
 
-        localStorage.setItem(this.storageKey, unit);
+        // Prefer the shared preferences manager so profile + localStorage stay aligned
+        if (window.UserPreferences && typeof window.UserPreferences.setTemperatureUnit === 'function') {
+            window.UserPreferences.setTemperatureUnit(unit);
+            this.applyPreference();
+            this.updateAllTemperatures();
+            return;
+        }
+
+        try {
+            localStorage.setItem(this.storageKey, unit);
+        } catch (e) {
+            console.error('Error saving temperature unit:', e);
+        }
         this.applyPreference();
 
         // Dispatch custom event for other components to listen to
@@ -110,10 +141,6 @@ class TemperatureToggle {
         if (!button) return;
 
         const unit = this.getUnit();
-        const icon = button.querySelector('i');
-        if (icon) {
-            icon.className = 'bi bi-thermometer-half';
-        }
         button.title = `Temperature unit: ${unit} (click to toggle)`;
         button.setAttribute('aria-label', `Current unit: ${unit}. Click to toggle to ${unit === 'C' ? 'F' : 'C'}`);
 
@@ -201,6 +228,7 @@ document.addEventListener('DOMContentLoaded', () => {
 
     // Listen for temperature unit changes to update displays
     window.addEventListener('temperatureUnitChanged', () => {
+        temperatureToggleInstance.applyPreference();
         temperatureToggleInstance.updateAllTemperatures();
     });
 });

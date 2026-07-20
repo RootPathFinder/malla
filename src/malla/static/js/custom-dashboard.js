@@ -30,7 +30,7 @@
             label: 'Environment',
             icon: 'bi-thermometer-half',
             metrics: {
-                temperature: { label: 'Temperature', unit: '°C', icon: 'bi-thermometer-half', thresholds: { warning: 45, danger: 60 } },
+                temperature: { label: 'Temperature', unit: '°C', icon: 'bi-thermometer-half', thresholds: { warning: 45, danger: 60 }, isTemperature: true },
                 relative_humidity: { label: 'Humidity', unit: '%', icon: 'bi-droplet', thresholds: { warning: 80, danger: 95 } },
                 barometric_pressure: { label: 'Pressure', unit: 'hPa', icon: 'bi-speedometer2' },
                 gas_resistance: { label: 'Gas Resistance', unit: 'Ω', icon: 'bi-wind' },
@@ -721,7 +721,14 @@
 
             return {
                 x: metricData.map(pt => new Date(pt.x)),
-                y: metricData.map(pt => Number(pt.y)),
+                y: metricData.map(pt => {
+                    const raw = Number(pt.y);
+                    if (metricDef?.isTemperature) {
+                        const converted = convertCelsiusForDisplay(raw);
+                        return converted === null ? raw : converted;
+                    }
+                    return raw;
+                }),
                 type: 'scatter',
                 mode: 'lines',
                 name: (metricDef?.label || metricKey) + (metricDef?.unit ? ` (${metricDef.unit})` : ''),
@@ -755,7 +762,14 @@
 
             return {
                 x: metricData.map(pt => new Date(pt.x)),
-                y: metricData.map(pt => Number(pt.y)),
+                y: metricData.map(pt => {
+                    const raw = Number(pt.y);
+                    if (metricDef?.isTemperature) {
+                        const converted = convertCelsiusForDisplay(raw);
+                        return converted === null ? raw : converted;
+                    }
+                    return raw;
+                }),
                 type: 'scatter',
                 mode: 'lines',
                 name: nodeName,
@@ -847,7 +861,10 @@
 
         // Environment metrics
         if (envMetrics.temperature !== undefined && envMetrics.temperature !== null) {
-            rows.push({ label: 'Temperature', value: `${Number(envMetrics.temperature).toFixed(1)}°C` });
+            const tempText = (typeof TemperatureToggle !== 'undefined' && TemperatureToggle.formatTemperature)
+                ? TemperatureToggle.formatTemperature(Number(envMetrics.temperature), 1)
+                : `${Number(envMetrics.temperature).toFixed(1)}°C`;
+            rows.push({ label: 'Temperature', value: tempText });
         }
         if (envMetrics.relative_humidity !== undefined && envMetrics.relative_humidity !== null) {
             rows.push({ label: 'Humidity', value: `${Number(envMetrics.relative_humidity).toFixed(1)}%` });
@@ -1663,9 +1680,43 @@
     }
 
     // ── Helpers ──────────────────────────────────────────────────
+    function getPreferredTemperatureUnit() {
+        if (typeof TemperatureToggle !== 'undefined' && TemperatureToggle.getUnit) {
+            return TemperatureToggle.getUnit();
+        }
+        if (window.UserPreferences && typeof window.UserPreferences.getTemperatureUnit === 'function') {
+            return window.UserPreferences.getTemperatureUnit();
+        }
+        try {
+            const saved = localStorage.getItem('malla-temperature-unit');
+            if (saved === 'C' || saved === 'F') return saved;
+        } catch (e) {
+            // ignore
+        }
+        return 'C';
+    }
+
+    function convertCelsiusForDisplay(celsius) {
+        const num = Number(celsius);
+        if (isNaN(num)) return null;
+        if (getPreferredTemperatureUnit() === 'F' &&
+            typeof TemperatureToggle !== 'undefined' &&
+            TemperatureToggle.celsiusToFahrenheit) {
+            return TemperatureToggle.celsiusToFahrenheit(num);
+        }
+        return num;
+    }
+
     function findMetricDef(metricKey) {
         for (const cat of Object.values(METRIC_CATEGORIES)) {
-            if (cat.metrics[metricKey]) return cat.metrics[metricKey];
+            if (cat.metrics[metricKey]) {
+                const def = { ...cat.metrics[metricKey] };
+                if (def.isTemperature || metricKey === 'temperature') {
+                    def.unit = `°${getPreferredTemperatureUnit()}`;
+                    def.isTemperature = true;
+                }
+                return def;
+            }
         }
         return null;
     }
@@ -1692,6 +1743,11 @@
 
         const num = Number(value);
         if (isNaN(num)) return String(value);
+
+        if (metricDef?.isTemperature) {
+            const display = convertCelsiusForDisplay(num);
+            return display === null ? '—' : display.toFixed(1);
+        }
 
         // Smart formatting
         if (Number.isInteger(num) || num > 100) return String(Math.round(num));
@@ -1791,6 +1847,15 @@
         `;
         return div;
     }
+
+    // Re-render when profile temperature unit changes (C/F)
+    function refreshOnTemperatureUnitChange() {
+        if (document.getElementById('dashboard-toolbar')) {
+            refreshAllWidgets();
+        }
+    }
+    window.addEventListener('temperatureUnitChanged', refreshOnTemperatureUnitChange);
+    window.addEventListener('userPreferencesReady', refreshOnTemperatureUnitChange);
 
     // ── Boot ────────────────────────────────────────────────────
     if (document.readyState === 'loading') {

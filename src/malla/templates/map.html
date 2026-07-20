@@ -1131,7 +1131,9 @@ function addNodeMarker(node) {
     if (node.latest_telemetry_temp !== undefined && node.latest_telemetry_temp !== null) {
         const tempC = node.latest_telemetry_temp;
         const tempF = (tempC * 9/5) + 32;
-        const tempUnit = localStorage.getItem('malla-temperature-unit') || 'C';
+        const tempUnit = (typeof TemperatureToggle !== 'undefined' && TemperatureToggle.getUnit)
+            ? TemperatureToggle.getUnit()
+            : (localStorage.getItem('malla-temperature-unit') || 'C');
         const displayTemp = tempUnit === 'F' ? tempF.toFixed(1) : tempC.toFixed(1);
         temperatureHTML = `<div class="node-marker-temp">${displayTemp}°${tempUnit}</div>`;
     }
@@ -1193,7 +1195,9 @@ function createNodePopupContent(node) {
     if (node.latest_telemetry_temp !== undefined && node.latest_telemetry_temp !== null) {
         const tempC = node.latest_telemetry_temp;
         const tempF = (tempC * 9/5) + 32;
-        const tempUnit = localStorage.getItem('malla-temperature-unit') || 'C';
+        const tempUnit = (typeof TemperatureToggle !== 'undefined' && TemperatureToggle.getUnit)
+            ? TemperatureToggle.getUnit()
+            : (localStorage.getItem('malla-temperature-unit') || 'C');
         const displayTemp = tempUnit === 'F' ? tempF.toFixed(1) : tempC.toFixed(1);
         const displayUnit = tempUnit;
         popupHtml += `<div style="margin-top: 8px; padding-top: 8px; border-top: 1px solid #ccc;"><strong>Temperature:</strong> ${displayTemp}°${displayUnit}</div>`;
@@ -2162,7 +2166,9 @@ function updateCoverageRadiusOptions() {
     const label = document.getElementById('coverageRadiusLabel');
     if (!select) return;
 
-    const tempUnit = localStorage.getItem('malla-temperature-unit') || 'C';
+    const tempUnit = (typeof TemperatureToggle !== 'undefined' && TemperatureToggle.getUnit)
+        ? TemperatureToggle.getUnit()
+        : (localStorage.getItem('malla-temperature-unit') || 'C');
     const useImperial = (tempUnit === 'F');
 
     // Preserve current selection if possible
