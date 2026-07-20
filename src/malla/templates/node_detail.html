@@ -93,41 +93,66 @@
         color: #842029;
     }
     .live-metric-tile {
-        position: relative;
-        overflow: hidden;
+        display: flex;
+        flex-direction: column;
+        gap: 0.35rem;
         border-radius: 0.5rem;
         background: var(--bs-tertiary-bg, #f8f9fa);
         border: 1px solid var(--bs-border-color, #dee2e6);
-        min-height: 92px;
-        padding: 0.85rem 0.75rem 0.7rem;
-    }
-    .live-metric-tile .live-spark {
-        position: absolute;
-        left: 0;
-        right: 0;
-        bottom: 0;
-        width: 100%;
-        height: 44px;
-        opacity: 0.7;
-        pointer-events: none;
-    }
-    .live-metric-tile .live-spark .area {
-        opacity: 0.18;
-    }
-    .live-metric-tile .live-spark .poll-dot {
-        opacity: 0.9;
-    }
-    .live-metric-tile .live-spark .poll-dot-latest {
-        opacity: 1;
+        min-height: 118px;
+        padding: 0.7rem 0.65rem 0.55rem;
     }
     .live-metric-tile .live-metric-body {
-        position: relative;
-        z-index: 1;
         text-align: center;
+        flex: 0 0 auto;
     }
     .live-metric-tile .live-metric-body small {
         display: block;
-        margin-top: 0.15rem;
+        margin-top: 0.1rem;
+    }
+    .live-spark-wrap {
+        display: grid;
+        grid-template-columns: 2.6rem 1fr;
+        gap: 0.2rem;
+        align-items: stretch;
+        min-height: 48px;
+        flex: 1 1 auto;
+    }
+    .live-spark-axis {
+        display: flex;
+        flex-direction: column;
+        justify-content: space-between;
+        font-size: 0.62rem;
+        line-height: 1;
+        color: var(--bs-secondary-color, #6c757d);
+        text-align: right;
+        padding: 1px 0;
+        font-variant-numeric: tabular-nums;
+    }
+    .live-spark-axis .live-spark-max,
+    .live-spark-axis .live-spark-min {
+        white-space: nowrap;
+        overflow: hidden;
+        text-overflow: ellipsis;
+    }
+    .live-metric-tile .live-spark {
+        width: 100%;
+        height: 48px;
+        display: block;
+    }
+    .live-metric-tile .live-spark .poll-bar {
+        opacity: 0.55;
+    }
+    .live-metric-tile .live-spark .poll-bar-latest {
+        opacity: 0.95;
+    }
+    .live-metric-tile .live-spark .poll-dot {
+        opacity: 0.95;
+    }
+    .live-metric-tile .live-spark .guide {
+        stroke: var(--bs-border-color, #dee2e6);
+        stroke-width: 0.6;
+        stroke-dasharray: 1.5 1.5;
     }
     [data-bs-theme="dark"] .live-metric-tile {
         background: rgba(255, 255, 255, 0.04);
@@ -534,37 +559,61 @@
                              Sparklines render behind the value as each sample arrives. -->
                         <div class="col-md-3 col-6" id="live-battery-tile" style="display: none;">
                             <div class="live-metric-tile">
-                                <svg class="live-spark" id="live-spark-battery" viewBox="0 0 100 44" preserveAspectRatio="none" aria-hidden="true"></svg>
                                 <div class="live-metric-body">
                                     <div class="h4 mb-0" id="live-battery">--</div>
                                     <small class="text-muted">Battery</small>
+                                </div>
+                                <div class="live-spark-wrap">
+                                    <div class="live-spark-axis">
+                                        <span class="live-spark-max" id="live-spark-battery-max"></span>
+                                        <span class="live-spark-min" id="live-spark-battery-min"></span>
+                                    </div>
+                                    <svg class="live-spark" id="live-spark-battery" viewBox="0 0 100 40" preserveAspectRatio="none" role="img" aria-label="Battery poll history"></svg>
                                 </div>
                             </div>
                         </div>
                         <div class="col-md-3 col-6" id="live-voltage-tile" style="display: none;">
                             <div class="live-metric-tile">
-                                <svg class="live-spark" id="live-spark-voltage" viewBox="0 0 100 44" preserveAspectRatio="none" aria-hidden="true"></svg>
                                 <div class="live-metric-body">
                                     <div class="h4 mb-0" id="live-voltage">--</div>
                                     <small class="text-muted">Voltage</small>
+                                </div>
+                                <div class="live-spark-wrap">
+                                    <div class="live-spark-axis">
+                                        <span class="live-spark-max" id="live-spark-voltage-max"></span>
+                                        <span class="live-spark-min" id="live-spark-voltage-min"></span>
+                                    </div>
+                                    <svg class="live-spark" id="live-spark-voltage" viewBox="0 0 100 40" preserveAspectRatio="none" role="img" aria-label="Voltage poll history"></svg>
                                 </div>
                             </div>
                         </div>
                         <div class="col-md-3 col-6" id="live-channel-util-tile" style="display: none;">
                             <div class="live-metric-tile">
-                                <svg class="live-spark" id="live-spark-channel-util" viewBox="0 0 100 44" preserveAspectRatio="none" aria-hidden="true"></svg>
                                 <div class="live-metric-body">
                                     <div class="h4 mb-0" id="live-channel-util">--</div>
                                     <small class="text-muted">Channel Util</small>
+                                </div>
+                                <div class="live-spark-wrap">
+                                    <div class="live-spark-axis">
+                                        <span class="live-spark-max" id="live-spark-channel-util-max"></span>
+                                        <span class="live-spark-min" id="live-spark-channel-util-min"></span>
+                                    </div>
+                                    <svg class="live-spark" id="live-spark-channel-util" viewBox="0 0 100 40" preserveAspectRatio="none" role="img" aria-label="Channel util poll history"></svg>
                                 </div>
                             </div>
                         </div>
                         <div class="col-md-3 col-6" id="live-air-util-tile" style="display: none;">
                             <div class="live-metric-tile">
-                                <svg class="live-spark" id="live-spark-air-util" viewBox="0 0 100 44" preserveAspectRatio="none" aria-hidden="true"></svg>
                                 <div class="live-metric-body">
                                     <div class="h4 mb-0" id="live-air-util">--</div>
                                     <small class="text-muted">Air Util TX</small>
+                                </div>
+                                <div class="live-spark-wrap">
+                                    <div class="live-spark-axis">
+                                        <span class="live-spark-max" id="live-spark-air-util-max"></span>
+                                        <span class="live-spark-min" id="live-spark-air-util-min"></span>
+                                    </div>
+                                    <svg class="live-spark" id="live-spark-air-util" viewBox="0 0 100 40" preserveAspectRatio="none" role="img" aria-label="Air util poll history"></svg>
                                 </div>
                             </div>
                         </div>
@@ -578,10 +627,16 @@
                         </div>
                         <div class="col-md-4 col-6" id="live-temperature-tile" style="display: none;">
                             <div class="live-metric-tile">
-                                <svg class="live-spark" id="live-spark-temperature" viewBox="0 0 100 44" preserveAspectRatio="none" aria-hidden="true"></svg>
                                 <div class="live-metric-body">
                                     <div class="h5 mb-0" id="live-temperature">--</div>
                                     <small class="text-muted">Temperature</small>
+                                </div>
+                                <div class="live-spark-wrap">
+                                    <div class="live-spark-axis">
+                                        <span class="live-spark-max" id="live-spark-temperature-max"></span>
+                                        <span class="live-spark-min" id="live-spark-temperature-min"></span>
+                                    </div>
+                                    <svg class="live-spark" id="live-spark-temperature" viewBox="0 0 100 40" preserveAspectRatio="none" role="img" aria-label="Temperature poll history"></svg>
                                 </div>
                             </div>
                         </div>
@@ -3043,13 +3098,39 @@ let liveChartData = {
     temperature: []
 };
 
-// Auto-scale live series so recent movement is readable (fixed 0–100 fills look like solid blocks).
+// Compact labeled bar charts under each metric (min/max axis + one bar per poll).
 const LIVE_SPARK_SERIES = {
-    battery: { el: 'live-spark-battery', color: '#198754' },
-    voltage: { el: 'live-spark-voltage', color: '#0d6efd' },
-    channelUtil: { el: 'live-spark-channel-util', color: '#fd7e14' },
-    airUtil: { el: 'live-spark-air-util', color: '#6f42c1' },
-    temperature: { el: 'live-spark-temperature', color: '#dc3545' }
+    battery: {
+        el: 'live-spark-battery',
+        color: '#198754',
+        format: (v) => Number(v).toFixed(0) + '%'
+    },
+    voltage: {
+        el: 'live-spark-voltage',
+        color: '#0d6efd',
+        format: (v) => Number(v).toFixed(2) + 'V'
+    },
+    channelUtil: {
+        el: 'live-spark-channel-util',
+        color: '#fd7e14',
+        format: (v) => Number(v).toFixed(1) + '%'
+    },
+    airUtil: {
+        el: 'live-spark-air-util',
+        color: '#6f42c1',
+        format: (v) => Number(v).toFixed(1) + '%'
+    },
+    temperature: {
+        el: 'live-spark-temperature',
+        color: '#dc3545',
+        format: (v) => {
+            const unit = localStorage.getItem('temperatureUnit') || 'celsius';
+            if (unit === 'fahrenheit') {
+                return ((Number(v) * 9 / 5) + 32).toFixed(1) + '°F';
+            }
+            return Number(v).toFixed(1) + '°C';
+        }
+    }
 };
 
 // Poll timeline tracking - stores each poll result
@@ -3355,9 +3436,13 @@ function resetLiveSparklines() {
         airUtil: [],
         temperature: []
     };
-    Object.values(LIVE_SPARK_SERIES).forEach(cfg => {
+    Object.entries(LIVE_SPARK_SERIES).forEach(([seriesKey, cfg]) => {
         const svg = document.getElementById(cfg.el);
         if (svg) svg.innerHTML = '';
+        const maxEl = document.getElementById(cfg.el + '-max');
+        const minEl = document.getElementById(cfg.el + '-min');
+        if (maxEl) maxEl.textContent = '';
+        if (minEl) minEl.textContent = '';
     });
 }
 
@@ -3369,55 +3454,90 @@ function pushLiveSparkValue(seriesKey, value) {
     liveChartData[seriesKey].push(Number(value));
 }
 
+function escapeSvgTitle(text) {
+    return String(text)
+        .replace(/&/g, '&amp;')
+        .replace(/</g, '&lt;')
+        .replace(/>/g, '&gt;')
+        .replace(/"/g, '&quot;');
+}
+
+function collectLiveSparkSamples(seriesKey) {
+    const series = liveChartData[seriesKey] || [];
+    const samples = [];
+    for (let i = 0; i < series.length; i++) {
+        const v = series[i];
+        if (v === null || v === undefined) continue;
+        samples.push({
+            v: Number(v),
+            t: liveChartData.timestamps[i] || null
+        });
+    }
+    return samples;
+}
+
 function renderLiveSparkline(seriesKey) {
     const cfg = LIVE_SPARK_SERIES[seriesKey];
     if (!cfg) return;
     const svg = document.getElementById(cfg.el);
     if (!svg) return;
 
-    const values = liveChartData[seriesKey].filter(v => v !== null && v !== undefined);
-    if (values.length < 1) {
+    const samples = collectLiveSparkSamples(seriesKey);
+    const maxEl = document.getElementById(cfg.el + '-max');
+    const minEl = document.getElementById(cfg.el + '-min');
+
+    if (samples.length < 1) {
         svg.innerHTML = '';
+        if (maxEl) maxEl.textContent = '';
+        if (minEl) minEl.textContent = '';
         return;
     }
 
-    const width = 100;
-    const height = 44;
-    const padY = 4;
-    let minVal = cfg.min !== undefined ? cfg.min : Math.min(...values);
-    let maxVal = cfg.max !== undefined ? cfg.max : Math.max(...values);
-    if (cfg.min === undefined && cfg.max === undefined) {
-        const span = maxVal - minVal;
-        const pad = span === 0 ? Math.max(Math.abs(maxVal) * 0.05, 0.1) : span * 0.15;
-        minVal -= pad;
-        maxVal += pad;
+    const values = samples.map(s => s.v);
+    const dataMin = Math.min(...values);
+    const dataMax = Math.max(...values);
+    // Pad scale a bit so bars don't touch the chart edges
+    const span = dataMax - dataMin;
+    const pad = span === 0 ? Math.max(Math.abs(dataMax) * 0.05, 0.1) : span * 0.12;
+    const scaleMin = dataMin - pad;
+    const scaleMax = dataMax + pad;
+    const range = (scaleMax - scaleMin) || 1;
+
+    if (maxEl) maxEl.textContent = cfg.format(dataMax);
+    if (minEl) minEl.textContent = cfg.format(dataMin);
+    if (maxEl && minEl && dataMin === dataMax) {
+        minEl.textContent = '';
     }
-    const range = (maxVal - minVal) || 1;
 
-    const coords = values.map((v, i) => {
-        const x = values.length === 1 ? width * 0.5 : (i / (values.length - 1)) * width;
-        const y = height - padY - ((v - minVal) / range) * (height - padY * 2);
-        return { x, y, v };
-    });
-    const linePoints = coords.map(p => `${p.x.toFixed(2)},${p.y.toFixed(2)}`).join(' ');
-
-    // Shrink dots slightly when many samples so the line stays readable
-    const baseR = values.length > 24 ? 1.1 : values.length > 12 ? 1.35 : 1.7;
-    const latestR = baseR + 0.55;
+    const width = 100;
+    const height = 40;
+    const padTop = 3;
+    const padBottom = 2;
+    const chartH = height - padTop - padBottom;
+    const n = samples.length;
+    const slot = width / n;
+    const barW = Math.max(1.4, Math.min(8, slot * 0.62));
 
     let html = '';
-    if (coords.length >= 2) {
-        const areaPoints = `0,${height} ${linePoints} ${width},${height}`;
-        html += `<polygon class="area" points="${areaPoints}" fill="${cfg.color}"></polygon>`;
-        html += `<polyline fill="none" stroke="${cfg.color}" stroke-width="1.75" stroke-linejoin="round" stroke-linecap="round" points="${linePoints}"></polyline>`;
-    }
+    // Mid guide line for easier reading
+    const midY = padTop + chartH / 2;
+    html += `<line class="guide" x1="0" y1="${midY.toFixed(2)}" x2="${width}" y2="${midY.toFixed(2)}"></line>`;
 
-    // One dot per poll sample; latest sample is slightly larger
-    coords.forEach((p, i) => {
-        const isLatest = i === coords.length - 1;
-        const r = isLatest ? latestR : baseR;
-        const cls = isLatest ? 'poll-dot poll-dot-latest' : 'poll-dot';
-        html += `<circle class="${cls}" cx="${p.x.toFixed(2)}" cy="${p.y.toFixed(2)}" r="${r.toFixed(2)}" fill="${cfg.color}" stroke="#fff" stroke-width="0.6"></circle>`;
+    samples.forEach((sample, i) => {
+        const isLatest = i === n - 1;
+        const barH = Math.max(2, ((sample.v - scaleMin) / range) * chartH);
+        const x = i * slot + (slot - barW) / 2;
+        const y = height - padBottom - barH;
+        const cls = isLatest ? 'poll-bar poll-bar-latest' : 'poll-bar';
+        const timeLabel = sample.t
+            ? (sample.t instanceof Date ? sample.t.toLocaleTimeString() : String(sample.t))
+            : '';
+        const tip = timeLabel
+            ? `${cfg.format(sample.v)} · ${timeLabel}`
+            : cfg.format(sample.v);
+        html += `<rect class="${cls}" x="${x.toFixed(2)}" y="${y.toFixed(2)}" width="${barW.toFixed(2)}" height="${barH.toFixed(2)}" rx="0.8" fill="${cfg.color}"><title>${escapeSvgTitle(tip)}</title></rect>`;
+        // Dot on bar top for each poll
+        html += `<circle class="poll-dot" cx="${(x + barW / 2).toFixed(2)}" cy="${y.toFixed(2)}" r="${isLatest ? 1.7 : 1.25}" fill="${cfg.color}" stroke="#fff" stroke-width="0.5"><title>${escapeSvgTitle(tip)}</title></circle>`;
     });
 
     svg.innerHTML = html;
