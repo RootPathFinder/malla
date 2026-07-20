@@ -1,6 +1,5 @@
 """Unit tests for opt-in solar weather forecasting."""
 
-import json
 import sqlite3
 import tempfile
 import time
