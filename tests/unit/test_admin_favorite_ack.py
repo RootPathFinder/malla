@@ -141,6 +141,90 @@ class TestFavoriteWriteAck:
         assert {int(r["node_id"]) for r in tracked} == {0x33333333}
 
 
+class TestFavoriteSessionKeyRecovery:
+    @pytest.mark.unit
+    def test_set_favorite_retries_after_bad_session_key(self, service, admin_db):
+        publisher = MagicMock()
+        publisher.send_set_favorite_node.side_effect = [0xABCD, 0xDCBA]
+        publisher.refresh_session_passkey.return_value = True
+        publisher.get_response.side_effect = [
+            {
+                "is_ack": False,
+                "is_nak": True,
+                "error_reason": "ADMIN_BAD_SESSION_KEY",
+            },
+            {
+                "is_ack": True,
+                "is_nak": False,
+                "error_reason": "NONE",
+            },
+        ]
+
+        with patch.object(service, "_get_publisher", return_value=publisher):
+            result = service.set_favorite_node(0x22222222, 0x33333333)
+
+        assert result.success is True
+        assert result.response["acknowledged"] is True
+        assert result.response["recovered"] is True
+        assert "session key refreshed" in result.response["message"]
+        publisher.refresh_session_passkey.assert_called_once_with(
+            0x22222222, timeout=30.0
+        )
+        assert publisher.send_set_favorite_node.call_count == 2
+        assert publisher.get_response.call_count == 2
+
+        tracked = AdminRepository.list_remote_device_favorites(0x22222222)
+        assert {int(r["node_id"]) for r in tracked} == {0x33333333}
+
+    @pytest.mark.unit
+    def test_set_favorite_fails_when_session_refresh_fails(self, service, admin_db):
+        publisher = MagicMock()
+        publisher.send_set_favorite_node.return_value = 0xABCD
+        publisher.refresh_session_passkey.return_value = False
+        publisher.get_response.return_value = {
+            "is_ack": False,
+            "is_nak": True,
+            "error_reason": "ADMIN_BAD_SESSION_KEY",
+        }
+
+        with patch.object(service, "_get_publisher", return_value=publisher):
+            result = service.set_favorite_node(0x22222222, 0x33333333)
+
+        assert result.success is False
+        assert "ADMIN_BAD_SESSION_KEY" in (result.error or "")
+        assert "failed to refresh session passkey" in (result.error or "")
+        publisher.send_set_favorite_node.assert_called_once()
+        assert AdminRepository.list_remote_device_favorites(0x22222222) == []
+
+    @pytest.mark.unit
+    def test_remove_favorite_retries_after_bad_session_key(self, service, admin_db):
+        AdminRepository.upsert_remote_device_favorite(
+            0x22222222, 0x33333333, source="managed"
+        )
+        publisher = MagicMock()
+        publisher.send_remove_favorite_node.side_effect = [0xBEEF, 0xCAFE]
+        publisher.refresh_session_passkey.return_value = True
+        publisher.get_response.side_effect = [
+            {
+                "is_ack": False,
+                "is_nak": True,
+                "error_reason": "ADMIN_BAD_SESSION_KEY",
+            },
+            {
+                "is_ack": True,
+                "is_nak": False,
+                "error_reason": "NONE",
+            },
+        ]
+
+        with patch.object(service, "_get_publisher", return_value=publisher):
+            result = service.remove_favorite_node(0x22222222, 0x33333333)
+
+        assert result.success is True
+        assert result.response["recovered"] is True
+        assert AdminRepository.list_remote_device_favorites(0x22222222) == []
+
+
 class TestTcpPublisherAckCorrelation:
     @pytest.mark.unit
     def test_routing_ack_matches_decoded_request_id(self):

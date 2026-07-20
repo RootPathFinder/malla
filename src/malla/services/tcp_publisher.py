@@ -1003,6 +1003,71 @@ class TCPPublisher:
                 logger.debug(f"No session passkey found for node !{node_id:08x}")
                 return 0
 
+    def has_session_passkey(self, node_id: int) -> bool:
+        """Return True if a session passkey is cached for the node."""
+        with self._session_passkey_lock:
+            return node_id in self._session_passkeys
+
+    def refresh_session_passkey(
+        self,
+        target_node_id: int,
+        timeout: float = 30.0,
+    ) -> bool:
+        """
+        Fetch a fresh session passkey from a remote node.
+
+        Remote admin *writes* require a session_passkey previously returned by
+        any get_* AdminMessage response. When the key is missing or stale
+        (ADMIN_BAD_SESSION_KEY), clients must GET again, store the new key,
+        then retry the write.
+
+        Args:
+            target_node_id: Node to request a passkey from
+            timeout: Seconds to wait for the metadata response
+
+        Returns:
+            True if a passkey is stored for the node after the request
+        """
+        self.clear_session_passkey(target_node_id)
+
+        logger.info(
+            f"Refreshing session passkey for !{target_node_id:08x} "
+            f"via get_device_metadata"
+        )
+        packet_id = self.send_get_device_metadata(target_node_id)
+        if packet_id is None:
+            logger.warning(
+                f"Failed to send get_device_metadata while refreshing "
+                f"session passkey for !{target_node_id:08x}"
+            )
+            return False
+
+        response = self.get_response(packet_id, timeout=timeout)
+        if not response:
+            logger.warning(
+                f"Timeout refreshing session passkey for !{target_node_id:08x}"
+            )
+            return False
+
+        if response.get("is_nak"):
+            logger.warning(
+                f"NAK refreshing session passkey for !{target_node_id:08x}: "
+                f"{response.get('error_reason', 'NAK')}"
+            )
+            return False
+
+        if self.has_session_passkey(target_node_id):
+            logger.info(
+                f"Refreshed session passkey for !{target_node_id:08x}"
+            )
+            return True
+
+        logger.warning(
+            f"get_device_metadata succeeded for !{target_node_id:08x} but "
+            f"no session_passkey was present in the response"
+        )
+        return False
+
     def send_admin_with_recovery(
         self,
         target_node_id: int,
@@ -1014,8 +1079,8 @@ class TCPPublisher:
         Send an admin message and handle key synchronization errors automatically.
 
         This method detects PKI/session key errors (like ADMIN_BAD_SESSION_KEY,
-        PKI_FAILED) and attempts recovery by clearing the stale session passkey
-        and retrying the request once.
+        PKI_FAILED) and attempts recovery by fetching a fresh session passkey
+        (via get_device_metadata) and retrying the request once.
 
         Args:
             target_node_id: The destination node ID
@@ -1072,12 +1137,20 @@ class TCPPublisher:
             ):
                 logger.warning(
                     f"PKI session error '{error_reason}' for node !{target_node_id:08x}, "
-                    f"clearing session passkey and retrying..."
+                    f"refreshing session passkey and retrying..."
                 )
-                self.clear_session_passkey(target_node_id)
+                # Drop any stale key baked into the outbound message, then
+                # obtain a fresh passkey via GET before retrying the write.
+                admin_message.ClearField("session_passkey")
+                if not self.refresh_session_passkey(
+                    target_node_id, timeout=timeout
+                ):
+                    result["error"] = (
+                        f"PKI key sync error: {error_reason}. "
+                        "Failed to refresh session passkey from the node."
+                    )
+                    return result
 
-                # Retry the request - need to create a fresh admin message
-                # since session_passkey was modified on the original
                 retry_packet_id = self.send_admin_message(
                     target_node_id=target_node_id,
                     admin_message=admin_message,
@@ -1189,8 +1262,9 @@ class TCPPublisher:
             # return one (it normally assigns meshPacket.id for ACK correlation)
             packet_id = random.getrandbits(32)
 
-            # Set session_passkey on the admin message if we have one for this target
-            # Session passkeys are required for admin authentication (like Android app)
+            # Set session_passkey on the admin message if we have one for this target.
+            # Session passkeys are required for remote admin *writes*. Always clear a
+            # stale key left on a reused message when we no longer have a cached one.
             with self._session_passkey_lock:
                 if target_node_id in self._session_passkeys:
                     session_passkey = self._session_passkeys[target_node_id]
@@ -1200,6 +1274,8 @@ class TCPPublisher:
                         f"({len(session_passkey)} bytes)"
                     )
                 else:
+                    if admin_message.session_passkey:
+                        admin_message.ClearField("session_passkey")
                     logger.info(
                         f"No session_passkey found for !{target_node_id:08x} "
                         f"(known nodes: {[f'!{n:08x}' for n in self._session_passkeys.keys()]})"
