@@ -202,7 +202,155 @@ class BotService:
         # Register built-in commands
         self._register_builtin_commands()
 
+        # Overlay persisted settings (survives restart) and seed timestamps
+        # so a reboot does not immediately rebroadcast digest/directory.
+        self._load_persisted_settings()
+
         logger.info("BotService initialized")
+
+    def _persisted_settings_snapshot(self) -> dict[str, Any]:
+        """Build the settings dict that should survive restarts."""
+        return {
+            "command_prefix": self._command_prefix,
+            "listen_channels": sorted(self._listen_channels),
+            "respond_channel_index": self._respond_channel_index,
+            "wait_for_jobs": self._wait_for_jobs,
+            "min_send_interval": self._min_send_interval,
+            "daily_digest_enabled": self._daily_digest_enabled,
+            "daily_digest_hour": self._daily_digest_hour,
+            "channel_broadcast_enabled": self._channel_broadcast_enabled,
+            "broadcast_interval_hours": self._broadcast_interval_hours,
+            "traceroute_format": self._traceroute_format,
+            "welcome_new_nodes_enabled": self._welcome_new_nodes_enabled,
+            "disabled_commands": sorted(self._disabled_commands),
+            "last_broadcast_time": self._last_broadcast_time,
+            "last_daily_digest_date": self._last_daily_digest_date,
+        }
+
+    def _save_persisted_settings(self) -> None:
+        """Persist current bot settings to SQLite."""
+        try:
+            from ..database.bot_settings_repository import BotSettingsRepository
+
+            BotSettingsRepository.set_many(self._persisted_settings_snapshot())
+        except Exception as e:
+            logger.error("Failed to persist bot settings: %s", e, exc_info=True)
+
+    def _persist_setting(self, key: str, value: Any) -> None:
+        """Persist a single bot setting key."""
+        try:
+            from ..database.bot_settings_repository import BotSettingsRepository
+
+            BotSettingsRepository.set(key, value)
+        except Exception as e:
+            logger.error("Failed to persist bot setting %s: %s", key, e, exc_info=True)
+
+    def _load_persisted_settings(self) -> None:
+        """Load bot settings from SQLite, seeding anti-spam timestamps if needed."""
+        try:
+            from ..database.bot_settings_repository import BotSettingsRepository
+
+            stored = BotSettingsRepository.get_all()
+        except Exception as e:
+            logger.error("Failed to load bot settings: %s", e, exc_info=True)
+            stored = {}
+
+        if "command_prefix" in stored and isinstance(stored["command_prefix"], str):
+            prefix = stored["command_prefix"].strip()
+            if prefix and len(prefix) <= 3:
+                self._command_prefix = prefix
+
+        if "listen_channels" in stored and isinstance(stored["listen_channels"], list):
+            self._listen_channels = {
+                str(ch) for ch in stored["listen_channels"] if str(ch).strip()
+            }
+
+        if "respond_channel_index" in stored:
+            try:
+                self._respond_channel_index = int(stored["respond_channel_index"])
+            except (TypeError, ValueError):
+                pass
+
+        if "wait_for_jobs" in stored:
+            self._wait_for_jobs = bool(stored["wait_for_jobs"])
+
+        if "min_send_interval" in stored:
+            try:
+                interval = float(stored["min_send_interval"])
+                if 0.5 <= interval <= 60:
+                    self._min_send_interval = interval
+            except (TypeError, ValueError):
+                pass
+
+        if "daily_digest_enabled" in stored:
+            self._daily_digest_enabled = bool(stored["daily_digest_enabled"])
+
+        if "daily_digest_hour" in stored:
+            try:
+                hour = int(stored["daily_digest_hour"])
+                if 0 <= hour <= 23:
+                    self._daily_digest_hour = hour
+            except (TypeError, ValueError):
+                pass
+
+        if "channel_broadcast_enabled" in stored:
+            self._channel_broadcast_enabled = bool(stored["channel_broadcast_enabled"])
+
+        if "broadcast_interval_hours" in stored:
+            try:
+                hours = float(stored["broadcast_interval_hours"])
+                if 1 <= hours <= 168:
+                    self._broadcast_interval_hours = hours
+            except (TypeError, ValueError):
+                pass
+
+        if "traceroute_format" in stored:
+            fmt = str(stored["traceroute_format"]).strip().lower()
+            if fmt in self._traceroute_formats:
+                self._traceroute_format = fmt
+
+        if "welcome_new_nodes_enabled" in stored:
+            self._welcome_new_nodes_enabled = bool(stored["welcome_new_nodes_enabled"])
+
+        if "disabled_commands" in stored and isinstance(
+            stored["disabled_commands"], list
+        ):
+            self._disabled_commands = {
+                str(cmd).lower() for cmd in stored["disabled_commands"] if cmd
+            }
+
+        # Timestamps: restore when present; otherwise seed to avoid restart spam.
+        seed_updates: dict[str, Any] = {}
+        if "last_broadcast_time" in stored:
+            try:
+                self._last_broadcast_time = float(stored["last_broadcast_time"])
+            except (TypeError, ValueError):
+                self._last_broadcast_time = time.time()
+                seed_updates["last_broadcast_time"] = self._last_broadcast_time
+        else:
+            # Fresh install / first boot after this feature: wait a full interval.
+            self._last_broadcast_time = time.time()
+            seed_updates["last_broadcast_time"] = self._last_broadcast_time
+
+        if "last_daily_digest_date" in stored:
+            date_val = stored["last_daily_digest_date"]
+            self._last_daily_digest_date = str(date_val) if date_val else None
+        else:
+            # If today's digest window already opened, mark today as sent so a
+            # deploy/restart does not immediately dump another digest.
+            local_now = time.localtime()
+            today = time.strftime("%Y-%m-%d", local_now)
+            if local_now.tm_hour >= self._daily_digest_hour:
+                self._last_daily_digest_date = today
+                seed_updates["last_daily_digest_date"] = today
+
+        if seed_updates:
+            try:
+                from ..database.bot_settings_repository import BotSettingsRepository
+
+                BotSettingsRepository.set_many(seed_updates)
+            except Exception as e:
+                logger.debug("Could not seed bot timestamp settings: %s", e)
 
     def _register_builtin_commands(self) -> None:
         """Register the built-in command handlers."""
@@ -364,6 +512,9 @@ class BotService:
         if cmd_name in self._commands:
             self._disabled_commands.discard(cmd_name)
             self._log_activity("command_enabled", {"command": cmd_name})
+            self._persist_setting(
+                "disabled_commands", sorted(self._disabled_commands)
+            )
             return True
         return False
 
@@ -373,6 +524,9 @@ class BotService:
         if cmd_name in self._commands:
             self._disabled_commands.add(cmd_name)
             self._log_activity("command_disabled", {"command": cmd_name})
+            self._persist_setting(
+                "disabled_commands", sorted(self._disabled_commands)
+            )
             return True
         return False
 
@@ -3206,7 +3360,11 @@ class BotService:
                     desc = desc[:57] + "..."
                 lines.append(desc)
 
-            lines.append(f"Key: {ch['psk']}")
+            # Keep PSKs off public LongFast; share via DM or !chanurl add-link
+            if ctx.is_dm:
+                lines.append(f"Key: {ch['psk']}")
+            else:
+                lines.append(f"DM for key, or {self._command_prefix}chanurl #")
 
             if ch.get("registered_by_name"):
                 lines.append(f"By: {ch['registered_by_name']}")
@@ -3255,6 +3413,7 @@ class BotService:
                 if self._channel_broadcast_enabled and elapsed >= interval_seconds:
                     self._broadcast_channel_directory()
                     self._last_broadcast_time = now
+                    self._persist_setting("last_broadcast_time", now)
 
                 self._maybe_send_daily_digest()
                 self._maybe_welcome_new_nodes()
@@ -3268,7 +3427,7 @@ class BotService:
         logger.info("Channel directory broadcast thread stopped")
 
     def _broadcast_channel_directory(self) -> None:
-        """Build and send the channel directory advertisement message."""
+        """Build and send a quiet channel directory ad (no PSKs on LongFast)."""
         try:
             from ..database.channel_directory_repository import (
                 ChannelDirectoryRepository,
@@ -3279,24 +3438,42 @@ class BotService:
                 logger.debug("No channels to broadcast")
                 return
 
-            lines = [f"📻 Channel Directory ({len(channels)}):"]
-            for ch in channels:
-                name = ch["channel_name"]
-                psk = ch["psk"]
-                desc = ch.get("description") or ""
-                if desc:
-                    if len(desc) > 25:
-                        desc = desc[:22] + "..."
-                    lines.append(f"• {name} [{psk}] - {desc}")
+            prefix = self._command_prefix
+            # Compact numbered names only — keys/links via !chanurl
+            names: list[str] = []
+            for i, ch in enumerate(channels, 1):
+                name = str(ch["channel_name"] or "")[:12]
+                if name:
+                    names.append(f"{i}.{name}")
+
+            if not names:
+                return
+
+            header = f"📻 Channels ({len(names)}):"
+            footer = f"{prefix}chanurl # to add"
+            # Fit as many names as possible under the LoRa budget
+            message = header + "\n" + " ".join(names) + "\n" + footer
+            if len(message.encode("utf-8")) > 220:
+                kept: list[str] = []
+                for entry in names:
+                    candidate = (
+                        header
+                        + "\n"
+                        + " ".join([*kept, entry])
+                        + "\n"
+                        + footer
+                    )
+                    if len(candidate.encode("utf-8")) > 220:
+                        break
+                    kept.append(entry)
+                if kept:
+                    omitted = len(names) - len(kept)
+                    message = header + "\n" + " ".join(kept)
+                    if omitted:
+                        message += f" +{omitted}"
+                    message += "\n" + footer
                 else:
-                    lines.append(f"• {name} [{psk}]")
-
-            lines.append("!channelinfo <name> for details")
-
-            message = "\n".join(lines)
-            # Truncate to fit Meshtastic payload
-            if len(message) > 220:
-                message = message[:217] + "..."
+                    message = f"{header}\n{footer}"
 
             self.queue_message(
                 text=message,
@@ -3421,6 +3598,7 @@ class BotService:
 
         self._last_digest_text = digest
         self._last_daily_digest_date = today
+        self._persist_setting("last_daily_digest_date", today)
         self.queue_message(
             text=digest,
             destination=0xFFFFFFFF,

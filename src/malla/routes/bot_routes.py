@@ -213,6 +213,9 @@ def api_bot_update_config():
         if "welcome_new_nodes_enabled" in data:
             bot._welcome_new_nodes_enabled = bool(data["welcome_new_nodes_enabled"])
 
+        # Persist so settings survive bot/process restarts
+        bot._save_persisted_settings()
+
         return jsonify(
             {
                 "message": "Configuration updated",
