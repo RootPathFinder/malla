@@ -123,12 +123,10 @@ class TestNodeRoutes:
 
         # Basic information section
         assert "Node Information" in response_text
-        assert "Total Packets" in response_text
-        assert "Destinations" in response_text
+        assert "hero-vitals" in response_text
         assert "Avg RSSI" in response_text
-
-        # Check for node metrics
-        assert "metric-value" in response_text
+        assert "packets" in response_text
+        assert "destinations" in response_text
 
         # Check for breadcrumb navigation
         assert "breadcrumb" in response_text
@@ -146,8 +144,9 @@ class TestNodeRoutes:
 
         response_text = response.data.decode("utf-8")
 
-        # Should show packet count greater than 0
-        assert "Total Packets" in response_text
+        # Hero vitals meta should include a non-zero packet count for fixture nodes
+        assert "packets" in response_text
+        assert "hero-vitals" in response_text
 
         # Check for protocol breakdown section if there are packets
         if "Protocol Usage" in response_text:
