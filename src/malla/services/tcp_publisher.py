@@ -19,8 +19,11 @@ from ..config import get_config
 from ..utils.telemetry_request import (
     complete_pending_telemetry,
     extract_from_node_id,
+    extract_portnum,
     extract_request_id,
     find_matching_telemetry_request,
+    is_routing_no_response,
+    telemetry_has_requested_metrics,
     telemetry_to_dict,
 )
 
@@ -191,6 +194,10 @@ class TCPPublisher:
         # Key: target_node_id (int), Value: dict with event and response data
         self._pending_telemetry_requests: dict[int, dict[str, Any]] = {}
         self._pending_telemetry_lock = threading.Lock()
+        # Late replies that arrived after a wait was cleaned up (by request id)
+        self._telemetry_late_by_request: dict[int, dict[str, Any]] = {}
+        # Most recent good telemetry per node (for grace / last-known)
+        self._telemetry_latest_by_node: dict[int, dict[str, Any]] = {}
 
         # Telemetry request statistics tracking
         self._telemetry_stats: dict[str, Any] = {
@@ -875,6 +882,42 @@ class TCPPublisher:
         except (TypeError, ValueError):
             return None
 
+    def _store_telemetry_caches(
+        self,
+        *,
+        from_node_id: int | None,
+        request_id: int | None,
+        telemetry_dict: dict[str, Any],
+        telemetry_type: str = "device_metrics",
+    ) -> None:
+        """Cache late/unmatched replies for grace-period recovery."""
+        if not telemetry_has_requested_metrics(telemetry_dict, telemetry_type):
+            # Still cache if any metrics variant is present
+            if not any(
+                telemetry_has_requested_metrics(telemetry_dict, t)
+                for t in (
+                    "device_metrics",
+                    "environment_metrics",
+                    "power_metrics",
+                    "local_stats",
+                )
+            ):
+                return
+        payload = {
+            "telemetry": telemetry_dict,
+            "timestamp": time.time(),
+            "from_node": from_node_id,
+            "request_id": request_id,
+        }
+        if request_id is not None:
+            self._telemetry_late_by_request[request_id] = payload
+            # Bound cache size
+            if len(self._telemetry_late_by_request) > 64:
+                oldest = next(iter(self._telemetry_late_by_request))
+                self._telemetry_late_by_request.pop(oldest, None)
+        if from_node_id is not None:
+            self._telemetry_latest_by_node[from_node_id] = payload
+
     def _match_and_complete_telemetry(self, packet: dict[str, Any]) -> bool:
         """
         Correlate a TELEMETRY_APP packet with a pending live request.
@@ -882,9 +925,36 @@ class TCPPublisher:
         Used by both pubsub ``_on_receive`` and the meshtastic ``onResponse``
         callback so either delivery path can complete the wait.
         """
+        portnum = extract_portnum(packet)
         from_node_id = extract_from_node_id(packet)
         request_id = extract_request_id(packet)
         decoded = packet.get("decoded") or {}
+
+        # ROUTING callbacks (wantAck / NO_RESPONSE) must not complete as success
+        if portnum == "ROUTING_APP" or decoded.get("routing") is not None:
+            if is_routing_no_response(packet) and request_id is not None:
+                with self._pending_telemetry_lock:
+                    for pending in self._pending_telemetry_requests.values():
+                        pending_rid = self._normalize_request_id(
+                            pending.get("request_id")
+                        )
+                        if pending_rid != request_id or pending.get("completed"):
+                            continue
+                        pending.setdefault("response_data", {})["error"] = "NO_RESPONSE"
+                        event = pending.get("event")
+                        if event is not None:
+                            event.set()
+                        logger.warning(
+                            "Telemetry NO_RESPONSE for request_id=%s "
+                            "(node may lack telemetry reply support)",
+                            request_id,
+                        )
+                        return True
+            return False
+
+        if portnum is not None and portnum != "TELEMETRY_APP":
+            return False
+
         telemetry_dict = telemetry_to_dict(decoded.get("telemetry", {}))
 
         logger.info(
@@ -905,9 +975,15 @@ class TCPPublisher:
                 telemetry=telemetry_dict,
             )
             if match is None:
+                # Keep for grace-period pickup after a premature timeout
+                self._store_telemetry_caches(
+                    from_node_id=from_node_id,
+                    request_id=request_id,
+                    telemetry_dict=telemetry_dict,
+                )
                 if pending_keys:
                     logger.debug(
-                        "TELEMETRY_APP ignored (no pending match); pending=%s "
+                        "TELEMETRY_APP cached (no pending match); pending=%s "
                         "from=%s request_id=%s",
                         pending_keys,
                         from_node_id,
@@ -922,6 +998,12 @@ class TCPPublisher:
                 from_node_id=from_node_id if from_node_id is not None else node_id,
                 request_id=request_id,
             )
+            self._store_telemetry_caches(
+                from_node_id=from_node_id if from_node_id is not None else node_id,
+                request_id=request_id or pending.get("request_id"),
+                telemetry_dict=telemetry_dict,
+                telemetry_type=pending.get("telemetry_type") or "device_metrics",
+            )
             if completed:
                 logger.info(
                     "Telemetry response matched pending request for !%08x "
@@ -930,6 +1012,19 @@ class TCPPublisher:
                     request_id or pending.get("request_id"),
                 )
             return completed
+
+    def get_latest_node_telemetry(
+        self, node_id: int, max_age_s: float = 30.0
+    ) -> dict[str, Any] | None:
+        """Return cached telemetry for a node if fresher than max_age_s."""
+        with self._pending_telemetry_lock:
+            cached = self._telemetry_latest_by_node.get(node_id)
+            if not cached:
+                return None
+            age = time.time() - float(cached.get("timestamp") or 0)
+            if age > max_age_s:
+                return None
+            return dict(cached)
 
     def get_response(
         self, packet_id: int, timeout: float = 30.0
@@ -2531,25 +2626,33 @@ class TCPPublisher:
                 # Update activity time
                 self._last_activity_time = time.time()
 
-                # Wait for response with timeout
+                # Wait for response with timeout, then a short grace for late RF
                 if response_event.wait(timeout=timeout):
-                    if "error" in response_data:
-                        logger.warning(
-                            f"Telemetry request failed for !{target_node_id:08x}: "
-                            f"{response_data.get('error')}"
-                        )
-                        # Track error
-                        with self._telemetry_stats_lock:
-                            self._telemetry_stats["errors"] += 1
-                            self._telemetry_stats["per_node_stats"][node_key][
-                                "errors"
-                            ] += 1
-                        return None
+                    pass
+                else:
+                    # Late reply often arrives just after the wait ends
+                    response_event.wait(timeout=0.75)
 
+                # Check late cache keyed by our packet id
+                if not response_data.get("telemetry") and request_id is not None:
+                    with self._pending_telemetry_lock:
+                        late = self._telemetry_late_by_request.pop(request_id, None)
+                    if late and late.get("telemetry"):
+                        response_data.update(
+                            {
+                                "telemetry": late["telemetry"],
+                                "timestamp": late.get("timestamp", time.time()),
+                                "from_node": late.get("from_node", target_node_id),
+                                "request_id": request_id,
+                                "late_cache": True,
+                            }
+                        )
+
+                if response_data.get("telemetry") and "error" not in response_data:
                     logger.info(
                         f"Telemetry request successful for !{target_node_id:08x}"
+                        + (" (late cache)" if response_data.get("late_cache") else "")
                     )
-                    # Track success
                     success_time = time.time()
                     with self._telemetry_stats_lock:
                         self._telemetry_stats["successful_responses"] += 1
@@ -2561,21 +2664,31 @@ class TCPPublisher:
                             "last_success"
                         ] = success_time
 
-                    # Include stats in response
                     response_data["stats"] = self.get_telemetry_stats(target_node_id)
                     return response_data
-                else:
+
+                if "error" in response_data:
                     logger.warning(
-                        f"Telemetry request timeout for !{target_node_id:08x} "
-                        f"(packet_id={request_id})"
+                        f"Telemetry request failed for !{target_node_id:08x}: "
+                        f"{response_data.get('error')}"
                     )
-                    # Track timeout
                     with self._telemetry_stats_lock:
-                        self._telemetry_stats["timeouts"] += 1
+                        self._telemetry_stats["errors"] += 1
                         self._telemetry_stats["per_node_stats"][node_key][
-                            "timeouts"
+                            "errors"
                         ] += 1
                     return None
+
+                logger.warning(
+                    f"Telemetry request timeout for !{target_node_id:08x} "
+                    f"(packet_id={request_id})"
+                )
+                with self._telemetry_stats_lock:
+                    self._telemetry_stats["timeouts"] += 1
+                    self._telemetry_stats["per_node_stats"][node_key][
+                        "timeouts"
+                    ] += 1
+                return None
 
             finally:
                 # Only remove our generation — never clobber a newer poll

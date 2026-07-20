@@ -2915,8 +2915,7 @@ def api_request_live_telemetry(node_id):
         )
         budget = live_telemetry_budget(estimated_hops)
 
-        # Floor client timeout to the hop budget so multi-hop is not starved by
-        # a short poll-interval hint; allow a longer client request up to max.
+        # timeout_s is per send attempt. Floor client hint to the hop budget.
         client_timeout = data.get("timeout")
         if client_timeout is None:
             timeout = budget["timeout_s"]
@@ -2935,6 +2934,63 @@ def api_request_live_telemetry(node_id):
             "want_ack": budget["want_ack"],
             "retry_delay_s": budget["retry_delay_s"],
         }
+
+        def _success_payload(result: dict[str, Any], attempts: int, source: str = "live"):
+            return {
+                "success": True,
+                "node_id": node_id_int,
+                "hex_id": f"!{node_id_int:08x}",
+                "telemetry": result.get("telemetry", {}),
+                "timestamp": result.get("timestamp"),
+                "stats": result.get("stats", {}),
+                "live": True,
+                "source": source,
+                "attempts": attempts,
+                "estimated_hops": budget["estimated_hops"],
+                "hop_source": hop_source,
+                "budget": budget,
+            }
+
+        def _failure_or_last_known(publisher: Any, attempts: int):
+            # Keep charts alive across brief RF misses using very fresh cache
+            cached: dict[str, Any] | None = None
+            getter = getattr(publisher, "get_latest_node_telemetry", None)
+            if callable(getter):
+                maybe = getter(node_id_int, max_age_s=20.0)
+                if isinstance(maybe, dict):
+                    cached = maybe
+            if cached and cached.get("telemetry"):
+                cached_result = {
+                    "telemetry": cached["telemetry"],
+                    "timestamp": cached.get("timestamp"),
+                    "stats": publisher.get_telemetry_stats(node_id_int),
+                }
+                payload = _success_payload(
+                    cached_result, attempts, source="last_known"
+                )
+                payload["warning"] = (
+                    "Using last-known telemetry; latest solicit timed out"
+                )
+                return jsonify(payload)
+
+            stats = publisher.get_telemetry_stats(node_id_int)
+            total = budget.get("total_budget_s", timeout)
+            return jsonify(
+                {
+                    "success": False,
+                    "error": (
+                        f"No response from node after {attempts} attempt(s) "
+                        f"(~{total}s, {budget['estimated_hops']}-hop path)"
+                    ),
+                    "node_id": node_id_int,
+                    "hex_id": f"!{node_id_int:08x}",
+                    "stats": stats,
+                    "attempts": attempts,
+                    "estimated_hops": budget["estimated_hops"],
+                    "hop_source": hop_source,
+                    "budget": budget,
+                }
+            ), 408
 
         if connection_type == "tcp":
             tcp_publisher = get_tcp_publisher()
@@ -2955,39 +3011,10 @@ def api_request_live_telemetry(node_id):
             )
 
             if result:
-                return jsonify(
-                    {
-                        "success": True,
-                        "node_id": node_id_int,
-                        "hex_id": f"!{node_id_int:08x}",
-                        "telemetry": result.get("telemetry", {}),
-                        "timestamp": result.get("timestamp"),
-                        "stats": result.get("stats", {}),
-                        "live": True,
-                        "attempts": attempts,
-                        "estimated_hops": budget["estimated_hops"],
-                        "hop_source": hop_source,
-                        "budget": budget,
-                    }
-                )
+                source = "late_cache" if result.get("late_cache") else "live"
+                return jsonify(_success_payload(result, attempts, source=source))
 
-            stats = tcp_publisher.get_telemetry_stats(node_id_int)
-            return jsonify(
-                {
-                    "success": False,
-                    "error": (
-                        f"No response from node within {timeout}s "
-                        f"({budget['estimated_hops']}-hop path)"
-                    ),
-                    "node_id": node_id_int,
-                    "hex_id": f"!{node_id_int:08x}",
-                    "stats": stats,
-                    "attempts": attempts,
-                    "estimated_hops": budget["estimated_hops"],
-                    "hop_source": hop_source,
-                    "budget": budget,
-                }
-            ), 408
+            return _failure_or_last_known(tcp_publisher, attempts)
 
         elif connection_type == "serial":
             serial_publisher = get_serial_publisher()
@@ -3008,39 +3035,10 @@ def api_request_live_telemetry(node_id):
             )
 
             if result:
-                return jsonify(
-                    {
-                        "success": True,
-                        "node_id": node_id_int,
-                        "hex_id": f"!{node_id_int:08x}",
-                        "telemetry": result.get("telemetry", {}),
-                        "timestamp": result.get("timestamp"),
-                        "stats": result.get("stats", {}),
-                        "live": True,
-                        "attempts": attempts,
-                        "estimated_hops": budget["estimated_hops"],
-                        "hop_source": hop_source,
-                        "budget": budget,
-                    }
-                )
+                source = "late_cache" if result.get("late_cache") else "live"
+                return jsonify(_success_payload(result, attempts, source=source))
 
-            stats = serial_publisher.get_telemetry_stats(node_id_int)
-            return jsonify(
-                {
-                    "success": False,
-                    "error": (
-                        f"No response from node within {timeout}s "
-                        f"({budget['estimated_hops']}-hop path)"
-                    ),
-                    "node_id": node_id_int,
-                    "hex_id": f"!{node_id_int:08x}",
-                    "stats": stats,
-                    "attempts": attempts,
-                    "estimated_hops": budget["estimated_hops"],
-                    "hop_source": hop_source,
-                    "budget": budget,
-                }
-            ), 408
+            return _failure_or_last_known(serial_publisher, attempts)
 
         elif connection_type == "mqtt":
             # MQTT is fire-and-forget, we can't wait for response here
