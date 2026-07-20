@@ -2982,6 +2982,8 @@ let liveTelemetrySelectedDuration = 60000; // Default 1 minute
 let liveTelemetryLastResponseTime = 0;
 let liveTelemetryConsecutiveSlowResponses = 0;
 let liveTelemetryConsecutiveFastResponses = 0;
+let liveTelemetryAbortController = null;
+let liveTelemetryPollStartedAt = 0;
 
 // Live chart data storage
 let liveChartData = {
@@ -3236,6 +3238,16 @@ function stopLiveTelemetry() {
     const pollingMetrics = document.getElementById('polling-metrics-container');
 
     liveTelemetryIsPolling = false;
+
+    // Abort any in-flight poll so Stop is immediate
+    if (liveTelemetryAbortController) {
+        try {
+            liveTelemetryAbortController.abort();
+        } catch (e) {
+            // ignore
+        }
+        liveTelemetryAbortController = null;
+    }
 
     // Clear timeouts
     if (liveTelemetryPollTimeout) {
@@ -3493,11 +3505,19 @@ function updatePollingMetrics(pollInterval, responseTime, success) {
 function scheduleNextPoll() {
     if (!liveTelemetryIsPolling) return;
 
+    // Wall-clock cadence: schedule from when this poll started, not from when
+    // it finished, so slow responses don't permanently stretch the interval.
+    const elapsed = Date.now() - (liveTelemetryPollStartedAt || Date.now());
+    const delay = Math.max(250, liveTelemetryPollInterval - elapsed);
+
+    if (liveTelemetryPollTimeout) {
+        clearTimeout(liveTelemetryPollTimeout);
+    }
     liveTelemetryPollTimeout = setTimeout(() => {
         if (liveTelemetryIsPolling) {
             pollLiveTelemetry();
         }
-    }, liveTelemetryPollInterval);
+    }, delay);
 }
 
 async function pollLiveTelemetry() {
@@ -3506,20 +3526,40 @@ async function pollLiveTelemetry() {
     const scriptTag = document.querySelector('script[data-node-id]');
     const nodeId = scriptTag.getAttribute('data-node-id');
     const pollStartTime = Date.now();
+    liveTelemetryPollStartedAt = pollStartTime;
     const statusIndicator = document.getElementById('live-telemetry-status');
 
+    // Abort previous in-flight request if any (should be rare with sequential polls)
+    if (liveTelemetryAbortController) {
+        try {
+            liveTelemetryAbortController.abort();
+        } catch (e) {
+            // ignore
+        }
+    }
+    liveTelemetryAbortController = new AbortController();
+    const signal = liveTelemetryAbortController.signal;
+
     try {
-        // Calculate timeout based on current poll interval (leave 2s buffer)
-        const requestTimeout = Math.min(Math.max(liveTelemetryPollInterval - 2000, 5), 25);
+        // Timeout is in *seconds* for the API. Convert from poll interval ms
+        // and leave a small buffer so the HTTP call finishes before the next poll.
+        // (Previously this used ms values as seconds, forcing a 25s timeout always.)
+        const requestTimeoutSec = Math.min(
+            Math.max(Math.round((liveTelemetryPollInterval - 1500) / 1000), 5),
+            20
+        );
 
         const response = await fetch(`/api/admin/node/${nodeId}/telemetry/live`, {
             method: 'POST',
             headers: {'Content-Type': 'application/json'},
             body: JSON.stringify({
                 telemetry_type: 'device_metrics',
-                timeout: requestTimeout
-            })
+                timeout: requestTimeoutSec
+            }),
+            signal
         });
+
+        if (!liveTelemetryIsPolling) return;
 
         const responseTime = Date.now() - pollStartTime;
         const data = await response.json();
@@ -3538,8 +3578,9 @@ async function pollLiveTelemetry() {
             addPollResult(true, responseTime);
 
             const intervalSec = Math.round(liveTelemetryPollInterval / 1000);
-            const responseSec = Math.round(responseTime/1000);
-            statusIndicator.innerHTML = `<span class="badge bg-success">Live</span> <small class="text-muted ms-2">Response: ${responseSec}s | Next poll: ${intervalSec}s</small>`;
+            const responseSec = (responseTime / 1000).toFixed(1);
+            const retryNote = data.attempts > 1 ? ' (retried)' : '';
+            statusIndicator.innerHTML = `<span class="badge bg-success">Live</span> <small class="text-muted ms-2">Response: ${responseSec}s${retryNote} | Next poll: ${intervalSec}s</small>`;
             adjustPollingInterval(responseTime, true);
 
             const telemetry = data.telemetry;
@@ -3569,10 +3610,10 @@ async function pollLiveTelemetry() {
         addPollResult(false, responseTime);
 
         const errorMsg = data.error || 'Unknown error';
-        if (errorMsg.includes('TCP not connected')) {
+        if (errorMsg.includes('TCP not connected') || errorMsg.includes('Serial not connected')) {
             statusIndicator.innerHTML = '<span class="badge bg-danger">Not Connected</span> <small class="text-muted ms-2">Connect via Admin page first</small>';
         } else if (errorMsg.includes('MQTT')) {
-            statusIndicator.innerHTML = '<span class="badge bg-danger">MQTT Mode</span> <small class="text-muted ms-2">Live telemetry requires TCP connection</small>';
+            statusIndicator.innerHTML = '<span class="badge bg-danger">MQTT Mode</span> <small class="text-muted ms-2">Live telemetry requires TCP or Serial connection</small>';
         } else {
             statusIndicator.innerHTML = `<span class="badge bg-warning">Error</span> <small class="text-muted ms-2">${errorMsg}</small>`;
         }
@@ -3582,7 +3623,12 @@ async function pollLiveTelemetry() {
         scheduleNextPoll();
 
     } catch (error) {
+        if (error && error.name === 'AbortError') {
+            return; // Stopped intentionally
+        }
         console.error('Live telemetry fetch failed:', error);
+        if (!liveTelemetryIsPolling) return;
+
         // Add failed result to timeline for network errors
         addPollResult(false, Date.now() - pollStartTime);
 

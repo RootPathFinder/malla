@@ -17,6 +17,13 @@ from pubsub import pub
 from serial.tools import list_ports
 
 from ..config import get_config
+from ..utils.telemetry_request import (
+    complete_pending_telemetry,
+    extract_from_node_id,
+    extract_request_id,
+    find_matching_telemetry_request,
+    telemetry_to_dict,
+)
 
 # Import get_hardware_model_name - avoid circular import by importing inside function
 # from .admin_service import get_hardware_model_name
@@ -581,35 +588,61 @@ class SerialPublisher:
             logger.error(f"Error handling admin response: {e}")
 
     def _handle_telemetry_response(self, packet: dict[str, Any]) -> None:
-        """Handle telemetry app responses."""
+        """Handle telemetry app responses (pubsub path)."""
         try:
-            from_id = packet.get("from")
-            if from_id is None:
-                from_id_str = packet.get("fromId", "")
-                if from_id_str.startswith("!"):
-                    from_id = int(from_id_str[1:], 16)
-                else:
-                    return
-
-            decoded = packet.get("decoded", {})
-            telemetry_data = decoded.get("telemetry", {})
-
-            if not telemetry_data:
-                return
-
-            # Check if this is a response to a pending request
-            with self._pending_telemetry_lock:
-                if from_id in self._pending_telemetry_requests:
-                    pending = self._pending_telemetry_requests[from_id]
-                    pending["response_data"]["telemetry"] = telemetry_data
-                    pending["response_data"]["timestamp"] = time.time()
-                    pending["response_data"]["from_node"] = from_id
-                    pending["event"].set()
-
-                    logger.debug(f"Received telemetry response from !{from_id:08x}")
-
+            self._match_and_complete_telemetry(packet)
         except Exception as e:
             logger.error(f"Error handling telemetry response: {e}")
+
+    def _match_and_complete_telemetry(self, packet: dict[str, Any]) -> bool:
+        """
+        Correlate a TELEMETRY_APP packet with a pending live request.
+
+        Dual-path: pubsub receive handler and meshtastic onResponse.
+        """
+        from_node_id = extract_from_node_id(packet)
+        request_id = extract_request_id(packet)
+        decoded = packet.get("decoded") or {}
+        telemetry_dict = telemetry_to_dict(decoded.get("telemetry", {}))
+
+        if not telemetry_dict and from_node_id is None and request_id is None:
+            return False
+
+        with self._pending_telemetry_lock:
+            match = find_matching_telemetry_request(
+                self._pending_telemetry_requests,
+                from_node_id=from_node_id,
+                request_id=request_id,
+                telemetry=telemetry_dict,
+            )
+            if match is None:
+                return False
+
+            node_id, pending = match
+            completed = complete_pending_telemetry(
+                pending,
+                telemetry=telemetry_dict,
+                from_node_id=from_node_id if from_node_id is not None else node_id,
+                request_id=request_id,
+            )
+            if completed:
+                logger.info(
+                    "Telemetry response matched pending request for !%08x "
+                    "(request_id=%s)",
+                    node_id,
+                    request_id or pending.get("request_id"),
+                )
+            return completed
+
+    @staticmethod
+    def _normalize_request_id(request_id: Any) -> int | None:
+        """Normalize packet/request ids to unsigned 32-bit ints."""
+        if request_id is None or request_id == "":
+            return None
+        try:
+            return int(request_id) & 0xFFFFFFFF
+        except (TypeError, ValueError):
+            return None
 
     def get_local_node_id(self) -> int | None:
         """Get the local node ID from the connected device."""
@@ -1368,6 +1401,9 @@ class SerialPublisher:
         This sends a telemetry request to the target node and waits for
         the response containing current device metrics.
 
+        Correlation uses the mesh packet id (requestId) plus metric-type
+        validation. Responses are accepted via pubsub and/or onResponse.
+
         Args:
             target_node_id: The destination node ID
             telemetry_type: Type of telemetry to request
@@ -1406,6 +1442,7 @@ class SerialPublisher:
             # Set up tracking for this request
             response_event = threading.Event()
             response_data: dict[str, Any] = {}
+            generation = time.time_ns()
 
             with self._pending_telemetry_lock:
                 self._pending_telemetry_requests[target_node_id] = {
@@ -1413,6 +1450,9 @@ class SerialPublisher:
                     "response_data": response_data,
                     "telemetry_type": telemetry_type,
                     "requested_at": time.time(),
+                    "generation": generation,
+                    "request_id": None,
+                    "completed": False,
                 }
 
             # Track statistics
@@ -1443,13 +1483,26 @@ class SerialPublisher:
                     f"(type={telemetry_type}) via serial"
                 )
 
-                # Send telemetry request
-                self._interface.sendData(
+                mesh_packet = self._interface.sendData(
                     data=telemetry,
                     destinationId=target_node_id,
                     portNum=portnums_pb2.TELEMETRY_APP,
                     wantAck=False,
                     wantResponse=True,
+                    onResponse=self._match_and_complete_telemetry,
+                )
+
+                request_id = self._normalize_request_id(
+                    getattr(mesh_packet, "id", None)
+                )
+                with self._pending_telemetry_lock:
+                    pending = self._pending_telemetry_requests.get(target_node_id)
+                    if pending and pending.get("generation") == generation:
+                        pending["request_id"] = request_id
+
+                logger.info(
+                    f"Telemetry request sent, packet_id={request_id} "
+                    f"(target=!{target_node_id:08x})"
                 )
 
                 # Wait for response
@@ -1486,7 +1539,8 @@ class SerialPublisher:
                     return response_data
                 else:
                     logger.warning(
-                        f"Telemetry request timeout for !{target_node_id:08x}"
+                        f"Telemetry request timeout for !{target_node_id:08x} "
+                        f"(packet_id={request_id})"
                     )
                     with self._telemetry_stats_lock:
                         self._telemetry_stats["timeouts"] += 1
@@ -1496,9 +1550,10 @@ class SerialPublisher:
                     return None
 
             finally:
-                # Always clean up the pending request
                 with self._pending_telemetry_lock:
-                    self._pending_telemetry_requests.pop(target_node_id, None)
+                    pending = self._pending_telemetry_requests.get(target_node_id)
+                    if pending and pending.get("generation") == generation:
+                        self._pending_telemetry_requests.pop(target_node_id, None)
 
         except Exception as e:
             logger.error(f"Failed to send telemetry request: {e}")
@@ -1510,46 +1565,51 @@ class SerialPublisher:
         """
         Get telemetry request statistics.
 
-        Args:
-            node_id: Optional node ID to get per-node stats for
-
-        Returns:
-            Dictionary with telemetry statistics
+        Shape matches TCPPublisher.get_telemetry_stats so the live UI can
+        consume either connection type the same way.
         """
         with self._telemetry_stats_lock:
+            total = self._telemetry_stats["total_requests"]
+            successes = self._telemetry_stats["successful_responses"]
+            timeouts = self._telemetry_stats["timeouts"]
+            errors = self._telemetry_stats["errors"]
+
+            success_rate = (successes / total * 100) if total > 0 else 0.0
+            failure_rate = 100.0 - success_rate
+
+            stats: dict[str, Any] = {
+                "total_requests": total,
+                "successful_responses": successes,
+                "timeouts": timeouts,
+                "errors": errors,
+                "success_rate": round(success_rate, 1),
+                "failure_rate": round(failure_rate, 1),
+                "last_request_time": self._telemetry_stats["last_request_time"],
+                "last_success_time": self._telemetry_stats["last_success_time"],
+            }
+
             if node_id is not None:
                 node_key = str(node_id)
                 node_stats = self._telemetry_stats["per_node_stats"].get(node_key, {})
-                return {
-                    "node_id": node_id,
-                    "requests": node_stats.get("requests", 0),
-                    "successes": node_stats.get("successes", 0),
-                    "timeouts": node_stats.get("timeouts", 0),
-                    "errors": node_stats.get("errors", 0),
-                    "success_rate": (
-                        node_stats.get("successes", 0)
-                        / max(node_stats.get("requests", 0), 1)
-                        * 100
-                    ),
-                    "last_request": node_stats.get("last_request"),
-                    "last_success": node_stats.get("last_success"),
-                }
-            else:
-                return {
-                    "total_requests": self._telemetry_stats["total_requests"],
-                    "successful_responses": self._telemetry_stats[
-                        "successful_responses"
-                    ],
-                    "timeouts": self._telemetry_stats["timeouts"],
-                    "errors": self._telemetry_stats["errors"],
-                    "success_rate": (
-                        self._telemetry_stats["successful_responses"]
-                        / max(self._telemetry_stats["total_requests"], 1)
-                        * 100
-                    ),
-                    "last_request_time": self._telemetry_stats["last_request_time"],
-                    "last_success_time": self._telemetry_stats["last_success_time"],
-                }
+                if node_stats:
+                    node_total = node_stats.get("requests", 0)
+                    node_successes = node_stats.get("successes", 0)
+                    node_success_rate = (
+                        (node_successes / node_total * 100) if node_total > 0 else 0.0
+                    )
+                    stats["node_stats"] = {
+                        "node_id": node_id,
+                        "hex_id": f"!{node_id:08x}",
+                        "requests": node_total,
+                        "successes": node_successes,
+                        "timeouts": node_stats.get("timeouts", 0),
+                        "errors": node_stats.get("errors", 0),
+                        "success_rate": round(node_success_rate, 1),
+                        "last_request": node_stats.get("last_request"),
+                        "last_success": node_stats.get("last_success"),
+                    }
+
+            return stats
 
     def reset_telemetry_stats(self) -> None:
         """Reset all telemetry statistics."""

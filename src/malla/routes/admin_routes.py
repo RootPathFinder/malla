@@ -7,6 +7,7 @@ Provides REST API endpoints and page routes for the Mesh Admin functionality.
 import json
 import logging
 import time
+from typing import Any
 
 from flask import (
     Blueprint,
@@ -2780,6 +2781,47 @@ def api_factory_reset(node_id):
         return jsonify({"error": str(e)}), 500
 
 
+def _live_telemetry_attempt_timeouts(timeout: float) -> list[float]:
+    """
+    Split a live-telemetry wait budget into primary + short retry.
+
+    Keeps total wait within the client timeout (and under typical gunicorn
+    worker limits) while giving flaky 0-hop replies a second chance.
+    """
+    budget = max(5.0, float(timeout))
+    # Cap per-request wall time so a single poll cannot pin a worker too long
+    budget = min(budget, 28.0)
+    if budget < 12.0:
+        return [budget]
+    retry = min(8.0, max(5.0, budget * 0.35))
+    primary = max(5.0, budget - retry)
+    return [primary, retry]
+
+
+def _request_live_telemetry_with_retry(
+    publisher: Any,
+    node_id_int: int,
+    telemetry_type: str,
+    timeout: float,
+) -> tuple[dict[str, Any] | None, int]:
+    """Try live telemetry once, then one short retry on timeout. Returns (result, attempts)."""
+    attempts = 0
+    result = None
+    for attempt_timeout in _live_telemetry_attempt_timeouts(timeout):
+        attempts += 1
+        result = publisher.send_telemetry_request(
+            target_node_id=node_id_int,
+            telemetry_type=telemetry_type,
+            timeout=attempt_timeout,
+        )
+        if result:
+            if attempts > 1:
+                result = dict(result)
+                result["retry_attempt"] = attempts - 1
+            return result, attempts
+    return None, attempts
+
+
 @admin_bp.route("/api/admin/node/<node_id>/telemetry/live", methods=["POST"])
 def api_request_live_telemetry(node_id):
     """
@@ -2800,7 +2842,7 @@ def api_request_live_telemetry(node_id):
 
         data = request.get_json() or {}
         telemetry_type = data.get("telemetry_type", "device_metrics")
-        timeout = min(data.get("timeout", 25), 60)  # Max 60 seconds for mesh
+        timeout = min(float(data.get("timeout", 25)), 60)  # Max 60 seconds for mesh
 
         admin_service = get_admin_service()
         connection_type = admin_service.connection_type.value
@@ -2815,10 +2857,8 @@ def api_request_live_telemetry(node_id):
                     }
                 ), 400
 
-            result = tcp_publisher.send_telemetry_request(
-                target_node_id=node_id_int,
-                telemetry_type=telemetry_type,
-                timeout=timeout,
+            result, attempts = _request_live_telemetry_with_retry(
+                tcp_publisher, node_id_int, telemetry_type, timeout
             )
 
             if result:
@@ -2831,20 +2871,21 @@ def api_request_live_telemetry(node_id):
                         "timestamp": result.get("timestamp"),
                         "stats": result.get("stats", {}),
                         "live": True,
+                        "attempts": attempts,
                     }
                 )
-            else:
-                # Get stats even on failure
-                stats = tcp_publisher.get_telemetry_stats(node_id_int)
-                return jsonify(
-                    {
-                        "success": False,
-                        "error": f"No response from node within {timeout}s",
-                        "node_id": node_id_int,
-                        "hex_id": f"!{node_id_int:08x}",
-                        "stats": stats,
-                    }
-                ), 408  # Request Timeout
+
+            stats = tcp_publisher.get_telemetry_stats(node_id_int)
+            return jsonify(
+                {
+                    "success": False,
+                    "error": f"No response from node within {timeout}s",
+                    "node_id": node_id_int,
+                    "hex_id": f"!{node_id_int:08x}",
+                    "stats": stats,
+                    "attempts": attempts,
+                }
+            ), 408
 
         elif connection_type == "serial":
             serial_publisher = get_serial_publisher()
@@ -2856,10 +2897,8 @@ def api_request_live_telemetry(node_id):
                     }
                 ), 400
 
-            result = serial_publisher.send_telemetry_request(
-                target_node_id=node_id_int,
-                telemetry_type=telemetry_type,
-                timeout=timeout,
+            result, attempts = _request_live_telemetry_with_retry(
+                serial_publisher, node_id_int, telemetry_type, timeout
             )
 
             if result:
@@ -2872,20 +2911,21 @@ def api_request_live_telemetry(node_id):
                         "timestamp": result.get("timestamp"),
                         "stats": result.get("stats", {}),
                         "live": True,
+                        "attempts": attempts,
                     }
                 )
-            else:
-                # Get stats even on failure
-                stats = serial_publisher.get_telemetry_stats(node_id_int)
-                return jsonify(
-                    {
-                        "success": False,
-                        "error": f"No response from node within {timeout}s",
-                        "node_id": node_id_int,
-                        "hex_id": f"!{node_id_int:08x}",
-                        "stats": stats,
-                    }
-                ), 408  # Request Timeout
+
+            stats = serial_publisher.get_telemetry_stats(node_id_int)
+            return jsonify(
+                {
+                    "success": False,
+                    "error": f"No response from node within {timeout}s",
+                    "node_id": node_id_int,
+                    "hex_id": f"!{node_id_int:08x}",
+                    "stats": stats,
+                    "attempts": attempts,
+                }
+            ), 408
 
         elif connection_type == "mqtt":
             # MQTT is fire-and-forget, we can't wait for response here

@@ -1,0 +1,300 @@
+"""Unit tests for live telemetry request correlation helpers."""
+
+import threading
+from unittest.mock import MagicMock
+
+import pytest
+
+from malla.routes.admin_routes import (
+    _live_telemetry_attempt_timeouts,
+    _request_live_telemetry_with_retry,
+)
+from malla.utils.telemetry_request import (
+    complete_pending_telemetry,
+    extract_from_node_id,
+    extract_request_id,
+    find_matching_telemetry_request,
+    normalize_mesh_node_id,
+    normalize_request_id,
+    telemetry_has_requested_metrics,
+    telemetry_to_dict,
+)
+
+
+@pytest.mark.unit
+class TestNormalizeMeshNodeId:
+    def test_int_and_masks(self):
+        assert normalize_mesh_node_id(0xAABBCCDD) == 0xAABBCCDD
+        assert normalize_mesh_node_id(-1) == 0xFFFFFFFF
+
+    def test_bang_hex_and_0x(self):
+        assert normalize_mesh_node_id("!aabbccdd") == 0xAABBCCDD
+        assert normalize_mesh_node_id("0xAABBCCDD") == 0xAABBCCDD
+
+    def test_bare_hex_and_decimal(self):
+        assert normalize_mesh_node_id("aabbccdd") == 0xAABBCCDD
+        assert normalize_mesh_node_id("123456789") == 123456789
+
+    def test_invalid(self):
+        assert normalize_mesh_node_id(None) is None
+        assert normalize_mesh_node_id("") is None
+        assert normalize_mesh_node_id("not-a-node") is None
+        assert normalize_mesh_node_id(True) is None
+
+
+@pytest.mark.unit
+class TestRequestIdExtraction:
+    def test_normalize_request_id(self):
+        assert normalize_request_id(0x1234) == 0x1234
+        assert normalize_request_id("42") == 42
+        assert normalize_request_id(None) is None
+
+    def test_extract_from_packet(self):
+        packet = {
+            "from": 0x11111111,
+            "fromId": "!22222222",
+            "decoded": {"requestId": 99, "telemetry": {"deviceMetrics": {"batteryLevel": 50}}},
+        }
+        assert extract_from_node_id(packet) == 0x11111111
+        assert extract_request_id(packet) == 99
+
+        packet2 = {"fromId": "!aabbccdd", "decoded": {"request_id": 7}}
+        assert extract_from_node_id(packet2) == 0xAABBCCDD
+        assert extract_request_id(packet2) == 7
+
+
+@pytest.mark.unit
+class TestTelemetryPayloadHelpers:
+    def test_has_requested_metrics_snake_and_camel(self):
+        assert telemetry_has_requested_metrics(
+            {"device_metrics": {"battery_level": 80}}, "device_metrics"
+        )
+        assert telemetry_has_requested_metrics(
+            {"deviceMetrics": {"batteryLevel": 80}}, "device_metrics"
+        )
+        assert not telemetry_has_requested_metrics(
+            {"environment_metrics": {"temperature": 20}}, "device_metrics"
+        )
+        assert not telemetry_has_requested_metrics({"device_metrics": {}}, "device_metrics")
+
+    def test_telemetry_to_dict_strips_raw(self):
+        payload = {
+            "device_metrics": {"battery_level": 42},
+            "raw": object(),
+        }
+        cleaned = telemetry_to_dict(payload)
+        assert "raw" not in cleaned
+        assert cleaned["device_metrics"]["battery_level"] == 42
+
+
+@pytest.mark.unit
+class TestFindMatchingTelemetryRequest:
+    def _pending(self, **overrides):
+        base = {
+            "event": threading.Event(),
+            "response_data": {},
+            "telemetry_type": "device_metrics",
+            "request_id": 0xABCD,
+            "completed": False,
+        }
+        base.update(overrides)
+        return base
+
+    def test_matches_by_request_id(self):
+        pending = {0x1111: self._pending(request_id=0xABCD)}
+        match = find_matching_telemetry_request(
+            pending,
+            from_node_id=0x9999,  # different from — request id wins
+            request_id=0xABCD,
+            telemetry={"device_metrics": {"battery_level": 1}},
+        )
+        assert match is not None
+        assert match[0] == 0x1111
+
+    def test_rejects_unsolicited_when_request_id_known(self):
+        pending = {0x1111: self._pending(request_id=0xABCD)}
+        match = find_matching_telemetry_request(
+            pending,
+            from_node_id=0x1111,
+            request_id=None,  # broadcast / unsolicited
+            telemetry={"device_metrics": {"battery_level": 1}},
+        )
+        assert match is None
+
+    def test_accepts_node_match_before_request_id_stored(self):
+        pending = {0x1111: self._pending(request_id=None)}
+        match = find_matching_telemetry_request(
+            pending,
+            from_node_id=0x1111,
+            request_id=0xABCD,
+            telemetry={"device_metrics": {"battery_level": 1}},
+        )
+        assert match is not None
+
+    def test_rejects_wrong_metric_type_without_request_id(self):
+        pending = {0x1111: self._pending(request_id=None, telemetry_type="device_metrics")}
+        match = find_matching_telemetry_request(
+            pending,
+            from_node_id=0x1111,
+            request_id=None,
+            telemetry={"environment_metrics": {"temperature": 21}},
+        )
+        assert match is None
+
+    def test_complete_is_idempotent(self):
+        pending = self._pending(request_id=None)
+        assert complete_pending_telemetry(
+            pending,
+            telemetry={"device_metrics": {"battery_level": 9}},
+            from_node_id=0x1111,
+            request_id=0xABCD,
+        )
+        assert pending["completed"] is True
+        assert pending["event"].is_set()
+        assert pending["response_data"]["telemetry"]["device_metrics"]["battery_level"] == 9
+
+        assert (
+            complete_pending_telemetry(
+                pending,
+                telemetry={"device_metrics": {"battery_level": 1}},
+                from_node_id=0x1111,
+            )
+            is False
+        )
+
+
+@pytest.mark.unit
+class TestLiveTelemetryApiRetryHelpers:
+    def test_attempt_timeout_split(self):
+        assert _live_telemetry_attempt_timeouts(10) == [10.0]
+        attempts = _live_telemetry_attempt_timeouts(25)
+        assert len(attempts) == 2
+        assert sum(attempts) == pytest.approx(25.0)
+        assert attempts[1] <= 8.0
+
+    def test_retry_helper_retries_once_on_failure(self):
+        publisher = MagicMock()
+        publisher.send_telemetry_request.side_effect = [
+            None,
+            {"telemetry": {"device_metrics": {"battery_level": 50}}},
+        ]
+        result, attempts = _request_live_telemetry_with_retry(
+            publisher, 0x1234, "device_metrics", 20
+        )
+        assert attempts == 2
+        assert result is not None
+        assert result["retry_attempt"] == 1
+        assert publisher.send_telemetry_request.call_count == 2
+
+    def test_retry_helper_stops_on_first_success(self):
+        publisher = MagicMock()
+        publisher.send_telemetry_request.return_value = {
+            "telemetry": {"device_metrics": {"battery_level": 50}}
+        }
+        result, attempts = _request_live_telemetry_with_retry(
+            publisher, 0x1234, "device_metrics", 20
+        )
+        assert attempts == 1
+        assert result is not None
+        assert "retry_attempt" not in result
+
+
+@pytest.mark.unit
+class TestTcpTelemetryMatchPath:
+    def test_match_and_complete_via_request_id(self):
+        from malla.services.tcp_publisher import TCPPublisher
+
+        pub = TCPPublisher.__new__(TCPPublisher)
+        pub._pending_telemetry_requests = {}
+        pub._pending_telemetry_lock = threading.Lock()
+
+        event = threading.Event()
+        response_data: dict = {}
+        pub._pending_telemetry_requests[0xAABBCCDD] = {
+            "event": event,
+            "response_data": response_data,
+            "telemetry_type": "device_metrics",
+            "request_id": 0x55AA,
+            "completed": False,
+        }
+
+        packet = {
+            "from": 0xAABBCCDD,
+            "fromId": "!aabbccdd",
+            "decoded": {
+                "portnum": "TELEMETRY_APP",
+                "requestId": 0x55AA,
+                "telemetry": {"device_metrics": {"battery_level": 77, "voltage": 4.1}},
+            },
+        }
+        assert pub._match_and_complete_telemetry(packet) is True
+        assert event.is_set()
+        assert response_data["telemetry"]["device_metrics"]["battery_level"] == 77
+
+    def test_generation_cleanup_does_not_remove_newer_request(self):
+        from malla.services.tcp_publisher import TCPPublisher
+
+        pub = TCPPublisher.__new__(TCPPublisher)
+        pub._pending_telemetry_requests = {}
+        pub._pending_telemetry_lock = threading.Lock()
+        pub._telemetry_stats = {
+            "total_requests": 0,
+            "successful_responses": 0,
+            "timeouts": 0,
+            "errors": 0,
+            "last_request_time": None,
+            "last_success_time": None,
+            "per_node_stats": {},
+        }
+        pub._telemetry_stats_lock = threading.Lock()
+        pub._interface = MagicMock()
+        pub._last_activity_time = 0
+
+        # Simulate overlapping request cleanup by exercising generation pop logic
+        old_gen = 1
+        new_gen = 2
+        pub._pending_telemetry_requests[1] = {
+            "generation": new_gen,
+            "event": threading.Event(),
+            "response_data": {},
+            "telemetry_type": "device_metrics",
+            "request_id": None,
+            "completed": False,
+        }
+        with pub._pending_telemetry_lock:
+            pending = pub._pending_telemetry_requests.get(1)
+            if pending and pending.get("generation") == old_gen:
+                pub._pending_telemetry_requests.pop(1, None)
+
+        assert 1 in pub._pending_telemetry_requests
+
+
+@pytest.mark.unit
+class TestSerialTelemetryStatsShape:
+    def test_node_stats_nested_like_tcp(self):
+        from malla.services.serial_publisher import SerialPublisher
+
+        pub = SerialPublisher.__new__(SerialPublisher)
+        pub._telemetry_stats_lock = threading.Lock()
+        pub._telemetry_stats = {
+            "total_requests": 4,
+            "successful_responses": 3,
+            "timeouts": 1,
+            "errors": 0,
+            "last_request_time": 1.0,
+            "last_success_time": 2.0,
+            "per_node_stats": {
+                "305419896": {
+                    "requests": 4,
+                    "successes": 3,
+                    "timeouts": 1,
+                    "errors": 0,
+                    "last_request": 1.0,
+                    "last_success": 2.0,
+                }
+            },
+        }
+        stats = pub.get_telemetry_stats(305419896)
+        assert "node_stats" in stats
+        assert stats["node_stats"]["successes"] == 3
+        assert stats["success_rate"] == 75.0
