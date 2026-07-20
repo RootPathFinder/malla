@@ -14,6 +14,8 @@ def admin_db(tmp_path, monkeypatch):
     db_path = tmp_path / "admin_favorite_ack.db"
     cfg = MagicMock()
     cfg.database_file = str(db_path)
+    # Env var takes precedence over get_config() — isolate per test for xdist.
+    monkeypatch.setenv("MALLA_DATABASE_FILE", str(db_path))
     monkeypatch.setattr("malla.database.connection.get_config", lambda: cfg)
     monkeypatch.setattr("src.malla.database.connection.get_config", lambda: cfg)
     init_admin_tables()
