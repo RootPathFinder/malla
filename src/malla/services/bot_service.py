@@ -390,7 +390,9 @@ class BotService:
         # Additional useful commands
         self.register_command("whoami", self._cmd_whoami, "Full node details")
         self.register_command("heard", self._cmd_heard, "Who heard you")
-        self.register_command("neighbors", self._cmd_neighbors, "Nearby nodes")
+        self.register_command(
+            "neighbors", self._cmd_neighbors, "RF neighbors (long names)"
+        )
         self.register_command("find", self._cmd_find, "Find node by name")
         self.register_command("busy", self._cmd_busy, "Channel utilization")
         self.register_command("lowbat", self._cmd_lowbat, "Low battery nodes")
@@ -2398,73 +2400,326 @@ class BotService:
             logger.error(f"Error in heard: {e}", exc_info=True)
             return "Heard data unavailable"
 
-    def _cmd_neighbors(self, ctx: CommandContext) -> str:
-        """Handle !neighbors command - nearby nodes by direct link."""
+    def _neighbor_display_name(
+        self,
+        node_id: int | None,
+        short_name: str | None = None,
+        long_name: str | None = None,
+        max_len: int = 22,
+    ) -> str:
+        """Prefer long name, append short name when it adds info."""
+        long_clean = (long_name or "").strip()
+        short_clean = (short_name or "").strip()
+        if long_clean and short_clean and short_clean.lower() not in long_clean.lower():
+            name = f"{long_clean} ({short_clean})"
+        elif long_clean:
+            name = long_clean
+        elif short_clean:
+            name = short_clean
+        elif node_id is not None:
+            name = f"!{node_id:08x}"
+        else:
+            name = "?"
+        if len(name) > max_len:
+            name = name[: max_len - 1] + "…"
+        return name
+
+    def _resolve_neighbors_subject(
+        self, ctx: CommandContext, cursor
+    ) -> tuple[int, str] | None:
+        """Resolve !neighbors subject: requester, or optional name/hex arg."""
+        if not ctx.args:
+            return ctx.sender_id, "you"
+
+        target = " ".join(ctx.args).strip().lower().replace("!", "")
+        if not target:
+            return ctx.sender_id, "you"
+
+        if all(c in "0123456789abcdef" for c in target) and len(target) in (4, 8):
+            try:
+                if len(target) == 8:
+                    node_id = int(target, 16)
+                else:
+                    cursor.execute(
+                        """
+                        SELECT node_id, short_name, long_name FROM node_info
+                        WHERE printf('%08x', node_id) LIKE ?
+                        LIMIT 1
+                        """,
+                        (f"%{target}",),
+                    )
+                    row = cursor.fetchone()
+                    if not row:
+                        return None
+                    label = self._neighbor_display_name(
+                        row["node_id"], row["short_name"], row["long_name"], max_len=18
+                    )
+                    return int(row["node_id"]), label
+                cursor.execute(
+                    "SELECT short_name, long_name FROM node_info WHERE node_id = ?",
+                    (node_id,),
+                )
+                row = cursor.fetchone()
+                label = self._neighbor_display_name(
+                    node_id,
+                    row["short_name"] if row else None,
+                    row["long_name"] if row else None,
+                    max_len=18,
+                )
+                return node_id, label
+            except ValueError:
+                pass
+
+        cursor.execute(
+            """
+            SELECT node_id, short_name, long_name FROM node_info
+            WHERE LOWER(short_name) LIKE ? OR LOWER(long_name) LIKE ?
+            ORDER BY
+              CASE
+                WHEN LOWER(short_name) = ? THEN 0
+                WHEN LOWER(long_name) = ? THEN 1
+                ELSE 2
+              END,
+              last_updated DESC
+            LIMIT 1
+            """,
+            (f"%{target}%", f"%{target}%", target, target),
+        )
+        row = cursor.fetchone()
+        if not row:
+            return None
+        label = self._neighbor_display_name(
+            row["node_id"], row["short_name"], row["long_name"], max_len=18
+        )
+        return int(row["node_id"]), label
+
+    def _load_neighborinfo_neighbors(
+        self, node_id: int
+    ) -> tuple[list[dict[str, Any]], float | None]:
+        """Load RF neighbors from the latest NeighborInfo packet."""
+        try:
+            from .neighbor_service import NeighborService
+
+            data = NeighborService.get_node_neighbors(node_id)
+        except Exception as e:
+            logger.debug("NeighborInfo lookup failed for %s: %s", node_id, e)
+            return [], None
+
+        if not data.get("has_data") or not data.get("neighbors"):
+            return [], data.get("last_report")
+
+        neighbor_ids = [int(n["node_id"]) for n in data["neighbors"] if n.get("node_id")]
+        meta = self._neighbor_node_meta(neighbor_ids)
+        rows: list[dict[str, Any]] = []
+        for n in data["neighbors"]:
+            nid = n.get("node_id")
+            if not nid:
+                continue
+            info = meta.get(int(nid), {})
+            rows.append(
+                {
+                    "node_id": int(nid),
+                    "short_name": info.get("short_name"),
+                    "long_name": info.get("long_name"),
+                    "role": info.get("role"),
+                    "avg_snr": n.get("snr"),
+                    "cnt": None,
+                    "last_ts": n.get("last_rx_time") or data.get("last_report"),
+                }
+            )
+        rows.sort(
+            key=lambda r: (
+                r["avg_snr"] is not None,
+                r["avg_snr"] if r["avg_snr"] is not None else -999,
+            ),
+            reverse=True,
+        )
+        return rows, data.get("last_report")
+
+    def _neighbor_node_meta(self, node_ids: list[int]) -> dict[int, dict[str, Any]]:
+        """Bulk-load short/long/role for neighbor display."""
+        if not node_ids:
+            return {}
         try:
             from ..database.connection import get_db_connection
 
             conn = get_db_connection()
             cursor = conn.cursor()
-            node_id = ctx.sender_id
-            one_day_ago = time.time() - 86400
-
-            # Prefer named relay neighbors when available
+            placeholders = ",".join("?" * len(node_ids))
             cursor.execute(
-                """
-                SELECT p.relay_node as node_id,
-                       n.short_name, n.long_name,
-                       AVG(p.snr) as avg_snr, COUNT(*) as cnt
-                FROM packet_history p
-                LEFT JOIN node_info n ON n.node_id = p.relay_node
-                WHERE p.from_node_id = ? AND p.timestamp > ?
-                  AND p.relay_node IS NOT NULL AND p.relay_node != 0
-                GROUP BY p.relay_node
-                ORDER BY avg_snr DESC
-                LIMIT 5
+                f"""
+                SELECT node_id, short_name, long_name, role
+                FROM node_info
+                WHERE node_id IN ({placeholders})
                 """,
-                (node_id, one_day_ago),
+                node_ids,
             )
-            rows = cursor.fetchall()
+            out = {
+                int(row["node_id"]): {
+                    "short_name": row["short_name"],
+                    "long_name": row["long_name"],
+                    "role": row["role"],
+                }
+                for row in cursor.fetchall()
+            }
+            conn.close()
+            return out
+        except Exception as e:
+            logger.debug("Neighbor meta lookup failed: %s", e)
+            return {}
 
-            # Fallback: strongest direct-hop nodes heard on the mesh recently
-            if not rows:
-                cursor.execute(
-                    """
-                    SELECT p.from_node_id as node_id,
-                           n.short_name, n.long_name,
-                           AVG(p.snr) as avg_snr, COUNT(*) as cnt
-                    FROM packet_history p
-                    LEFT JOIN node_info n ON n.node_id = p.from_node_id
-                    WHERE p.timestamp > ?
-                      AND p.from_node_id IS NOT NULL
-                      AND p.from_node_id != ?
-                      AND p.snr IS NOT NULL
-                      AND p.hop_start IS NOT NULL
-                      AND p.hop_limit IS NOT NULL
-                      AND (p.hop_start - p.hop_limit) = 0
-                      AND COALESCE(n.archived, 0) = 0
-                    GROUP BY p.from_node_id
-                    ORDER BY avg_snr DESC
-                    LIMIT 5
-                    """,
-                    (one_day_ago, node_id),
+    def _load_inferred_neighbors(
+        self, node_id: int, cursor
+    ) -> tuple[list[dict[str, Any]], str]:
+        """Infer neighbors from recent relays, then direct 0-hop hearability."""
+        one_day_ago = time.time() - 86400
+        cursor.execute(
+            """
+            SELECT p.relay_node as node_id,
+                   n.short_name, n.long_name, n.role,
+                   AVG(p.snr) as avg_snr, COUNT(*) as cnt,
+                   MAX(p.timestamp) as last_ts
+            FROM packet_history p
+            LEFT JOIN node_info n ON n.node_id = p.relay_node
+            WHERE p.from_node_id = ? AND p.timestamp > ?
+              AND p.relay_node IS NOT NULL AND p.relay_node != 0
+              AND p.relay_node != ?
+            GROUP BY p.relay_node
+            ORDER BY avg_snr DESC
+            LIMIT 8
+            """,
+            (node_id, one_day_ago, node_id),
+        )
+        rows = [dict(row) for row in cursor.fetchall()]
+        if rows:
+            return rows, "relay"
+
+        cursor.execute(
+            """
+            SELECT p.from_node_id as node_id,
+                   n.short_name, n.long_name, n.role,
+                   AVG(p.snr) as avg_snr, COUNT(*) as cnt,
+                   MAX(p.timestamp) as last_ts
+            FROM packet_history p
+            LEFT JOIN node_info n ON n.node_id = p.from_node_id
+            WHERE p.timestamp > ?
+              AND p.from_node_id IS NOT NULL
+              AND p.from_node_id != ?
+              AND p.snr IS NOT NULL
+              AND p.hop_start IS NOT NULL
+              AND p.hop_limit IS NOT NULL
+              AND (p.hop_start - p.hop_limit) = 0
+              AND COALESCE(n.archived, 0) = 0
+            GROUP BY p.from_node_id
+            ORDER BY avg_snr DESC
+            LIMIT 8
+            """,
+            (one_day_ago, node_id),
+        )
+        return [dict(row) for row in cursor.fetchall()], "heard"
+
+    def _format_neighbors_reply(
+        self,
+        *,
+        subject_label: str,
+        is_self: bool,
+        source: str,
+        rows: list[dict[str, Any]],
+        report_ts: float | None,
+    ) -> str:
+        """Build a LoRa-friendly neighbors reply with long names."""
+        whose = "Your" if is_self else f"{subject_label}"
+        if source == "rf":
+            header = f"📡 {whose} RF neighbors ({len(rows)})"
+        elif source == "relay":
+            header = f"📡 {whose} relay neighbors ({len(rows)})"
+        else:
+            header = f"📡 Near {subject_label if not is_self else 'you'} ({len(rows)})"
+
+        if report_ts:
+            age = time.time() - float(report_ts)
+            if age < 3600:
+                header += f" · {int(age / 60)}m"
+            elif age < 86400:
+                header += f" · {int(age / 3600)}h"
+            else:
+                header += f" · {int(age / 86400)}d"
+
+        lines = [header + ":"]
+        for row in rows[:6]:
+            name = self._neighbor_display_name(
+                row.get("node_id"),
+                row.get("short_name"),
+                row.get("long_name"),
+                max_len=20,
+            )
+            snr_val = row.get("avg_snr")
+            if snr_val is not None:
+                snr = f"{float(snr_val):.0f}dB"
+            else:
+                snr = "?dB"
+
+            extras: list[str] = []
+            role = (row.get("role") or "").upper()
+            if "ROUTER" in role:
+                extras.append("rtr")
+            elif "REPEATER" in role:
+                extras.append("rptr")
+            cnt = row.get("cnt")
+            if cnt and source != "rf":
+                extras.append(f"{int(cnt)}pk")
+
+            suffix = f" {' '.join(extras)}" if extras else ""
+            lines.append(f"{name} {snr}{suffix}")
+
+        # Keep under tip budget (~220 bytes total with DM tip)
+        while len("\n".join(lines).encode("utf-8")) > 195 and len(lines) > 2:
+            lines.pop()
+        return "\n".join(lines)
+
+    def _cmd_neighbors(self, ctx: CommandContext) -> str:
+        """Handle !neighbors [node] — RF neighbors with long names / SNR."""
+        try:
+            from ..database.connection import get_db_connection
+
+            conn = get_db_connection()
+            cursor = conn.cursor()
+            subject = self._resolve_neighbors_subject(ctx, cursor)
+            if subject is None:
+                conn.close()
+                query = " ".join(ctx.args).strip()
+                return f"📡 Node '{query}' not found"
+
+            node_id, subject_label = subject
+            is_self = node_id == ctx.sender_id
+
+            rf_rows, report_ts = self._load_neighborinfo_neighbors(node_id)
+            if rf_rows:
+                conn.close()
+                text = self._format_neighbors_reply(
+                    subject_label=subject_label,
+                    is_self=is_self,
+                    source="rf",
+                    rows=rf_rows,
+                    report_ts=report_ts,
                 )
-                rows = cursor.fetchall()
+                return self._with_dm_tip(ctx, text)
 
+            inferred, source = self._load_inferred_neighbors(node_id, cursor)
             conn.close()
 
-            if not rows:
-                return "📡 No neighbors found"
+            if not inferred:
+                whose = "Your" if is_self else f"{subject_label}'s"
+                return f"📡 {whose} neighbors unknown"
 
-            lines = ["📡 Near you:"]
-            for row in rows:
-                name = self._digest_node_label(
-                    row["node_id"], row["short_name"], row["long_name"], max_len=10
-                )
-                snr = f"{row['avg_snr']:.0f}dB" if row["avg_snr"] is not None else "?"
-                lines.append(f"{name} {snr}")
-
-            return self._with_dm_tip(ctx, "\n".join(lines))
+            text = self._format_neighbors_reply(
+                subject_label=subject_label,
+                is_self=is_self,
+                source=source,
+                rows=inferred,
+                report_ts=inferred[0].get("last_ts"),
+            )
+            return self._with_dm_tip(ctx, text)
         except Exception as e:
             logger.error(f"Error in neighbors: {e}", exc_info=True)
             return "Neighbor data unavailable"
