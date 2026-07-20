@@ -2,7 +2,11 @@
 Unit tests for PKI error code handling and recovery functionality.
 """
 
-from malla.services.tcp_publisher import PKIErrorCodes
+from unittest.mock import MagicMock, patch
+
+from meshtastic import admin_pb2
+
+from malla.services.tcp_publisher import PKIErrorCodes, TCPPublisher
 
 
 class TestPKIErrorCodes:
@@ -81,3 +85,142 @@ class TestPKIErrorCodes:
             PKIErrorCodes.REQUIRES_KEY_CONFIGURATION
         )
         assert len(overlap) == 0, f"Unexpected overlap: {overlap}"
+
+
+    def test_normalize_error_reason_handles_int_and_qualified_names(self):
+        assert PKIErrorCodes.normalize_error_reason(36) == "ADMIN_BAD_SESSION_KEY"
+        assert (
+            PKIErrorCodes.normalize_error_reason("Error.ADMIN_BAD_SESSION_KEY")
+            == "ADMIN_BAD_SESSION_KEY"
+        )
+        assert PKIErrorCodes.is_recoverable_session_error(36)
+        assert PKIErrorCodes.is_recoverable_session_error(
+            "Routing.Error.ADMIN_BAD_SESSION_KEY"
+        )
+
+
+class TestSessionPasskeyRefresh:
+    """Tests for refreshing session passkeys after ADMIN_BAD_SESSION_KEY."""
+
+    def _publisher(self) -> TCPPublisher:
+        publisher = TCPPublisher.__new__(TCPPublisher)
+        publisher._session_passkeys = {0x22222222: b"\x01" * 8}
+        publisher._session_passkey_lock = __import__("threading").Lock()
+        return publisher
+
+    def test_refresh_session_passkey_clears_and_stores_new_key(self):
+        publisher = self._publisher()
+
+        def fake_get_metadata(target_node_id: int):
+            publisher._session_passkeys[target_node_id] = b"\x02" * 8
+            return 0xAAAA
+
+        with (
+            patch.object(
+                publisher, "send_get_device_metadata", side_effect=fake_get_metadata
+            ) as send_get,
+            patch.object(
+                publisher,
+                "get_response",
+                return_value={"is_nak": False, "error_reason": "NONE"},
+            ),
+        ):
+            assert publisher.refresh_session_passkey(0x22222222) is True
+
+        send_get.assert_called_once_with(0x22222222)
+        assert publisher._session_passkeys[0x22222222] == b"\x02" * 8
+
+    def test_refresh_session_passkey_fails_on_timeout(self):
+        publisher = self._publisher()
+        with (
+            patch.object(publisher, "send_get_device_metadata", return_value=0xAAAA),
+            patch.object(publisher, "get_response", return_value=None),
+        ):
+            assert publisher.refresh_session_passkey(0x22222222) is False
+        assert 0x22222222 not in publisher._session_passkeys
+
+    def test_send_admin_with_recovery_refreshes_passkey_before_retry(self):
+        publisher = self._publisher()
+        admin_msg = admin_pb2.AdminMessage()
+        admin_msg.get_device_metadata_request = True
+        admin_msg.session_passkey = b"\x01" * 8
+
+        responses = [
+            {
+                "is_nak": True,
+                "error_reason": "ADMIN_BAD_SESSION_KEY",
+            },
+            {
+                "is_nak": False,
+                "error_reason": "NONE",
+                "admin_message": admin_msg,
+            },
+        ]
+
+        with (
+            patch.object(
+                publisher, "send_admin_message", side_effect=[0x1111, 0x2222]
+            ) as send_admin,
+            patch.object(publisher, "get_response", side_effect=responses),
+            patch.object(
+                publisher, "refresh_session_passkey", return_value=True
+            ) as refresh,
+        ):
+            result = publisher.send_admin_with_recovery(
+                target_node_id=0x22222222,
+                admin_message=admin_msg,
+                timeout=5.0,
+            )
+
+        assert result["success"] is True
+        assert result["recovered"] is True
+        refresh.assert_called_once_with(0x22222222, timeout=5.0)
+        assert send_admin.call_count == 2
+
+    def test_execute_with_session_recovery_retries_up_to_three_times(self):
+        publisher = self._publisher()
+        responses = [
+            {"is_nak": True, "error_reason": "ADMIN_BAD_SESSION_KEY"},
+            {"is_nak": True, "error_reason": "ADMIN_BAD_SESSION_KEY"},
+            {"is_nak": False, "error_reason": "NONE"},
+        ]
+
+        with (
+            patch.object(
+                publisher, "get_response", side_effect=responses
+            ),
+            patch.object(
+                publisher, "refresh_session_passkey", return_value=True
+            ) as refresh,
+        ):
+            result = publisher.execute_with_session_recovery(
+                target_node_id=0x22222222,
+                send_fn=MagicMock(side_effect=[0x1, 0x2, 0x3]),
+                timeout=5.0,
+            )
+
+        assert result["success"] is True
+        assert result["recovered"] is True
+        assert result["attempts"] == 3
+        assert refresh.call_count == 2
+
+    def test_execute_with_session_recovery_stops_after_max_attempts(self):
+        publisher = self._publisher()
+        bad = {"is_nak": True, "error_reason": "ADMIN_BAD_SESSION_KEY"}
+
+        with (
+            patch.object(publisher, "get_response", return_value=bad),
+            patch.object(
+                publisher, "refresh_session_passkey", return_value=True
+            ) as refresh,
+        ):
+            result = publisher.execute_with_session_recovery(
+                target_node_id=0x22222222,
+                send_fn=MagicMock(side_effect=[0x1, 0x2, 0x3]),
+                timeout=5.0,
+            )
+
+        assert result["success"] is False
+        assert result["attempts"] == 3
+        assert refresh.call_count == 2
+        assert "ADMIN_BAD_SESSION_KEY" in (result["error"] or "")

@@ -19,7 +19,7 @@ from ..database.admin_repository import AdminRepository
 from .config_metadata import get_all_config_schemas, get_config_schema
 from .mqtt_publisher import get_mqtt_publisher
 from .serial_publisher import get_serial_publisher
-from .tcp_publisher import get_tcp_publisher
+from .tcp_publisher import PKIErrorCodes, get_tcp_publisher
 
 logger = logging.getLogger(__name__)
 
@@ -338,9 +338,13 @@ class AdminService:
         retry_delay: float = 2.0,
         timeout: float = 30.0,
         command_name: str = "command",
+        target_node_id: int | None = None,
     ) -> tuple[bool, Any, list[dict[str, Any]]]:
         """
         Send a command with retry logic for unreliable nodes.
+
+        On ADMIN_BAD_SESSION_KEY / PKI_FAILED, refreshes the session passkey
+        before the next attempt (up to max_retries total attempts).
 
         Args:
             send_func: Function to call to send the command, returns packet_id
@@ -349,6 +353,7 @@ class AdminService:
             retry_delay: Seconds to wait between retries
             timeout: Seconds to wait for each response
             command_name: Name of the command for logging
+            target_node_id: Node id used for session passkey refresh
 
         Returns:
             Tuple of (success, response_data, retry_info)
@@ -386,6 +391,37 @@ class AdminService:
             response = publisher.get_response(packet_id, timeout=timeout)
 
             if response:
+                if response.get("is_nak"):
+                    error_reason = response.get("error_reason", "NAK")
+                    attempt_info["status"] = "nak"
+                    attempt_info["error"] = error_reason
+                    retry_info.append(attempt_info)
+
+                    if (
+                        target_node_id is not None
+                        and attempt < max_retries
+                        and PKIErrorCodes.is_recoverable_session_error(error_reason)
+                        and hasattr(publisher, "refresh_session_passkey")
+                    ):
+                        logger.warning(
+                            f"{command_name} got {error_reason} "
+                            f"(attempt {attempt}/{max_retries}); "
+                            f"refreshing session passkey for !{target_node_id:08x}"
+                        )
+                        if publisher.refresh_session_passkey(
+                            target_node_id, timeout=timeout
+                        ):
+                            continue
+                        attempt_info["error"] = (
+                            f"{error_reason} (failed to refresh session passkey)"
+                        )
+                        break
+
+                    if attempt < max_retries:
+                        time.sleep(retry_delay)
+                        continue
+                    break
+
                 # Parse the response
                 parsed = response_parser(response)
                 if parsed is not None:
@@ -413,6 +449,283 @@ class AdminService:
 
         logger.error(f"{command_name} failed after {max_retries} attempts")
         return False, None, retry_info
+
+    def _send_and_await_with_session_recovery(
+        self,
+        publisher: Any,
+        target_node_id: int,
+        send_fn: Any,
+        timeout: float = 10.0,
+        max_attempts: int | None = None,
+        refresh_timeout: float = 30.0,
+    ) -> dict[str, Any]:
+        """
+        Send an admin command and await ACK/response with session passkey renewal.
+
+        On ADMIN_BAD_SESSION_KEY / PKI_FAILED, refreshes the passkey via
+        publisher.refresh_session_passkey (when available) and retries up to
+        max_attempts times. Prefers publisher.execute_with_session_recovery
+        when implemented on the publisher class (TCP).
+        """
+        if max_attempts is None:
+            max_attempts = PKIErrorCodes.MAX_SESSION_RECOVERY_ATTEMPTS
+
+        # Prefer the publisher's native implementation when present on the class
+        # (avoid MagicMock auto-attrs that exist on instances but not classes).
+        if callable(
+            getattr(type(publisher), "execute_with_session_recovery", None)
+        ):
+            return publisher.execute_with_session_recovery(
+                target_node_id=target_node_id,
+                send_fn=send_fn,
+                timeout=timeout,
+                max_attempts=max_attempts,
+                refresh_timeout=refresh_timeout,
+            )
+
+        result: dict[str, Any] = {
+            "success": False,
+            "response": None,
+            "error": None,
+            "error_reason": None,
+            "recovered": False,
+            "needs_key_config": False,
+            "packet_id": None,
+            "attempts": 0,
+        }
+
+        for attempt in range(1, max_attempts + 1):
+            result["attempts"] = attempt
+            packet_id = send_fn()
+            if packet_id is None:
+                result["error"] = "Failed to send admin message"
+                return result
+
+            result["packet_id"] = packet_id
+            response = publisher.get_response(packet_id, timeout=timeout)
+
+            if not response:
+                result["error"] = (
+                    f"No response received (timeout after {timeout}s)"
+                )
+                return result
+
+            error_reason = PKIErrorCodes.normalize_error_reason(
+                response.get("error_reason", "NONE")
+            )
+            is_nak = bool(response.get("is_nak")) or error_reason != "NONE"
+            response["error_reason"] = error_reason
+            response["is_nak"] = is_nak
+
+            if error_reason == "NONE" and not is_nak:
+                result["success"] = True
+                result["response"] = response
+                if attempt > 1:
+                    result["recovered"] = True
+                return result
+
+            result["error_reason"] = error_reason
+            result["response"] = response
+
+            if PKIErrorCodes.is_key_configuration_error(error_reason):
+                result["needs_key_config"] = True
+                result["error"] = (
+                    f"Node !{target_node_id:08x} does not have this server's "
+                    f"public key configured ({error_reason})."
+                )
+                return result
+
+            # Prefer a real refresh method; MagicMock auto-attrs are fine here
+            # because production publishers either implement it or don't.
+            refresh_fn = getattr(publisher, "refresh_session_passkey", None)
+            can_refresh = callable(refresh_fn)
+
+            if (
+                PKIErrorCodes.is_recoverable_session_error(error_reason)
+                and attempt < max_attempts
+                and can_refresh
+            ):
+                logger.warning(
+                    f"PKI session error '{error_reason}' for node "
+                    f"!{target_node_id:08x} (attempt {attempt}/{max_attempts}), "
+                    f"refreshing session passkey and retrying..."
+                )
+                if not publisher.refresh_session_passkey(
+                    target_node_id, timeout=refresh_timeout
+                ):
+                    result["error"] = (
+                        f"PKI key sync error: {error_reason}. "
+                        "Failed to refresh session passkey from the node."
+                    )
+                    return result
+                continue
+
+            if PKIErrorCodes.is_recoverable_session_error(error_reason):
+                if not can_refresh:
+                    result["error"] = (
+                        f"PKI key sync error: {error_reason}. "
+                        "Publisher cannot refresh session passkeys."
+                    )
+                else:
+                    result["error"] = (
+                        f"PKI key sync error: {error_reason} "
+                        f"after {attempt} attempt(s)."
+                    )
+                return result
+
+            result["error"] = f"Routing error: {error_reason or 'NAK'}"
+            return result
+
+        return result
+
+    def _admin_write_with_session_recovery(
+        self,
+        publisher: Any,
+        target_node_id: int,
+        send_fn: Any,
+        log_id: int,
+        conn_type: AdminConnectionType,
+        success_acked_message: str,
+        success_unacked_message: str,
+        nak_prefix: str,
+        send_failure_message: str,
+        timeout: float = 10.0,
+        max_attempts: int | None = None,
+    ) -> AdminCommandResult:
+        """
+        Soft-ACK admin write with automatic session passkey renewal.
+
+        Treats a non-NAK response as verified success, timeout as unacked
+        success (packet was queued), and session-key NAKs as recoverable
+        for up to max_attempts sends.
+
+        Before the first attempt, ensures a session passkey is cached when
+        the publisher supports it (remote writes require one).
+        """
+        if max_attempts is None:
+            max_attempts = PKIErrorCodes.MAX_SESSION_RECOVERY_ATTEMPTS
+
+        recovery_log: list[str] = []
+
+        # Remote admin writes require a session_passkey. Obtain one up front
+        # when missing so the first attempt isn't a guaranteed NAK.
+        if callable(getattr(publisher, "has_session_passkey", None)) and callable(
+            getattr(publisher, "refresh_session_passkey", None)
+        ):
+            if not publisher.has_session_passkey(target_node_id):
+                recovery_log.append(
+                    f"No session passkey for !{target_node_id:08x}; fetching via get_device_metadata"
+                )
+                logger.info(recovery_log[-1])
+                if not publisher.refresh_session_passkey(
+                    target_node_id, timeout=30.0
+                ):
+                    recovery_log.append(
+                        "Failed to obtain session passkey before write; continuing anyway"
+                    )
+                    logger.warning(recovery_log[-1])
+                else:
+                    recovery_log.append("Session passkey obtained")
+
+        outcome = self._send_and_await_with_session_recovery(
+            publisher=publisher,
+            target_node_id=target_node_id,
+            send_fn=send_fn,
+            timeout=timeout,
+            max_attempts=max_attempts,
+        )
+
+        packet_id = outcome.get("packet_id")
+        attempts = int(outcome.get("attempts") or 1)
+        if outcome.get("recovered"):
+            recovery_log.append(
+                f"Recovered after session refresh ({attempts} attempt(s))"
+            )
+
+        if packet_id is None and not outcome.get("response"):
+            AdminRepository.update_admin_log_status(
+                log_id=log_id,
+                status="failed",
+                error_message=f"Failed to send message via {conn_type.value}",
+            )
+            return AdminCommandResult(
+                success=False,
+                log_id=log_id,
+                error=send_failure_message,
+                attempts=attempts,
+                retry_info=[{"recovery_log": recovery_log}] if recovery_log else None,
+            )
+
+        # Timeout with a packet id: soft success (same policy as prior write paths)
+        if (
+            not outcome.get("success")
+            and outcome.get("response") is None
+            and packet_id is not None
+            and not outcome.get("error_reason")
+        ):
+            result = self._finalize_admin_write_ack(
+                packet_id=packet_id,
+                log_id=log_id,
+                response=None,
+                success_acked_message=success_acked_message,
+                success_unacked_message=success_unacked_message,
+                nak_prefix=nak_prefix,
+                recovered=bool(outcome.get("recovered")),
+            )
+            result.attempts = attempts
+            if recovery_log:
+                result.retry_info = [{"recovery_log": recovery_log}]
+            return result
+
+        if outcome.get("success"):
+            assert packet_id is not None
+            result = self._finalize_admin_write_ack(
+                packet_id=packet_id,
+                log_id=log_id,
+                response=outcome.get("response"),
+                success_acked_message=success_acked_message,
+                success_unacked_message=success_unacked_message,
+                nak_prefix=nak_prefix,
+                recovered=bool(outcome.get("recovered")),
+            )
+            result.attempts = attempts
+            if recovery_log:
+                result.retry_info = [{"recovery_log": recovery_log}]
+            return result
+
+        error_reason = PKIErrorCodes.normalize_error_reason(
+            outcome.get("error_reason") or ""
+        )
+        raw_error = str(outcome.get("error") or "")
+        if PKIErrorCodes.is_recoverable_session_error(error_reason):
+            if "Failed to refresh" in raw_error:
+                error_msg = (
+                    f"{nak_prefix}: {error_reason} "
+                    "(failed to refresh session passkey)"
+                )
+            else:
+                error_msg = (
+                    f"{nak_prefix}: {error_reason} "
+                    f"after {attempts} attempt(s) with session refresh"
+                )
+        elif error_reason and error_reason != "NONE":
+            error_msg = f"{nak_prefix}: {error_reason}"
+        else:
+            error_msg = raw_error or f"{nak_prefix}: NAK"
+
+        AdminRepository.update_admin_log_status(
+            log_id=log_id,
+            status="failed",
+            error_message=error_msg,
+        )
+        return AdminCommandResult(
+            success=False,
+            packet_id=packet_id,
+            log_id=log_id,
+            error=error_msg,
+            attempts=attempts,
+            retry_info=[{"recovery_log": recovery_log}] if recovery_log else None,
+        )
 
     @property
     def gateway_node_id(self) -> int | None:
@@ -1044,6 +1357,7 @@ class AdminService:
             retry_delay=retry_delay,
             timeout=timeout,
             command_name=f"get_config({config_type.name})",
+            target_node_id=target_node_id,
         )
 
         attempts = len(retry_info)
@@ -1160,6 +1474,7 @@ class AdminService:
             retry_delay=retry_delay,
             timeout=timeout,
             command_name=f"get_module_config({module_config_type.name})",
+            target_node_id=target_node_id,
         )
 
         attempts = len(retry_info)
@@ -1288,6 +1603,7 @@ class AdminService:
             retry_delay=retry_delay,
             timeout=timeout,
             command_name=f"get_channel({channel_index})",
+            target_node_id=target_node_id,
         )
 
         attempts = len(retry_info)
@@ -1659,12 +1975,7 @@ class AdminService:
 
         publisher = self._get_publisher()
 
-        if conn_type in (AdminConnectionType.TCP, AdminConnectionType.SERIAL):
-            packet_id = publisher.send_set_favorite_node(
-                target_node_id=target_node_id,
-                node_to_favorite=node_to_favorite,
-            )
-        else:
+        if conn_type not in (AdminConnectionType.TCP, AdminConnectionType.SERIAL):
             AdminRepository.update_admin_log_status(
                 log_id=log_id,
                 status="failed",
@@ -1676,23 +1987,15 @@ class AdminService:
                 error="set_favorite_node requires TCP or Serial connection",
             )
 
-        if packet_id is None:
-            AdminRepository.update_admin_log_status(
-                log_id=log_id,
-                status="failed",
-                error_message=f"Failed to send message via {conn_type.value}",
-            )
-            return AdminCommandResult(
-                success=False,
-                log_id=log_id,
-                error=f"Failed to send set_favorite_node command via {conn_type.value}",
-            )
-
-        # Wait for routing ACK/NAK (or admin response) from the remote node
-        ack_result = self._await_admin_write_ack(
+        ack_result = self._admin_write_with_session_recovery(
             publisher=publisher,
-            packet_id=packet_id,
+            target_node_id=target_node_id,
+            send_fn=lambda: publisher.send_set_favorite_node(
+                target_node_id=target_node_id,
+                node_to_favorite=node_to_favorite,
+            ),
             log_id=log_id,
+            conn_type=conn_type,
             success_acked_message=(
                 f"Node !{node_to_favorite:08x} set as favorite on "
                 f"!{target_node_id:08x} (ACK received)"
@@ -1702,6 +2005,9 @@ class AdminService:
                 f"on !{target_node_id:08x} (no ACK received)"
             ),
             nak_prefix="Node rejected set_favorite_node",
+            send_failure_message=(
+                f"Failed to send set_favorite_node command via {conn_type.value}"
+            ),
         )
 
         if not ack_result.success:
@@ -1755,12 +2061,7 @@ class AdminService:
 
         publisher = self._get_publisher()
 
-        if conn_type in (AdminConnectionType.TCP, AdminConnectionType.SERIAL):
-            packet_id = publisher.send_remove_favorite_node(
-                target_node_id=target_node_id,
-                node_to_unfavorite=node_to_unfavorite,
-            )
-        else:
+        if conn_type not in (AdminConnectionType.TCP, AdminConnectionType.SERIAL):
             AdminRepository.update_admin_log_status(
                 log_id=log_id,
                 status="failed",
@@ -1772,23 +2073,15 @@ class AdminService:
                 error="remove_favorite_node requires TCP or Serial connection",
             )
 
-        if packet_id is None:
-            AdminRepository.update_admin_log_status(
-                log_id=log_id,
-                status="failed",
-                error_message=f"Failed to send message via {conn_type.value}",
-            )
-            return AdminCommandResult(
-                success=False,
-                log_id=log_id,
-                error=f"Failed to send remove_favorite_node command via {conn_type.value}",
-            )
-
-        # Wait for routing ACK/NAK (or admin response) from the remote node
-        ack_result = self._await_admin_write_ack(
+        ack_result = self._admin_write_with_session_recovery(
             publisher=publisher,
-            packet_id=packet_id,
+            target_node_id=target_node_id,
+            send_fn=lambda: publisher.send_remove_favorite_node(
+                target_node_id=target_node_id,
+                node_to_unfavorite=node_to_unfavorite,
+            ),
             log_id=log_id,
+            conn_type=conn_type,
             success_acked_message=(
                 f"Node !{node_to_unfavorite:08x} removed from favorites on "
                 f"!{target_node_id:08x} (ACK received)"
@@ -1798,6 +2091,9 @@ class AdminService:
                 f"on !{target_node_id:08x} (no ACK received)"
             ),
             nak_prefix="Node rejected remove_favorite_node",
+            send_failure_message=(
+                f"Failed to send remove_favorite_node command via {conn_type.value}"
+            ),
         )
 
         if not ack_result.success:
@@ -1809,6 +2105,82 @@ class AdminService:
         )
 
         return ack_result
+
+    def _finalize_admin_write_ack(
+        self,
+        packet_id: int,
+        log_id: int,
+        response: dict[str, Any] | None,
+        success_acked_message: str,
+        success_unacked_message: str,
+        nak_prefix: str,
+        recovered: bool = False,
+    ) -> AdminCommandResult:
+        """Map an ACK/NAK/timeout response into an AdminCommandResult."""
+        if response:
+            is_nak = response.get("is_nak", False)
+            error_reason = response.get("error_reason", "")
+
+            if is_nak:
+                error_msg = f"{nak_prefix}: {error_reason or 'NAK'}"
+                AdminRepository.update_admin_log_status(
+                    log_id=log_id,
+                    status="failed",
+                    error_message=error_msg,
+                )
+                return AdminCommandResult(
+                    success=False,
+                    packet_id=packet_id,
+                    log_id=log_id,
+                    error=error_msg,
+                )
+
+            message = success_acked_message
+            if recovered:
+                message = f"{success_acked_message} (session key refreshed)"
+            AdminRepository.update_admin_log_status(
+                log_id=log_id,
+                status="success",
+                response_data=json.dumps(
+                    {
+                        "message": message,
+                        "acknowledged": True,
+                        "recovered": recovered,
+                    }
+                ),
+            )
+            return AdminCommandResult(
+                success=True,
+                packet_id=packet_id,
+                log_id=log_id,
+                response={
+                    "message": message,
+                    "acknowledged": True,
+                    "recovered": recovered,
+                },
+            )
+
+        AdminRepository.update_admin_log_status(
+            log_id=log_id,
+            status="success",
+            response_data=json.dumps(
+                {
+                    "message": success_unacked_message,
+                    "acknowledged": False,
+                    "recovered": recovered,
+                }
+            ),
+        )
+        return AdminCommandResult(
+            success=True,
+            packet_id=packet_id,
+            log_id=log_id,
+            response={
+                "message": success_unacked_message,
+                "acknowledged": False,
+                "recovered": recovered,
+            },
+        )
 
     def _await_admin_write_ack(
         self,
@@ -1830,57 +2202,13 @@ class AdminService:
         came back (common on lossy mesh links).
         """
         response = publisher.get_response(packet_id, timeout=timeout)
-
-        if response:
-            is_nak = response.get("is_nak", False)
-            error_reason = response.get("error_reason", "")
-
-            if is_nak:
-                error_msg = f"{nak_prefix}: {error_reason or 'NAK'}"
-                AdminRepository.update_admin_log_status(
-                    log_id=log_id,
-                    status="failed",
-                    error_message=error_msg,
-                )
-                return AdminCommandResult(
-                    success=False,
-                    packet_id=packet_id,
-                    log_id=log_id,
-                    error=error_msg,
-                )
-
-            AdminRepository.update_admin_log_status(
-                log_id=log_id,
-                status="success",
-                response_data=json.dumps(
-                    {"message": success_acked_message, "acknowledged": True}
-                ),
-            )
-            return AdminCommandResult(
-                success=True,
-                packet_id=packet_id,
-                log_id=log_id,
-                response={
-                    "message": success_acked_message,
-                    "acknowledged": True,
-                },
-            )
-
-        AdminRepository.update_admin_log_status(
-            log_id=log_id,
-            status="success",
-            response_data=json.dumps(
-                {"message": success_unacked_message, "acknowledged": False}
-            ),
-        )
-        return AdminCommandResult(
-            success=True,
+        return self._finalize_admin_write_ack(
             packet_id=packet_id,
             log_id=log_id,
-            response={
-                "message": success_unacked_message,
-                "acknowledged": False,
-            },
+            response=response,
+            success_acked_message=success_acked_message,
+            success_unacked_message=success_unacked_message,
+            nak_prefix=nak_prefix,
         )
 
     def _read_local_nodedb_favorites(self) -> list[dict[str, Any]]:
@@ -2214,57 +2542,20 @@ class AdminService:
         )
 
         publisher = self._get_publisher()
-        packet_id = publisher.send_begin_edit_settings(target_node_id=target_node_id)
-
-        if packet_id is None:
-            AdminRepository.update_admin_log_status(
-                log_id=log_id,
-                status="failed",
-                error_message=f"Failed to send message via {conn_type.value}",
-            )
-            return AdminCommandResult(
-                success=False,
-                log_id=log_id,
-                error=f"Failed to send admin message via {conn_type.value}",
-            )
-
-        # Wait for ACK
-        response = publisher.get_response(packet_id, timeout=10.0)
-        if response and response.get("is_nak"):
-            error_msg = (
-                f"Node rejected begin_edit_settings: {response.get('error_reason', '')}"
-            )
-            AdminRepository.update_admin_log_status(
-                log_id=log_id,
-                status="failed",
-                error_message=error_msg,
-            )
-            return AdminCommandResult(
-                success=False,
-                packet_id=packet_id,
-                log_id=log_id,
-                error=error_msg,
-            )
-
-        acknowledged = bool(response)
-        message = (
-            "Edit session started - ACK received"
-            if acknowledged
-            else "Edit session started - no ACK received"
-        )
-        AdminRepository.update_admin_log_status(
-            log_id=log_id,
-            status="success",
-            response_data=json.dumps(
-                {"message": message, "acknowledged": acknowledged}
+        return self._admin_write_with_session_recovery(
+            publisher=publisher,
+            target_node_id=target_node_id,
+            send_fn=lambda: publisher.send_begin_edit_settings(
+                target_node_id=target_node_id
             ),
-        )
-
-        return AdminCommandResult(
-            success=True,
-            packet_id=packet_id,
             log_id=log_id,
-            response={"message": message, "acknowledged": acknowledged},
+            conn_type=conn_type,
+            success_acked_message="Edit session started - ACK received",
+            success_unacked_message="Edit session started - no ACK received",
+            nak_prefix="Node rejected begin_edit_settings",
+            send_failure_message=(
+                f"Failed to send admin message via {conn_type.value}"
+            ),
         )
 
     def commit_edit_settings(
@@ -2308,55 +2599,20 @@ class AdminService:
         )
 
         publisher = self._get_publisher()
-        packet_id = publisher.send_commit_edit_settings(target_node_id=target_node_id)
-
-        if packet_id is None:
-            AdminRepository.update_admin_log_status(
-                log_id=log_id,
-                status="failed",
-                error_message=f"Failed to send message via {conn_type.value}",
-            )
-            return AdminCommandResult(
-                success=False,
-                log_id=log_id,
-                error=f"Failed to send admin message via {conn_type.value}",
-            )
-
-        # Wait for ACK
-        response = publisher.get_response(packet_id, timeout=10.0)
-        if response and response.get("is_nak"):
-            error_msg = f"Node rejected commit_edit_settings: {response.get('error_reason', '')}"
-            AdminRepository.update_admin_log_status(
-                log_id=log_id,
-                status="failed",
-                error_message=error_msg,
-            )
-            return AdminCommandResult(
-                success=False,
-                packet_id=packet_id,
-                log_id=log_id,
-                error=error_msg,
-            )
-
-        acknowledged = bool(response)
-        message = (
-            "Edit session committed - ACK received"
-            if acknowledged
-            else "Edit session committed - no ACK received"
-        )
-        AdminRepository.update_admin_log_status(
-            log_id=log_id,
-            status="success",
-            response_data=json.dumps(
-                {"message": message, "acknowledged": acknowledged}
+        return self._admin_write_with_session_recovery(
+            publisher=publisher,
+            target_node_id=target_node_id,
+            send_fn=lambda: publisher.send_commit_edit_settings(
+                target_node_id=target_node_id
             ),
-        )
-
-        return AdminCommandResult(
-            success=True,
-            packet_id=packet_id,
             log_id=log_id,
-            response={"message": message, "acknowledged": acknowledged},
+            conn_type=conn_type,
+            success_acked_message="Edit session committed - ACK received",
+            success_unacked_message="Edit session committed - no ACK received",
+            nak_prefix="Node rejected commit_edit_settings",
+            send_failure_message=(
+                f"Failed to send admin message via {conn_type.value}"
+            ),
         )
 
     def set_config(
@@ -2404,13 +2660,7 @@ class AdminService:
 
         config_type_str = config_type.name.lower()
 
-        if conn_type in (AdminConnectionType.TCP, AdminConnectionType.SERIAL):
-            packet_id = publisher.send_set_config(
-                target_node_id=target_node_id,
-                config_type=config_type_str,
-                config_data=config_data,
-            )
-        else:
+        if conn_type not in (AdminConnectionType.TCP, AdminConnectionType.SERIAL):
             # MQTT set_config not yet implemented
             AdminRepository.update_admin_log_status(
                 log_id=log_id,
@@ -2423,75 +2673,25 @@ class AdminService:
                 error="set_config requires TCP or Serial connection",
             )
 
-        if packet_id is None:
-            AdminRepository.update_admin_log_status(
-                log_id=log_id,
-                status="failed",
-                error_message=f"Failed to send message via {conn_type.value}",
-            )
-            return AdminCommandResult(
-                success=False,
-                log_id=log_id,
-                error=f"Failed to send admin message via {conn_type.value}",
-            )
-
-        # Wait for response/acknowledgment with shorter timeout for write operations
-        response = publisher.get_response(packet_id, timeout=10.0)
-
-        if response:
-            # Check if this was a NAK (negative acknowledgement)
-            is_nak = response.get("is_nak", False)
-            error_reason = response.get("error_reason", "")
-
-            if is_nak:
-                error_msg = f"Node rejected config: {error_reason}"
-                AdminRepository.update_admin_log_status(
-                    log_id=log_id,
-                    status="failed",
-                    error_message=error_msg,
-                )
-                return AdminCommandResult(
-                    success=False,
-                    packet_id=packet_id,
-                    log_id=log_id,
-                    error=error_msg,
-                )
-
-            AdminRepository.update_admin_log_status(
-                log_id=log_id,
-                status="success",
-                response_data=json.dumps({"message": "Config updated - ACK received"}),
-            )
-
-            return AdminCommandResult(
-                success=True,
-                packet_id=packet_id,
-                log_id=log_id,
-                response={
-                    "message": "Config updated - ACK received",
-                    "acknowledged": True,
-                },
-            )
-        else:
-            # No response - packet was sent but ACK not received
-            # Treat as success since packet was sent; node may have applied config
-            # but ACK was lost or delayed (common in mesh networks)
-            AdminRepository.update_admin_log_status(
-                log_id=log_id,
-                status="success",
-                response_data=json.dumps(
-                    {"message": "Config sent - no ACK (likely applied)"}
-                ),
-            )
-            return AdminCommandResult(
-                success=True,
-                packet_id=packet_id,
-                log_id=log_id,
-                response={
-                    "message": "Config sent - no ACK received (likely applied)",
-                    "acknowledged": False,
-                },
-            )
+        return self._admin_write_with_session_recovery(
+            publisher=publisher,
+            target_node_id=target_node_id,
+            send_fn=lambda: publisher.send_set_config(
+                target_node_id=target_node_id,
+                config_type=config_type_str,
+                config_data=config_data,
+            ),
+            log_id=log_id,
+            conn_type=conn_type,
+            success_acked_message="Config updated - ACK received",
+            success_unacked_message=(
+                "Config sent - no ACK received (likely applied)"
+            ),
+            nak_prefix="Node rejected config",
+            send_failure_message=(
+                f"Failed to send admin message via {conn_type.value}"
+            ),
+        )
 
     def set_module_config(
         self,
@@ -2537,13 +2737,7 @@ class AdminService:
 
         module_type_str = module_config_type.name.lower()
 
-        if conn_type in (AdminConnectionType.TCP, AdminConnectionType.SERIAL):
-            packet_id = publisher.send_set_module_config(
-                target_node_id=target_node_id,
-                module_type=module_type_str,
-                module_data=module_data,
-            )
-        else:
+        if conn_type not in (AdminConnectionType.TCP, AdminConnectionType.SERIAL):
             # MQTT set_module_config not yet implemented
             AdminRepository.update_admin_log_status(
                 log_id=log_id,
@@ -2556,76 +2750,25 @@ class AdminService:
                 error="set_module_config requires TCP or Serial connection",
             )
 
-        if packet_id is None:
-            AdminRepository.update_admin_log_status(
-                log_id=log_id,
-                status="failed",
-                error_message=f"Failed to send message via {conn_type.value}",
-            )
-            return AdminCommandResult(
-                success=False,
-                log_id=log_id,
-                error=f"Failed to send admin message via {conn_type.value}",
-            )
-
-        # Wait for response/acknowledgment with shorter timeout for write operations
-        response = publisher.get_response(packet_id, timeout=10.0)
-
-        if response:
-            # Check if this was a NAK (negative acknowledgement)
-            is_nak = response.get("is_nak", False)
-            error_reason = response.get("error_reason", "")
-
-            if is_nak:
-                error_msg = f"Node rejected module config: {error_reason}"
-                AdminRepository.update_admin_log_status(
-                    log_id=log_id,
-                    status="failed",
-                    error_message=error_msg,
-                )
-                return AdminCommandResult(
-                    success=False,
-                    packet_id=packet_id,
-                    log_id=log_id,
-                    error=error_msg,
-                )
-
-            AdminRepository.update_admin_log_status(
-                log_id=log_id,
-                status="success",
-                response_data=json.dumps(
-                    {"message": "Module config updated - ACK received"}
-                ),
-            )
-
-            return AdminCommandResult(
-                success=True,
-                packet_id=packet_id,
-                log_id=log_id,
-                response={
-                    "message": "Module config updated - ACK received",
-                    "acknowledged": True,
-                },
-            )
-        else:
-            # No response - packet was sent but ACK not received
-            # Treat as success since packet was sent; node may have applied config
-            AdminRepository.update_admin_log_status(
-                log_id=log_id,
-                status="success",
-                response_data=json.dumps(
-                    {"message": "Module config sent - no ACK (likely applied)"}
-                ),
-            )
-            return AdminCommandResult(
-                success=True,
-                packet_id=packet_id,
-                log_id=log_id,
-                response={
-                    "message": "Module config sent - no ACK received (likely applied)",
-                    "acknowledged": False,
-                },
-            )
+        return self._admin_write_with_session_recovery(
+            publisher=publisher,
+            target_node_id=target_node_id,
+            send_fn=lambda: publisher.send_set_module_config(
+                target_node_id=target_node_id,
+                module_type=module_type_str,
+                module_data=module_data,
+            ),
+            log_id=log_id,
+            conn_type=conn_type,
+            success_acked_message="Module config updated - ACK received",
+            success_unacked_message=(
+                "Module config sent - no ACK received (likely applied)"
+            ),
+            nak_prefix="Node rejected module config",
+            send_failure_message=(
+                f"Failed to send admin message via {conn_type.value}"
+            ),
+        )
 
     def set_channel(
         self,
@@ -2669,13 +2812,7 @@ class AdminService:
         # Send the request using appropriate publisher
         publisher = self._get_publisher()
 
-        if conn_type in (AdminConnectionType.TCP, AdminConnectionType.SERIAL):
-            packet_id = publisher.send_set_channel(
-                target_node_id=target_node_id,
-                channel_index=channel_index,
-                channel_data=channel_data,
-            )
-        else:
+        if conn_type not in (AdminConnectionType.TCP, AdminConnectionType.SERIAL):
             # MQTT set_channel not yet implemented
             AdminRepository.update_admin_log_status(
                 log_id=log_id,
@@ -2688,74 +2825,25 @@ class AdminService:
                 error="set_channel requires TCP or Serial connection",
             )
 
-        if packet_id is None:
-            AdminRepository.update_admin_log_status(
-                log_id=log_id,
-                status="failed",
-                error_message=f"Failed to send message via {conn_type.value}",
-            )
-            return AdminCommandResult(
-                success=False,
-                log_id=log_id,
-                error=f"Failed to send admin message via {conn_type.value}",
-            )
-
-        # Wait for response/acknowledgment with shorter timeout for write operations
-        response = publisher.get_response(packet_id, timeout=10.0)
-
-        if response:
-            # Check if this was a NAK (negative acknowledgement)
-            is_nak = response.get("is_nak", False)
-            error_reason = response.get("error_reason", "")
-
-            if is_nak:
-                error_msg = f"Node rejected channel config: {error_reason}"
-                AdminRepository.update_admin_log_status(
-                    log_id=log_id,
-                    status="failed",
-                    error_message=error_msg,
-                )
-                return AdminCommandResult(
-                    success=False,
-                    packet_id=packet_id,
-                    log_id=log_id,
-                    error=error_msg,
-                )
-
-            AdminRepository.update_admin_log_status(
-                log_id=log_id,
-                status="success",
-                response_data=json.dumps({"message": "Channel updated - ACK received"}),
-            )
-
-            return AdminCommandResult(
-                success=True,
-                packet_id=packet_id,
-                log_id=log_id,
-                response={
-                    "message": "Channel updated - ACK received",
-                    "acknowledged": True,
-                },
-            )
-        else:
-            # No response - packet was sent but ACK not received
-            # Treat as success since packet was sent; node may have applied config
-            AdminRepository.update_admin_log_status(
-                log_id=log_id,
-                status="success",
-                response_data=json.dumps(
-                    {"message": "Channel config sent - no ACK (likely applied)"}
-                ),
-            )
-            return AdminCommandResult(
-                success=True,
-                packet_id=packet_id,
-                log_id=log_id,
-                response={
-                    "message": "Channel config sent - no ACK received (likely applied)",
-                    "acknowledged": False,
-                },
-            )
+        return self._admin_write_with_session_recovery(
+            publisher=publisher,
+            target_node_id=target_node_id,
+            send_fn=lambda: publisher.send_set_channel(
+                target_node_id=target_node_id,
+                channel_index=channel_index,
+                channel_data=channel_data,
+            ),
+            log_id=log_id,
+            conn_type=conn_type,
+            success_acked_message="Channel updated - ACK received",
+            success_unacked_message=(
+                "Channel config sent - no ACK received (likely applied)"
+            ),
+            nak_prefix="Node rejected channel config",
+            send_failure_message=(
+                f"Failed to send admin message via {conn_type.value}"
+            ),
+        )
 
     def set_owner(
         self,
@@ -2802,14 +2890,7 @@ class AdminService:
         # Send the request using appropriate publisher
         publisher = self._get_publisher()
 
-        if conn_type in (AdminConnectionType.TCP, AdminConnectionType.SERIAL):
-            packet_id = publisher.send_set_owner(
-                target_node_id=target_node_id,
-                long_name=long_name,
-                short_name=short_name,
-                is_licensed=is_licensed,
-            )
-        else:
+        if conn_type not in (AdminConnectionType.TCP, AdminConnectionType.SERIAL):
             # MQTT set_owner not yet implemented
             AdminRepository.update_admin_log_status(
                 log_id=log_id,
@@ -2822,76 +2903,26 @@ class AdminService:
                 error="set_owner requires TCP or Serial connection",
             )
 
-        if packet_id is None:
-            AdminRepository.update_admin_log_status(
-                log_id=log_id,
-                status="failed",
-                error_message=f"Failed to send message via {conn_type.value}",
-            )
-            return AdminCommandResult(
-                success=False,
-                log_id=log_id,
-                error=f"Failed to send admin message via {conn_type.value}",
-            )
-
-        # Wait for response/acknowledgment with shorter timeout for write operations
-        response = publisher.get_response(packet_id, timeout=10.0)
-
-        if response:
-            # Check if this was a NAK (negative acknowledgement)
-            is_nak = response.get("is_nak", False)
-            error_reason = response.get("error_reason", "")
-
-            if is_nak:
-                error_msg = f"Node rejected user settings: {error_reason}"
-                AdminRepository.update_admin_log_status(
-                    log_id=log_id,
-                    status="failed",
-                    error_message=error_msg,
-                )
-                return AdminCommandResult(
-                    success=False,
-                    packet_id=packet_id,
-                    log_id=log_id,
-                    error=error_msg,
-                )
-
-            AdminRepository.update_admin_log_status(
-                log_id=log_id,
-                status="success",
-                response_data=json.dumps(
-                    {"message": "User settings updated - ACK received"}
-                ),
-            )
-
-            return AdminCommandResult(
-                success=True,
-                packet_id=packet_id,
-                log_id=log_id,
-                response={
-                    "message": "User settings updated - ACK received",
-                    "acknowledged": True,
-                },
-            )
-        else:
-            # No response - packet was sent but ACK not received
-            # Treat as success since packet was sent; node may have applied settings
-            AdminRepository.update_admin_log_status(
-                log_id=log_id,
-                status="success",
-                response_data=json.dumps(
-                    {"message": "User settings sent - no ACK (likely applied)"}
-                ),
-            )
-            return AdminCommandResult(
-                success=True,
-                packet_id=packet_id,
-                log_id=log_id,
-                response={
-                    "message": "User settings sent - no ACK received (likely applied)",
-                    "acknowledged": False,
-                },
-            )
+        return self._admin_write_with_session_recovery(
+            publisher=publisher,
+            target_node_id=target_node_id,
+            send_fn=lambda: publisher.send_set_owner(
+                target_node_id=target_node_id,
+                long_name=long_name,
+                short_name=short_name,
+                is_licensed=is_licensed,
+            ),
+            log_id=log_id,
+            conn_type=conn_type,
+            success_acked_message="User settings updated - ACK received",
+            success_unacked_message=(
+                "User settings sent - no ACK received (likely applied)"
+            ),
+            nak_prefix="Node rejected user settings",
+            send_failure_message=(
+                f"Failed to send admin message via {conn_type.value}"
+            ),
+        )
 
     def get_config_schema(self, config_type: str) -> list[dict[str, Any]]:
         """

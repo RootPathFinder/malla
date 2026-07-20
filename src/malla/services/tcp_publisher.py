@@ -40,6 +40,10 @@ class PKIErrorCodes:
         "PKI_FAILED",
     }
 
+    # Max send attempts when auto-renewing the admin session passkey
+    # (1 initial attempt + up to 2 renew-and-retry cycles).
+    MAX_SESSION_RECOVERY_ATTEMPTS = 3
+
     # Error codes that indicate the node doesn't have our public key configured
     # These require manual configuration on the remote node
     REQUIRES_KEY_CONFIGURATION = {
@@ -49,17 +53,48 @@ class PKIErrorCodes:
     }
 
     @classmethod
-    def is_recoverable_session_error(cls, error_reason: str) -> bool:
+    def normalize_error_reason(cls, error_reason: Any) -> str:
+        """Normalize routing error reasons to canonical string names."""
+        if error_reason is None or error_reason == "":
+            return "NONE"
+        if isinstance(error_reason, bytes):
+            try:
+                error_reason = error_reason.decode("utf-8")
+            except Exception:
+                error_reason = str(error_reason)
+        if isinstance(error_reason, int):
+            try:
+                from meshtastic import mesh_pb2
+
+                values_by_number = mesh_pb2.Routing.Error.items()
+                for name, number in values_by_number:
+                    if number == error_reason:
+                        return str(name)
+                return str(error_reason)
+            except Exception:
+                return str(error_reason)
+        text = str(error_reason).strip()
+        # Handle "Routing.Error.ADMIN_BAD_SESSION_KEY" / "Error.ADMIN_BAD_SESSION_KEY"
+        if "." in text:
+            text = text.rsplit(".", 1)[-1]
+        return text
+
+    @classmethod
+    def is_recoverable_session_error(cls, error_reason: Any) -> bool:
         """Check if an error indicates a stale session that can be recovered."""
-        return error_reason in cls.RECOVERABLE_SESSION_ERRORS
+        return (
+            cls.normalize_error_reason(error_reason) in cls.RECOVERABLE_SESSION_ERRORS
+        )
 
     @classmethod
-    def is_key_configuration_error(cls, error_reason: str) -> bool:
+    def is_key_configuration_error(cls, error_reason: Any) -> bool:
         """Check if an error requires manual key configuration on remote node."""
-        return error_reason in cls.REQUIRES_KEY_CONFIGURATION
+        return (
+            cls.normalize_error_reason(error_reason) in cls.REQUIRES_KEY_CONFIGURATION
+        )
 
     @classmethod
-    def is_pki_related(cls, error_reason: str) -> bool:
+    def is_pki_related(cls, error_reason: Any) -> bool:
         """Check if an error is related to PKI/key synchronization."""
         return cls.is_recoverable_session_error(
             error_reason
@@ -654,11 +689,15 @@ class TCPPublisher:
             # Handle routing packets (ACK/NAK responses)
             if portnum == "ROUTING_APP":
                 routing = decoded.get("routing", {})
-                error_reason = routing.get("errorReason", "NONE")
+                error_reason = PKIErrorCodes.normalize_error_reason(
+                    routing.get("errorReason", "NONE")
+                )
                 # Meshtastic puts requestId on decoded; some paths also copy it top-level
-                request_id = packet.get("requestId") or decoded.get("requestId")
+                request_id = self._normalize_request_id(
+                    packet.get("requestId") or decoded.get("requestId")
+                )
 
-                if request_id:
+                if request_id is not None:
                     logger.info(
                         f"Received routing response for request {request_id}: {error_reason}"
                     )
@@ -866,6 +905,16 @@ class TCPPublisher:
         except Exception as e:
             logger.error(f"Error processing received packet: {e}")
 
+    @staticmethod
+    def _normalize_request_id(request_id: Any) -> int | None:
+        """Normalize packet/request ids to unsigned 32-bit ints for dict keys."""
+        if request_id is None or request_id == "":
+            return None
+        try:
+            return int(request_id) & 0xFFFFFFFF
+        except (TypeError, ValueError):
+            return None
+
     def get_response(
         self, packet_id: int, timeout: float = 30.0
     ) -> dict[str, Any] | None:
@@ -1003,35 +1052,101 @@ class TCPPublisher:
                 logger.debug(f"No session passkey found for node !{node_id:08x}")
                 return 0
 
-    def send_admin_with_recovery(
+    def has_session_passkey(self, node_id: int) -> bool:
+        """Return True if a session passkey is cached for the node."""
+        with self._session_passkey_lock:
+            return node_id in self._session_passkeys
+
+    def refresh_session_passkey(
         self,
         target_node_id: int,
-        admin_message: admin_pb2.AdminMessage,
         timeout: float = 30.0,
+    ) -> bool:
+        """
+        Fetch a fresh session passkey from a remote node.
+
+        Remote admin *writes* require a session_passkey previously returned by
+        any get_* AdminMessage response. When the key is missing or stale
+        (ADMIN_BAD_SESSION_KEY), clients must GET again, store the new key,
+        then retry the write.
+
+        Args:
+            target_node_id: Node to request a passkey from
+            timeout: Seconds to wait for the metadata response
+
+        Returns:
+            True if a passkey is stored for the node after the request
+        """
+        self.clear_session_passkey(target_node_id)
+
+        logger.info(
+            f"Refreshing session passkey for !{target_node_id:08x} "
+            f"via get_device_metadata"
+        )
+        packet_id = self.send_get_device_metadata(target_node_id)
+        if packet_id is None:
+            logger.warning(
+                f"Failed to send get_device_metadata while refreshing "
+                f"session passkey for !{target_node_id:08x}"
+            )
+            return False
+
+        response = self.get_response(packet_id, timeout=timeout)
+        if not response:
+            logger.warning(
+                f"Timeout refreshing session passkey for !{target_node_id:08x}"
+            )
+            return False
+
+        if response.get("is_nak"):
+            logger.warning(
+                f"NAK refreshing session passkey for !{target_node_id:08x}: "
+                f"{response.get('error_reason', 'NAK')}"
+            )
+            return False
+
+        if self.has_session_passkey(target_node_id):
+            logger.info(
+                f"Refreshed session passkey for !{target_node_id:08x}"
+            )
+            return True
+
+        logger.warning(
+            f"get_device_metadata succeeded for !{target_node_id:08x} but "
+            f"no session_passkey was present in the response"
+        )
+        return False
+
+    def execute_with_session_recovery(
+        self,
+        target_node_id: int,
+        send_fn: Any,
+        timeout: float = 30.0,
+        max_attempts: int | None = None,
+        refresh_timeout: float | None = None,
         auto_recover: bool = True,
     ) -> dict[str, Any]:
         """
-        Send an admin message and handle key synchronization errors automatically.
-
-        This method detects PKI/session key errors (like ADMIN_BAD_SESSION_KEY,
-        PKI_FAILED) and attempts recovery by clearing the stale session passkey
-        and retrying the request once.
+        Send an admin command and await a response, renewing the session passkey
+        on ADMIN_BAD_SESSION_KEY / PKI_FAILED.
 
         Args:
-            target_node_id: The destination node ID
-            admin_message: The admin message protobuf
-            timeout: Maximum time to wait for response in seconds
-            auto_recover: Whether to attempt automatic recovery on key errors
+            target_node_id: Destination node
+            send_fn: Zero-arg callable that sends the command and returns packet_id
+            timeout: Seconds to wait for each command response
+            max_attempts: Max send attempts including the first (default 3)
+            refresh_timeout: Seconds to wait while refreshing the passkey
+            auto_recover: When False, do not renew/retry on session errors
 
         Returns:
-            Dict with keys:
-                - success: bool indicating if request succeeded
-                - response: The response data if successful, None otherwise
-                - error: Error message if failed, None otherwise
-                - error_reason: Specific routing error code if available
-                - recovered: bool indicating if recovery was needed and succeeded
-                - needs_key_config: bool indicating remote node needs key config
+            Dict with success, response, error, error_reason, recovered,
+            needs_key_config, packet_id, attempts
         """
+        if max_attempts is None:
+            max_attempts = PKIErrorCodes.MAX_SESSION_RECOVERY_ATTEMPTS
+        if refresh_timeout is None:
+            refresh_timeout = timeout
+
         result: dict[str, Any] = {
             "success": False,
             "response": None,
@@ -1039,77 +1154,49 @@ class TCPPublisher:
             "error_reason": None,
             "recovered": False,
             "needs_key_config": False,
+            "packet_id": None,
+            "attempts": 0,
         }
 
-        # First attempt
-        packet_id = self.send_admin_message(
-            target_node_id=target_node_id,
-            admin_message=admin_message,
-            want_response=True,
-        )
+        for attempt in range(1, max_attempts + 1):
+            result["attempts"] = attempt
+            packet_id = send_fn()
+            if packet_id is None:
+                result["error"] = "Failed to send admin message"
+                return result
 
-        if packet_id is None:
-            result["error"] = "Failed to send admin message"
-            return result
+            result["packet_id"] = packet_id
+            response = self.get_response(packet_id, timeout=timeout)
 
-        response = self.get_response(packet_id, timeout=timeout)
+            if not response:
+                result["error"] = (
+                    f"No response received (timeout after {timeout}s). "
+                    "Node may be offline or unreachable."
+                )
+                return result
 
-        if response:
-            error_reason = response.get("error_reason", "NONE")
+            error_reason = PKIErrorCodes.normalize_error_reason(
+                response.get("error_reason", "NONE")
+            )
+            is_nak = bool(response.get("is_nak"))
+            # Trust the canonical reason even if is_nak was computed from a
+            # non-normalized value upstream.
+            if error_reason != "NONE":
+                is_nak = True
+            response["error_reason"] = error_reason
+            response["is_nak"] = is_nak
+            response["is_ack"] = not is_nak
 
-            # Check if this is a successful response
-            if error_reason == "NONE" and not response.get("is_nak"):
+            if error_reason == "NONE" and not is_nak:
                 result["success"] = True
                 result["response"] = response
+                if attempt > 1:
+                    result["recovered"] = True
                 return result
 
-            # Store the error reason for the caller
             result["error_reason"] = error_reason
+            result["response"] = response
 
-            # Check if this is a recoverable session key error
-            if auto_recover and PKIErrorCodes.is_recoverable_session_error(
-                error_reason
-            ):
-                logger.warning(
-                    f"PKI session error '{error_reason}' for node !{target_node_id:08x}, "
-                    f"clearing session passkey and retrying..."
-                )
-                self.clear_session_passkey(target_node_id)
-
-                # Retry the request - need to create a fresh admin message
-                # since session_passkey was modified on the original
-                retry_packet_id = self.send_admin_message(
-                    target_node_id=target_node_id,
-                    admin_message=admin_message,
-                    want_response=True,
-                )
-
-                if retry_packet_id is not None:
-                    retry_response = self.get_response(retry_packet_id, timeout=timeout)
-
-                    if retry_response:
-                        retry_error = retry_response.get("error_reason", "NONE")
-                        if retry_error == "NONE" and not retry_response.get("is_nak"):
-                            logger.info(
-                                f"Recovery succeeded for node !{target_node_id:08x}"
-                            )
-                            result["success"] = True
-                            result["response"] = retry_response
-                            result["recovered"] = True
-                            return result
-                        else:
-                            result["error_reason"] = retry_error
-                            logger.warning(
-                                f"Recovery attempt failed with error: {retry_error}"
-                            )
-
-                result["error"] = (
-                    f"PKI key sync error: {error_reason}. "
-                    "Recovery attempt failed. Try clearing all session keys."
-                )
-                return result
-
-            # Check if this requires manual key configuration
             if PKIErrorCodes.is_key_configuration_error(error_reason):
                 result["needs_key_config"] = True
                 result["error"] = (
@@ -1119,16 +1206,89 @@ class TCPPublisher:
                 )
                 return result
 
-            # Other routing errors
+            if (
+                auto_recover
+                and PKIErrorCodes.is_recoverable_session_error(error_reason)
+                and attempt < max_attempts
+            ):
+                logger.warning(
+                    f"PKI session error '{error_reason}' for node "
+                    f"!{target_node_id:08x} (attempt {attempt}/{max_attempts}), "
+                    f"refreshing session passkey and retrying..."
+                )
+                if not self.refresh_session_passkey(
+                    target_node_id, timeout=refresh_timeout
+                ):
+                    result["error"] = (
+                        f"PKI key sync error: {error_reason}. "
+                        "Failed to refresh session passkey from the node."
+                    )
+                    return result
+                continue
+
+            if PKIErrorCodes.is_recoverable_session_error(error_reason):
+                result["error"] = (
+                    f"PKI key sync error: {error_reason} "
+                    f"after {attempt} attempt(s). "
+                    "Try clearing all session keys."
+                )
+                return result
+
             result["error"] = f"Routing error: {error_reason}"
             return result
 
-        # Timeout - no response received
-        result["error"] = (
-            f"No response received (timeout after {timeout}s). "
-            "Node may be offline or unreachable."
-        )
         return result
+
+    def send_admin_with_recovery(
+        self,
+        target_node_id: int,
+        admin_message: admin_pb2.AdminMessage,
+        timeout: float = 30.0,
+        auto_recover: bool = True,
+        max_attempts: int | None = None,
+    ) -> dict[str, Any]:
+        """
+        Send an admin message and handle key synchronization errors automatically.
+
+        This method detects PKI/session key errors (like ADMIN_BAD_SESSION_KEY,
+        PKI_FAILED) and attempts recovery by fetching a fresh session passkey
+        (via get_device_metadata) and retrying up to max_attempts times.
+
+        Args:
+            target_node_id: The destination node ID
+            admin_message: The admin message protobuf
+            timeout: Maximum time to wait for response in seconds
+            auto_recover: Whether to attempt automatic recovery on key errors
+            max_attempts: Max send attempts including the first (default 3)
+
+        Returns:
+            Dict with keys:
+                - success: bool indicating if request succeeded
+                - response: The response data if successful, None otherwise
+                - error: Error message if failed, None otherwise
+                - error_reason: Specific routing error code if available
+                - recovered: bool indicating if recovery was needed and succeeded
+                - needs_key_config: bool indicating remote node needs key config
+                - packet_id / attempts: tracking metadata
+        """
+
+        def send_fn() -> int | None:
+            # Drop any stale key baked into a reused message; send_admin_message
+            # will re-attach the current cached passkey if one is available.
+            admin_message.ClearField("session_passkey")
+            return self.send_admin_message(
+                target_node_id=target_node_id,
+                admin_message=admin_message,
+                want_response=True,
+            )
+
+        return self.execute_with_session_recovery(
+            target_node_id=target_node_id,
+            send_fn=send_fn,
+            timeout=timeout,
+            max_attempts=max_attempts,
+            auto_recover=auto_recover,
+        )
 
     def _get_admin_channel_index(self) -> int:
         """
@@ -1189,8 +1349,9 @@ class TCPPublisher:
             # return one (it normally assigns meshPacket.id for ACK correlation)
             packet_id = random.getrandbits(32)
 
-            # Set session_passkey on the admin message if we have one for this target
-            # Session passkeys are required for admin authentication (like Android app)
+            # Set session_passkey on the admin message if we have one for this target.
+            # Session passkeys are required for remote admin *writes*. Always clear a
+            # stale key left on a reused message when we no longer have a cached one.
             with self._session_passkey_lock:
                 if target_node_id in self._session_passkeys:
                     session_passkey = self._session_passkeys[target_node_id]
@@ -1200,6 +1361,8 @@ class TCPPublisher:
                         f"({len(session_passkey)} bytes)"
                     )
                 else:
+                    if admin_message.session_passkey:
+                        admin_message.ClearField("session_passkey")
                     logger.info(
                         f"No session_passkey found for !{target_node_id:08x} "
                         f"(known nodes: {[f'!{n:08x}' for n in self._session_passkeys.keys()]})"

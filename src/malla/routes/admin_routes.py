@@ -2610,6 +2610,8 @@ def api_set_favorite_node(node_id):
                     "message": message,
                     "acknowledged": acknowledged,
                     "log_id": result.log_id,
+                    "attempts": result.attempts,
+                    "retry_info": result.retry_info,
                     "favorites": favorites.get("favorites", []),
                     "favorites_source": favorites.get("source"),
                 }
@@ -2620,6 +2622,8 @@ def api_set_favorite_node(node_id):
                     "success": False,
                     "error": result.error,
                     "log_id": result.log_id,
+                    "attempts": result.attempts,
+                    "retry_info": result.retry_info,
                 }
             ), 200
 
@@ -2668,6 +2672,8 @@ def api_remove_favorite_node(node_id):
                     "message": message,
                     "acknowledged": acknowledged,
                     "log_id": result.log_id,
+                    "attempts": result.attempts,
+                    "retry_info": result.retry_info,
                     "favorites": favorites.get("favorites", []),
                     "favorites_source": favorites.get("source"),
                 }
@@ -2678,6 +2684,8 @@ def api_remove_favorite_node(node_id):
                     "success": False,
                     "error": result.error,
                     "log_id": result.log_id,
+                    "attempts": result.attempts,
+                    "retry_info": result.retry_info,
                 }
             ), 200
 
