@@ -85,6 +85,8 @@ class AlertType(Enum):
     HIGH_PACKET_LOSS = "high_packet_loss"
     SOLAR_CHARGING_ISSUE = "solar_charging_issue"
     SOLAR_CHARGING_CRITICAL = "solar_charging_critical"
+    SOLAR_POWER_AT_RISK = "solar_power_at_risk"
+    SOLAR_POWER_WATCHING = "solar_power_watching"
 
 
 @dataclass
@@ -703,6 +705,11 @@ class AlertService:
             solar_results = cls._check_solar_charging()
             results["alerts_generated"] += solar_results.get("alerts", 0)
 
+            results["checks_run"].append("solar_power_condition")
+            solar_condition_results = cls._check_solar_power_condition()
+            results["alerts_generated"] += solar_condition_results.get("alerts", 0)
+            results["alerts_resolved"] += solar_condition_results.get("resolved", 0)
+
             logger.info(
                 f"Health checks complete: {results['alerts_generated']} alerts generated, "
                 f"{results['alerts_resolved']} resolved, {results['alerts_cleaned']} old alerts cleaned"
@@ -724,9 +731,11 @@ class AlertService:
             conn = get_db_connection()
             cursor = conn.cursor()
 
-            # Get latest valid battery telemetry for each node
-            # We fetch battery and voltage separately to handle cases where they are sent in different packets
-            # or where one value is 0/invalid
+            # Latest valid battery telemetry — only within the recent window so
+            # abandoned nodes with old readings do not keep firing alerts.
+            from ..power_analysis import recent_telemetry_cutoff
+
+            cutoff = recent_telemetry_cutoff()
             logger.debug("Fetching battery health data from telemetry_data table...")
             cursor.execute(
                 """
@@ -734,13 +743,16 @@ class AlertService:
                     n.node_id,
                     (SELECT t.battery_level FROM telemetry_data t
                      WHERE t.node_id = n.node_id AND t.battery_level > 0
+                       AND t.timestamp > ?
                      ORDER BY t.timestamp DESC LIMIT 1) as battery_level,
                     (SELECT t.voltage FROM telemetry_data t
                      WHERE t.node_id = n.node_id AND t.voltage > 0
+                       AND t.timestamp > ?
                      ORDER BY t.timestamp DESC LIMIT 1) as voltage
                 FROM node_info n
                 WHERE COALESCE(n.archived, 0) = 0
-            """
+            """,
+                (cutoff, cutoff),
             )
 
             rows = cursor.fetchall()
@@ -754,6 +766,9 @@ class AlertService:
                 node_id = row["node_id"]
                 battery = row["battery_level"]
                 voltage = cls._correct_voltage(row["voltage"])
+                # Skip nodes with no recent telemetry entirely
+                if battery is None and voltage is None:
+                    continue
                 node_battery_status[node_id] = {
                     "battery_level": battery,
                     "voltage": voltage,
@@ -764,16 +779,15 @@ class AlertService:
                     nodes_with_voltage += 1
 
             logger.info(
-                f"Battery health: {len(rows)} nodes checked, "
+                f"Battery health: {len(node_battery_status)} nodes with recent telemetry, "
                 f"{nodes_with_battery} with battery data, "
                 f"{nodes_with_voltage} with voltage data"
             )
 
             # Check for nodes that need new alerts
-            for row in rows:
-                node_id = row["node_id"]
-                battery_level = row["battery_level"]
-                voltage = cls._correct_voltage(row["voltage"])
+            for node_id, status in node_battery_status.items():
+                battery_level = status["battery_level"]
+                voltage = status["voltage"]
 
                 # Check battery percentage
                 if battery_level is not None and battery_level > 0:
@@ -856,7 +870,15 @@ class AlertService:
                 status = node_battery_status.get(node_id)
 
                 if status is None:
-                    # No recent telemetry for this node, can't verify - skip
+                    # No recent telemetry — drop stale battery alerts so they
+                    # don't linger for abandoned nodes.
+                    alert_type = AlertType(alert_type_str)
+                    if cls.resolve_alert(alert_type, node_id):
+                        logger.info(
+                            f"Battery alert resolved for node {node_id}: "
+                            f"no recent telemetry"
+                        )
+                        alerts_resolved += 1
                     continue
 
                 battery_level = status.get("battery_level")
@@ -968,6 +990,154 @@ class AlertService:
             logger.error(f"Error checking solar charging: {e}")
 
         return {"alerts": alerts_generated}
+
+    @classmethod
+    def _check_solar_power_condition(cls) -> dict[str, Any]:
+        """Alert on unified solar degradation conditions (at_risk / watching).
+
+        Uses power_analysis.get_solar_power_conditions so mesh health, alerts,
+        and the Power Analytics page share the same condition model.
+        Resolves alerts when a node recovers to healthy.
+        """
+        alerts_generated = 0
+        alerts_resolved = 0
+
+        try:
+            from ..power_analysis import get_solar_power_conditions
+
+            conn = get_db_connection()
+            try:
+                conditions = get_solar_power_conditions(conn)
+            finally:
+                conn.close()
+
+            at_risk_ids: set[int] = set()
+            watching_ids: set[int] = set()
+
+            for node in conditions.get("at_risk") or []:
+                node_id = node["node_id"]
+                at_risk_ids.add(node_id)
+                issues = node.get("issues") or []
+                issue_text = (
+                    "; ".join(issues[:3]) if issues else "Solar power degrading"
+                )
+                outlook = node.get("outlook") or ""
+                message = issue_text
+                if outlook:
+                    message = f"{issue_text}. {outlook}"
+
+                cls.add_alert(
+                    Alert(
+                        alert_type=AlertType.SOLAR_POWER_AT_RISK,
+                        severity=AlertSeverity.CRITICAL,
+                        node_id=node_id,
+                        title=f"Solar At Risk: {node['name']}",
+                        message=message,
+                        metadata={
+                            "condition": "at_risk",
+                            "issues": issues,
+                            "outlook": outlook,
+                            "health_score": node.get("health_score"),
+                            "hours_to_critical": node.get("hours_to_critical"),
+                            "days_since_full_charge": (node.get("solar") or {}).get(
+                                "days_since_full_charge"
+                            ),
+                        },
+                    )
+                )
+                alerts_generated += 1
+                # Escalate supersedes watching alert
+                if cls.resolve_alert(AlertType.SOLAR_POWER_WATCHING, node_id):
+                    alerts_resolved += 1
+
+            for node in conditions.get("watching") or []:
+                node_id = node["node_id"]
+                watching_ids.add(node_id)
+                if node_id in at_risk_ids:
+                    continue
+                issues = node.get("issues") or []
+                issue_text = (
+                    "; ".join(issues[:3])
+                    if issues
+                    else "Solar power needs attention"
+                )
+                outlook = node.get("outlook") or ""
+                message = issue_text
+                if outlook:
+                    message = f"{issue_text}. {outlook}"
+
+                cls.add_alert(
+                    Alert(
+                        alert_type=AlertType.SOLAR_POWER_WATCHING,
+                        severity=AlertSeverity.WARNING,
+                        node_id=node_id,
+                        title=f"Solar Watching: {node['name']}",
+                        message=message,
+                        metadata={
+                            "condition": "watching",
+                            "issues": issues,
+                            "outlook": outlook,
+                            "health_score": node.get("health_score"),
+                            "hours_to_critical": node.get("hours_to_critical"),
+                        },
+                    )
+                )
+                alerts_generated += 1
+
+            # Resolve recovered, watching-downgraded, or stale (no recent telemetry) nodes
+            active_condition_ids = at_risk_ids | watching_ids
+            healthy_ids = {n["node_id"] for n in (conditions.get("healthy") or [])} | {
+                n["node_id"] for n in (conditions.get("unknown") or [])
+            }
+
+            for node_id in healthy_ids:
+                if cls.resolve_alert(AlertType.SOLAR_POWER_AT_RISK, node_id):
+                    alerts_resolved += 1
+                    logger.info(f"Solar at-risk alert resolved for node {node_id}")
+                if cls.resolve_alert(AlertType.SOLAR_POWER_WATCHING, node_id):
+                    alerts_resolved += 1
+                    logger.info(f"Solar watching alert resolved for node {node_id}")
+
+            # Watching nodes that were previously at_risk: resolve at_risk
+            for node_id in watching_ids:
+                if node_id not in at_risk_ids:
+                    if cls.resolve_alert(AlertType.SOLAR_POWER_AT_RISK, node_id):
+                        alerts_resolved += 1
+
+            # Drop solar alerts for nodes no longer in the recent-telemetry set
+            conn = get_db_connection()
+            try:
+                cursor = conn.cursor()
+                cursor.execute(
+                    """
+                    SELECT node_id, alert_type FROM alerts
+                    WHERE alert_type IN (?, ?) AND resolved = 0
+                    """,
+                    (
+                        AlertType.SOLAR_POWER_AT_RISK.value,
+                        AlertType.SOLAR_POWER_WATCHING.value,
+                    ),
+                )
+                open_solar_alerts = cursor.fetchall()
+            finally:
+                conn.close()
+
+            for alert_row in open_solar_alerts:
+                node_id = alert_row["node_id"]
+                if node_id in active_condition_ids or node_id in healthy_ids:
+                    continue
+                alert_type = AlertType(alert_row["alert_type"])
+                if cls.resolve_alert(alert_type, node_id):
+                    alerts_resolved += 1
+                    logger.info(
+                        f"Solar alert resolved for node {node_id}: "
+                        f"stale/no recent telemetry"
+                    )
+
+        except Exception as e:
+            logger.error(f"Error checking solar power condition: {e}", exc_info=True)
+
+        return {"alerts": alerts_generated, "resolved": alerts_resolved}
 
     @classmethod
     def _check_node_activity(cls) -> dict[str, Any]:
@@ -1803,8 +1973,10 @@ class AlertService:
                     }
                 )
 
-            # 2. Check for low battery nodes
-            # Use correlated subqueries to get latest VALID battery/voltage
+            # 2. Check for low battery nodes (recent telemetry only)
+            from ..power_analysis import recent_telemetry_cutoff
+
+            telemetry_cutoff = recent_telemetry_cutoff(now)
             cursor.execute(
                 """
                 SELECT
@@ -1812,13 +1984,16 @@ class AlertService:
                     COALESCE(n.long_name, n.short_name, printf('!%08x', n.node_id)) as name,
                     (SELECT t.battery_level FROM telemetry_data t
                      WHERE t.node_id = n.node_id AND t.battery_level > 0
+                       AND t.timestamp > ?
                      ORDER BY t.timestamp DESC LIMIT 1) as battery_level,
                     (SELECT t.voltage FROM telemetry_data t
                      WHERE t.node_id = n.node_id AND t.voltage > 0
+                       AND t.timestamp > ?
                      ORDER BY t.timestamp DESC LIMIT 1) as voltage
                 FROM node_info n
                 WHERE COALESCE(n.archived, 0) = 0
-                """
+                """,
+                (telemetry_cutoff, telemetry_cutoff),
             )
 
             all_nodes_battery = cursor.fetchall()
@@ -1827,6 +2002,8 @@ class AlertService:
             for n in all_nodes_battery:
                 batt = n["battery_level"]
                 volt = cls._correct_voltage(n["voltage"])
+                if batt is None and volt is None:
+                    continue
                 is_low = False
 
                 if batt is not None and batt < 30:
@@ -1883,6 +2060,50 @@ class AlertService:
                         "affected_nodes": [n["name"] for n in warning_battery[:10]],
                     }
                 )
+
+            # 2b. Solar power degradation (unified condition model)
+            try:
+                from ..power_analysis import get_solar_power_conditions
+
+                solar_conditions = get_solar_power_conditions(conn)
+                solar_at_risk = solar_conditions.get("at_risk") or []
+                solar_watching = solar_conditions.get("watching") or []
+
+                if solar_at_risk:
+                    health_deductions += min(25, len(solar_at_risk) * 8)
+                    insights.append(
+                        {
+                            "id": "solar_at_risk",
+                            "priority": "high",
+                            "icon": "sun",
+                            "title": f"{len(solar_at_risk)} Solar Node{'s' if len(solar_at_risk) > 1 else ''} At Risk",
+                            "description": "Solar nodes are not recovering charge as expected — check panels, wiring, or weather.",
+                            "action": "View Power Analytics",
+                            "link": "/battery-analytics",
+                            "value": len(solar_at_risk),
+                            "value_label": "nodes",
+                            "affected_nodes": [n["name"] for n in solar_at_risk[:10]],
+                        }
+                    )
+
+                if solar_watching:
+                    health_deductions += min(10, len(solar_watching) * 3)
+                    insights.append(
+                        {
+                            "id": "solar_watching",
+                            "priority": "medium",
+                            "icon": "sun",
+                            "title": f"{len(solar_watching)} Solar Node{'s' if len(solar_watching) > 1 else ''} Watching",
+                            "description": "Early signs of weaker daytime charge or deeper overnight lows.",
+                            "action": "View Power Analytics",
+                            "link": "/battery-analytics",
+                            "value": len(solar_watching),
+                            "value_label": "nodes",
+                            "affected_nodes": [n["name"] for n in solar_watching[:10]],
+                        }
+                    )
+            except Exception as solar_err:
+                logger.debug(f"Solar condition insights skipped: {solar_err}")
 
             # 3. Check signal quality trends
             cursor.execute(
@@ -2132,8 +2353,10 @@ class AlertService:
                 row["from_node_id"]: row["last_seen"] for row in cursor.fetchall()
             }
 
-            # Get all active nodes with their latest telemetry
-            # Filter for valid (>0) values to avoid 0.00V issues
+            # Latest telemetry for battery/solar checks — recent window only
+            from ..power_analysis import recent_telemetry_cutoff
+
+            telemetry_cutoff = recent_telemetry_cutoff(now)
             cursor.execute(
                 """
                 SELECT
@@ -2141,15 +2364,19 @@ class AlertService:
                     COALESCE(n.long_name, n.short_name, printf('!%08x', n.node_id)) as name,
                     n.hex_id,
                     n.role,
+                    n.power_type,
                     (SELECT t.battery_level FROM telemetry_data t
                      WHERE t.node_id = n.node_id AND t.battery_level > 0
+                       AND t.timestamp > ?
                      ORDER BY t.timestamp DESC LIMIT 1) as battery_level,
                     (SELECT t.voltage FROM telemetry_data t
                      WHERE t.node_id = n.node_id AND t.voltage > 0
+                       AND t.timestamp > ?
                      ORDER BY t.timestamp DESC LIMIT 1) as voltage
                 FROM node_info n
                 WHERE COALESCE(n.archived, 0) = 0
-                """
+                """,
+                (telemetry_cutoff, telemetry_cutoff),
             )
 
             all_rows = cursor.fetchall()
@@ -2157,6 +2384,18 @@ class AlertService:
                 f"Node health summary: fetched {len(all_rows)} nodes, "
                 f"{len(last_seen_map)} with recent activity"
             )
+
+            # Precompute solar conditions for solar-typed nodes
+            solar_condition_by_id: dict[int, dict[str, Any]] = {}
+            try:
+                from ..power_analysis import get_solar_power_conditions
+
+                solar_conditions = get_solar_power_conditions(conn)
+                for bucket in ("at_risk", "watching", "healthy", "unknown"):
+                    for entry in solar_conditions.get(bucket) or []:
+                        solar_condition_by_id[entry["node_id"]] = entry
+            except Exception as solar_err:
+                logger.debug(f"Solar conditions for health summary skipped: {solar_err}")
 
             healthy = 0
             warning = 0
@@ -2171,6 +2410,7 @@ class AlertService:
                 role = row["role"]
                 battery = row["battery_level"]
                 voltage = cls._correct_voltage(row["voltage"])
+                power_type = row["power_type"] if "power_type" in row.keys() else None
 
                 last_seen = last_seen_map.get(node_id)
 
@@ -2214,7 +2454,23 @@ class AlertService:
                     value = f"{voltage:.2f}V"
                     warning += 1
                 else:
-                    healthy += 1
+                    # Solar degradation conditions (when not already battery-critical)
+                    solar_entry = solar_condition_by_id.get(node_id)
+                    if solar_entry and power_type == "solar":
+                        if solar_entry.get("condition") == "at_risk":
+                            status = "critical"
+                            issue = "Solar at risk"
+                            value = (solar_entry.get("issues") or ["Degrading"])[0][:40]
+                            critical += 1
+                        elif solar_entry.get("condition") == "watching":
+                            status = "warning"
+                            issue = "Solar watching"
+                            value = (solar_entry.get("issues") or ["Watching"])[0][:40]
+                            warning += 1
+                        else:
+                            healthy += 1
+                    else:
+                        healthy += 1
 
                 # Add to attention list if not healthy
                 if status != "healthy":
@@ -2244,6 +2500,16 @@ class AlertService:
                 "offline": offline,
                 "total": healthy + warning + critical + offline,
                 "nodes_needing_attention": nodes_needing_attention[:20],  # Top 20
+                "solar_at_risk": sum(
+                    1
+                    for e in solar_condition_by_id.values()
+                    if e.get("condition") == "at_risk"
+                ),
+                "solar_watching": sum(
+                    1
+                    for e in solar_condition_by_id.values()
+                    if e.get("condition") == "watching"
+                ),
             }
 
         except Exception as e:
@@ -2255,6 +2521,8 @@ class AlertService:
                 "offline": 0,
                 "total": 0,
                 "nodes_needing_attention": [],
+                "solar_at_risk": 0,
+                "solar_watching": 0,
             }
 
     @classmethod
@@ -2340,8 +2608,10 @@ class AlertService:
                 if power_type == "solar":
                     solar_nodes += count
 
-            # Battery stats
-            # Use subquery to get latest valid battery level for each node
+            # Battery stats — recent telemetry only
+            from ..power_analysis import recent_telemetry_cutoff
+
+            telemetry_cutoff = recent_telemetry_cutoff(now)
             cursor.execute(
                 """
                 SELECT
@@ -2349,20 +2619,36 @@ class AlertService:
                     COUNT(CASE WHEN latest_batt.battery_level < 30 THEN 1 END) as low_battery
                 FROM node_info n
                 LEFT JOIN (
-                    SELECT node_id, battery_level
+                    SELECT t1.node_id, t1.battery_level
                     FROM telemetry_data t1
-                    WHERE battery_level > 0
-                    AND timestamp = (
-                        SELECT MAX(timestamp)
+                    WHERE t1.battery_level > 0
+                      AND t1.timestamp > ?
+                      AND t1.timestamp = (
+                        SELECT MAX(t2.timestamp)
                         FROM telemetry_data t2
-                        WHERE t2.node_id = t1.node_id AND t2.battery_level > 0
-                    )
+                        WHERE t2.node_id = t1.node_id
+                          AND t2.battery_level > 0
+                          AND t2.timestamp > ?
+                      )
                 ) latest_batt ON n.node_id = latest_batt.node_id
                 WHERE COALESCE(n.archived, 0) = 0
                   AND latest_batt.battery_level IS NOT NULL
-                """
+                """,
+                (telemetry_cutoff, telemetry_cutoff),
             )
             battery_stats = cursor.fetchone()
+
+            # Solar power condition counts (unified analyzer)
+            solar_at_risk_nodes = 0
+            solar_watching_nodes = 0
+            try:
+                from ..power_analysis import get_solar_power_conditions
+
+                solar_conditions = get_solar_power_conditions(conn)
+                solar_at_risk_nodes = len(solar_conditions.get("at_risk") or [])
+                solar_watching_nodes = len(solar_conditions.get("watching") or [])
+            except Exception as solar_err:
+                logger.debug(f"Solar vitals skipped: {solar_err}")
 
             conn.close()
 
@@ -2405,6 +2691,8 @@ class AlertService:
                 "infrastructure_nodes": infra_nodes,
                 "client_nodes": client_nodes,
                 "solar_nodes": solar_nodes,
+                "solar_at_risk_nodes": solar_at_risk_nodes,
+                "solar_watching_nodes": solar_watching_nodes,
                 "low_battery_nodes": battery_stats["low_battery"] or 0,
                 "avg_battery": round(battery_stats["avg_battery"], 0)
                 if battery_stats["avg_battery"]
@@ -2425,6 +2713,8 @@ class AlertService:
                 "infrastructure_nodes": 0,
                 "client_nodes": 0,
                 "solar_nodes": 0,
+                "solar_at_risk_nodes": 0,
+                "solar_watching_nodes": 0,
                 "low_battery_nodes": 0,
                 "avg_battery": 0,
             }

@@ -8,10 +8,13 @@ from datetime import UTC, datetime
 logger = logging.getLogger(__name__)
 
 
-def format_time_ago(dt: datetime | None) -> str:
-    """Format a datetime as relative time string."""
-    if not dt:
+def format_time_ago(dt: datetime | float | int | None) -> str:
+    """Format a datetime (or Unix timestamp) as relative time string."""
+    if not dt and dt != 0:
         return "Never"
+
+    if isinstance(dt, (int, float)):
+        dt = datetime.fromtimestamp(float(dt), tz=UTC)
 
     # Ensure we're comparing timestamps in the same timezone
     # If dt is naive (no timezone), assume it's UTC

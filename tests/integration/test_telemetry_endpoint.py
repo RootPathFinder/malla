@@ -259,6 +259,14 @@ class TestTelemetryEndpoint:
         assert telemetry_data["power_type"] == "solar"
         assert telemetry_data["battery_health_score"] == 82
         assert telemetry_data["power_analysis_timestamp"] == analysis_ts
+        assert "power_status" in telemetry_data
+        assert telemetry_data["power_status"]["power_type"] in (
+            "solar",
+            "unknown",
+            "battery",
+            "mains",
+        )
+        assert "outlook" in telemetry_data["power_status"]
         assert telemetry_data["environment_metrics"]["voltage"] == pytest.approx(3.85)
         assert telemetry_data["environment_metrics"]["current"] == pytest.approx(12.5)
         assert telemetry_data["air_quality_metrics"]["pm25_standard"] == 8

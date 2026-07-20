@@ -2090,6 +2090,115 @@ function updateHeroVitals(telemetry) {
     }
 }
 
+function bindPowerTypeOverride(nodeId) {
+    const saveBtn = document.getElementById('power-type-save-btn');
+    const selectEl = document.getElementById('power-type-override');
+    const lockEl = document.getElementById('power-type-lock');
+    const statusEl = document.getElementById('power-type-override-status');
+    if (!saveBtn || !selectEl || !lockEl) {
+        return;
+    }
+    saveBtn.addEventListener('click', async function() {
+        const powerType = selectEl.value;
+        const locked = !!lockEl.checked;
+        saveBtn.disabled = true;
+        if (statusEl) {
+            statusEl.textContent = 'Saving...';
+            statusEl.className = 'small text-muted mt-1';
+        }
+        try {
+            const resp = await fetch(`/api/node/${nodeId}/power-type`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ power_type: powerType, locked: locked })
+            });
+            const data = await resp.json();
+            if (!resp.ok) {
+                throw new Error(data.error || 'Save failed');
+            }
+            if (statusEl) {
+                statusEl.textContent = locked
+                    ? 'Locked — auto-detect will not change this'
+                    : 'Saved (unlocked — auto-detect may update)';
+                statusEl.className = 'small text-success mt-1';
+            }
+            // Refresh telemetry so condition/outlook reflect the new type
+            setTimeout(function() { loadTelemetryData(); }, 400);
+        } catch (err) {
+            console.error('Power type override failed:', err);
+            if (statusEl) {
+                statusEl.textContent = err.message || 'Save failed';
+                statusEl.className = 'small text-danger mt-1';
+            }
+        } finally {
+            saveBtn.disabled = false;
+        }
+    });
+
+    bindSolarForecastControls(nodeId);
+}
+
+function bindSolarForecastControls(nodeId) {
+    const saveBtn = document.getElementById('solar-forecast-save-btn');
+    const enableEl = document.getElementById('solar-forecast-enable');
+    const latEl = document.getElementById('solar-forecast-lat');
+    const lonEl = document.getElementById('solar-forecast-lon');
+    const statusEl = document.getElementById('solar-forecast-status');
+    if (!saveBtn || !enableEl) {
+        return;
+    }
+    saveBtn.addEventListener('click', async function() {
+        const enabled = !!enableEl.checked;
+        const latRaw = latEl ? latEl.value.trim() : '';
+        const lonRaw = lonEl ? lonEl.value.trim() : '';
+        const body = { enabled: enabled };
+        if (latRaw === '' && lonRaw === '') {
+            // Leave existing override as-is (or none)
+        } else if (latRaw !== '' && lonRaw !== '') {
+            body.latitude = Number(latRaw);
+            body.longitude = Number(lonRaw);
+        } else {
+            if (statusEl) {
+                statusEl.textContent = 'Enter both lat and lon, or leave both blank';
+                statusEl.className = 'small text-danger mt-1';
+            }
+            return;
+        }
+        saveBtn.disabled = true;
+        if (statusEl) {
+            statusEl.textContent = 'Saving forecast settings...';
+            statusEl.className = 'small text-muted mt-1';
+        }
+        try {
+            const resp = await fetch(`/api/node/${nodeId}/solar-forecast`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify(body)
+            });
+            const data = await resp.json();
+            if (!resp.ok) {
+                throw new Error(data.error || 'Save failed');
+            }
+            if (statusEl) {
+                const wx = data.solar_weather || {};
+                statusEl.textContent = wx.available
+                    ? ('Saved — ' + (wx.outlook || 'forecast ready'))
+                    : ('Saved — ' + (wx.reason || 'awaiting location/weather'));
+                statusEl.className = 'small text-success mt-1';
+            }
+            setTimeout(function() { loadTelemetryData(); }, 400);
+        } catch (err) {
+            console.error('Solar forecast settings failed:', err);
+            if (statusEl) {
+                statusEl.textContent = err.message || 'Save failed';
+                statusEl.className = 'small text-danger mt-1';
+            }
+        } finally {
+            saveBtn.disabled = false;
+        }
+    });
+}
+
 async function loadTelemetryData() {
     const scriptTag = document.querySelector('script[data-node-id]');
     const nodeId = scriptTag.getAttribute('data-node-id');
@@ -2225,41 +2334,145 @@ async function loadTelemetryData() {
 
         html += '<table class="table table-sm table-borderless mb-0" style="font-size: 0.9rem;">';
 
-        // Power Type (from analysis)
-        if (telemetry.power_type && telemetry.power_type !== 'unknown') {
-            const powerIcons = {
-                'mains': '<i class="bi bi-plug-fill text-primary"></i>',
-                'solar': '<i class="bi bi-sun-fill text-warning"></i>',
-                'battery': '<i class="bi bi-battery-full text-success"></i>',
-                'usb': '<i class="bi bi-usb-symbol text-info"></i>'
-            };
-            const powerLabels = {
-                'mains': 'Mains Power',
-                'solar': 'Solar Powered',
-                'battery': 'Battery Only',
-                'usb': 'USB Power'
-            };
-            const icon = powerIcons[telemetry.power_type] || '<i class="bi bi-lightning-charge"></i>';
-            const label = powerLabels[telemetry.power_type] || telemetry.power_type;
-            const tooltip = telemetry.power_type_reason ? ' title="' + telemetry.power_type_reason + '"' : '';
+        // Explained power status (preferred) with legacy fallback
+        const ps = telemetry.power_status || null;
+        const powerType = (ps && ps.power_type) || telemetry.power_type;
+        const powerIcons = {
+            'mains': '<i class="bi bi-plug-fill text-primary"></i>',
+            'solar': '<i class="bi bi-sun-fill text-warning"></i>',
+            'battery': '<i class="bi bi-battery-full text-success"></i>',
+            'usb': '<i class="bi bi-usb-symbol text-info"></i>',
+            'unknown': '<i class="bi bi-question-circle text-secondary"></i>'
+        };
+        const powerLabels = {
+            'mains': 'Mains / USB',
+            'solar': 'Solar',
+            'battery': 'Battery only',
+            'usb': 'USB Power',
+            'unknown': 'Unknown'
+        };
+        if (powerType) {
+            const icon = powerIcons[powerType] || '<i class="bi bi-lightning-charge"></i>';
+            const label = (ps && ps.power_type_label) || powerLabels[powerType] || powerType;
+            const stateLabel = ps && ps.state_label ? ' · ' + ps.state_label : '';
+            const reason = (ps && ps.reason) || telemetry.power_type_reason || '';
+            const tooltip = reason ? ' title="' + String(reason).replace(/"/g, '&quot;') + '"' : '';
             html += '<tr>';
-            html += '<td class="text-muted" style="width: 50%;">Power Source</td>';
-            html += '<td class="text-end fw-bold"' + tooltip + ' data-bs-toggle="tooltip">' + icon + ' ' + label + '</td>';
+            html += '<td class="text-muted" style="width: 50%;">Power source</td>';
+            html += '<td class="text-end fw-bold"' + tooltip + ' data-bs-toggle="tooltip">' + icon + ' ' + label + stateLabel + '</td>';
             html += '</tr>';
         }
 
-        if (telemetry.battery_health_score !== undefined && telemetry.battery_health_score !== null) {
+        if (ps && ps.condition_label) {
+            const cond = ps.condition || 'unknown';
+            const condClass = cond === 'healthy' || cond === 'powered'
+                ? 'text-success'
+                : cond === 'watching'
+                    ? 'text-warning'
+                    : cond === 'at_risk'
+                        ? 'text-danger'
+                        : 'text-secondary';
+            html += '<tr>';
+            html += '<td class="text-muted">Condition</td>';
+            html += '<td class="text-end"><span class="' + condClass + ' fw-bold">' + ps.condition_label + '</span></td>';
+            html += '</tr>';
+        } else if (telemetry.battery_health_score !== undefined && telemetry.battery_health_score !== null) {
             const bhs = Number(telemetry.battery_health_score);
             const bhsClass = bhs >= 80 ? 'text-success' : bhs >= 50 ? 'text-warning' : 'text-danger';
             html += '<tr>';
-            html += '<td class="text-muted">Battery Health Score</td>';
+            html += '<td class="text-muted">Battery health</td>';
             html += '<td class="text-end"><span class="' + bhsClass + ' fw-bold">' + bhs.toFixed(0) + '</span></td>';
             html += '</tr>';
         }
-        if (telemetry.power_analysis_timestamp) {
+
+        // Manual power-type override (locks auto-detect)
+        const locked = !!(ps && ps.power_type_locked) || !!telemetry.power_type_locked;
+        const currentType = powerType || 'unknown';
+        html += '<tr>';
+        html += '<td class="text-muted align-middle">Override</td>';
+        html += '<td class="text-end">';
+        html += '<div class="d-inline-flex align-items-center gap-1 flex-wrap justify-content-end">';
+        html += '<select id="power-type-override" class="form-select form-select-sm" style="width: auto; min-width: 7.5rem;">';
+        ['solar', 'battery', 'mains', 'unknown'].forEach(function(opt) {
+            const labels = { solar: 'Solar', battery: 'Battery', mains: 'Mains/USB', unknown: 'Unknown' };
+            html += '<option value="' + opt + '"' + (opt === currentType ? ' selected' : '') + '>' + labels[opt] + '</option>';
+        });
+        html += '</select>';
+        html += '<div class="form-check form-check-inline m-0">';
+        html += '<input class="form-check-input" type="checkbox" id="power-type-lock"' + (locked ? ' checked' : '') + '>';
+        html += '<label class="form-check-label small" for="power-type-lock">Lock</label>';
+        html += '</div>';
+        html += '<button type="button" class="btn btn-sm btn-outline-secondary" id="power-type-save-btn" title="Save power type override">Save</button>';
+        html += '</div>';
+        html += '<div id="power-type-override-status" class="small text-muted mt-1"></div>';
+        html += '</td></tr>';
+
+        // Opt-in solar weather forecasting (Open-Meteo)
+        const sw = telemetry.solar_weather || null;
+        const forecastEnabled = !!(sw && sw.enabled) || !!telemetry.solar_forecast_enabled;
+        const loc = (sw && sw.location) || {};
+        const overrideLat = (loc.source === 'override' && loc.latitude != null)
+            ? loc.latitude
+            : (telemetry.solar_forecast_lat != null ? telemetry.solar_forecast_lat : '');
+        const overrideLon = (loc.source === 'override' && loc.longitude != null)
+            ? loc.longitude
+            : (telemetry.solar_forecast_lon != null ? telemetry.solar_forecast_lon : '');
+        html += '<tr>';
+        html += '<td class="text-muted align-top">Weather forecast</td>';
+        html += '<td class="text-end">';
+        html += '<div class="form-check form-check-inline m-0 mb-1">';
+        html += '<input class="form-check-input" type="checkbox" id="solar-forecast-enable"' + (forecastEnabled ? ' checked' : '') + '>';
+        html += '<label class="form-check-label small" for="solar-forecast-enable">Enable solar weather forecast</label>';
+        html += '</div>';
+        html += '<div class="d-inline-flex align-items-center gap-1 flex-wrap justify-content-end mb-1">';
+        html += '<input type="number" step="any" class="form-control form-control-sm" id="solar-forecast-lat" placeholder="Lat" style="width: 5.5rem;" value="' + (overrideLat !== '' && overrideLat != null ? overrideLat : '') + '">';
+        html += '<input type="number" step="any" class="form-control form-control-sm" id="solar-forecast-lon" placeholder="Lon" style="width: 5.5rem;" value="' + (overrideLon !== '' && overrideLon != null ? overrideLon : '') + '">';
+        html += '<button type="button" class="btn btn-sm btn-outline-secondary" id="solar-forecast-save-btn" title="Save forecast settings">Save</button>';
+        html += '</div>';
+        html += '<div class="small text-muted">Optional lat/lon override if GPS is missing. Uses Open-Meteo.</div>';
+        if (sw && sw.available && sw.outlook) {
+            const oc = sw.overall_condition || 'unknown';
+            const ocClass = oc === 'good' ? 'text-success' : oc === 'fair' ? 'text-warning' : oc === 'poor' ? 'text-danger' : 'text-secondary';
+            html += '<div class="small mt-1 ' + ocClass + '"><strong>Wx:</strong> ' + sw.outlook + '</div>';
+        } else if (sw && sw.enabled && sw.reason) {
+            html += '<div class="small text-warning mt-1">' + sw.reason + '</div>';
+        }
+        html += '<div id="solar-forecast-status" class="small text-muted mt-1"></div>';
+        html += '</td></tr>';
+
+        if (ps && ps.outlook) {
             html += '<tr>';
-            html += '<td class="text-muted">Power Analysis</td>';
-            html += '<td class="text-end small">' + formatTelemetryAge(telemetry.power_analysis_timestamp) + ' ago</td>';
+            html += '<td class="text-muted">Outlook</td>';
+            html += '<td class="text-end small">' + ps.outlook + '</td>';
+            html += '</tr>';
+        }
+
+        if (ps && Array.isArray(ps.issues) && ps.issues.length) {
+            html += '<tr>';
+            html += '<td class="text-muted align-top">Issues</td>';
+            html += '<td class="text-end small">';
+            html += '<ul class="list-unstyled mb-0">';
+            ps.issues.slice(0, 4).forEach(function(issue) {
+                html += '<li class="text-warning">' + issue + '</li>';
+            });
+            html += '</ul></td></tr>';
+        }
+
+        if (ps && ps.solar && ps.solar.days_since_full_charge != null && powerType === 'solar') {
+            html += '<tr>';
+            html += '<td class="text-muted">Last full charge</td>';
+            html += '<td class="text-end small">';
+            html += ps.solar.days_since_full_charge === 0
+                ? 'Today'
+                : (ps.solar.days_since_full_charge + ' day(s) ago');
+            html += '</td></tr>';
+        }
+
+        const analysisTs = (ps && ps.analyzed_at) || telemetry.power_analysis_timestamp;
+        if (analysisTs) {
+            html += '<tr>';
+            html += '<td class="text-muted">Power analysis</td>';
+            html += '<td class="text-end small">' + formatTelemetryAge(analysisTs) + ' ago</td>';
             html += '</tr>';
         }
 
@@ -2486,6 +2699,9 @@ async function loadTelemetryData() {
 
         // Update content
         telemetryContent.innerHTML = html;
+
+        // Wire power-type override controls
+        bindPowerTypeOverride(nodeId);
 
         // Reinitialize tooltips
         const tooltipTriggerList = telemetryContent.querySelectorAll('[data-bs-toggle="tooltip"]');

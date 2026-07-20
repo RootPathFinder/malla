@@ -342,6 +342,66 @@ def _ensure_schema_migrations(cursor: sqlite3.Cursor) -> None:
             else:
                 logging.warning(f"Failed to add archived column: {exc}")
 
+    # Migration: Add power_type_locked for manual power-type overrides
+    if "node_info_power_type_locked" not in _SCHEMA_MIGRATIONS_DONE:
+        try:
+            cursor.execute("PRAGMA table_info(node_info)")
+            columns = [row[1] for row in cursor.fetchall()]
+
+            if "power_type_locked" not in columns:
+                cursor.execute(
+                    "ALTER TABLE node_info ADD COLUMN power_type_locked INTEGER DEFAULT 0"
+                )
+                logging.info(
+                    "Added power_type_locked column to node_info via auto-migration"
+                )
+
+            _SCHEMA_MIGRATIONS_DONE.add("node_info_power_type_locked")
+        except sqlite3.OperationalError as exc:
+            if "duplicate column name" in str(exc).lower():
+                _SCHEMA_MIGRATIONS_DONE.add("node_info_power_type_locked")
+            else:
+                logging.warning(f"Failed to add power_type_locked column: {exc}")
+
+    # Migration: Opt-in solar weather forecast columns + cache table
+    if "node_info_solar_forecast" not in _SCHEMA_MIGRATIONS_DONE:
+        try:
+            cursor.execute("PRAGMA table_info(node_info)")
+            columns = [row[1] for row in cursor.fetchall()]
+
+            if "solar_forecast_enabled" not in columns:
+                cursor.execute(
+                    "ALTER TABLE node_info ADD COLUMN solar_forecast_enabled INTEGER DEFAULT 0"
+                )
+            if "solar_forecast_lat" not in columns:
+                cursor.execute(
+                    "ALTER TABLE node_info ADD COLUMN solar_forecast_lat REAL"
+                )
+            if "solar_forecast_lon" not in columns:
+                cursor.execute(
+                    "ALTER TABLE node_info ADD COLUMN solar_forecast_lon REAL"
+                )
+            cursor.execute(
+                """
+                CREATE TABLE IF NOT EXISTS solar_weather_cache (
+                    cache_key TEXT PRIMARY KEY,
+                    latitude REAL NOT NULL,
+                    longitude REAL NOT NULL,
+                    fetched_at REAL NOT NULL,
+                    payload_json TEXT NOT NULL
+                )
+                """
+            )
+            logging.info(
+                "Added solar forecast columns/cache via auto-migration"
+            )
+            _SCHEMA_MIGRATIONS_DONE.add("node_info_solar_forecast")
+        except sqlite3.OperationalError as exc:
+            if "duplicate column name" in str(exc).lower():
+                _SCHEMA_MIGRATIONS_DONE.add("node_info_solar_forecast")
+            else:
+                logging.warning(f"Failed solar forecast migration: {exc}")
+
     # Migration: Add scaling indexes for 1000+ node performance
     if "scaling_indexes" not in _SCHEMA_MIGRATIONS_DONE:
         try:

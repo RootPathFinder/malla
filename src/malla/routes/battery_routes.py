@@ -19,6 +19,8 @@ battery_bp = Blueprint("battery", __name__)
 def battery_analytics():
     """Battery analytics dashboard page."""
     try:
+        from ..power_analysis import get_solar_power_conditions
+
         # Get power source summary
         power_summary = BatteryAnalyticsRepository.get_power_source_summary()
         logger.debug(f"Power summary: {power_summary}")
@@ -48,6 +50,28 @@ def battery_analytics():
         )
         logger.debug(f"Nodes with telemetry: {nodes_with_telemetry}")
 
+        # Unified solar ops lists (At risk / Watching)
+        solar_conditions = {
+            "at_risk": [],
+            "watching": [],
+            "healthy": [],
+            "unknown": [],
+            "counts": {"at_risk": 0, "watching": 0, "healthy": 0, "unknown": 0},
+            "total": 0,
+        }
+        solar_forecasts = []
+        try:
+            from ..solar_weather import get_opted_in_solar_forecasts
+
+            conn = get_db_connection()
+            try:
+                solar_conditions = get_solar_power_conditions(conn)
+                solar_forecasts = get_opted_in_solar_forecasts(conn)
+            finally:
+                conn.close()
+        except Exception as solar_err:
+            logger.warning(f"Solar power conditions unavailable: {solar_err}")
+
         return render_template(
             "battery_analytics.html",
             power_summary=power_summary,
@@ -55,6 +79,8 @@ def battery_analytics():
             battery_health=battery_health,
             critical_batteries=critical_batteries,
             nodes_with_telemetry=nodes_with_telemetry,
+            solar_conditions=solar_conditions,
+            solar_forecasts=solar_forecasts,
         )
     except Exception as e:
         logger.error(f"Error loading battery analytics: {e}", exc_info=True)
@@ -82,6 +108,15 @@ def battery_analytics():
             battery_health=[],
             critical_batteries=[],
             nodes_with_telemetry=[],
+            solar_conditions={
+                "at_risk": [],
+                "watching": [],
+                "healthy": [],
+                "unknown": [],
+                "counts": {"at_risk": 0, "watching": 0, "healthy": 0, "unknown": 0},
+                "total": 0,
+            },
+            solar_forecasts=[],
         )
 
 
@@ -276,6 +311,169 @@ def voltage_trends():
     except Exception as e:
         logger.error(f"Error getting voltage trends: {e}", exc_info=True)
         return jsonify({"error": str(e), "nodes": {}, "count": 0}), 500
+
+
+@battery_bp.route("/api/solar-power-conditions", methods=["GET"])
+def solar_power_conditions_api():
+    """API: unified solar At risk / Watching / Healthy conditions."""
+    try:
+        from ..power_analysis import get_solar_power_conditions
+
+        conn = get_db_connection()
+        try:
+            conditions = get_solar_power_conditions(conn)
+        finally:
+            conn.close()
+        return jsonify(conditions)
+    except Exception as e:
+        logger.error(f"Error getting solar power conditions: {e}", exc_info=True)
+        return jsonify({"error": str(e), "at_risk": [], "watching": [], "counts": {}}), 500
+
+
+@battery_bp.route("/api/node/<node_id>/power-type", methods=["POST"])
+def set_node_power_type(node_id):
+    """Manually set / lock a node's power type so auto-detect does not clobber it.
+
+    JSON body:
+        power_type: solar | battery | mains | unknown
+        locked: bool (default true)
+    """
+    try:
+        from ..power_analysis import set_power_type_override
+        from ..utils.node_utils import convert_node_id
+
+        node_id_int = convert_node_id(node_id)
+        payload = request.get_json(silent=True) or {}
+        power_type = (payload.get("power_type") or "").strip().lower()
+        locked = payload.get("locked", True)
+        if isinstance(locked, str):
+            locked = locked.lower() in ("1", "true", "yes", "on")
+
+        if power_type not in ("solar", "battery", "mains", "unknown"):
+            return (
+                jsonify(
+                    {
+                        "error": "power_type must be one of: solar, battery, mains, unknown"
+                    }
+                ),
+                400,
+            )
+
+        conn = get_db_connection()
+        try:
+            status = set_power_type_override(
+                node_id_int, power_type, conn, locked=bool(locked)
+            )
+        finally:
+            conn.close()
+
+        return jsonify(
+            {
+                "message": "Power type updated",
+                "node_id": node_id_int,
+                "power_type": status.get("power_type"),
+                "power_type_locked": status.get("power_type_locked"),
+                "power_status": status,
+            }
+        )
+    except ValueError as e:
+        return jsonify({"error": str(e)}), 400
+    except Exception as e:
+        logger.error(f"Error setting power type for node {node_id}: {e}", exc_info=True)
+        return jsonify({"error": str(e)}), 500
+
+
+@battery_bp.route("/api/node/<node_id>/solar-forecast", methods=["GET", "POST"])
+def node_solar_forecast(node_id):
+    """Get or configure opt-in solar weather forecasting for a node.
+
+    POST JSON body:
+        enabled: bool
+        latitude / longitude: optional override (both required together)
+        clear_override: bool — clear stored lat/lon override
+        refresh: bool — force Open-Meteo refresh on GET/POST
+    """
+    try:
+        from ..solar_weather import (
+            get_node_solar_weather_forecast,
+            set_solar_forecast_settings,
+        )
+        from ..utils.node_utils import convert_node_id
+
+        node_id_int = convert_node_id(node_id)
+        conn = get_db_connection()
+        try:
+            if request.method == "POST":
+                payload = request.get_json(silent=True) or {}
+                enabled = payload.get("enabled", True)
+                if isinstance(enabled, str):
+                    enabled = enabled.lower() in ("1", "true", "yes", "on")
+                clear_override = payload.get("clear_override", False)
+                if isinstance(clear_override, str):
+                    clear_override = clear_override.lower() in (
+                        "1",
+                        "true",
+                        "yes",
+                        "on",
+                    )
+                lat = payload.get("latitude", payload.get("lat"))
+                lon = payload.get("longitude", payload.get("lon"))
+                if lat is not None and lat != "":
+                    lat = float(lat)
+                else:
+                    lat = None
+                if lon is not None and lon != "":
+                    lon = float(lon)
+                else:
+                    lon = None
+
+                result = set_solar_forecast_settings(
+                    node_id_int,
+                    conn,
+                    enabled=bool(enabled),
+                    latitude=lat,
+                    longitude=lon,
+                    clear_override=bool(clear_override),
+                )
+                return jsonify(
+                    {
+                        "message": "Solar forecast settings updated",
+                        "node_id": node_id_int,
+                        "solar_weather": result,
+                    }
+                )
+
+            force = request.args.get("refresh", "false").lower() == "true"
+            result = get_node_solar_weather_forecast(
+                node_id_int, conn, force_refresh=force
+            )
+            return jsonify({"node_id": node_id_int, "solar_weather": result})
+        finally:
+            conn.close()
+    except ValueError as e:
+        return jsonify({"error": str(e)}), 400
+    except Exception as e:
+        logger.error(
+            f"Error with solar forecast for node {node_id}: {e}", exc_info=True
+        )
+        return jsonify({"error": str(e)}), 500
+
+
+@battery_bp.route("/api/solar-forecasts", methods=["GET"])
+def solar_forecasts_api():
+    """List solar weather forecasts for all opted-in nodes."""
+    try:
+        from ..solar_weather import get_opted_in_solar_forecasts
+
+        conn = get_db_connection()
+        try:
+            forecasts = get_opted_in_solar_forecasts(conn)
+        finally:
+            conn.close()
+        return jsonify({"count": len(forecasts), "nodes": forecasts})
+    except Exception as e:
+        logger.error(f"Error listing solar forecasts: {e}", exc_info=True)
+        return jsonify({"error": str(e), "count": 0, "nodes": []}), 500
 
 
 @battery_bp.route("/api/solar-charging-status", methods=["GET"])

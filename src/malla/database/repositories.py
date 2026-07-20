@@ -1964,21 +1964,36 @@ class NodeRepository:
             power_info = None
             try:
                 cursor.execute(
-                    "SELECT power_type, power_type_reason, power_analysis_timestamp, battery_health_score FROM node_info WHERE node_id = ?",
+                    """
+                    SELECT power_type, power_type_reason, power_analysis_timestamp,
+                           battery_health_score, COALESCE(power_type_locked, 0) as power_type_locked
+                    FROM node_info WHERE node_id = ?
+                    """,
                     (node_id,),
                 )
                 power_info = cursor.fetchone()
             except Exception:
-                # battery_health_score may be missing on older DBs — retry without it
+                # Older DBs may lack power_type_locked and/or battery_health_score
                 try:
                     cursor.execute(
-                        "SELECT power_type, power_type_reason, power_analysis_timestamp FROM node_info WHERE node_id = ?",
+                        """
+                        SELECT power_type, power_type_reason, power_analysis_timestamp,
+                               battery_health_score
+                        FROM node_info WHERE node_id = ?
+                        """,
                         (node_id,),
                     )
                     power_info = cursor.fetchone()
                 except Exception:
-                    # Columns might not exist yet if migration hasn't run or old DB
-                    pass
+                    try:
+                        cursor.execute(
+                            "SELECT power_type, power_type_reason, power_analysis_timestamp FROM node_info WHERE node_id = ?",
+                            (node_id,),
+                        )
+                        power_info = cursor.fetchone()
+                    except Exception:
+                        # Columns might not exist yet if migration hasn't run or old DB
+                        pass
 
             conn.close()
 
@@ -2125,6 +2140,10 @@ class NodeRepository:
                     telemetry_dict["battery_health_score"] = power_info[
                         "battery_health_score"
                     ]
+                if "power_type_locked" in power_info.keys():
+                    telemetry_dict["power_type_locked"] = bool(
+                        power_info["power_type_locked"]
+                    )
 
             timestamp = datetime.fromtimestamp(latest_timestamp, UTC)
             telemetry_dict["timestamp"] = timestamp.strftime("%Y-%m-%d %H:%M:%S UTC")
@@ -2139,6 +2158,56 @@ class NodeRepository:
                 telemetry_dict["power_metrics"] = power_metrics
             if air_quality_metrics:
                 telemetry_dict["air_quality_metrics"] = air_quality_metrics
+
+            try:
+                from ..power_analysis import analyze_node_power
+
+                status_conn = get_db_connection()
+                power_status = analyze_node_power(node_id, status_conn)
+                status_conn.close()
+                telemetry_dict["power_status"] = power_status
+                # Prefer live analysis for type/score when we have real samples;
+                # keep persisted power_analysis_timestamp as last DB write time.
+                if power_status.get("power_type") and power_status.get(
+                    "power_type"
+                ) != "unknown":
+                    telemetry_dict["power_type"] = power_status["power_type"]
+                if power_status.get("reason"):
+                    telemetry_dict["power_type_reason"] = power_status["reason"]
+                if power_status.get("health_score") is not None:
+                    telemetry_dict["battery_health_score"] = power_status[
+                        "health_score"
+                    ]
+                if "power_type_locked" in power_status:
+                    telemetry_dict["power_type_locked"] = bool(
+                        power_status.get("power_type_locked")
+                    )
+            except Exception as e:
+                logger.debug("Could not build power_status for node %s: %s", node_id, e)
+
+            # Opt-in solar weather forecast (Open-Meteo)
+            try:
+                from ..solar_weather import get_node_solar_weather_forecast
+
+                wx_conn = get_db_connection()
+                try:
+                    solar_weather = get_node_solar_weather_forecast(node_id, wx_conn)
+                finally:
+                    wx_conn.close()
+                if solar_weather:
+                    telemetry_dict["solar_weather"] = solar_weather
+                    # Convenience flag for UI checkbox state
+                    telemetry_dict["solar_forecast_enabled"] = bool(
+                        solar_weather.get("enabled")
+                    )
+                    loc = solar_weather.get("location") or {}
+                    if loc.get("source") == "override":
+                        telemetry_dict["solar_forecast_lat"] = loc.get("latitude")
+                        telemetry_dict["solar_forecast_lon"] = loc.get("longitude")
+            except Exception as e:
+                logger.debug(
+                    "Could not build solar_weather for node %s: %s", node_id, e
+                )
 
             return telemetry_dict if telemetry_dict else None
 
@@ -4143,7 +4212,7 @@ class BatteryAnalyticsRepository:
 
     @staticmethod
     def detect_and_update_power_types(force_update: bool = False) -> dict[str, int]:
-        """Detect power types based on voltage patterns and update database.
+        """Detect power types via the unified power_analysis module.
 
         Args:
             force_update: If True, re-detect even for nodes with existing power types
@@ -4152,290 +4221,23 @@ class BatteryAnalyticsRepository:
             Dictionary with counts of updated nodes by power type
         """
         try:
+            from ..power_analysis import update_power_analysis_batch
+
             conn = get_db_connection()
-            cursor = conn.cursor()
-            current_time = time.time()
-
-            # Re-analyze nodes that:
-            # 1. Have unknown/null power type
-            # 2. Haven't been analyzed in last 24 hours (periodic re-check)
-            # 3. Force update is enabled
-            reanalysis_threshold = current_time - (24 * 3600)  # 24 hours ago
-
             if force_update:
                 logger.info("Force mode: Re-detecting power types for all nodes")
-                cursor.execute(
-                    """
-                    SELECT DISTINCT ni.node_id, ni.long_name, ni.power_type,
-                           ni.power_analysis_timestamp
-                    FROM node_info ni
-                    INNER JOIN telemetry_data td ON ni.node_id = td.node_id
-                    WHERE td.voltage IS NOT NULL OR td.battery_level IS NOT NULL
-                    GROUP BY ni.node_id
-                    """
-                )
             else:
                 logger.info(
                     "Detecting power types for unknown nodes and nodes needing re-analysis"
                 )
-                cursor.execute(
-                    """
-                    SELECT DISTINCT ni.node_id, ni.long_name, ni.power_type,
-                           ni.power_analysis_timestamp
-                    FROM node_info ni
-                    INNER JOIN telemetry_data td ON ni.node_id = td.node_id
-                    WHERE (td.voltage IS NOT NULL OR td.battery_level IS NOT NULL)
-                      AND (
-                        ni.power_type IS NULL
-                        OR ni.power_type = 'unknown'
-                        OR ni.power_analysis_timestamp IS NULL
-                        OR ni.power_analysis_timestamp < ?
-                      )
-                    GROUP BY ni.node_id
-                    """,
-                    (reanalysis_threshold,),
-                )
-
-            nodes = cursor.fetchall()
-            updated_counts = {"solar": 0, "battery": 0, "mains": 0}
-
-            logger.info(f"Analyzing power types for {len(nodes)} nodes")
-
-            for node_row in nodes:
-                node_id = node_row["node_id"]
-                node_name = node_row["long_name"]
-                old_power_type = (
-                    node_row["power_type"] if node_row["power_type"] else "unknown"
-                )
-
-                # Get voltage history from last 7 days first
-                # This ensures we capture daily patterns for solar detection
-                seven_days_ago = current_time - (7 * 24 * 3600)
-                cursor.execute(
-                    """
-                    SELECT voltage, battery_level, timestamp
-                    FROM telemetry_data
-                    WHERE node_id = ?
-                      AND (voltage IS NOT NULL OR battery_level IS NOT NULL)
-                      AND timestamp > ?
-                    ORDER BY timestamp ASC
-                    """,
-                    (node_id, seven_days_ago),
-                )
-
-                telemetry_rows = cursor.fetchall()
-
-                # If insufficient data in 7 days, extend to 30 days
-                if len(telemetry_rows) < 3:
-                    thirty_days_ago = current_time - (30 * 24 * 3600)
-                    cursor.execute(
-                        """
-                        SELECT voltage, battery_level, timestamp
-                        FROM telemetry_data
-                        WHERE node_id = ?
-                          AND (voltage IS NOT NULL OR battery_level IS NOT NULL)
-                          AND timestamp > ?
-                        ORDER BY timestamp ASC
-                        """,
-                        (node_id, thirty_days_ago),
-                    )
-                    telemetry_rows = cursor.fetchall()
-                    if telemetry_rows:
-                        logger.debug(
-                            f"Extended analysis to 30 days for {node_name}: "
-                            f"found {len(telemetry_rows)} readings"
-                        )
-
-                # Fast-path: Check for strong battery_level signals even with minimal data
-                # Battery level 101 is a clear indicator of USB/mains power
-                if len(telemetry_rows) >= 1:
-                    battery_101_count = sum(
-                        1 for r in telemetry_rows if r["battery_level"] == 101
-                    )
-                    total_with_battery = sum(
-                        1 for r in telemetry_rows if r["battery_level"] is not None
-                    )
-
-                    # If majority of readings show 101%, classify as mains
-                    if (
-                        total_with_battery >= 1
-                        and battery_101_count / total_with_battery >= 0.5
-                    ):
-                        cursor.execute(
-                            """
-                            UPDATE node_info
-                            SET power_type = 'mains', power_type_reason = ?, power_analysis_timestamp = ?
-                            WHERE node_id = ?
-                            """,
-                            (
-                                f"USB Powered (battery_level=101% in {battery_101_count}/{total_with_battery} readings)",
-                                current_time,
-                                node_id,
-                            ),
-                        )
-                        if old_power_type != "mains":
-                            updated_counts["mains"] += 1
-                            logger.info(
-                                f"Fast-path: {node_name} ({node_id}): {old_power_type} -> mains (USB powered)"
-                            )
-                        continue
-
-                # For nodes with 1-2 readings, use voltage-based heuristics
-                if len(telemetry_rows) < 3:
-                    # Extract voltage data
-                    valid_voltages = [
-                        r["voltage"] * 1000
-                        if r["voltage"] and r["voltage"] < 1
-                        else r["voltage"]
-                        for r in telemetry_rows
-                        if r["voltage"] is not None
-                    ]
-                    valid_batteries = [
-                        r["battery_level"]
-                        for r in telemetry_rows
-                        if r["battery_level"] is not None
-                    ]
-
-                    # Make minimal data classification
-                    power_type = None
-                    reason = None
-
-                    if valid_voltages:
-                        max_v = max(valid_voltages)
-                        min_v = min(valid_voltages)
-
-                        # High stable voltage (>4.0V) strongly suggests mains power
-                        if min_v >= 4.0:
-                            power_type = "mains"
-                            reason = f"High voltage ({min_v:.2f}V+) with limited data"
-                        # Large voltage variation in few readings suggests battery drain
-                        elif len(valid_voltages) >= 2 and (max_v - min_v) > 0.1:
-                            power_type = "battery"
-                            reason = f"Voltage variation ({min_v:.2f}-{max_v:.2f}V) suggests battery"
-                        # Low voltage with moderate battery suggests battery powered
-                        elif (
-                            valid_batteries
-                            and min_v < 3.9
-                            and max(valid_batteries) < 90
-                        ):
-                            power_type = "battery"
-                            reason = f"Low voltage ({min_v:.2f}V) with {max(valid_batteries)}% battery"
-
-                    if power_type:
-                        cursor.execute(
-                            """
-                            UPDATE node_info
-                            SET power_type = ?, power_type_reason = ?, power_analysis_timestamp = ?
-                            WHERE node_id = ?
-                            """,
-                            (power_type, reason, current_time, node_id),
-                        )
-                        if old_power_type != power_type:
-                            updated_counts[power_type] += 1
-                            logger.info(
-                                f"Minimal-data: {node_name} ({node_id}): {old_power_type} -> {power_type} ({reason})"
-                            )
-                        continue
-
-                    logger.debug(
-                        f"Insufficient data for {node_name} ({node_id}): "
-                        f"only {len(telemetry_rows)} readings, no clear pattern"
-                    )
-                    continue
-
-                # Analyze voltage patterns
-                voltages = []
-                battery_levels = []
-                timestamps = []
-
-                for row in telemetry_rows:
-                    if row["voltage"] is not None:
-                        voltages.append(row["voltage"])
-                        timestamps.append(row["timestamp"])
-                        battery_levels.append(row["battery_level"])
-
-                if not voltages:
-                    continue
-
-                # Scale voltages if needed
-                scaled_voltages = []
-                for v in voltages:
-                    if v < 1:
-                        scaled_voltages.append(v * 1000)
-                    else:
-                        scaled_voltages.append(v)
-
-                # Calculate time span
-                if len(timestamps) >= 2:
-                    time_span_hours = (timestamps[-1] - timestamps[0]) / 3600
-                else:
-                    time_span_hours = 0
-
-                logger.debug(
-                    f"Analyzing {node_name} ({node_id}): {len(voltages)} readings, "
-                    f"range {min(scaled_voltages):.2f}-{max(scaled_voltages):.2f}V, "
-                    f"time span {time_span_hours:.1f}h"
-                )
-
-                classification = (
-                    BatteryAnalyticsRepository._classify_power_type_with_reason(
-                        scaled_voltages, timestamps, battery_levels
-                    )
-                )
-
-                if classification:
-                    power_type, reason = classification
-                else:
-                    power_type, reason = None, None
-
-                if power_type and power_type != old_power_type:
-                    # Update the database with timestamp and reason
-                    cursor.execute(
-                        """
-                        UPDATE node_info
-                        SET power_type = ?, power_type_reason = ?, power_analysis_timestamp = ?
-                        WHERE node_id = ?
-                        """,
-                        (power_type, reason, current_time, node_id),
-                    )
-                    updated_counts[power_type] += 1
-                    logger.info(
-                        f"Updated {node_name} ({node_id}): {old_power_type} -> {power_type} ({reason})"
-                    )
-                elif power_type == old_power_type and power_type is not None:
-                    # Same classification, update timestamp and reason (might have refined reason)
-                    cursor.execute(
-                        """
-                        UPDATE node_info
-                        SET power_type_reason = ?, power_analysis_timestamp = ?
-                        WHERE node_id = ?
-                        """,
-                        (reason, current_time, node_id),
-                    )
-                    logger.debug(
-                        f"Confirmed {node_name} ({node_id}): power_type={power_type}"
-                    )
-                elif power_type is None:
-                    # Could not classify, but update timestamp to avoid constant retries
-                    cursor.execute(
-                        """
-                        UPDATE node_info
-                        SET power_type = 'unknown', power_type_reason = NULL, power_analysis_timestamp = ?
-                        WHERE node_id = ?
-                        """,
-                        (current_time, node_id),
-                    )
-                    logger.warning(
-                        f"Could not classify {node_name} ({node_id}) - marked as unknown "
-                        f"({len(voltages)} readings, {time_span_hours:.1f}h span)"
-                    )
-
-            conn.commit()
+            results = update_power_analysis_batch(conn, force_update=force_update)
             conn.close()
-
-            logger.info(f"Power type detection complete: {updated_counts}")
-            return updated_counts
-
+            logger.info("Power type detection complete: %s", results)
+            return {
+                "solar": results.get("solar", 0),
+                "battery": results.get("battery", 0),
+                "mains": results.get("mains", 0),
+            }
         except Exception as e:
             logger.error(f"Error detecting power types: {e}", exc_info=True)
             return {"solar": 0, "battery": 0, "mains": 0}
@@ -4446,184 +4248,30 @@ class BatteryAnalyticsRepository:
         timestamps: list[float],
         battery_levels: list[int | None] | None = None,
     ) -> tuple[str, str] | None:
-        """Classify power type and return reason.
+        """Classify power type via unified power_analysis module."""
+        from ..power_analysis import classify_power_source, normalize_voltage
 
-        Returns:
-            tuple: (power_type, reason_string) or None
-        """
-        if len(voltages) < 3:
+        if len(timestamps) < 3:
             return None
-
-        # Check battery levels for strong signals
-        if battery_levels:
-            valid_levels = [b for b in battery_levels if b is not None]
-            if len(valid_levels) >= 3:
-                count_101 = valid_levels.count(101)
-                count_100 = valid_levels.count(100)
-                count_total = len(valid_levels)
-
-                if count_101 / count_total > 0.5:
-                    return "mains", "USB Powered (>50% readings are 101%)"
-
-                if count_100 / count_total > 0.95:
-                    return "mains", "Constant 100% Battery"
-
-                bat_min = min(valid_levels)
-                bat_max = max(valid_levels)
-                bat_range = bat_max - bat_min
-
-                # Solar: Reaches full charge (100%) or near it + Significant discharge (range > 10%)
-                if bat_max >= 98 and bat_range > 10:
-                    return (
-                        "solar",
-                        f"Battery cycling {bat_min}-{bat_max}% indicates solar charging",
-                    )
-
-                # Check for daytime charging pattern (solar detection for smaller panels)
-                # Even if battery never reaches 98%, if it charges during daytime and
-                # discharges at night, it's likely solar
-                if bat_max < 98 and len(timestamps) >= 10:
-                    from datetime import datetime
-
-                    # Group battery levels by hour of day
-                    hourly_levels: dict[int, list[int]] = {}
-                    for ts, level in zip(timestamps, battery_levels, strict=False):
-                        if level is not None:
-                            hour = datetime.fromtimestamp(ts).hour
-                            if hour not in hourly_levels:
-                                hourly_levels[hour] = []
-                            hourly_levels[hour].append(level)
-
-                    # Calculate hourly averages
-                    hourly_avgs = {}
-                    for hour, levels in hourly_levels.items():
-                        hourly_avgs[hour] = sum(levels) / len(levels)
-
-                    # Solar pattern: afternoon (14-18) higher than morning (6-10)
-                    # This detects the characteristic solar charging curve
-                    morning_levels = [
-                        hourly_avgs[h] for h in range(6, 11) if h in hourly_avgs
-                    ]
-                    afternoon_levels = [
-                        hourly_avgs[h] for h in range(14, 19) if h in hourly_avgs
-                    ]
-
-                    if len(morning_levels) >= 2 and len(afternoon_levels) >= 2:
-                        morning_avg = sum(morning_levels) / len(morning_levels)
-                        afternoon_avg = sum(afternoon_levels) / len(afternoon_levels)
-
-                        # If afternoon is at least 1% higher than morning,
-                        # it indicates daytime charging (solar)
-                        if afternoon_avg > morning_avg + 1.0:
-                            return (
-                                "solar",
-                                f"Daytime charging pattern ({morning_avg:.0f}% AM → {afternoon_avg:.0f}% PM)",
-                            )
-
-                # Battery: Never reaches full charge and no daytime charging pattern
-                if bat_max < 98:
-                    return "battery", f"Battery discharging (Max {bat_max}%)"
-
-        # Calculate basic statistics
-        voltage_min = min(voltages)
-        voltage_max = max(voltages)
-        voltage_range = voltage_max - voltage_min
-        voltage_mean = sum(voltages) / len(voltages)
-        n = len(voltages)
-
-        variance = sum((v - voltage_mean) ** 2 for v in voltages) / n
-        std_dev = variance**0.5
-
-        if len(timestamps) >= 2:
-            time_span = abs(timestamps[0] - timestamps[-1])
-            hours_span = time_span / 3600
+        levels: list[int | None]
+        if battery_levels is not None:
+            levels = list(battery_levels)
         else:
-            hours_span = 0
-
-        # Trend analysis
-        paired = sorted(zip(timestamps, voltages, strict=False), key=lambda x: x[0])
-        sorted_voltages = [v for _, v in paired]
-
-        if len(sorted_voltages) >= 3:
-            x_vals = list(range(len(sorted_voltages)))
-            x_mean = sum(x_vals) / len(x_vals)
-            y_mean = sum(sorted_voltages) / len(sorted_voltages)
-            numerator = sum(
-                (x - x_mean) * (y - y_mean)
-                for x, y in zip(x_vals, sorted_voltages, strict=False)
-            )
-            denominator = sum((x - x_mean) ** 2 for x in x_vals)
-            slope = numerator / denominator if denominator > 0 else 0
-        else:
-            slope = 0
-
-        deltas = [
-            sorted_voltages[i + 1] - sorted_voltages[i]
-            for i in range(len(sorted_voltages) - 1)
-        ]
-        sign_changes = sum(
-            1 for i in range(len(deltas) - 1) if deltas[i] * deltas[i + 1] < 0
+            levels = [None for _ in range(len(timestamps))]
+        norm_v: list[float | None] = [normalize_voltage(v) for v in voltages]
+        # Pad voltages to timestamps length if caller only passed voltage samples
+        if len(norm_v) != len(timestamps):
+            # Best-effort: zip truncates in classify; ensure equal length
+            n = min(len(timestamps), len(norm_v), len(levels))
+            timestamps = timestamps[:n]
+            norm_v = norm_v[:n]
+            levels = levels[:n]
+        power_type, reason, _confidence = classify_power_source(
+            timestamps, norm_v, levels
         )
-        cycle_ratio = sign_changes / max(len(deltas) - 1, 1) if len(deltas) > 1 else 0
-
-        charging_events = sum(1 for d in deltas if d > 0.05)
-        discharging_events = sum(1 for d in deltas if d < -0.05)
-
-        logger.debug(
-            f"Power type analysis: range={voltage_range:.3f}V, std_dev={std_dev:.3f}, "
-            f"mean={voltage_mean:.3f}V, hours={hours_span:.1f}h, slope={slope:.6f}, "
-            f"cycles={sign_changes}, charging_events={charging_events}, discharge_events={discharging_events}"
-        )
-
-        # MAINS
-        if voltage_mean >= 3.95 and std_dev < 0.08 and voltage_range < 0.2:
-            return "mains", "Stable high voltage (>3.95V)"
-
-        if voltage_min >= 3.95 and voltage_range < 0.15:
-            return "mains", "Consistently full charge"
-
-        # SOLAR
-        if charging_events >= 2 and discharging_events >= 2 and voltage_range > 0.2:
-            return "solar", "Active charge/discharge cycles"
-
-        if voltage_range > 0.25 and cycle_ratio > 0.15 and hours_span >= 6:
-            return "solar", "High variance with cycling"
-
-        if voltage_range > 0.4 and std_dev > 0.08:
-            return "solar", "Large voltage swings (Day/Night)"
-
-        if charging_events >= 2 and voltage_range > 0.15 and voltage_max > 3.9:
-            return "solar", "Multiple charging events"
-
-        if charging_events >= 1 and voltage_range > 0.3 and cycle_ratio > 0.1:
-            return "solar", "Cycling pattern detected"
-
-        if charging_events >= 2 and voltage_range > 0.2 and discharging_events >= 1:
-            return "solar", "Charge/Discharge pattern"
-
-        # BATTERY
-        if slope < -0.0008 and charging_events <= 1:
-            return "battery", "Consistent discharge trend"
-
-        if (
-            voltage_mean < 3.85
-            and discharging_events > charging_events
-            and charging_events <= 1
-        ):
-            return "battery", "Discharge dominant"
-
-        if voltage_max < 3.95 and std_dev < 0.12 and slope <= 0:
-            return "battery", "Below full charge, no charging"
-
-        if slope < -0.0001 and charging_events == 0 and len(voltages) >= 5:
-            return "battery", "Declining voltage"
-
-        # Fallback
-        if len(voltages) >= 10 and hours_span >= 12:
-            if voltage_mean > 3.95 and std_dev < 0.1:
-                return "mains", "Fallback: Stable high voltage"
-
-        return None
+        if power_type == "unknown":
+            return None
+        return power_type, reason
 
     @staticmethod
     def get_power_source_summary() -> dict[str, int]:
@@ -4677,6 +4325,9 @@ class BatteryAnalyticsRepository:
     def get_mesh_power_stats() -> dict[str, Any]:
         """Get comprehensive mesh-wide power statistics.
 
+        Health/monitoring metrics use recent telemetry only (see
+        power_analysis.RECENT_TELEMETRY_MAX_AGE_HOURS).
+
         Returns:
             Dictionary with mesh-wide power analytics including:
             - Total nodes with telemetry
@@ -4689,21 +4340,26 @@ class BatteryAnalyticsRepository:
             - Total telemetry records
         """
         try:
+            from ..power_analysis import recent_telemetry_cutoff
+
             conn = get_db_connection()
             cursor = conn.cursor()
+            monitoring_cutoff = recent_telemetry_cutoff()
 
-            # Get total nodes with any telemetry data
+            # Nodes with recent telemetry (health/monitoring window)
             cursor.execute(
                 """
                 SELECT COUNT(DISTINCT ni.node_id) as total
                 FROM node_info ni
                 INNER JOIN telemetry_data td ON ni.node_id = td.node_id
-                WHERE td.voltage IS NOT NULL OR td.battery_level IS NOT NULL
-            """
+                WHERE (td.voltage IS NOT NULL OR td.battery_level IS NOT NULL)
+                  AND td.timestamp > ?
+            """,
+                (monitoring_cutoff,),
             )
             total_nodes = cursor.fetchone()["total"]
 
-            # Get nodes with recent telemetry (last 24 hours)
+            # Nodes with telemetry in the last 24 hours (activity card)
             recent_cutoff = time.time() - (24 * 3600)
             cursor.execute(
                 """
@@ -4717,19 +4373,27 @@ class BatteryAnalyticsRepository:
             )
             active_nodes = cursor.fetchone()["active"]
 
-            # Get average battery level (from most recent telemetry per node)
+            # Average battery level from latest reading within monitoring window
             cursor.execute(
                 """
                 WITH latest_telemetry AS (
-                    SELECT node_id, battery_level, MAX(timestamp) as max_ts
-                    FROM telemetry_data
-                    WHERE battery_level IS NOT NULL
-                    GROUP BY node_id
+                    SELECT t1.node_id, t1.battery_level
+                    FROM telemetry_data t1
+                    WHERE t1.battery_level IS NOT NULL
+                      AND t1.timestamp > ?
+                      AND t1.timestamp = (
+                        SELECT MAX(t2.timestamp)
+                        FROM telemetry_data t2
+                        WHERE t2.node_id = t1.node_id
+                          AND t2.battery_level IS NOT NULL
+                          AND t2.timestamp > ?
+                      )
                 )
                 SELECT AVG(battery_level) as avg_battery, COUNT(*) as count
                 FROM latest_telemetry
                 WHERE battery_level > 0 AND battery_level <= 100
-            """
+            """,
+                (monitoring_cutoff, monitoring_cutoff),
             )
             battery_result = cursor.fetchone()
             avg_battery = (
@@ -4739,20 +4403,28 @@ class BatteryAnalyticsRepository:
             )
             nodes_with_battery = battery_result["count"]
 
-            # Get average voltage (from most recent telemetry per node)
+            # Average voltage from latest reading within monitoring window
             cursor.execute(
                 """
                 WITH latest_telemetry AS (
-                    SELECT td.node_id, td.voltage, MAX(td.timestamp) as max_ts
-                    FROM telemetry_data td
-                    WHERE td.voltage IS NOT NULL
-                    GROUP BY td.node_id
+                    SELECT t1.node_id, t1.voltage
+                    FROM telemetry_data t1
+                    WHERE t1.voltage IS NOT NULL
+                      AND t1.timestamp > ?
+                      AND t1.timestamp = (
+                        SELECT MAX(t2.timestamp)
+                        FROM telemetry_data t2
+                        WHERE t2.node_id = t1.node_id
+                          AND t2.voltage IS NOT NULL
+                          AND t2.timestamp > ?
+                      )
                 )
                 SELECT AVG(voltage) as avg_voltage, MIN(voltage) as min_voltage,
                        MAX(voltage) as max_voltage, COUNT(*) as count
                 FROM latest_telemetry
                 WHERE voltage > 0
-            """
+            """,
+                (monitoring_cutoff, monitoring_cutoff),
             )
             voltage_result = cursor.fetchone()
 
@@ -4773,14 +4445,21 @@ class BatteryAnalyticsRepository:
             max_voltage = round(max_voltage, 2) if max_voltage else None
             nodes_with_voltage = voltage_result["count"]
 
-            # Count nodes by status based on latest voltage
+            # Count nodes by status based on latest recent voltage
             cursor.execute(
                 """
                 WITH latest_telemetry AS (
-                    SELECT td.node_id, td.voltage, MAX(td.timestamp) as max_ts
-                    FROM telemetry_data td
-                    WHERE td.voltage IS NOT NULL
-                    GROUP BY td.node_id
+                    SELECT t1.node_id, t1.voltage
+                    FROM telemetry_data t1
+                    WHERE t1.voltage IS NOT NULL
+                      AND t1.timestamp > ?
+                      AND t1.timestamp = (
+                        SELECT MAX(t2.timestamp)
+                        FROM telemetry_data t2
+                        WHERE t2.node_id = t1.node_id
+                          AND t2.voltage IS NOT NULL
+                          AND t2.timestamp > ?
+                      )
                 )
                 SELECT
                     SUM(CASE
@@ -4798,7 +4477,8 @@ class BatteryAnalyticsRepository:
                     END) as good
                 FROM latest_telemetry
                 WHERE voltage > 0
-            """
+            """,
+                (monitoring_cutoff, monitoring_cutoff),
             )
             status_result = cursor.fetchone()
             nodes_critical = status_result["critical"] or 0
@@ -4823,14 +4503,21 @@ class BatteryAnalyticsRepository:
             if oldest_ts and newest_ts:
                 data_days = round((newest_ts - oldest_ts) / 86400, 1)
 
-            # Get average health score from node_info (if available)
+            # Average health score for nodes with recent telemetry
             cursor.execute(
                 """
-                SELECT AVG(battery_health_score) as avg_health,
+                SELECT AVG(ni.battery_health_score) as avg_health,
                        COUNT(*) as count
-                FROM node_info
-                WHERE battery_health_score IS NOT NULL
-            """
+                FROM node_info ni
+                WHERE ni.battery_health_score IS NOT NULL
+                  AND EXISTS (
+                    SELECT 1 FROM telemetry_data td
+                    WHERE td.node_id = ni.node_id
+                      AND td.timestamp > ?
+                      AND (td.voltage IS NOT NULL OR td.battery_level IS NOT NULL)
+                  )
+            """,
+                (monitoring_cutoff,),
             )
             health_result = cursor.fetchone()
             avg_health = (
@@ -4879,21 +4566,22 @@ class BatteryAnalyticsRepository:
 
     @staticmethod
     def get_battery_health_overview() -> list[dict[str, Any]]:
-        """Get overview of all nodes with battery health information.
+        """Get overview of nodes with recent battery health information.
 
-        Returns all nodes that have telemetry data with battery health analysis:
-        - Voltage trends and current level
-        - Battery health score based on charging behavior
-        - Comparison to baseline performance
+        Only includes nodes with telemetry within the health/monitoring window
+        (power_analysis.RECENT_TELEMETRY_MAX_AGE_HOURS).
 
         Returns:
             List of dictionaries with node battery health data
         """
         try:
+            from ..power_analysis import recent_telemetry_cutoff
+
             conn = get_db_connection()
             cursor = conn.cursor()
+            cutoff = recent_telemetry_cutoff()
 
-            # Get all nodes with any telemetry data - simplified query for reliability
+            # Nodes with recent telemetry only
             cursor.execute(
                 """
                 SELECT DISTINCT
@@ -4906,14 +4594,16 @@ class BatteryAnalyticsRepository:
                     ni.last_updated
                 FROM node_info ni
                 INNER JOIN telemetry_data td ON ni.node_id = td.node_id
-                WHERE td.voltage IS NOT NULL OR td.battery_level IS NOT NULL
+                WHERE (td.voltage IS NOT NULL OR td.battery_level IS NOT NULL)
+                  AND td.timestamp > ?
                 ORDER BY ni.last_updated DESC
-            """
+            """,
+                (cutoff,),
             )
 
             nodes = cursor.fetchall()
             logger.info(
-                f"Battery health overview: found {len(nodes)} nodes with telemetry"
+                f"Battery health overview: found {len(nodes)} nodes with recent telemetry"
             )
 
             results = []
@@ -4921,16 +4611,18 @@ class BatteryAnalyticsRepository:
                 node_id = row["node_id"]
                 node_name = row["long_name"] or row["short_name"] or row["hex_id"]
 
-                # Get latest telemetry for this node
+                # Get latest telemetry for this node within the monitoring window
                 cursor.execute(
                     """
                     SELECT voltage, battery_level, timestamp
                     FROM telemetry_data
-                    WHERE node_id = ? AND (voltage IS NOT NULL OR battery_level IS NOT NULL)
+                    WHERE node_id = ?
+                      AND (voltage IS NOT NULL OR battery_level IS NOT NULL)
+                      AND timestamp > ?
                     ORDER BY timestamp DESC
                     LIMIT 1
                 """,
-                    (node_id,),
+                    (node_id, cutoff),
                 )
                 latest = cursor.fetchone()
 
@@ -5193,14 +4885,17 @@ class BatteryAnalyticsRepository:
 
     @staticmethod
     def get_critical_batteries() -> list[dict[str, Any]]:
-        """Get nodes with critical battery levels.
+        """Get nodes with critical battery levels and recent telemetry.
 
         Returns:
             List of nodes with voltage < 3.3V or health score < 40
         """
         try:
+            from ..power_analysis import recent_telemetry_cutoff
+
             conn = get_db_connection()
             cursor = conn.cursor()
+            cutoff = recent_telemetry_cutoff()
 
             cursor.execute(
                 """
@@ -5213,20 +4908,42 @@ class BatteryAnalyticsRepository:
                     ni.power_type_reason,
                     ni.last_battery_voltage,
                     ni.battery_health_score,
-                    ni.last_updated
+                    ni.last_updated,
+                    (
+                        SELECT MAX(td.timestamp)
+                        FROM telemetry_data td
+                        WHERE td.node_id = ni.node_id
+                          AND (td.voltage IS NOT NULL OR td.battery_level IS NOT NULL)
+                    ) as last_telemetry
                 FROM node_info ni
                 WHERE ni.power_type IN ('solar', 'battery')
+                  AND EXISTS (
+                    SELECT 1 FROM telemetry_data td
+                    WHERE td.node_id = ni.node_id
+                      AND td.timestamp > ?
+                      AND (td.voltage IS NOT NULL OR td.battery_level IS NOT NULL)
+                  )
                 ORDER BY ni.last_battery_voltage ASC NULLS LAST
                 LIMIT 10
-            """
+            """,
+                (cutoff,),
             )
 
             results = []
             for row in cursor.fetchall():
                 node_name = row["long_name"] or row["short_name"] or row["hex_id"]
 
-                # Scale voltage from fractional volts to actual volts (0.004 -> 4.0)
-                voltage = row["last_battery_voltage"]
+                # Prefer latest recent telemetry voltage over stale cached value
+                cursor.execute(
+                    """
+                    SELECT voltage FROM telemetry_data
+                    WHERE node_id = ? AND voltage IS NOT NULL AND timestamp > ?
+                    ORDER BY timestamp DESC LIMIT 1
+                    """,
+                    (row["node_id"], cutoff),
+                )
+                latest_v = cursor.fetchone()
+                voltage = latest_v["voltage"] if latest_v else row["last_battery_voltage"]
                 if voltage is not None and voltage < 1:
                     voltage = voltage * 1000
 
@@ -5235,6 +4952,7 @@ class BatteryAnalyticsRepository:
                     row["battery_health_score"] is not None
                     and row["battery_health_score"] < 40
                 ):
+                    last_seen_src = row["last_telemetry"] or row["last_updated"]
                     results.append(
                         {
                             "node_id": row["node_id"],
@@ -5244,7 +4962,7 @@ class BatteryAnalyticsRepository:
                             "power_type_reason": row["power_type_reason"],
                             "voltage": voltage,
                             "health_score": row["battery_health_score"],
-                            "last_seen": format_time_ago(row["last_updated"]),
+                            "last_seen": format_time_ago(last_seen_src),
                         }
                     )
 
@@ -5306,16 +5024,21 @@ class BatteryAnalyticsRepository:
 
     @staticmethod
     def get_nodes_with_battery_telemetry() -> list[dict[str, Any]]:
-        """Get all nodes that have shared battery telemetry data.
+        """Get nodes with recent battery telemetry data.
+
+        Only includes nodes with telemetry within the health/monitoring window.
 
         Returns:
             List of nodes with battery telemetry sorted by power type and recency
         """
         try:
+            from ..power_analysis import recent_telemetry_cutoff
+
             conn = get_db_connection()
             cursor = conn.cursor()
+            cutoff = recent_telemetry_cutoff()
 
-            # Get all nodes with telemetry, fetching latest voltage directly
+            # Nodes with recent telemetry only
             cursor.execute(
                 """
                 SELECT DISTINCT
@@ -5327,11 +5050,13 @@ class BatteryAnalyticsRepository:
                     ni.power_type_reason
                 FROM node_info ni
                 INNER JOIN telemetry_data td ON ni.node_id = td.node_id
-                WHERE td.voltage IS NOT NULL OR td.battery_level IS NOT NULL
-            """
+                WHERE (td.voltage IS NOT NULL OR td.battery_level IS NOT NULL)
+                  AND td.timestamp > ?
+            """,
+                (cutoff,),
             )
             nodes = cursor.fetchall()
-            logger.info(f"Found {len(nodes)} nodes with battery telemetry")
+            logger.info(f"Found {len(nodes)} nodes with recent battery telemetry")
 
             results = []
             for row in nodes:
@@ -5339,16 +5064,18 @@ class BatteryAnalyticsRepository:
                 node_name = row["long_name"] or row["short_name"] or row["hex_id"]
                 power_type = row["power_type"] or "unknown"
 
-                # Get latest telemetry for this node
+                # Get latest telemetry within the monitoring window
                 cursor.execute(
                     """
                     SELECT voltage, battery_level, timestamp
                     FROM telemetry_data
-                    WHERE node_id = ? AND (voltage IS NOT NULL OR battery_level IS NOT NULL)
+                    WHERE node_id = ?
+                      AND (voltage IS NOT NULL OR battery_level IS NOT NULL)
+                      AND timestamp > ?
                     ORDER BY timestamp DESC
                     LIMIT 1
                 """,
-                    (node_id,),
+                    (node_id, cutoff),
                 )
                 latest = cursor.fetchone()
 
@@ -5366,6 +5093,8 @@ class BatteryAnalyticsRepository:
                             )
                         except Exception:
                             pass
+                else:
+                    continue
 
                 # Calculate battery health for this node
                 battery_health = BatteryAnalyticsRepository._calculate_battery_health(
@@ -5629,16 +5358,19 @@ class BatteryAnalyticsRepository:
 
     @staticmethod
     def get_solar_nodes_with_charging_issues() -> list[dict[str, Any]]:
-        """Get all solar nodes that are experiencing charging issues.
+        """Get solar nodes with charging issues and recent telemetry.
 
         Returns:
             List of solar nodes with poor/critical charging status
         """
         try:
+            from ..power_analysis import recent_telemetry_cutoff
+
             conn = get_db_connection()
             cursor = conn.cursor()
+            cutoff = recent_telemetry_cutoff()
 
-            # Get all solar-powered nodes
+            # Solar nodes with recent telemetry only
             cursor.execute(
                 """
                 SELECT
@@ -5650,7 +5382,14 @@ class BatteryAnalyticsRepository:
                     ni.last_battery_voltage
                 FROM node_info ni
                 WHERE ni.power_type = 'solar'
-            """
+                  AND EXISTS (
+                    SELECT 1 FROM telemetry_data td
+                    WHERE td.node_id = ni.node_id
+                      AND td.timestamp > ?
+                      AND (td.voltage IS NOT NULL OR td.battery_level IS NOT NULL)
+                  )
+            """,
+                (cutoff,),
             )
             solar_nodes = cursor.fetchall()
             conn.close()
