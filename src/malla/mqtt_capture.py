@@ -445,6 +445,9 @@ def init_database() -> None:
         ("power_type_reason", "TEXT"),
         ("power_analysis_timestamp", "REAL"),
         ("power_type_locked", "INTEGER DEFAULT 0"),
+        ("solar_forecast_enabled", "INTEGER DEFAULT 0"),
+        ("solar_forecast_lat", "REAL"),
+        ("solar_forecast_lon", "REAL"),
     ]
 
     for column_name, column_type in power_columns:

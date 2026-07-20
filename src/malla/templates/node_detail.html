@@ -2134,6 +2134,69 @@ function bindPowerTypeOverride(nodeId) {
             saveBtn.disabled = false;
         }
     });
+
+    bindSolarForecastControls(nodeId);
+}
+
+function bindSolarForecastControls(nodeId) {
+    const saveBtn = document.getElementById('solar-forecast-save-btn');
+    const enableEl = document.getElementById('solar-forecast-enable');
+    const latEl = document.getElementById('solar-forecast-lat');
+    const lonEl = document.getElementById('solar-forecast-lon');
+    const statusEl = document.getElementById('solar-forecast-status');
+    if (!saveBtn || !enableEl) {
+        return;
+    }
+    saveBtn.addEventListener('click', async function() {
+        const enabled = !!enableEl.checked;
+        const latRaw = latEl ? latEl.value.trim() : '';
+        const lonRaw = lonEl ? lonEl.value.trim() : '';
+        const body = { enabled: enabled };
+        if (latRaw === '' && lonRaw === '') {
+            // Leave existing override as-is (or none)
+        } else if (latRaw !== '' && lonRaw !== '') {
+            body.latitude = Number(latRaw);
+            body.longitude = Number(lonRaw);
+        } else {
+            if (statusEl) {
+                statusEl.textContent = 'Enter both lat and lon, or leave both blank';
+                statusEl.className = 'small text-danger mt-1';
+            }
+            return;
+        }
+        saveBtn.disabled = true;
+        if (statusEl) {
+            statusEl.textContent = 'Saving forecast settings...';
+            statusEl.className = 'small text-muted mt-1';
+        }
+        try {
+            const resp = await fetch(`/api/node/${nodeId}/solar-forecast`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify(body)
+            });
+            const data = await resp.json();
+            if (!resp.ok) {
+                throw new Error(data.error || 'Save failed');
+            }
+            if (statusEl) {
+                const wx = data.solar_weather || {};
+                statusEl.textContent = wx.available
+                    ? ('Saved — ' + (wx.outlook || 'forecast ready'))
+                    : ('Saved — ' + (wx.reason || 'awaiting location/weather'));
+                statusEl.className = 'small text-success mt-1';
+            }
+            setTimeout(function() { loadTelemetryData(); }, 400);
+        } catch (err) {
+            console.error('Solar forecast settings failed:', err);
+            if (statusEl) {
+                statusEl.textContent = err.message || 'Save failed';
+                statusEl.className = 'small text-danger mt-1';
+            }
+        } finally {
+            saveBtn.disabled = false;
+        }
+    });
 }
 
 async function loadTelemetryData() {
@@ -2342,6 +2405,39 @@ async function loadTelemetryData() {
         html += '<button type="button" class="btn btn-sm btn-outline-secondary" id="power-type-save-btn" title="Save power type override">Save</button>';
         html += '</div>';
         html += '<div id="power-type-override-status" class="small text-muted mt-1"></div>';
+        html += '</td></tr>';
+
+        // Opt-in solar weather forecasting (Open-Meteo)
+        const sw = telemetry.solar_weather || null;
+        const forecastEnabled = !!(sw && sw.enabled) || !!telemetry.solar_forecast_enabled;
+        const loc = (sw && sw.location) || {};
+        const overrideLat = (loc.source === 'override' && loc.latitude != null)
+            ? loc.latitude
+            : (telemetry.solar_forecast_lat != null ? telemetry.solar_forecast_lat : '');
+        const overrideLon = (loc.source === 'override' && loc.longitude != null)
+            ? loc.longitude
+            : (telemetry.solar_forecast_lon != null ? telemetry.solar_forecast_lon : '');
+        html += '<tr>';
+        html += '<td class="text-muted align-top">Weather forecast</td>';
+        html += '<td class="text-end">';
+        html += '<div class="form-check form-check-inline m-0 mb-1">';
+        html += '<input class="form-check-input" type="checkbox" id="solar-forecast-enable"' + (forecastEnabled ? ' checked' : '') + '>';
+        html += '<label class="form-check-label small" for="solar-forecast-enable">Enable solar weather forecast</label>';
+        html += '</div>';
+        html += '<div class="d-inline-flex align-items-center gap-1 flex-wrap justify-content-end mb-1">';
+        html += '<input type="number" step="any" class="form-control form-control-sm" id="solar-forecast-lat" placeholder="Lat" style="width: 5.5rem;" value="' + (overrideLat !== '' && overrideLat != null ? overrideLat : '') + '">';
+        html += '<input type="number" step="any" class="form-control form-control-sm" id="solar-forecast-lon" placeholder="Lon" style="width: 5.5rem;" value="' + (overrideLon !== '' && overrideLon != null ? overrideLon : '') + '">';
+        html += '<button type="button" class="btn btn-sm btn-outline-secondary" id="solar-forecast-save-btn" title="Save forecast settings">Save</button>';
+        html += '</div>';
+        html += '<div class="small text-muted">Optional lat/lon override if GPS is missing. Uses Open-Meteo.</div>';
+        if (sw && sw.available && sw.outlook) {
+            const oc = sw.overall_condition || 'unknown';
+            const ocClass = oc === 'good' ? 'text-success' : oc === 'fair' ? 'text-warning' : oc === 'poor' ? 'text-danger' : 'text-secondary';
+            html += '<div class="small mt-1 ' + ocClass + '"><strong>Wx:</strong> ' + sw.outlook + '</div>';
+        } else if (sw && sw.enabled && sw.reason) {
+            html += '<div class="small text-warning mt-1">' + sw.reason + '</div>';
+        }
+        html += '<div id="solar-forecast-status" class="small text-muted mt-1"></div>';
         html += '</td></tr>';
 
         if (ps && ps.outlook) {

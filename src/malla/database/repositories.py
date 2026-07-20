@@ -2185,6 +2185,30 @@ class NodeRepository:
             except Exception as e:
                 logger.debug("Could not build power_status for node %s: %s", node_id, e)
 
+            # Opt-in solar weather forecast (Open-Meteo)
+            try:
+                from ..solar_weather import get_node_solar_weather_forecast
+
+                wx_conn = get_db_connection()
+                try:
+                    solar_weather = get_node_solar_weather_forecast(node_id, wx_conn)
+                finally:
+                    wx_conn.close()
+                if solar_weather:
+                    telemetry_dict["solar_weather"] = solar_weather
+                    # Convenience flag for UI checkbox state
+                    telemetry_dict["solar_forecast_enabled"] = bool(
+                        solar_weather.get("enabled")
+                    )
+                    loc = solar_weather.get("location") or {}
+                    if loc.get("source") == "override":
+                        telemetry_dict["solar_forecast_lat"] = loc.get("latitude")
+                        telemetry_dict["solar_forecast_lon"] = loc.get("longitude")
+            except Exception as e:
+                logger.debug(
+                    "Could not build solar_weather for node %s: %s", node_id, e
+                )
+
             return telemetry_dict if telemetry_dict else None
 
         except Exception as e:

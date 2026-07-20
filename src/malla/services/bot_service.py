@@ -2842,9 +2842,23 @@ class BotService:
             except Exception as solar_err:
                 logger.debug(f"lowbat solar conditions skipped: {solar_err}")
 
+            solar_wx_poor = []
+            try:
+                from ..solar_weather import get_opted_in_solar_forecasts
+
+                for node in get_opted_in_solar_forecasts(conn):
+                    if (
+                        node.get("available")
+                        and node.get("overall_condition") == "poor"
+                    ):
+                        solar_wx_poor.append(node)
+                solar_wx_poor = solar_wx_poor[:3]
+            except Exception as wx_err:
+                logger.debug(f"lowbat solar weather skipped: {wx_err}")
+
             conn.close()
 
-            if not rows and not solar_at_risk:
+            if not rows and not solar_at_risk and not solar_wx_poor:
                 return "🔋 No low battery nodes"
 
             lines: list[str] = []
@@ -2871,6 +2885,21 @@ class BotService:
                     if len(issue) > 28:
                         issue = issue[:25] + "..."
                     lines.append(f"{name}: {issue}")
+
+            if solar_wx_poor:
+                lines.append("☁️ Poor solar wx:")
+                for node in solar_wx_poor:
+                    name = node.get("short_name") or node.get("name") or "?"
+                    if len(name) > 10:
+                        name = name[:10]
+                    tomorrow = (
+                        ((node.get("solar_weather") or {}).get("forecast") or {}).get(
+                            "tomorrow"
+                        )
+                        or {}
+                    )
+                    label = tomorrow.get("condition_label") or "Poor"
+                    lines.append(f"{name}: {label}")
 
             return "\n".join(lines)
         except Exception as e:
@@ -3963,6 +3992,7 @@ class BotService:
             offline_routers = self._get_recently_offline_routers()
             lowbat_count = self._get_recent_lowbat_count()
             solar_at_risk_count = int(vitals.get("solar_at_risk_nodes") or 0)
+            solar_wx_poor_count = self._get_solar_wx_poor_count()
             top_names = self._get_digest_top_names(limit=3)
             nodes_delta = self._get_active_nodes_delta()
             new_nodes = self._get_new_nodes_24h(name_limit=3)
@@ -3979,6 +4009,7 @@ class BotService:
                 longest_tr=longest_tr,
                 when=when,
                 solar_at_risk_count=solar_at_risk_count,
+                solar_wx_poor_count=solar_wx_poor_count,
             )
         except Exception as e:
             logger.error(f"Error building daily digest: {e}", exc_info=True)
@@ -3995,6 +4026,7 @@ class BotService:
         longest_tr: dict[str, Any] | None = None,
         when: time.struct_time | None = None,
         solar_at_risk_count: int = 0,
+        solar_wx_poor_count: int = 0,
     ) -> str:
         """Format digest fields into a Meshtastic-friendly message."""
         when = when or time.localtime()
@@ -4028,6 +4060,8 @@ class BotService:
             alert_parts.append(f"Lowbat: {lowbat_count}")
         if solar_at_risk_count > 0:
             alert_parts.append(f"Solar⚠: {solar_at_risk_count}")
+        if solar_wx_poor_count > 0:
+            alert_parts.append(f"SolarWx: {solar_wx_poor_count}")
         if offline_routers:
             alert_parts.append(f"Off routers: {len(offline_routers)}")
         if alert_parts:
@@ -4184,6 +4218,26 @@ class BotService:
         except Exception as e:
             logger.error(f"Error getting recently offline routers: {e}", exc_info=True)
             return []
+
+    def _get_solar_wx_poor_count(self) -> int:
+        """Count opted-in nodes with a poor Open-Meteo solar charge window."""
+        try:
+            from ..database.connection import get_db_connection
+            from ..solar_weather import get_opted_in_solar_forecasts
+
+            conn = get_db_connection()
+            try:
+                nodes = get_opted_in_solar_forecasts(conn)
+            finally:
+                conn.close()
+            return sum(
+                1
+                for n in nodes
+                if n.get("available") and n.get("overall_condition") == "poor"
+            )
+        except Exception as e:
+            logger.debug(f"Error counting poor solar weather forecasts: {e}")
+            return 0
 
     def _get_recent_lowbat_count(self) -> int:
         """Count nodes with recent low-battery telemetry only."""
