@@ -23,6 +23,10 @@ from .routes import register_routes
 from .services.alert_service import AlertService
 from .services.log_service import install_log_handler
 from .services.power_monitor import start_power_monitor, stop_power_monitor
+from .services.scheduled_telemetry_service import (
+    start_scheduled_telemetry_runner,
+    stop_scheduled_telemetry_runner,
+)
 from .utils.formatting import format_node_id, format_time_ago
 from .utils.node_utils import start_cache_cleanup, stop_cache_cleanup
 from .utils.safe_logging import safe_error, safe_info
@@ -360,9 +364,14 @@ def create_app(cfg: AppConfig | None = None):  # noqa: D401
     logger.info("Starting auto-archive stale nodes background thread")
     start_auto_archive_stale_nodes(interval_seconds=86400)
 
+    # Operator-scheduled solicited telemetry (min 30m intervals)
+    logger.info("Starting scheduled telemetry runner")
+    start_scheduled_telemetry_runner()
+
     # Register cleanup on app shutdown
     atexit.register(stop_cache_cleanup)
     atexit.register(stop_power_monitor)
+    atexit.register(stop_scheduled_telemetry_runner)
 
     # Register all routes
     logger.info("Registering application routes")

@@ -674,6 +674,13 @@
                     </button>
                 </li>
                 <li class="nav-item" role="presentation">
+                    <button class="nav-link" id="telemetry-schedule-tab" data-bs-toggle="tab"
+                            data-bs-target="#telemetry-schedule-pane" type="button" role="tab">
+                        <i class="bi bi-broadcast-pin"></i> Telemetry Schedule
+                        <span class="badge bg-secondary" id="telemetryScheduleBadge">0</span>
+                    </button>
+                </li>
+                <li class="nav-item" role="presentation">
                     <button class="nav-link" id="bot-tab" data-bs-toggle="tab"
                             data-bs-target="#bot-pane" type="button" role="tab">
                         <i class="bi bi-robot"></i> Mesh Bot
@@ -1702,6 +1709,128 @@
                     <div id="serverLogsContainer" class="server-logs-container" style="height: calc(100vh - 400px); min-height: 300px; overflow-y: auto; font-family: 'SF Mono', 'Monaco', 'Inconsolata', monospace; font-size: 0.8rem; background: var(--bs-tertiary-bg); border-radius: 0.375rem; padding: 0.5rem;">
                         <div class="text-center py-4 text-muted">
                             <i class="bi bi-hourglass-split"></i> Loading logs...
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Scheduled Solicited Telemetry Tab -->
+                <div class="tab-pane fade" id="telemetry-schedule-pane" role="tabpanel">
+                    <div class="alert alert-info small mb-3">
+                        <i class="bi bi-info-circle"></i>
+                        Routers on recent firmware often broadcast telemetry at most every 12 hours.
+                        Schedule <strong>solicited</strong> polls here (minimum 30 minutes) so health
+                        and battery monitoring stay useful. Requires TCP or Serial admin connection.
+                    </div>
+                    <div class="row">
+                        <div class="col-lg-5 mb-4">
+                            <div class="card">
+                                <div class="card-header d-flex justify-content-between align-items-center">
+                                    <span><i class="bi bi-plus-circle"></i> Add / Update Schedule</span>
+                                    <small class="text-muted" id="telemetryScheduleRunnerStatus">Runner: —</small>
+                                </div>
+                                <div class="card-body">
+                                    <div class="mb-3 position-relative">
+                                        <label for="telemetryScheduleNodeInput" class="form-label">Node</label>
+                                        <input type="text" class="form-control" id="telemetryScheduleNodeInput"
+                                               placeholder="Select or search node…"
+                                               autocomplete="off"
+                                               oninput="searchTelemetryScheduleNodes()"
+                                               onfocus="showTelemetryScheduleNodeSelector()">
+                                        <div id="telemetryScheduleNodeResults" class="node-autocomplete-results" style="display:none;"></div>
+                                    </div>
+                                    <div class="mb-3">
+                                        <label for="telemetryScheduleIntervalMinutes" class="form-label">
+                                            Interval (minutes)
+                                        </label>
+                                        <input type="number" class="form-control" id="telemetryScheduleIntervalMinutes"
+                                               min="30" step="15" value="60">
+                                        <div class="form-text">Minimum 30 minutes. Default 60.</div>
+                                    </div>
+                                    <div class="mb-3">
+                                        <label class="form-label">Telemetry types (rotated each poll)</label>
+                                        <div class="row g-1" id="telemetryScheduleTypeChecks">
+                                            <div class="col-6">
+                                                <div class="form-check">
+                                                    <input class="form-check-input telemetry-schedule-type" type="checkbox"
+                                                           value="device_metrics" id="tsTypeDevice" checked>
+                                                    <label class="form-check-label small" for="tsTypeDevice">Device / battery</label>
+                                                </div>
+                                            </div>
+                                            <div class="col-6">
+                                                <div class="form-check">
+                                                    <input class="form-check-input telemetry-schedule-type" type="checkbox"
+                                                           value="environment_metrics" id="tsTypeEnv">
+                                                    <label class="form-check-label small" for="tsTypeEnv">Environment</label>
+                                                </div>
+                                            </div>
+                                            <div class="col-6">
+                                                <div class="form-check">
+                                                    <input class="form-check-input telemetry-schedule-type" type="checkbox"
+                                                           value="power_metrics" id="tsTypePower">
+                                                    <label class="form-check-label small" for="tsTypePower">Power</label>
+                                                </div>
+                                            </div>
+                                            <div class="col-6">
+                                                <div class="form-check">
+                                                    <input class="form-check-input telemetry-schedule-type" type="checkbox"
+                                                           value="local_stats" id="tsTypeLocal">
+                                                    <label class="form-check-label small" for="tsTypeLocal">Local stats</label>
+                                                </div>
+                                            </div>
+                                            <div class="col-6">
+                                                <div class="form-check">
+                                                    <input class="form-check-input telemetry-schedule-type" type="checkbox"
+                                                           value="air_quality_metrics" id="tsTypeAq">
+                                                    <label class="form-check-label small" for="tsTypeAq">Air quality</label>
+                                                </div>
+                                            </div>
+                                        </div>
+                                    </div>
+                                    <div class="form-check form-switch mb-3">
+                                        <input class="form-check-input" type="checkbox" id="telemetryScheduleEnabled" checked>
+                                        <label class="form-check-label" for="telemetryScheduleEnabled">Enabled</label>
+                                    </div>
+                                    <div class="d-flex flex-wrap gap-2">
+                                        <button class="btn btn-primary btn-sm" type="button" onclick="saveTelemetrySchedule()">
+                                            <i class="bi bi-save"></i> Save schedule
+                                        </button>
+                                        <button class="btn btn-outline-secondary btn-sm" type="button" onclick="loadTelemetrySchedules()">
+                                            <i class="bi bi-arrow-clockwise"></i> Refresh
+                                        </button>
+                                        <button class="btn btn-outline-primary btn-sm" type="button" onclick="runDueTelemetrySchedules()">
+                                            <i class="bi bi-play"></i> Run due now
+                                        </button>
+                                    </div>
+                                    <div id="telemetryScheduleFormAlert" class="alert d-none mt-3 mb-0 py-2 small" role="alert"></div>
+                                </div>
+                            </div>
+                        </div>
+                        <div class="col-lg-7 mb-4">
+                            <div class="card">
+                                <div class="card-header">
+                                    <i class="bi bi-list-ul"></i> Active Schedules
+                                </div>
+                                <div class="card-body p-0">
+                                    <div class="table-responsive">
+                                        <table class="table table-sm table-hover mb-0 align-middle">
+                                            <thead>
+                                                <tr>
+                                                    <th>Node</th>
+                                                    <th>Interval</th>
+                                                    <th>Types</th>
+                                                    <th>Last</th>
+                                                    <th></th>
+                                                </tr>
+                                            </thead>
+                                            <tbody id="telemetrySchedulesBody">
+                                                <tr>
+                                                    <td colspan="5" class="text-muted text-center py-4">Loading…</td>
+                                                </tr>
+                                            </tbody>
+                                        </table>
+                                    </div>
+                                </div>
+                            </div>
                         </div>
                     </div>
                 </div>
@@ -3186,6 +3315,7 @@
         let inputId = 'targetNodeInput';
         if (resultsContainerId === 'testNodeResults') inputId = 'testNodeInput';
         else if (resultsContainerId === 'favoriteNodeResults') inputId = 'favoriteNodeInput';
+        else if (resultsContainerId === 'telemetryScheduleNodeResults') inputId = 'telemetryScheduleNodeInput';
         const input = document.getElementById(inputId);
 
         // Display both hex ID and node name for easy identification
@@ -11210,6 +11340,283 @@
                 botActivityInterval = setInterval(refreshBotActivity, 2000);
             }
         }
+    });
+
+    // ========================================================================
+    // Scheduled solicited telemetry
+    // ========================================================================
+
+    let telemetrySchedulesCache = {};
+
+    function showTelemetryScheduleFormAlert(type, message) {
+        const el = document.getElementById('telemetryScheduleFormAlert');
+        if (!el) return;
+        el.className = `alert alert-${type} mt-3 mb-0 py-2 small`;
+        el.textContent = message;
+        el.classList.remove('d-none');
+    }
+
+    function showTelemetryScheduleNodeSelector() {
+        const input = document.getElementById('telemetryScheduleNodeInput');
+        const value = input ? input.value.trim() : '';
+        if (!value) {
+            const resultsDiv = document.getElementById('telemetryScheduleNodeResults');
+            if (!resultsDiv) return;
+            if (!administrableNodesCache.length) {
+                resultsDiv.innerHTML = `
+                    <div class="node-autocomplete-item text-muted" style="cursor: default;">
+                        <div class="small">No administrable nodes found</div>
+                        <div class="small text-muted">Type to search all known nodes</div>
+                    </div>`;
+                resultsDiv.style.display = 'block';
+                return;
+            }
+            let html = `
+                <div class="autocomplete-section-header">
+                    <i class="bi bi-shield-check text-success me-1"></i>
+                    <span class="small text-muted">Administrable Nodes</span>
+                </div>`;
+            for (const node of administrableNodesCache) {
+                const displayName = node.long_name || node.short_name || 'Unknown';
+                const hexId = node.hex_id || `!${(node.node_id >>> 0).toString(16).padStart(8, '0')}`;
+                html += `
+                    <div class="node-autocomplete-item"
+                         onclick="selectAutocompleteNode('${hexId}', '${escapeHtml(displayName)}', 'telemetryScheduleNodeResults')">
+                        <div class="node-name">${escapeHtml(displayName)}</div>
+                        <div class="node-id">${hexId}</div>
+                    </div>`;
+            }
+            resultsDiv.innerHTML = html;
+            resultsDiv.style.display = 'block';
+            return;
+        }
+        searchTelemetryScheduleNodes();
+    }
+
+    function searchTelemetryScheduleNodes() {
+        const input = document.getElementById('telemetryScheduleNodeInput');
+        const value = input ? input.value.trim() : '';
+        if (!value) {
+            showTelemetryScheduleNodeSelector();
+            return;
+        }
+        searchNodes(value, 'telemetryScheduleNodeResults');
+    }
+
+    function getSelectedTelemetryScheduleTypes() {
+        return Array.from(document.querySelectorAll('.telemetry-schedule-type:checked'))
+            .map((el) => el.value);
+    }
+
+    function setTelemetryScheduleForm(schedule) {
+        if (!schedule) return;
+        const input = document.getElementById('telemetryScheduleNodeInput');
+        if (input) {
+            const name = schedule.display_name || schedule.long_name || schedule.short_name || schedule.hex_id;
+            input.value = `${schedule.hex_id} - ${name}`;
+            input.dataset.nodeId = schedule.hex_id;
+        }
+        const intervalEl = document.getElementById('telemetryScheduleIntervalMinutes');
+        if (intervalEl) {
+            intervalEl.value = schedule.interval_minutes || Math.max(30, Math.floor((schedule.interval_seconds || 3600) / 60));
+        }
+        const enabledEl = document.getElementById('telemetryScheduleEnabled');
+        if (enabledEl) enabledEl.checked = !!schedule.enabled;
+        const types = new Set(schedule.telemetry_types || ['device_metrics']);
+        document.querySelectorAll('.telemetry-schedule-type').forEach((el) => {
+            el.checked = types.has(el.value);
+        });
+    }
+
+    async function saveTelemetrySchedule() {
+        const nodeId = getNodeIdFromInput('telemetryScheduleNodeInput');
+        if (!nodeId) {
+            showTelemetryScheduleFormAlert('warning', 'Select a node first.');
+            return;
+        }
+        const minutes = parseInt(document.getElementById('telemetryScheduleIntervalMinutes')?.value || '60', 10);
+        if (!Number.isFinite(minutes) || minutes < 30) {
+            showTelemetryScheduleFormAlert('warning', 'Interval must be at least 30 minutes.');
+            return;
+        }
+        const types = getSelectedTelemetryScheduleTypes();
+        if (!types.length) {
+            showTelemetryScheduleFormAlert('warning', 'Select at least one telemetry type.');
+            return;
+        }
+        const enabled = !!document.getElementById('telemetryScheduleEnabled')?.checked;
+        try {
+            const resp = await fetch(`/api/admin/node/${encodeURIComponent(nodeId)}/telemetry/schedule`, {
+                method: 'POST',
+                headers: {'Content-Type': 'application/json'},
+                body: JSON.stringify({
+                    interval_minutes: minutes,
+                    telemetry_types: types,
+                    enabled: enabled,
+                }),
+            });
+            const data = await resp.json();
+            if (!resp.ok || !data.success) {
+                showTelemetryScheduleFormAlert('danger', data.error || 'Failed to save schedule');
+                return;
+            }
+            showTelemetryScheduleFormAlert('success', 'Schedule saved.');
+            await loadTelemetrySchedules();
+        } catch (err) {
+            showTelemetryScheduleFormAlert('danger', `Error: ${err.message}`);
+        }
+    }
+
+    async function deleteTelemetrySchedule(nodeId) {
+        if (!confirm('Remove this telemetry schedule?')) return;
+        try {
+            const resp = await fetch(`/api/admin/node/${encodeURIComponent(nodeId)}/telemetry/schedule`, {
+                method: 'DELETE',
+            });
+            const data = await resp.json();
+            if (!resp.ok || !data.success) {
+                showAlert('danger', data.error || 'Failed to delete schedule');
+                return;
+            }
+            await loadTelemetrySchedules();
+        } catch (err) {
+            showAlert('danger', `Error: ${err.message}`);
+        }
+    }
+
+    async function runTelemetryScheduleNow(nodeId) {
+        try {
+            showAlert('info', 'Soliciting telemetry…');
+            const resp = await fetch(`/api/admin/node/${encodeURIComponent(nodeId)}/telemetry/schedule/run`, {
+                method: 'POST',
+            });
+            const data = await resp.json();
+            if (data.success) {
+                showAlert('success', `Telemetry received from ${data.hex_id || nodeId} (${data.telemetry_type || 'device_metrics'})`);
+            } else {
+                showAlert('warning', data.error || 'No response');
+            }
+            await loadTelemetrySchedules();
+        } catch (err) {
+            showAlert('danger', `Error: ${err.message}`);
+        }
+    }
+
+    async function runDueTelemetrySchedules() {
+        try {
+            const resp = await fetch('/api/admin/telemetry/schedules/run-due', {method: 'POST'});
+            const data = await resp.json();
+            if (!resp.ok) {
+                showTelemetryScheduleFormAlert('danger', data.error || 'Run failed');
+                return;
+            }
+            if (data.skipped_reason === 'publisher_disconnected') {
+                showTelemetryScheduleFormAlert('warning', 'Connect TCP or Serial first.');
+            } else if (data.skipped_reason === 'mqtt_unsupported') {
+                showTelemetryScheduleFormAlert('warning', 'Scheduled telemetry requires TCP or Serial (not MQTT).');
+            } else {
+                showTelemetryScheduleFormAlert(
+                    'success',
+                    `Due run: claimed ${data.claimed || 0}, ok ${data.succeeded || 0}, fail ${data.failed || 0}`
+                );
+            }
+            await loadTelemetrySchedules();
+        } catch (err) {
+            showTelemetryScheduleFormAlert('danger', `Error: ${err.message}`);
+        }
+    }
+
+    function editTelemetrySchedule(nodeId) {
+        const schedule = telemetrySchedulesCache[String(nodeId)];
+        if (schedule) setTelemetryScheduleForm(schedule);
+    }
+
+    function renderTelemetrySchedules(schedules) {
+        const body = document.getElementById('telemetrySchedulesBody');
+        const badge = document.getElementById('telemetryScheduleBadge');
+        if (badge) badge.textContent = String(schedules.length);
+        if (!body) return;
+        telemetrySchedulesCache = {};
+        if (!schedules.length) {
+            body.innerHTML = `<tr><td colspan="5" class="text-muted text-center py-4">No schedules yet. Add a node on the left.</td></tr>`;
+            return;
+        }
+        body.innerHTML = schedules.map((s) => {
+            telemetrySchedulesCache[String(s.node_id)] = s;
+            const name = escapeHtml(s.display_name || s.hex_id);
+            const hex = escapeHtml(s.hex_id || '');
+            const enabledBadge = s.enabled
+                ? '<span class="badge bg-success">On</span>'
+                : '<span class="badge bg-secondary">Off</span>';
+            const types = escapeHtml((s.telemetry_types || []).join(', '));
+            let last = 'Never';
+            if (s.last_success_at) {
+                last = formatTimeAgo(s.last_success_at);
+            } else if (s.last_requested_at) {
+                last = `${formatTimeAgo(s.last_requested_at)} (no reply)`;
+            }
+            if (s.last_error) {
+                last += `<div class="text-danger small">${escapeHtml(s.last_error)}</div>`;
+            }
+            const nodeKey = s.hex_id || s.node_id;
+            return `
+                <tr>
+                    <td>
+                        <div class="fw-semibold">${name}</div>
+                        <div class="small text-muted">${hex} ${enabledBadge}</div>
+                    </td>
+                    <td>${s.interval_minutes || Math.floor(s.interval_seconds / 60)}m</td>
+                    <td class="small">${types}</td>
+                    <td class="small">${last}</td>
+                    <td class="text-nowrap">
+                        <button class="btn btn-outline-primary btn-sm" title="Edit"
+                                onclick="editTelemetrySchedule(${s.node_id})">
+                            <i class="bi bi-pencil"></i>
+                        </button>
+                        <button class="btn btn-outline-success btn-sm" title="Poll now"
+                                onclick="runTelemetryScheduleNow('${nodeKey}')">
+                            <i class="bi bi-broadcast"></i>
+                        </button>
+                        <button class="btn btn-outline-danger btn-sm" title="Remove"
+                                onclick="deleteTelemetrySchedule('${nodeKey}')">
+                            <i class="bi bi-trash"></i>
+                        </button>
+                    </td>
+                </tr>`;
+        }).join('');
+    }
+
+    async function loadTelemetrySchedules() {
+        const body = document.getElementById('telemetrySchedulesBody');
+        try {
+            const resp = await fetch('/api/admin/telemetry/schedules');
+            const data = await resp.json();
+            if (!resp.ok || !data.success) {
+                if (body) {
+                    body.innerHTML = `<tr><td colspan="5" class="text-danger text-center py-4">${escapeHtml(data.error || 'Failed to load')}</td></tr>`;
+                }
+                return;
+            }
+            const runner = data.runner || {};
+            const runnerEl = document.getElementById('telemetryScheduleRunnerStatus');
+            if (runnerEl) {
+                const conn = runner.publisher_connected
+                    ? `connected (${runner.connection_type || '?'})`
+                    : 'no TCP/Serial';
+                runnerEl.textContent = runner.running
+                    ? `Runner: active · ${conn}`
+                    : `Runner: stopped · ${conn}`;
+            }
+            renderTelemetrySchedules(data.schedules || []);
+        } catch (err) {
+            if (body) {
+                body.innerHTML = `<tr><td colspan="5" class="text-danger text-center py-4">${escapeHtml(err.message)}</td></tr>`;
+            }
+        }
+    }
+
+    document.getElementById('telemetry-schedule-tab')?.addEventListener('shown.bs.tab', function() {
+        loadTelemetrySchedules();
     });
 </script>
 {% endblock %}

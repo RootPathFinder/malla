@@ -21,16 +21,30 @@ from flask_login import current_user
 
 from ..config import get_config
 from ..database.admin_repository import AdminRepository
+from ..database.scheduled_telemetry_repository import (
+    DEFAULT_INTERVAL_SECONDS,
+    MIN_INTERVAL_SECONDS,
+    ScheduledTelemetryRepository,
+)
 from ..models.user import UserRole
 from ..services.admin_service import ConfigType, get_admin_service
+from ..services.live_telemetry import (
+    request_live_telemetry_with_retry,
+    resolve_live_telemetry_hops,
+)
+from ..services.scheduled_telemetry_service import (
+    get_runner_status,
+    run_due_schedules_once,
+    run_schedule_now,
+)
 from ..services.serial_publisher import discover_serial_ports, get_serial_publisher
 from ..services.tcp_publisher import get_tcp_publisher
 from ..utils.config_compare import deep_compare_config
 from ..utils.node_utils import convert_node_id
 from ..utils.telemetry_request import (
     LIVE_TELEMETRY_MAX_BUDGET_S,
+    TELEMETRY_TYPE_KEYS,
     live_telemetry_budget,
-    split_live_telemetry_attempts,
 )
 
 logger = logging.getLogger(__name__)
@@ -2786,108 +2800,6 @@ def api_factory_reset(node_id):
         return jsonify({"error": str(e)}), 500
 
 
-def _live_telemetry_attempt_timeouts(
-    timeout: float, attempts: int = 2
-) -> list[float]:
-    """Split a live-telemetry wait budget into hop-aware attempt windows."""
-    return split_live_telemetry_attempts(timeout, attempts=attempts)
-
-
-def _estimate_hops_from_recent_packets(node_id: int) -> int | None:
-    """Fallback hop estimate from recent packet hop_start/hop_limit fields."""
-    try:
-        from ..database.connection import get_db_connection
-
-        conn = get_db_connection()
-        cursor = conn.cursor()
-        cursor.execute(
-            """
-            SELECT AVG(hop_start - hop_limit) AS avg_hops
-            FROM packet_history
-            WHERE from_node_id = ?
-              AND hop_start IS NOT NULL
-              AND hop_limit IS NOT NULL
-              AND hop_start >= hop_limit
-              AND timestamp > ?
-            """,
-            (node_id, time.time() - 7 * 86400),
-        )
-        row = cursor.fetchone()
-        conn.close()
-        if not row or row["avg_hops"] is None:
-            return None
-        return int(round(float(row["avg_hops"])))
-    except Exception as e:
-        logger.debug(f"Packet hop estimate failed for !{node_id:08x}: {e}")
-        return None
-
-
-def _resolve_live_telemetry_hops(
-    node_id_int: int, client_hops: Any = None
-) -> tuple[int, str]:
-    """
-    Resolve hop distance for live telemetry budgeting.
-
-    Preference: traceroute estimate -> client hint -> recent packet avg -> 1.
-    """
-    # Traceroute-based estimate (gateway path)
-    try:
-        from ..services.job_service import JobService
-
-        estimated = JobService()._estimate_hop_count(node_id_int)
-        if estimated is not None:
-            return int(estimated), "traceroute"
-    except Exception as e:
-        logger.debug(f"Traceroute hop estimate failed for !{node_id_int:08x}: {e}")
-
-    if client_hops is not None and client_hops != "":
-        try:
-            return int(round(float(client_hops))), "client"
-        except (TypeError, ValueError):
-            pass
-
-    packet_hops = _estimate_hops_from_recent_packets(node_id_int)
-    if packet_hops is not None:
-        return packet_hops, "packets"
-
-    return 1, "default"
-
-
-def _request_live_telemetry_with_retry(
-    publisher: Any,
-    node_id_int: int,
-    telemetry_type: str,
-    timeout: float,
-    *,
-    attempts: int = 2,
-    hop_limit: int | None = None,
-    want_ack: bool = False,
-    retry_delay_s: float = 0.5,
-) -> tuple[dict[str, Any] | None, int]:
-    """Try live telemetry with hop-aware retries. Returns (result, attempts_used)."""
-    attempts_used = 0
-    result = None
-    attempt_timeouts = _live_telemetry_attempt_timeouts(timeout, attempts=attempts)
-    for idx, attempt_timeout in enumerate(attempt_timeouts):
-        attempts_used += 1
-        result = publisher.send_telemetry_request(
-            target_node_id=node_id_int,
-            telemetry_type=telemetry_type,
-            timeout=attempt_timeout,
-            hop_limit=hop_limit,
-            want_ack=want_ack,
-        )
-        if result:
-            if attempts_used > 1:
-                result = dict(result)
-                result["retry_attempt"] = attempts_used - 1
-            return result, attempts_used
-        # Brief pause before re-send so multi-hop airtime can clear
-        if idx < len(attempt_timeouts) - 1 and retry_delay_s > 0:
-            time.sleep(retry_delay_s)
-    return None, attempts_used
-
-
 @admin_bp.route("/api/admin/node/<node_id>/telemetry/live", methods=["POST"])
 def api_request_live_telemetry(node_id):
     """
@@ -2912,7 +2824,7 @@ def api_request_live_telemetry(node_id):
         data = request.get_json() or {}
         telemetry_type = data.get("telemetry_type", "device_metrics")
 
-        estimated_hops, hop_source = _resolve_live_telemetry_hops(
+        estimated_hops, hop_source = resolve_live_telemetry_hops(
             node_id_int, data.get("estimated_hops")
         )
         budget = live_telemetry_budget(estimated_hops)
@@ -3004,7 +2916,7 @@ def api_request_live_telemetry(node_id):
                     }
                 ), 400
 
-            result, attempts = _request_live_telemetry_with_retry(
+            result, attempts = request_live_telemetry_with_retry(
                 tcp_publisher,
                 node_id_int,
                 telemetry_type,
@@ -3028,7 +2940,7 @@ def api_request_live_telemetry(node_id):
                     }
                 ), 400
 
-            result, attempts = _request_live_telemetry_with_retry(
+            result, attempts = request_live_telemetry_with_retry(
                 serial_publisher,
                 node_id_int,
                 telemetry_type,
@@ -3062,6 +2974,108 @@ def api_request_live_telemetry(node_id):
 
     except Exception as e:
         logger.error(f"Error requesting live telemetry: {e}")
+        return jsonify({"error": str(e)}), 500
+
+
+@admin_bp.route("/api/admin/telemetry/schedules", methods=["GET"])
+def api_list_telemetry_schedules():
+    """List all operator-managed solicited telemetry schedules."""
+    try:
+        schedules = ScheduledTelemetryRepository.list_schedules()
+        return jsonify(
+            {
+                "success": True,
+                "schedules": schedules,
+                "min_interval_seconds": MIN_INTERVAL_SECONDS,
+                "min_interval_minutes": MIN_INTERVAL_SECONDS // 60,
+                "default_interval_seconds": DEFAULT_INTERVAL_SECONDS,
+                "available_types": list(TELEMETRY_TYPE_KEYS.keys()),
+                "runner": get_runner_status(),
+            }
+        )
+    except Exception as e:
+        logger.error(f"Error listing telemetry schedules: {e}")
+        return jsonify({"error": str(e)}), 500
+
+
+@admin_bp.route("/api/admin/telemetry/schedules/run-due", methods=["POST"])
+def api_run_due_telemetry_schedules():
+    """Manually run due scheduled telemetry solicitations."""
+    try:
+        data = request.get_json() or {}
+        limit = data.get("limit")
+        summary = run_due_schedules_once(
+            limit=int(limit) if limit is not None else None
+        )
+        return jsonify({"success": True, **summary})
+    except Exception as e:
+        logger.error(f"Error running due telemetry schedules: {e}")
+        return jsonify({"error": str(e)}), 500
+
+
+@admin_bp.route(
+    "/api/admin/node/<node_id>/telemetry/schedule", methods=["GET", "POST", "DELETE"]
+)
+def api_node_telemetry_schedule(node_id):
+    """Get, create/update, or delete a node's solicited telemetry schedule."""
+    try:
+        node_id_int = convert_node_id(node_id)
+
+        if request.method == "GET":
+            schedule = ScheduledTelemetryRepository.get_schedule(node_id_int)
+            return jsonify(
+                {
+                    "success": True,
+                    "schedule": schedule,
+                    "min_interval_seconds": MIN_INTERVAL_SECONDS,
+                    "available_types": list(TELEMETRY_TYPE_KEYS.keys()),
+                }
+            )
+
+        if request.method == "DELETE":
+            deleted = ScheduledTelemetryRepository.delete_schedule(node_id_int)
+            return jsonify({"success": True, "deleted": deleted})
+
+        data = request.get_json() or {}
+        interval_seconds = data.get("interval_seconds")
+        if interval_seconds is None and data.get("interval_minutes") is not None:
+            interval_seconds = int(data["interval_minutes"]) * 60
+        if interval_seconds is None:
+            interval_seconds = DEFAULT_INTERVAL_SECONDS
+
+        enabled = data.get("enabled", True)
+        if isinstance(enabled, str):
+            enabled = enabled.strip().lower() in ("1", "true", "yes", "on")
+
+        schedule = ScheduledTelemetryRepository.upsert_schedule(
+            node_id_int,
+            interval_seconds=interval_seconds,
+            telemetry_types=data.get("telemetry_types"),
+            enabled=bool(enabled),
+        )
+        return jsonify({"success": True, "schedule": schedule})
+
+    except ValueError as e:
+        return jsonify({"success": False, "error": str(e)}), 400
+    except Exception as e:
+        logger.error(f"Error managing telemetry schedule for {node_id}: {e}")
+        return jsonify({"error": str(e)}), 500
+
+
+@admin_bp.route(
+    "/api/admin/node/<node_id>/telemetry/schedule/run", methods=["POST"]
+)
+def api_run_node_telemetry_schedule(node_id):
+    """Immediately solicit telemetry for a scheduled node."""
+    try:
+        node_id_int = convert_node_id(node_id)
+        outcome = run_schedule_now(node_id_int)
+        status = 200 if outcome.get("success") else 408
+        if outcome.get("error") == "No schedule for this node":
+            status = 404
+        return jsonify(outcome), status
+    except Exception as e:
+        logger.error(f"Error running telemetry schedule for {node_id}: {e}")
         return jsonify({"error": str(e)}), 500
 
 

@@ -5,10 +5,7 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
-from malla.routes.admin_routes import (
-    _live_telemetry_attempt_timeouts,
-    _request_live_telemetry_with_retry,
-)
+from malla.services.live_telemetry import request_live_telemetry_with_retry
 from malla.utils.telemetry_request import (
     LIVE_TELEMETRY_TYPE_ROTATION,
     apply_telemetry_request_type,
@@ -213,8 +210,8 @@ class TestLiveTelemetryHopBudget:
 @pytest.mark.unit
 class TestLiveTelemetryApiRetryHelpers:
     def test_attempt_timeout_split(self):
-        assert _live_telemetry_attempt_timeouts(10, attempts=1) == [10.0]
-        attempts = _live_telemetry_attempt_timeouts(12, attempts=2)
+        assert split_live_telemetry_attempts(10, attempts=1) == [10.0]
+        attempts = split_live_telemetry_attempts(12, attempts=2)
         assert attempts == [12.0, 12.0]
 
     def test_retry_helper_retries_once_on_failure(self):
@@ -223,8 +220,8 @@ class TestLiveTelemetryApiRetryHelpers:
             None,
             {"telemetry": {"device_metrics": {"battery_level": 50}}},
         ]
-        with patch("malla.routes.admin_routes.time.sleep"):
-            result, attempts = _request_live_telemetry_with_retry(
+        with patch("malla.services.live_telemetry.time.sleep"):
+            result, attempts = request_live_telemetry_with_retry(
                 publisher,
                 0x1234,
                 "device_metrics",
@@ -247,7 +244,7 @@ class TestLiveTelemetryApiRetryHelpers:
         publisher.send_telemetry_request.return_value = {
             "telemetry": {"device_metrics": {"battery_level": 50}}
         }
-        result, attempts = _request_live_telemetry_with_retry(
+        result, attempts = request_live_telemetry_with_retry(
             publisher, 0x1234, "device_metrics", 20, attempts=3
         )
         assert attempts == 1
@@ -257,8 +254,8 @@ class TestLiveTelemetryApiRetryHelpers:
     def test_retry_helper_three_attempts_for_far_nodes(self):
         publisher = MagicMock()
         publisher.send_telemetry_request.return_value = None
-        with patch("malla.routes.admin_routes.time.sleep") as sleep_mock:
-            result, attempts = _request_live_telemetry_with_retry(
+        with patch("malla.services.live_telemetry.time.sleep") as sleep_mock:
+            result, attempts = request_live_telemetry_with_retry(
                 publisher,
                 0x1234,
                 "device_metrics",

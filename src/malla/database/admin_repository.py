@@ -182,6 +182,15 @@ def init_admin_tables() -> None:
 
     conn.commit()
     conn.close()
+
+    # Operator-managed solicited telemetry schedules (separate helper)
+    try:
+        from .scheduled_telemetry_repository import init_scheduled_telemetry_tables
+
+        init_scheduled_telemetry_tables()
+    except Exception as e:
+        logger.warning(f"Could not initialize scheduled telemetry tables: {e}")
+
     logger.info("Admin tables initialized")
 
 
