@@ -2762,6 +2762,8 @@ class BotService:
             lowbat_count = self._get_recent_lowbat_count()
             top_names = self._get_digest_top_names(limit=3)
             nodes_delta = self._get_active_nodes_delta()
+            new_nodes = self._get_new_nodes_24h(limit=2)
+            longest_tr = self._get_longest_traceroute_24h()
 
             return self._format_daily_digest(
                 vitals=vitals,
@@ -2769,6 +2771,8 @@ class BotService:
                 offline_routers=offline_routers,
                 lowbat_count=lowbat_count,
                 top_names=top_names,
+                new_nodes=new_nodes,
+                longest_tr=longest_tr,
                 when=time.localtime(),
             )
         except Exception as e:
@@ -2782,11 +2786,14 @@ class BotService:
         offline_routers: list[str],
         lowbat_count: int,
         top_names: list[str],
+        new_nodes: list[str] | None = None,
+        longest_tr: dict[str, Any] | None = None,
         when: time.struct_time | None = None,
     ) -> str:
         """Format digest fields into a Meshtastic-friendly message."""
         when = when or time.localtime()
         date_label = f"{when.tm_mon}/{when.tm_mday}"
+        new_nodes = new_nodes or []
 
         nodes = int(vitals.get("active_nodes_24h") or 0)
         packets = int(vitals.get("packets_24h") or 0)
@@ -2819,10 +2826,24 @@ class BotService:
                 names = ", ".join(offline_routers[:2])
                 lines.append(f"Routers: {names}")
 
-        if top_names:
-            lines.append(f"Top: {', '.join(top_names)}")
+        if new_nodes:
+            lines.append(f"New: {', '.join(new_nodes)}")
 
+        if longest_tr and longest_tr.get("hops", 0) > 0:
+            from_name = longest_tr.get("from_name") or "?"
+            to_name = longest_tr.get("to_name") or "?"
+            lines.append(
+                f"Long TR: {longest_tr['hops']} hops {from_name}→{to_name}"
+            )
+
+        # Top talkers are nice-to-have; drop first if payload is tight
+        optional_top = f"Top: {', '.join(top_names)}" if top_names else None
         message = "\n".join(lines)
+        if optional_top:
+            candidate = message + "\n" + optional_top
+            if len(candidate.encode("utf-8")) <= 220:
+                message = candidate
+
         if len(message.encode("utf-8")) > 220:
             message = message.encode("utf-8")[:217].decode("utf-8", errors="ignore")
             message = message.rstrip() + "..."
@@ -2966,6 +2987,26 @@ class BotService:
             logger.error(f"Error getting recent lowbat count: {e}", exc_info=True)
             return 0
 
+    def _digest_node_label(
+        self,
+        node_id: int | None,
+        short_name: str | None = None,
+        long_name: str | None = None,
+        max_len: int = 10,
+    ) -> str:
+        """Compact node label for digest lines."""
+        if short_name:
+            name = short_name
+        elif long_name:
+            name = long_name
+        elif node_id is not None:
+            name = f"!{node_id:08x}"[-4:]
+        else:
+            name = "?"
+        if len(name) > max_len:
+            name = name[:max_len]
+        return name
+
     def _get_digest_top_names(self, limit: int = 3) -> list[str]:
         """Return short names of the most active nodes in the last 24 hours."""
         try:
@@ -2990,20 +3031,129 @@ class BotService:
             rows = cursor.fetchall()
             conn.close()
 
-            names: list[str] = []
-            for row in rows:
-                name = (
-                    row["short_name"]
-                    or row["long_name"]
-                    or f"!{row['from_node_id']:08x}"
+            return [
+                self._digest_node_label(
+                    row["from_node_id"], row["short_name"], row["long_name"]
                 )
-                if len(name) > 10:
-                    name = name[:10]
-                names.append(name)
-            return names
+                for row in rows
+            ]
         except Exception as e:
             logger.error(f"Error getting digest top names: {e}", exc_info=True)
             return []
+
+    def _get_new_nodes_24h(self, limit: int = 2) -> list[str]:
+        """Return names of nodes first seen in the last 24 hours."""
+        try:
+            from ..database.connection import get_db_connection
+
+            conn = get_db_connection()
+            cursor = conn.cursor()
+            since = time.time() - (24 * 3600)
+            cursor.execute(
+                """
+                SELECT node_id, short_name, long_name, first_seen
+                FROM node_info
+                WHERE COALESCE(archived, 0) = 0
+                  AND first_seen IS NOT NULL
+                  AND first_seen > ?
+                ORDER BY first_seen DESC
+                LIMIT ?
+                """,
+                (since, limit),
+            )
+            rows = cursor.fetchall()
+            conn.close()
+
+            return [
+                self._digest_node_label(
+                    row["node_id"], row["short_name"], row["long_name"]
+                )
+                for row in rows
+            ]
+        except Exception as e:
+            logger.error(f"Error getting new nodes for digest: {e}", exc_info=True)
+            return []
+
+    def _get_longest_traceroute_24h(self) -> dict[str, Any] | None:
+        """Find the traceroute with the most hops in the last 24 hours.
+
+        Uses route payload hop counts (lightweight) rather than full link
+        distance analysis so the digest stays cheap to compute.
+        """
+        try:
+            from ..database.connection import get_db_connection
+            from ..utils.traceroute_utils import parse_traceroute_payload
+
+            conn = get_db_connection()
+            cursor = conn.cursor()
+            since = time.time() - (24 * 3600)
+            cursor.execute(
+                """
+                SELECT p.from_node_id, p.to_node_id, p.hop_start, p.hop_limit,
+                       p.raw_payload,
+                       nf.short_name as from_short, nf.long_name as from_long,
+                       nt.short_name as to_short, nt.long_name as to_long
+                FROM packet_history p
+                LEFT JOIN node_info nf ON nf.node_id = p.from_node_id
+                LEFT JOIN node_info nt ON nt.node_id = p.to_node_id
+                WHERE p.portnum_name = 'TRACEROUTE_APP'
+                  AND p.timestamp > ?
+                  AND p.raw_payload IS NOT NULL
+                ORDER BY p.timestamp DESC
+                LIMIT 150
+                """,
+                (since,),
+            )
+            rows = cursor.fetchall()
+            conn.close()
+
+            best: dict[str, Any] | None = None
+            for row in rows:
+                hops = 0
+                raw_payload = row["raw_payload"]
+                if isinstance(raw_payload, memoryview):
+                    raw_payload = raw_payload.tobytes()
+                if isinstance(raw_payload, bytes) and raw_payload:
+                    route_data = parse_traceroute_payload(raw_payload)
+                    snr_hops = len(route_data.get("snr_towards") or [])
+                    route_hops = len(route_data.get("route_nodes") or [])
+                    # SNR entries cover each RF hop including the final hop
+                    hops = snr_hops if snr_hops > 0 else (
+                        route_hops + 1 if route_hops > 0 else 0
+                    )
+
+                hop_start = row["hop_start"]
+                hop_limit = row["hop_limit"]
+                if hop_start is not None and hop_limit is not None:
+                    consumed = int(hop_start) - int(hop_limit)
+                    if consumed > hops:
+                        hops = consumed
+
+                if hops <= 0:
+                    continue
+                if best is None or hops > best["hops"]:
+                    best = {
+                        "hops": hops,
+                        "from_name": self._digest_node_label(
+                            row["from_node_id"],
+                            row["from_short"],
+                            row["from_long"],
+                            max_len=8,
+                        ),
+                        "to_name": self._digest_node_label(
+                            row["to_node_id"],
+                            row["to_short"],
+                            row["to_long"],
+                            max_len=8,
+                        ),
+                    }
+
+            return best
+        except Exception as e:
+            logger.error(
+                f"Error getting longest traceroute for digest: {e}", exc_info=True
+            )
+            return None
 
 
 # Singleton accessor

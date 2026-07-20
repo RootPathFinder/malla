@@ -34,6 +34,12 @@ class TestDailyDigestFormatting:
             offline_routers=["HillTop", "Bridge"],
             lowbat_count=2,
             top_names=["Alpha", "Bravo", "Charlie"],
+            new_nodes=["Newbie", "Fresh"],
+            longest_tr={
+                "hops": 5,
+                "from_name": "Alpha",
+                "to_name": "Zulu",
+            },
             when=when,
         )
 
@@ -44,6 +50,8 @@ class TestDailyDigestFormatting:
         assert "Lowbat: 2" in message
         assert "Off routers: 2" in message
         assert "Routers: HillTop, Bridge" in message
+        assert "New: Newbie, Fresh" in message
+        assert "Long TR: 5 hops Alpha→Zulu" in message
         assert "Top: Alpha, Bravo, Charlie" in message
 
     @pytest.mark.unit
@@ -61,12 +69,16 @@ class TestDailyDigestFormatting:
             offline_routers=[],
             lowbat_count=0,
             top_names=["Alpha"],
+            new_nodes=[],
+            longest_tr=None,
             when=when,
         )
 
         assert "Lowbat" not in message
         assert "Off routers" not in message
         assert "Routers:" not in message
+        assert "New:" not in message
+        assert "Long TR:" not in message
         assert "Top: Alpha" in message
 
 
@@ -127,6 +139,91 @@ class TestDailyDigestFilters:
         assert params[0] == pytest.approx(
             time.time() - bot_service._digest_lowbat_hours * 3600, abs=5
         )
+
+
+class TestDailyDigestExtras:
+    @pytest.mark.unit
+    def test_new_nodes_query_uses_first_seen_24h_window(self, bot_service: BotService):
+        cursor = MagicMock()
+        cursor.fetchall.return_value = [
+            {
+                "node_id": 11,
+                "short_name": "Newbie",
+                "long_name": "New Node",
+                "first_seen": time.time() - 1000,
+            }
+        ]
+        conn = MagicMock()
+        conn.cursor.return_value = cursor
+
+        with patch(
+            "src.malla.database.connection.get_db_connection", return_value=conn
+        ):
+            names = bot_service._get_new_nodes_24h(limit=2)
+
+        assert names == ["Newbie"]
+        sql = cursor.execute.call_args[0][0]
+        params = cursor.execute.call_args[0][1]
+        assert "first_seen > ?" in sql
+        assert params[0] == pytest.approx(time.time() - 24 * 3600, abs=5)
+        assert params[1] == 2
+
+    @pytest.mark.unit
+    def test_longest_traceroute_picks_max_hops(self, bot_service: BotService):
+        cursor = MagicMock()
+        cursor.fetchall.return_value = [
+            {
+                "from_node_id": 0x11111111,
+                "to_node_id": 0x22222222,
+                "hop_start": 3,
+                "hop_limit": 1,
+                "raw_payload": b"unused",
+                "from_short": "Alpha",
+                "from_long": None,
+                "to_short": "Beta",
+                "to_long": None,
+            },
+            {
+                "from_node_id": 0x33333333,
+                "to_node_id": 0x44444444,
+                "hop_start": 7,
+                "hop_limit": 2,
+                "raw_payload": b"unused",
+                "from_short": "Gamma",
+                "from_long": None,
+                "to_short": "Delta",
+                "to_long": None,
+            },
+        ]
+        conn = MagicMock()
+        conn.cursor.return_value = cursor
+
+        with patch(
+            "src.malla.database.connection.get_db_connection", return_value=conn
+        ):
+            with patch(
+                "src.malla.utils.traceroute_utils.parse_traceroute_payload",
+                side_effect=[
+                    {
+                        "route_nodes": [1],
+                        "snr_towards": [-5.0, -6.0],
+                        "route_back": [],
+                        "snr_back": [],
+                    },
+                    {
+                        "route_nodes": [1, 2, 3],
+                        "snr_towards": [-5.0, -6.0, -7.0, -8.0],
+                        "route_back": [],
+                        "snr_back": [],
+                    },
+                ],
+            ):
+                best = bot_service._get_longest_traceroute_24h()
+
+        assert best is not None
+        assert best["hops"] == 5  # hop_start - hop_limit for second packet
+        assert best["from_name"] == "Gamma"
+        assert best["to_name"] == "Delta"
 
 
 class TestDailyDigestScheduling:
