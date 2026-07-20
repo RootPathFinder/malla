@@ -226,13 +226,37 @@ class TestChannelUrlGeneration:
     """Tests for Meshtastic channel URL generation."""
 
     @pytest.mark.unit
-    def test_generate_channel_url_basic(self):
+    def test_generate_channel_url_is_add_mode(self):
         from malla.utils.channel_url import generate_channel_url
 
         url = generate_channel_url("TestChan", "AQ==")
         assert url is not None
-        assert url.startswith("https://meshtastic.org/e/#")
-        assert len(url) > len("https://meshtastic.org/e/#")
+        assert url.startswith("https://meshtastic.org/e/?add=true#")
+        assert len(url) > len("https://meshtastic.org/e/?add=true#")
+
+    @pytest.mark.unit
+    def test_generate_channel_url_encodes_single_channel(self):
+        """Add-mode URLs encode only the shared channel (no placeholders)."""
+        import base64
+
+        from meshtastic.protobuf import apponly_pb2
+
+        from malla.utils.channel_url import generate_channel_url
+
+        url = generate_channel_url("TestChan", "AQ==")
+        assert url is not None
+
+        fragment = url.split("#", 1)[1]
+        padded = fragment + "=" * (-len(fragment) % 4)
+        proto_bytes = base64.urlsafe_b64decode(padded)
+
+        channel_set = apponly_pb2.ChannelSet()
+        channel_set.ParseFromString(proto_bytes)
+
+        assert len(channel_set.settings) == 1
+        assert channel_set.settings[0].name == "TestChan"
+        assert channel_set.settings[0].psk == base64.b64decode("AQ==")
+        assert not channel_set.HasField("lora_config")
 
     @pytest.mark.unit
     def test_generate_channel_url_default_psk(self):
@@ -240,7 +264,7 @@ class TestChannelUrlGeneration:
 
         url = generate_channel_url("MyChan")
         assert url is not None
-        assert "meshtastic.org/e/#" in url
+        assert "meshtastic.org/e/?add=true#" in url
 
     @pytest.mark.unit
     def test_generate_channel_url_different_channels_differ(self):
@@ -259,56 +283,50 @@ class TestChannelUrlGeneration:
         assert url1 != url2
 
     @pytest.mark.unit
-    def test_generate_channel_url_preserves_primary_channel(self):
-        """URL encodes the shared channel at index 1 (secondary) with
-        the default primary channel at index 0 so tapping the URL on
-        iOS/Android does not wipe existing channels."""
+    def test_generate_channel_url_add_mode_ignores_slot(self):
+        from malla.utils.channel_url import generate_channel_url
+
+        assert generate_channel_url("TestChan", "AQ==") == generate_channel_url(
+            "TestChan", "AQ==", channel_index=3
+        )
+
+    @pytest.mark.unit
+    def test_generate_channel_url_replace_mode_pads_slots(self):
+        """Explicit replace mode still pads lower slots for legacy use."""
         import base64
 
         from meshtastic.protobuf import apponly_pb2
 
         from malla.utils.channel_url import generate_channel_url
 
-        url = generate_channel_url("TestChan", "AQ==")
+        url = generate_channel_url("TestChan", "AQ==", channel_index=1, add=False)
         assert url is not None
+        assert url.startswith("https://meshtastic.org/e/#")
+        assert "?add=true" not in url
 
-        # Decode the protobuf from the URL fragment
         fragment = url.split("#", 1)[1]
-        # Re-pad base64url
         padded = fragment + "=" * (-len(fragment) % 4)
         proto_bytes = base64.urlsafe_b64decode(padded)
 
         channel_set = apponly_pb2.ChannelSet()
         channel_set.ParseFromString(proto_bytes)
 
-        # Must have 2 settings entries: primary (index 0) + shared (index 1)
         assert len(channel_set.settings) == 2
-
-        # settings[0] should be the default primary channel (empty name,
-        # default PSK 0x01)
-        primary = channel_set.settings[0]
-        assert primary.name == ""
-        assert primary.psk == b"\x01"
-
-        # settings[1] should be the shared channel
-        secondary = channel_set.settings[1]
-        assert secondary.name == "TestChan"
-        assert secondary.psk == base64.b64decode("AQ==")
-
-        # lora_config should not be present
+        assert channel_set.settings[0].name == ""
+        assert channel_set.settings[0].psk == b"\x01"
+        assert channel_set.settings[1].name == "TestChan"
+        assert channel_set.settings[1].psk == base64.b64decode("AQ==")
         assert not channel_set.HasField("lora_config")
 
     @pytest.mark.unit
-    def test_generate_channel_url_custom_slot(self):
-        """Specifying channel_index=3 puts the channel at settings[3]
-        with placeholder entries at settings[0]-[2]."""
+    def test_generate_channel_url_replace_custom_slot(self):
         import base64
 
         from meshtastic.protobuf import apponly_pb2
 
         from malla.utils.channel_url import generate_channel_url
 
-        url = generate_channel_url("MyChan", "AQ==", channel_index=3)
+        url = generate_channel_url("MyChan", "AQ==", channel_index=3, add=False)
         assert url is not None
 
         fragment = url.split("#", 1)[1]
@@ -318,29 +336,22 @@ class TestChannelUrlGeneration:
         channel_set = apponly_pb2.ChannelSet()
         channel_set.ParseFromString(proto_bytes)
 
-        # 4 entries: slots 0, 1, 2 (placeholders) + slot 3 (target)
         assert len(channel_set.settings) == 4
-
-        # Placeholders should have default PSK and no name
         for i in range(3):
             assert channel_set.settings[i].name == ""
             assert channel_set.settings[i].psk == b"\x01"
-
-        # Slot 3 is the actual channel
         assert channel_set.settings[3].name == "MyChan"
         assert channel_set.settings[3].psk == base64.b64decode("AQ==")
 
     @pytest.mark.unit
-    def test_generate_channel_url_slot_zero_replaces_primary(self):
-        """channel_index=0 puts the channel directly at slot 0 with
-        no extra placeholder entries."""
+    def test_generate_channel_url_replace_slot_zero(self):
         import base64
 
         from meshtastic.protobuf import apponly_pb2
 
         from malla.utils.channel_url import generate_channel_url
 
-        url = generate_channel_url("Primary", "AQ==", channel_index=0)
+        url = generate_channel_url("Primary", "AQ==", channel_index=0, add=False)
         assert url is not None
 
         fragment = url.split("#", 1)[1]
@@ -355,8 +366,7 @@ class TestChannelUrlGeneration:
 
     @pytest.mark.unit
     def test_generate_channel_url_invalid_slot_returns_none(self):
-        """Out of range channel_index (8, -1) returns None."""
         from malla.utils.channel_url import generate_channel_url
 
-        assert generate_channel_url("X", "AQ==", channel_index=8) is None
-        assert generate_channel_url("X", "AQ==", channel_index=-1) is None
+        assert generate_channel_url("X", "AQ==", channel_index=8, add=False) is None
+        assert generate_channel_url("X", "AQ==", channel_index=-1, add=False) is None

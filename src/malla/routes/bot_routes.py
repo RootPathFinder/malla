@@ -504,13 +504,11 @@ def api_bot_channels():
         active_only = request.args.get("active_only", "true").lower() == "true"
         channels = ChannelDirectoryRepository.get_all_channels(active_only=active_only)
 
-        # Attach a clickable Meshtastic URL to each channel.
-        # The optional ?slot= query param (0-7) controls which radio
-        # channel index the URL targets.  Defaults to 1 (secondary).
-        slot = request.args.get("slot", 1, type=int)
+        # Attach add-mode Meshtastic URLs (?add=true) so clients append
+        # the channel without replacing LongFast / existing channels.
         for ch in channels:
             ch["url"] = generate_channel_url(
-                ch["channel_name"], ch.get("psk", "AQ=="), channel_index=slot
+                ch["channel_name"], ch.get("psk", "AQ==")
             )
 
         return jsonify({"channels": channels, "count": len(channels)})
@@ -546,13 +544,10 @@ def api_bot_add_channel():
         )
 
         if result["success"]:
-            # Attach the clickable Meshtastic URL to the new channel
+            # Attach an add-mode Meshtastic URL to the new channel
             from ..utils.channel_url import generate_channel_url
 
-            slot = data.get("channel_index", 1)
-            result["channel"]["url"] = generate_channel_url(
-                channel_name, psk, channel_index=slot
-            )
+            result["channel"]["url"] = generate_channel_url(channel_name, psk)
             return jsonify(result)
         else:
             return jsonify(result), 409
@@ -575,9 +570,8 @@ def api_bot_channel_info(channel_name: str):
         if not channel:
             return jsonify({"error": f"Channel '{channel_name}' not found"}), 404
 
-        slot = request.args.get("slot", 1, type=int)
         channel["url"] = generate_channel_url(
-            channel["channel_name"], channel.get("psk", "AQ=="), channel_index=slot
+            channel["channel_name"], channel.get("psk", "AQ==")
         )
         return jsonify(channel)
 
