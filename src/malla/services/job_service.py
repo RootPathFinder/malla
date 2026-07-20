@@ -23,6 +23,79 @@ from .change_registry import ChangeType as ChangeRegistryType
 
 logger = logging.getLogger(__name__)
 
+# Confirmation levels for admin write outcomes recorded in job results.
+# verified > acked > unacked > failed; skipped means no write was needed.
+CONFIRMATION_VERIFIED = "verified"
+CONFIRMATION_ACKED = "acked"
+CONFIRMATION_UNACKED = "unacked"
+CONFIRMATION_FAILED = "failed"
+CONFIRMATION_SKIPPED = "skipped"
+CONFIRMATION_MIXED = "mixed"
+
+
+def confirmation_from_admin_result(result: Any) -> str:
+    """
+    Map an AdminCommandResult to a confirmation level.
+
+    - failed: write failed / NAK
+    - acked: remote ACK (or admin response) received
+    - unacked: write reported success but no ACK came back
+    """
+    if result is None or not getattr(result, "success", False):
+        return CONFIRMATION_FAILED
+    response = getattr(result, "response", None) or {}
+    if response.get("acknowledged") is True:
+        return CONFIRMATION_ACKED
+    if response.get("acknowledged") is False:
+        return CONFIRMATION_UNACKED
+    # Success without an explicit acknowledged flag — treat as unconfirmed
+    return CONFIRMATION_UNACKED
+
+
+def summarize_confirmations(levels: list[str]) -> str:
+    """Roll up per-item confirmation levels into a single job-level value."""
+    actionable = [c for c in levels if c != CONFIRMATION_SKIPPED]
+    if not actionable:
+        return CONFIRMATION_SKIPPED if levels else CONFIRMATION_FAILED
+
+    unique = set(actionable)
+    if unique == {CONFIRMATION_FAILED}:
+        return CONFIRMATION_FAILED
+    if CONFIRMATION_FAILED in unique and len(unique) > 1:
+        return CONFIRMATION_MIXED
+    if unique == {CONFIRMATION_VERIFIED}:
+        return CONFIRMATION_VERIFIED
+    if unique <= {CONFIRMATION_ACKED, CONFIRMATION_VERIFIED}:
+        return CONFIRMATION_ACKED if CONFIRMATION_ACKED in unique else CONFIRMATION_VERIFIED
+    if unique == {CONFIRMATION_UNACKED}:
+        return CONFIRMATION_UNACKED
+    if CONFIRMATION_UNACKED in unique and unique & {
+        CONFIRMATION_ACKED,
+        CONFIRMATION_VERIFIED,
+    }:
+        return CONFIRMATION_MIXED
+    return CONFIRMATION_MIXED
+
+
+def confirmation_counts(levels: list[str]) -> dict[str, int]:
+    """Count confirmation levels for job result summaries."""
+    counts: dict[str, int] = {}
+    for level in levels:
+        counts[level] = counts.get(level, 0) + 1
+    return counts
+
+
+def confirmation_progress_label(level: str) -> str:
+    """Short label for progress / log messages."""
+    return {
+        CONFIRMATION_VERIFIED: "verified",
+        CONFIRMATION_ACKED: "ACK received",
+        CONFIRMATION_UNACKED: "no ACK",
+        CONFIRMATION_FAILED: "failed",
+        CONFIRMATION_SKIPPED: "skipped",
+        CONFIRMATION_MIXED: "mixed confirmation",
+    }.get(level, level)
+
 
 class JobCancelledException(Exception):
     """Exception raised when a job is cancelled."""
@@ -970,8 +1043,10 @@ class JobService:
 
         current_item = 0
         successful_restores: list[str] = []
+        restored_items: list[dict[str, str]] = []
         skipped_unchanged: list[str] = []
         errors: list[str] = []
+        confirmation_levels: list[str] = []
 
         # Create a change registry to track changes and enable skip-if-unchanged
         change_registry = ChangeRegistry()
@@ -1042,6 +1117,7 @@ class JobService:
 
                 if pending and pending.status.value == "skipped":
                     skipped_unchanged.append(f"core:{item_name}")
+                    confirmation_levels.append(CONFIRMATION_SKIPPED)
                     progress.update(
                         prog_pct,
                         f"≡ {item_name.upper()} config unchanged - skipped",
@@ -1068,10 +1144,14 @@ class JobService:
 
                 if result.success:
                     change_registry.mark_change_applied(tx_id, item_name)
-                    successful_restores.append(f"core:{item_name}")
+                    item_key = f"core:{item_name}"
+                    conf = confirmation_from_admin_result(result)
+                    successful_restores.append(item_key)
+                    restored_items.append({"item": item_key, "confirmation": conf})
+                    confirmation_levels.append(conf)
                     progress.update(
                         prog_pct,
-                        f"✓ {item_name.upper()} config restored",
+                        f"✓ {item_name.upper()} config restored ({confirmation_progress_label(conf)})",
                         "core",
                         current_item,
                         total_items,
@@ -1088,6 +1168,7 @@ class JobService:
                             f"⏱ {item_name.upper()} config timeout: {error_msg}"
                         )
                     errors.append(f"core:{item_name}: {error_msg}")
+                    confirmation_levels.append(CONFIRMATION_FAILED)
                     progress.update(
                         prog_pct,
                         display_msg,
@@ -1134,6 +1215,7 @@ class JobService:
 
                 if pending and pending.status.value == "skipped":
                     skipped_unchanged.append(f"module:{item_name}")
+                    confirmation_levels.append(CONFIRMATION_SKIPPED)
                     progress.update(
                         prog_pct,
                         f"≡ {item_name.upper()} module unchanged - skipped",
@@ -1160,10 +1242,14 @@ class JobService:
 
                 if result.success:
                     change_registry.mark_change_applied(tx_id, item_name)
-                    successful_restores.append(f"module:{item_name}")
+                    item_key = f"module:{item_name}"
+                    conf = confirmation_from_admin_result(result)
+                    successful_restores.append(item_key)
+                    restored_items.append({"item": item_key, "confirmation": conf})
+                    confirmation_levels.append(conf)
                     progress.update(
                         prog_pct,
-                        f"✓ {item_name.upper()} module restored",
+                        f"✓ {item_name.upper()} module restored ({confirmation_progress_label(conf)})",
                         "module",
                         current_item,
                         total_items,
@@ -1180,6 +1266,7 @@ class JobService:
                             f"⏱ {item_name.upper()} module timeout: {error_msg}"
                         )
                     errors.append(f"module:{item_name}: {error_msg}")
+                    confirmation_levels.append(CONFIRMATION_FAILED)
                     progress.update(
                         prog_pct,
                         display_msg,
@@ -1245,6 +1332,7 @@ class JobService:
 
                 if pending and pending.status.value == "skipped":
                     skipped_unchanged.append(f"channel:{channel_idx}")
+                    confirmation_levels.append(CONFIRMATION_SKIPPED)
                     progress.update(
                         prog_pct,
                         f"≡ Channel {channel_idx} unchanged - skipped",
@@ -1271,10 +1359,14 @@ class JobService:
 
                 if result.success:
                     change_registry.mark_change_applied(tx_id, channel_key)
-                    successful_restores.append(f"channel:{channel_idx}")
+                    item_key = f"channel:{channel_idx}"
+                    conf = confirmation_from_admin_result(result)
+                    successful_restores.append(item_key)
+                    restored_items.append({"item": item_key, "confirmation": conf})
+                    confirmation_levels.append(conf)
                     progress.update(
                         prog_pct,
-                        f"✓ Channel {channel_idx} restored",
+                        f"✓ Channel {channel_idx} restored ({confirmation_progress_label(conf)})",
                         "channel",
                         current_item,
                         total_items,
@@ -1289,6 +1381,7 @@ class JobService:
                     if is_timeout:
                         display_msg = f"⏱ Channel {channel_idx} timeout: {error_msg}"
                     errors.append(f"channel:{channel_idx}: {error_msg}")
+                    confirmation_levels.append(CONFIRMATION_FAILED)
                     progress.update(
                         prog_pct,
                         display_msg,
@@ -1337,18 +1430,30 @@ class JobService:
             skip_msg = (
                 f", {len(skipped_unchanged)} unchanged" if skipped_unchanged else ""
             )
-            progress.update(100, "Restore complete!", "complete")
+            overall_confirmation = summarize_confirmations(confirmation_levels)
+            conf_label = confirmation_progress_label(overall_confirmation)
+            progress.update(
+                100, f"Restore complete ({conf_label})!", "complete"
+            )
 
             return {
                 "success": True,
                 "data": {
-                    "message": f"Restored {len(successful_restores)} configurations{skip_msg}",
+                    "message": (
+                        f"Restored {len(successful_restores)} configurations"
+                        f"{skip_msg} ({conf_label})"
+                    ),
                     "successful_restores": successful_restores,
+                    "restored_items": restored_items,
                     "skipped_unchanged": skipped_unchanged,
                     "failed_restores": errors,
                     "total_restored": len(successful_restores),
                     "total_skipped": len(skipped_unchanged),
                     "total_failed": len(errors),
+                    "confirmation": overall_confirmation,
+                    "confirmation_counts": confirmation_counts(confirmation_levels),
+                    "acknowledged": overall_confirmation
+                    in (CONFIRMATION_ACKED, CONFIRMATION_VERIFIED),
                     "reboot_after": reboot_after,
                     "reboot_sent": reboot_sent,
                     "reboot_error": reboot_error,
@@ -1361,6 +1466,9 @@ class JobService:
                 "data": {
                     "failed_restores": errors,
                     "skipped_unchanged": skipped_unchanged,
+                    "confirmation": CONFIRMATION_FAILED,
+                    "confirmation_counts": confirmation_counts(confirmation_levels),
+                    "acknowledged": False,
                 },
             }
 
@@ -1501,15 +1609,35 @@ class JobService:
                     }
 
             if result.success:
+                conf = confirmation_from_admin_result(result)
+                conf_label = confirmation_progress_label(conf)
                 progress.update(
-                    100, f"✓ {config_type} configuration deployed", "complete"
+                    100,
+                    f"✓ {config_type} configuration deployed ({conf_label})",
+                    "complete",
                 )
                 return {
                     "success": True,
-                    "data": {"config_type": config_type, "log_id": result.log_id},
+                    "data": {
+                        "config_type": config_type,
+                        "log_id": result.log_id,
+                        "confirmation": conf,
+                        "acknowledged": conf == CONFIRMATION_ACKED,
+                        "message": (
+                            f"{config_type} configuration deployed ({conf_label})"
+                        ),
+                    },
                 }
             else:
-                return {"success": False, "error": result.error}
+                return {
+                    "success": False,
+                    "error": result.error,
+                    "data": {
+                        "config_type": config_type,
+                        "confirmation": CONFIRMATION_FAILED,
+                        "acknowledged": False,
+                    },
+                }
 
         except Exception as e:
             return {"success": False, "error": str(e)}
@@ -1659,6 +1787,8 @@ class JobService:
                         "skipped": True,
                         "reason": "Already compliant",
                         "attempts": 0,
+                        "confirmation": CONFIRMATION_SKIPPED,
+                        "acknowledged": False,
                     }
                 )
                 progress.update(
@@ -1671,6 +1801,7 @@ class JobService:
                 continue
 
             # Try up to max_retries times for each node
+            node_confirmation = CONFIRMATION_FAILED
             for attempt in range(max_retries):
                 attempts_made = attempt + 1
                 attempt_label = (
@@ -1722,6 +1853,7 @@ class JobService:
 
                     if not result.success:
                         last_error = result.error
+                        node_confirmation = CONFIRMATION_FAILED
                         logger.warning(
                             f"set_config failed for {node_hex} attempt {attempts_made}: {result.error}"
                         )
@@ -1738,11 +1870,14 @@ class JobService:
                             )
                         continue
 
+                    node_confirmation = confirmation_from_admin_result(result)
+                    conf_label = confirmation_progress_label(node_confirmation)
+
                     # Commit edit settings transaction (follows Meshtastic web protocol)
                     # This saves changes to flash
                     progress.update(
                         node_pct,
-                        f"💾 Committing config to {node_hex}...",
+                        f"💾 Committing config to {node_hex} ({conf_label})...",
                         "committing",
                         current=idx + 1,
                         total=total_nodes,
@@ -1760,7 +1895,7 @@ class JobService:
                     # Wait for config to be applied (mesh network latency)
                     wait_with_progress(
                         3,
-                        f"⏳ Config sent to {node_hex}, waiting for node",
+                        f"⏳ Config sent to {node_hex} ({conf_label}), waiting for node",
                         node_pct,
                         "waiting",
                         idx + 1,
@@ -1779,6 +1914,7 @@ class JobService:
 
                     if is_compliant:
                         node_success = True
+                        node_confirmation = CONFIRMATION_VERIFIED
                         progress.update(
                             node_pct,
                             f"✓ {node_hex} now compliant ({idx + 1}/{total_nodes})",
@@ -1812,6 +1948,7 @@ class JobService:
 
                 except Exception as e:
                     last_error = str(e)
+                    node_confirmation = CONFIRMATION_FAILED
                     logger.error(
                         f"Error fixing {node_hex} attempt {attempts_made}: {e}"
                     )
@@ -1834,6 +1971,9 @@ class JobService:
                         "node_hex": node_hex,
                         "success": True,
                         "attempts": attempts_made,
+                        "confirmation": node_confirmation,
+                        "acknowledged": node_confirmation
+                        in (CONFIRMATION_ACKED, CONFIRMATION_VERIFIED),
                     }
                 )
             else:
@@ -1853,6 +1993,8 @@ class JobService:
                         "success": False,
                         "error": last_error or "Unknown error",
                         "attempts": attempts_made,
+                        "confirmation": node_confirmation,
+                        "acknowledged": False,
                     }
                 )
                 logger.error(
@@ -2004,9 +2146,13 @@ class JobService:
 
         skip_msg = f", {skipped_count} skipped" if skipped_count > 0 else ""
         reboot_msg = f", {len(rebooted_nodes)} rebooted" if rebooted_nodes else ""
+        overall_confirmation = summarize_confirmations(
+            [str(r.get("confirmation", CONFIRMATION_FAILED)) for r in results]
+        )
+        conf_label = confirmation_progress_label(overall_confirmation)
         progress.update(
             100,
-            f"✓ Complete: {fixed_count} fixed{skip_msg}, {failed_count} failed{reboot_msg}",
+            f"✓ Complete: {fixed_count} fixed{skip_msg}, {failed_count} failed{reboot_msg} ({conf_label})",
             "complete",
         )
 
@@ -2023,6 +2169,12 @@ class JobService:
                 "still_non_compliant": still_non_compliant,
                 "template_type": template_type,
                 "rebooted_nodes": rebooted_nodes,
+                "confirmation": overall_confirmation,
+                "confirmation_counts": confirmation_counts(
+                    [str(r.get("confirmation", CONFIRMATION_FAILED)) for r in results]
+                ),
+                "acknowledged": overall_confirmation
+                in (CONFIRMATION_ACKED, CONFIRMATION_VERIFIED),
             },
         }
 
