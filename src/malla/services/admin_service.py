@@ -2169,17 +2169,25 @@ class AdminService:
                 error=error_msg,
             )
 
+        acknowledged = bool(response)
+        message = (
+            "Edit session started - ACK received"
+            if acknowledged
+            else "Edit session started - no ACK received"
+        )
         AdminRepository.update_admin_log_status(
             log_id=log_id,
             status="success",
-            response_data=json.dumps({"message": "Edit session started"}),
+            response_data=json.dumps(
+                {"message": message, "acknowledged": acknowledged}
+            ),
         )
 
         return AdminCommandResult(
             success=True,
             packet_id=packet_id,
             log_id=log_id,
-            response={"message": "Edit session started"},
+            response={"message": message, "acknowledged": acknowledged},
         )
 
     def commit_edit_settings(
@@ -2253,17 +2261,25 @@ class AdminService:
                 error=error_msg,
             )
 
+        acknowledged = bool(response)
+        message = (
+            "Edit session committed - ACK received"
+            if acknowledged
+            else "Edit session committed - no ACK received"
+        )
         AdminRepository.update_admin_log_status(
             log_id=log_id,
             status="success",
-            response_data=json.dumps({"message": "Edit session committed"}),
+            response_data=json.dumps(
+                {"message": message, "acknowledged": acknowledged}
+            ),
         )
 
         return AdminCommandResult(
             success=True,
             packet_id=packet_id,
             log_id=log_id,
-            response={"message": "Edit session committed - config changes saved"},
+            response={"message": message, "acknowledged": acknowledged},
         )
 
     def set_config(
