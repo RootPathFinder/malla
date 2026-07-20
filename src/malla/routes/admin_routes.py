@@ -21,13 +21,13 @@ from flask_login import current_user
 
 from ..config import get_config
 from ..database.admin_repository import AdminRepository
-from ..models.user import UserRole
-from ..services.admin_service import ConfigType, get_admin_service
 from ..database.scheduled_telemetry_repository import (
     DEFAULT_INTERVAL_SECONDS,
     MIN_INTERVAL_SECONDS,
     ScheduledTelemetryRepository,
 )
+from ..models.user import UserRole
+from ..services.admin_service import ConfigType, get_admin_service
 from ..services.live_telemetry import (
     request_live_telemetry_with_retry,
     resolve_live_telemetry_hops,
