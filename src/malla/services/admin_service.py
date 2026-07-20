@@ -1688,15 +1688,24 @@ class AdminService:
                 error=f"Failed to send set_favorite_node command via {conn_type.value}",
             )
 
-        AdminRepository.update_admin_log_status(
+        # Wait for routing ACK/NAK (or admin response) from the remote node
+        ack_result = self._await_admin_write_ack(
+            publisher=publisher,
+            packet_id=packet_id,
             log_id=log_id,
-            status="success",
-            response_data=json.dumps(
-                {
-                    "message": f"Set favorite node command sent for !{node_to_favorite:08x}"
-                }
+            success_acked_message=(
+                f"Node !{node_to_favorite:08x} set as favorite on "
+                f"!{target_node_id:08x} (ACK received)"
             ),
+            success_unacked_message=(
+                f"Set favorite command sent for !{node_to_favorite:08x} "
+                f"on !{target_node_id:08x} (no ACK received)"
+            ),
+            nak_prefix="Node rejected set_favorite_node",
         )
+
+        if not ack_result.success:
+            return ack_result
 
         AdminRepository.upsert_remote_device_favorite(
             target_node_id=target_node_id,
@@ -1704,14 +1713,7 @@ class AdminService:
             source="managed",
         )
 
-        return AdminCommandResult(
-            success=True,
-            packet_id=packet_id,
-            log_id=log_id,
-            response={
-                "message": f"Node !{node_to_favorite:08x} set as favorite on !{target_node_id:08x}"
-            },
-        )
+        return ack_result
 
     def remove_favorite_node(
         self,
@@ -1782,27 +1784,102 @@ class AdminService:
                 error=f"Failed to send remove_favorite_node command via {conn_type.value}",
             )
 
-        AdminRepository.update_admin_log_status(
+        # Wait for routing ACK/NAK (or admin response) from the remote node
+        ack_result = self._await_admin_write_ack(
+            publisher=publisher,
+            packet_id=packet_id,
             log_id=log_id,
-            status="success",
-            response_data=json.dumps(
-                {
-                    "message": f"Remove favorite node command sent for !{node_to_unfavorite:08x}"
-                }
+            success_acked_message=(
+                f"Node !{node_to_unfavorite:08x} removed from favorites on "
+                f"!{target_node_id:08x} (ACK received)"
             ),
+            success_unacked_message=(
+                f"Remove favorite command sent for !{node_to_unfavorite:08x} "
+                f"on !{target_node_id:08x} (no ACK received)"
+            ),
+            nak_prefix="Node rejected remove_favorite_node",
         )
+
+        if not ack_result.success:
+            return ack_result
 
         AdminRepository.remove_remote_device_favorite(
             target_node_id=target_node_id,
             favorite_node_id=node_to_unfavorite,
         )
 
+        return ack_result
+
+    def _await_admin_write_ack(
+        self,
+        publisher: Any,
+        packet_id: int,
+        log_id: int,
+        success_acked_message: str,
+        success_unacked_message: str,
+        nak_prefix: str,
+        timeout: float = 10.0,
+    ) -> AdminCommandResult:
+        """
+        Wait for a routing ACK/NAK (or admin response) after an admin write.
+
+        Meshtastic favorite writes do not return an AdminMessage payload; the
+        positive confirmation is a ROUTING_APP ACK (errorReason=NONE) for the
+        sent packet. A NAK means the node rejected or could not deliver the
+        command. Timeout means the packet was queued/sent but no confirmation
+        came back (common on lossy mesh links).
+        """
+        response = publisher.get_response(packet_id, timeout=timeout)
+
+        if response:
+            is_nak = response.get("is_nak", False)
+            error_reason = response.get("error_reason", "")
+
+            if is_nak:
+                error_msg = f"{nak_prefix}: {error_reason or 'NAK'}"
+                AdminRepository.update_admin_log_status(
+                    log_id=log_id,
+                    status="failed",
+                    error_message=error_msg,
+                )
+                return AdminCommandResult(
+                    success=False,
+                    packet_id=packet_id,
+                    log_id=log_id,
+                    error=error_msg,
+                )
+
+            AdminRepository.update_admin_log_status(
+                log_id=log_id,
+                status="success",
+                response_data=json.dumps(
+                    {"message": success_acked_message, "acknowledged": True}
+                ),
+            )
+            return AdminCommandResult(
+                success=True,
+                packet_id=packet_id,
+                log_id=log_id,
+                response={
+                    "message": success_acked_message,
+                    "acknowledged": True,
+                },
+            )
+
+        AdminRepository.update_admin_log_status(
+            log_id=log_id,
+            status="success",
+            response_data=json.dumps(
+                {"message": success_unacked_message, "acknowledged": False}
+            ),
+        )
         return AdminCommandResult(
             success=True,
             packet_id=packet_id,
             log_id=log_id,
             response={
-                "message": f"Node !{node_to_unfavorite:08x} removed from favorites on !{target_node_id:08x}"
+                "message": success_unacked_message,
+                "acknowledged": False,
             },
         )
 

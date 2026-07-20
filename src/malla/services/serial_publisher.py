@@ -432,6 +432,36 @@ class SerialPublisher:
                 return
 
             port_num = packet.get("decoded", {}).get("portnum")
+            decoded = packet.get("decoded", {})
+
+            # Handle routing ACK/NAK responses (wantAck delivery confirmation)
+            if port_num == "ROUTING_APP" or port_num == portnums_pb2.ROUTING_APP:
+                routing = decoded.get("routing", {})
+                error_reason = routing.get("errorReason", "NONE")
+                request_id = packet.get("requestId") or decoded.get("requestId")
+
+                if request_id:
+                    response_data = {
+                        "packet": packet,
+                        "received_at": time.time(),
+                        "from_node": packet.get("fromId") or packet.get("from"),
+                        "routing": routing,
+                        "error_reason": error_reason,
+                        "is_ack": error_reason == "NONE",
+                        "is_nak": error_reason != "NONE",
+                        "decoded": decoded,
+                    }
+                    with self._response_lock:
+                        if request_id in self._pending_responses:
+                            self._pending_responses[request_id] = response_data
+                            if request_id in self._response_events:
+                                self._response_events[request_id].set()
+                        else:
+                            self._last_admin_response = response_data
+                            self._admin_response_event.set()
+                    logger.info(
+                        f"Received routing response for request {request_id}: {error_reason}"
+                    )
 
             # Handle admin responses
             if port_num == "ADMIN_APP" or port_num == portnums_pb2.ADMIN_APP:
@@ -448,7 +478,7 @@ class SerialPublisher:
         """Handle admin app responses."""
         try:
             decoded = packet.get("decoded", {})
-            request_id = decoded.get("requestId", 0)
+            request_id = packet.get("requestId") or decoded.get("requestId", 0)
 
             admin_message = None
             if "admin" in decoded:
@@ -459,6 +489,8 @@ class SerialPublisher:
                 "admin_message": admin_message,
                 "from_node": packet.get("fromId"),
                 "received_at": time.time(),
+                "is_ack": True,
+                "is_nak": False,
             }
 
             # Check if this is a response to a specific request
@@ -541,6 +573,12 @@ class SerialPublisher:
         if request_id:
             # Wait for specific request
             with self._response_lock:
+                existing = self._pending_responses.get(request_id)
+                if existing:
+                    self._pending_responses.pop(request_id, None)
+                    self._response_events.pop(request_id, None)
+                    return existing
+
                 if request_id not in self._response_events:
                     self._response_events[request_id] = threading.Event()
                     self._pending_responses[request_id] = {}
@@ -550,7 +588,7 @@ class SerialPublisher:
                 with self._response_lock:
                     response = self._pending_responses.pop(request_id, None)
                     self._response_events.pop(request_id, None)
-                return response
+                return response if response else None
             else:
                 # Timeout - clean up
                 with self._response_lock:
@@ -591,21 +629,28 @@ class SerialPublisher:
             return None
 
         try:
-            packet_id = random.getrandbits(32)
-
-            # Register for response
-            with self._response_lock:
-                self._response_events[packet_id] = threading.Event()
-                self._pending_responses[packet_id] = {}
-
-            # Send the admin message
-            self._interface.sendData(
-                data=admin_message.SerializeToString(),
+            # Send the admin message; wantAck requests a routing ACK/NAK
+            mesh_packet = self._interface.sendData(
+                data=admin_message,
                 destinationId=target_node_id,
                 portNum=portnums_pb2.ADMIN_APP,
+                wantAck=True,
                 wantResponse=want_response,
                 channelIndex=0,
+                pkiEncrypted=True,
             )
+
+            packet_id = getattr(mesh_packet, "id", None)
+            if not packet_id:
+                packet_id = random.getrandbits(32)
+            else:
+                packet_id = int(packet_id) & 0xFFFFFFFF
+
+            # Register for response keyed by the real mesh packet id
+            if want_response:
+                with self._response_lock:
+                    self._response_events[packet_id] = threading.Event()
+                    self._pending_responses[packet_id] = {}
 
             logger.info(
                 f"Sent admin message to !{target_node_id:08x}, packet_id={packet_id}"

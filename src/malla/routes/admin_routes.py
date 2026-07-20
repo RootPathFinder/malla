@@ -2598,6 +2598,9 @@ def api_set_favorite_node(node_id):
 
         if result.success:
             message = result.response.get("message") if result.response else None
+            acknowledged = (
+                bool(result.response.get("acknowledged")) if result.response else False
+            )
             favorites = admin_service.get_device_favorites(target_node_id)
             return jsonify(
                 {
@@ -2605,6 +2608,7 @@ def api_set_favorite_node(node_id):
                     "target_node_id": f"!{target_node_id:08x}",
                     "node_favorited": f"!{node_to_favorite:08x}",
                     "message": message,
+                    "acknowledged": acknowledged,
                     "log_id": result.log_id,
                     "favorites": favorites.get("favorites", []),
                     "favorites_source": favorites.get("source"),
@@ -2652,6 +2656,9 @@ def api_remove_favorite_node(node_id):
 
         if result.success:
             message = result.response.get("message") if result.response else None
+            acknowledged = (
+                bool(result.response.get("acknowledged")) if result.response else False
+            )
             favorites = admin_service.get_device_favorites(target_node_id)
             return jsonify(
                 {
@@ -2659,6 +2666,7 @@ def api_remove_favorite_node(node_id):
                     "target_node_id": f"!{target_node_id:08x}",
                     "node_unfavorited": f"!{node_to_unfavorite:08x}",
                     "message": message,
+                    "acknowledged": acknowledged,
                     "log_id": result.log_id,
                     "favorites": favorites.get("favorites", []),
                     "favorites_source": favorites.get("source"),

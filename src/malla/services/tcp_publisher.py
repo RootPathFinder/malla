@@ -655,7 +655,8 @@ class TCPPublisher:
             if portnum == "ROUTING_APP":
                 routing = decoded.get("routing", {})
                 error_reason = routing.get("errorReason", "NONE")
-                request_id = packet.get("requestId")
+                # Meshtastic puts requestId on decoded; some paths also copy it top-level
+                request_id = packet.get("requestId") or decoded.get("requestId")
 
                 if request_id:
                     logger.info(
@@ -849,7 +850,7 @@ class TCPPublisher:
 
                 # Signal any waiting requests
                 # The meshtastic library uses 'requestId' for response correlation
-                request_id = packet.get("requestId")
+                request_id = packet.get("requestId") or decoded.get("requestId")
                 if request_id:
                     with self._response_lock:
                         # Store the response for any matching pending request
@@ -878,13 +879,21 @@ class TCPPublisher:
         Returns:
             Response data or None if timeout
         """
-        # Clear any previous response
+        # Clear any previous general response so we don't pick up a stale one
         self._admin_response_event.clear()
         self._last_admin_response = None
 
         event = threading.Event()
 
         with self._response_lock:
+            # If ACK/response already arrived between send and wait, return it
+            existing = self._pending_responses.get(packet_id)
+            if existing:
+                self._pending_responses.pop(packet_id, None)
+                self._response_events.pop(packet_id, None)
+                logger.info(f"Got buffered response for packet {packet_id}")
+                return existing
+
             self._response_events[packet_id] = event
             self._pending_responses[packet_id] = {}  # Mark as pending
 
@@ -1176,7 +1185,8 @@ class TCPPublisher:
             # Get admin channel index
             admin_channel_index = self._get_admin_channel_index()
 
-            # Generate a random packet ID for tracking
+            # Generate a random packet ID for tracking only if sendData does not
+            # return one (it normally assigns meshPacket.id for ACK correlation)
             packet_id = random.getrandbits(32)
 
             # Set session_passkey on the admin message if we have one for this target
@@ -1196,9 +1206,9 @@ class TCPPublisher:
                     )
 
             # Send the packet using sendData
-            # Note: sendData returns a MeshPacket, we use our own packet_id for tracking
             # pkiEncrypted=True is required for admin messages to work on remote nodes
-            self._interface.sendData(
+            # wantAck=True requests a routing ACK/NAK from the destination
+            mesh_packet = self._interface.sendData(
                 data=admin_message,
                 destinationId=target_node_id,
                 portNum=portnums_pb2.PortNum.ADMIN_APP,
@@ -1208,6 +1218,11 @@ class TCPPublisher:
                 pkiEncrypted=True,
             )
 
+            # Prefer the real mesh packet id so ROUTING_APP ACKs can be matched
+            real_id = getattr(mesh_packet, "id", None)
+            if real_id:
+                packet_id = int(real_id) & 0xFFFFFFFF
+
             logger.info(
                 f"Sent admin message to !{target_node_id:08x}, packet_id={packet_id}"
             )
@@ -1215,7 +1230,7 @@ class TCPPublisher:
             # Update activity time on successful send
             self._last_activity_time = time.time()
 
-            # Initialize pending response tracking
+            # Initialize pending response tracking keyed by the real packet id
             if want_response:
                 with self._response_lock:
                     self._pending_responses[packet_id] = {}
