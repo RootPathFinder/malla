@@ -1,7 +1,7 @@
 """Unit tests for mesh bot traceroute parsing and formatting."""
 
 import time
-from unittest.mock import patch
+from unittest.mock import MagicMock, patch
 
 import pytest
 from meshtastic import mesh_pb2
@@ -32,6 +32,14 @@ def _build_route_discovery_payload(
     if snr_back is not None:
         route_discovery.snr_back.extend(int(snr * 4) for snr in snr_back)
     return route_discovery.SerializeToString()
+
+
+def _name_map() -> dict[int, str]:
+    return {
+        0x12345678: "Alpha",
+        0x11111111: "Hill",
+        0x87654321: "You",
+    }
 
 
 class TestBotTracerouteParsing:
@@ -127,50 +135,14 @@ class TestBotTracerouteMatching:
 
 class TestBotTracerouteFormatting:
     @pytest.mark.unit
-    def test_format_chain_style(self, bot_service: BotService):
-        result = bot_service._format_traceroute_result(
-            route=[0x11111111],
-            route_back=[0x11111111],
-            snr_towards=[-5.0, -8.0],
-            snr_back=[-7.0, -6.0],
-            source_id=0x12345678,
-            dest_id=0x87654321,
-            style="chain",
-        )
-
-        assert "TR → 5678 > 1111(-5.0) > 4321(-8.0)" in result
-        assert "← 4321 > 1111(-7.0) > 5678(-6.0)" in result
+    def test_default_format_is_names(self, bot_service: BotService):
+        assert bot_service._traceroute_format == "names"
 
     @pytest.mark.unit
-    def test_format_hops_style(self, bot_service: BotService):
-        result = bot_service._format_traceroute_result(
-            route=[0x11111111],
-            route_back=[0x11111111],
-            snr_towards=[-5.0, -8.0],
-            snr_back=[-7.0, -6.0],
-            source_id=0x12345678,
-            dest_id=0x87654321,
-            style="hops",
-        )
-
-        assert "TR to 4321 (2 hops)" in result
-        assert "1 5678→1111 -5.0" in result
-        assert "2 1111→4321 -8.0" in result
-        assert "← 4321→1111 -7.0 →5678 -6.0" in result
-
-    @pytest.mark.unit
-    def test_format_names_style(self, bot_service: BotService):
-        def fake_details(node_id: int):
-            return {
-                0x12345678: {"short_name": "Alpha", "long_name": "Alpha Node"},
-                0x11111111: {"short_name": "Hill", "long_name": "Hill Top"},
-                0x87654321: {"short_name": "You", "long_name": "Your Node"},
-            }.get(node_id)
-
-        with patch(
-            "src.malla.database.repositories.NodeRepository.get_node_details",
-            side_effect=fake_details,
-        ):
+    def test_format_names_style_uses_bulk_labels(self, bot_service: BotService):
+        with patch.object(
+            bot_service, "_fetch_node_labels", return_value=_name_map()
+        ) as fetch:
             result = bot_service._format_traceroute_result(
                 route=[0x11111111],
                 route_back=[0x11111111],
@@ -181,33 +153,124 @@ class TestBotTracerouteFormatting:
                 style="names",
             )
 
-        assert "TR Alpha → Hill(-5.0) → You(-8.0)" in result
-        assert "← You → Hill(-7.0) → Alpha(-6.0)" in result
+        fetch.assert_called_once()
+        assert "TR to You (2 hops)" in result
+        assert "Alpha → Hill(-5) → You(-8)" in result
+        assert "← You → Hill(-7) → Alpha(-6)" in result
 
     @pytest.mark.unit
-    def test_format_chain_direct_hop(self, bot_service: BotService):
-        result = bot_service._format_traceroute_result(
-            route=[],
-            route_back=[],
-            snr_towards=[-4.0],
-            snr_back=[],
-            source_id=0x12345678,
-            dest_id=0x87654321,
-            style="chain",
-        )
+    def test_format_chain_style_includes_names(self, bot_service: BotService):
+        with patch.object(bot_service, "_fetch_node_labels", return_value=_name_map()):
+            result = bot_service._format_traceroute_result(
+                route=[0x11111111],
+                route_back=[0x11111111],
+                snr_towards=[-5.0, -8.0],
+                snr_back=[-7.0, -6.0],
+                source_id=0x12345678,
+                dest_id=0x87654321,
+                style="chain",
+            )
 
-        assert result == "TR → 5678 > 4321(-4.0)"
+        assert "TR → Alpha > Hill(-5) > You(-8)" in result
+        assert "← You > Hill(-7) > Alpha(-6)" in result
 
     @pytest.mark.unit
-    def test_handle_traceroute_packet_sends_formatted_response(
+    def test_format_hops_style_includes_names(self, bot_service: BotService):
+        with patch.object(bot_service, "_fetch_node_labels", return_value=_name_map()):
+            result = bot_service._format_traceroute_result(
+                route=[0x11111111],
+                route_back=[0x11111111],
+                snr_towards=[-5.0, -8.0],
+                snr_back=[-7.0, -6.0],
+                source_id=0x12345678,
+                dest_id=0x87654321,
+                style="hops",
+            )
+
+        assert "TR to You (2 hops)" in result
+        assert "1 Alpha→Hill -5" in result
+        assert "2 Hill→You -8" in result
+        assert "← You→Hill -7 →Alpha -6" in result
+
+    @pytest.mark.unit
+    def test_format_falls_back_to_hex_when_unnamed(self, bot_service: BotService):
+        with patch.object(
+            bot_service,
+            "_fetch_node_labels",
+            return_value={
+                0x12345678: "5678",
+                0x87654321: "4321",
+            },
+        ):
+            result = bot_service._format_traceroute_result(
+                route=[],
+                route_back=[],
+                snr_towards=[-4.0],
+                snr_back=[],
+                source_id=0x12345678,
+                dest_id=0x87654321,
+                style="names",
+            )
+
+        assert "TR to 4321 (1 hop)" in result
+        assert "5678 → 4321(-4)" in result
+
+    @pytest.mark.unit
+    def test_fetch_node_labels_reads_node_info_shape(self, bot_service: BotService):
+        cursor = MagicMock()
+        cursor.fetchall.return_value = [
+            {
+                "node_id": 0x12345678,
+                "short_name": "Alpha",
+                "long_name": "Alpha Node",
+            },
+            {
+                "node_id": 0x87654321,
+                "short_name": None,
+                "long_name": "VeryLongDestinationName",
+            },
+        ]
+        conn = MagicMock()
+        conn.cursor.return_value = cursor
+
+        with patch(
+            "src.malla.database.connection.get_db_connection", return_value=conn
+        ):
+            labels = bot_service._fetch_node_labels(
+                [0x12345678, 0x87654321, 0x11111111],
+                max_len=6,
+                overrides={0x11111111: "HillTop"},
+            )
+
+        assert labels[0x12345678] == "Alpha"
+        assert labels[0x87654321] == "VeryLo"
+        assert labels[0x11111111] == "HillTo"
+
+    @pytest.mark.unit
+    def test_get_node_name_reads_node_info_directly(self, bot_service: BotService):
+        cursor = MagicMock()
+        cursor.fetchone.return_value = {
+            "short_name": "You",
+            "long_name": "Your Node",
+        }
+        conn = MagicMock()
+        conn.cursor.return_value = cursor
+
+        with patch(
+            "src.malla.database.connection.get_db_connection", return_value=conn
+        ):
+            assert bot_service._get_node_name(0x87654321) == "Your Node"
+
+    @pytest.mark.unit
+    def test_handle_traceroute_packet_sends_named_response(
         self, bot_service: BotService
     ):
         dest_id = 0x87654321
         local_id = 0x12345678
-        bot_service._traceroute_format = "chain"
+        bot_service._traceroute_format = "names"
         bot_service._pending_traceroutes[dest_id] = (
             dest_id,
-            "Requester",
+            "You",
             1,
             time.time(),
         )
@@ -229,11 +292,16 @@ class TestBotTracerouteFormatting:
         }
 
         with patch.object(bot_service, "_get_local_node_id", return_value=local_id):
-            with patch.object(bot_service, "queue_message") as queue_message:
-                bot_service._handle_traceroute_packet(packet)
+            with patch.object(
+                bot_service,
+                "_fetch_node_labels",
+                return_value=_name_map(),
+            ):
+                with patch.object(bot_service, "queue_message") as queue_message:
+                    bot_service._handle_traceroute_packet(packet)
 
         queue_message.assert_called_once()
         response = queue_message.call_args.kwargs["text"]
-        assert response.startswith("TR →")
-        assert "5678 > 1111(-5.0) > 4321(-8.0)" in response
+        assert "TR to You (2 hops)" in response
+        assert "Alpha → Hill(-5) → You(-8)" in response
         assert dest_id not in bot_service._pending_traceroutes

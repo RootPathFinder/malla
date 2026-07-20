@@ -175,9 +175,9 @@ class BotService:
         self._daily_digest_hour = 8  # Local hour (0-23) to broadcast
         self._last_daily_digest_date: str | None = None
         self._last_digest_text: str | None = None
-        # Traceroute reply style: chain | hops | names
-        self._traceroute_format = "chain"
-        self._traceroute_formats = ("chain", "hops", "names")
+        # Traceroute reply style: names (default) | chain | hops
+        self._traceroute_format = "names"
+        self._traceroute_formats = ("names", "chain", "hops")
 
         # Welcome newly discovered nodes (rate-limited)
         self._welcome_new_nodes_enabled = True
@@ -905,6 +905,9 @@ class BotService:
             requester_id, requester_name, channel_index, _ = pending
             source_id = local_node_id or 0
             dest_id = matched_dest
+            known_names: dict[int, str] = {}
+            if requester_name:
+                known_names[dest_id] = requester_name
 
             logger.info(
                 "Processing traceroute response for !%08x on channel %s "
@@ -924,6 +927,7 @@ class BotService:
                 snr_back,
                 source_id,
                 dest_id,
+                known_names=known_names,
             )
 
             self.queue_message(
@@ -954,21 +958,72 @@ class BotService:
         """Return a compact node identifier for mesh payloads."""
         return f"{node_id:08x}"[-4:]
 
-    def _traceroute_label(self, node_id: int, *, use_names: bool = False) -> str:
+    def _fetch_node_labels(
+        self,
+        node_ids: list[int] | set[int],
+        *,
+        max_len: int = 6,
+        overrides: dict[int, str] | None = None,
+    ) -> dict[int, str]:
+        """Bulk-resolve compact node labels from node_info (short > long > hex)."""
+        ids = [nid for nid in dict.fromkeys(node_ids) if nid]
+        labels: dict[int, str] = {}
+        if overrides:
+            for nid, name in overrides.items():
+                if nid and name:
+                    cleaned = str(name).strip()
+                    if cleaned:
+                        labels[nid] = (
+                            cleaned[:max_len] if len(cleaned) > max_len else cleaned
+                        )
+
+        missing = [nid for nid in ids if nid not in labels]
+        if missing:
+            try:
+                from ..database.connection import get_db_connection
+
+                conn = get_db_connection()
+                cursor = conn.cursor()
+                placeholders = ",".join("?" * len(missing))
+                cursor.execute(
+                    f"""
+                    SELECT node_id, short_name, long_name
+                    FROM node_info
+                    WHERE node_id IN ({placeholders})
+                    """,
+                    missing,
+                )
+                for row in cursor.fetchall():
+                    name = (row["short_name"] or row["long_name"] or "").strip()
+                    if name:
+                        labels[row["node_id"]] = (
+                            name[:max_len] if len(name) > max_len else name
+                        )
+                conn.close()
+            except Exception as e:
+                logger.debug("Traceroute node label lookup failed: %s", e)
+
+        for nid in ids:
+            if nid not in labels:
+                labels[nid] = self._short_node_id(nid)
+        return labels
+
+    def _traceroute_label(
+        self,
+        node_id: int,
+        *,
+        labels: dict[int, str] | None = None,
+        use_names: bool = True,
+    ) -> str:
         """Return a compact node label for traceroute output."""
         if not node_id:
             return "?"
+        if labels is not None:
+            return labels.get(node_id, self._short_node_id(node_id))
         if use_names:
-            try:
-                from ..database.repositories import NodeRepository
-
-                node = NodeRepository.get_node_details(node_id)
-                if node:
-                    name = node.get("short_name") or node.get("long_name")
-                    if name:
-                        return name[:10] if len(name) > 10 else name
-            except Exception:
-                pass
+            return self._fetch_node_labels([node_id]).get(
+                node_id, self._short_node_id(node_id)
+            )
         return self._short_node_id(node_id)
 
     def _format_snr(self, snr: float | None, *, compact: bool = False) -> str:
@@ -986,24 +1041,35 @@ class BotService:
         end_id: int,
         snrs: list[float | None],
         *,
-        use_names: bool = False,
+        labels: dict[int, str] | None = None,
+        use_names: bool = True,
+        separator: str = " > ",
+        compact_snr: bool = False,
     ) -> str:
-        """Format a path as: A > B(-5.0) > C(-8.0)."""
+        """Format a path as: A > B(-5) > C(-8)."""
         if not start_id or not end_id:
             return ""
 
         path_nodes = [start_id, *intermediates, end_id]
-        parts = [self._traceroute_label(path_nodes[0], use_names=use_names)]
+        parts = [
+            self._traceroute_label(
+                path_nodes[0], labels=labels, use_names=use_names
+            )
+        ]
         for index in range(1, len(path_nodes)):
-            label = self._traceroute_label(path_nodes[index], use_names=use_names)
+            label = self._traceroute_label(
+                path_nodes[index], labels=labels, use_names=use_names
+            )
             snr = snrs[index - 1] if index - 1 < len(snrs) else None
             if snr is None and index - 1 >= len(snrs):
                 parts.append(label)
             elif snr is None:
                 parts.append(f"{label}(?)")
             else:
-                parts.append(f"{label}({self._format_snr(snr)})")
-        return " > ".join(parts)
+                parts.append(
+                    f"{label}({self._format_snr(snr, compact=compact_snr)})"
+                )
+        return separator.join(parts)
 
     def _format_traceroute_hops(
         self,
@@ -1011,6 +1077,10 @@ class BotService:
         intermediates: list[int],
         end_id: int,
         snrs: list[float | None],
+        *,
+        labels: dict[int, str] | None = None,
+        use_names: bool = True,
+        compact_snr: bool = True,
     ) -> list[str]:
         """Format a path as numbered hop lines."""
         if not start_id or not end_id:
@@ -1019,16 +1089,40 @@ class BotService:
         path_nodes = [start_id, *intermediates, end_id]
         lines: list[str] = []
         for index in range(len(path_nodes) - 1):
-            from_label = self._short_node_id(path_nodes[index])
-            to_label = self._short_node_id(path_nodes[index + 1])
+            from_label = self._traceroute_label(
+                path_nodes[index], labels=labels, use_names=use_names
+            )
+            to_label = self._traceroute_label(
+                path_nodes[index + 1], labels=labels, use_names=use_names
+            )
             snr = snrs[index] if index < len(snrs) else None
             if snr is None:
                 lines.append(f"{index + 1} {from_label}→{to_label}")
             else:
                 lines.append(
-                    f"{index + 1} {from_label}→{to_label} {self._format_snr(snr)}"
+                    f"{index + 1} {from_label}→{to_label} "
+                    f"{self._format_snr(snr, compact=compact_snr)}"
                 )
         return lines
+
+    def _collect_traceroute_node_ids(
+        self,
+        route: list[int],
+        route_back: list[int],
+        source_id: int,
+        dest_id: int,
+    ) -> list[int]:
+        """Collect unique node IDs involved in a traceroute path."""
+        return [
+            nid
+            for nid in (
+                source_id,
+                dest_id,
+                *route,
+                *route_back,
+            )
+            if nid
+        ]
 
     def _format_traceroute_result(
         self,
@@ -1039,23 +1133,48 @@ class BotService:
         source_id: int = 0,
         dest_id: int = 0,
         style: str | None = None,
+        known_names: dict[int, str] | None = None,
     ) -> str:
         """Format traceroute results using the configured output style."""
-        fmt = (style or self._traceroute_format or "chain").lower()
+        fmt = (style or self._traceroute_format or "names").lower()
         if fmt not in self._traceroute_formats:
-            fmt = "chain"
+            fmt = "names"
+
+        # Prefer node names in every style; fall back to 4-char hex when unknown.
+        labels = self._fetch_node_labels(
+            self._collect_traceroute_node_ids(route, route_back, source_id, dest_id),
+            overrides=known_names,
+        )
 
         if fmt == "hops":
             message = self._format_traceroute_hops_style(
-                route, route_back, snr_towards, snr_back, source_id, dest_id
+                route,
+                route_back,
+                snr_towards,
+                snr_back,
+                source_id,
+                dest_id,
+                labels=labels,
             )
-        elif fmt == "names":
-            message = self._format_traceroute_names_style(
-                route, route_back, snr_towards, snr_back, source_id, dest_id
+        elif fmt == "chain":
+            message = self._format_traceroute_chain_style(
+                route,
+                route_back,
+                snr_towards,
+                snr_back,
+                source_id,
+                dest_id,
+                labels=labels,
             )
         else:
-            message = self._format_traceroute_chain_style(
-                route, route_back, snr_towards, snr_back, source_id, dest_id
+            message = self._format_traceroute_names_style(
+                route,
+                route_back,
+                snr_towards,
+                snr_back,
+                source_id,
+                dest_id,
+                labels=labels,
             )
 
         if len(message.encode("utf-8")) > 220:
@@ -1071,23 +1190,35 @@ class BotService:
         snr_back: list[float | None],
         source_id: int,
         dest_id: int,
+        *,
+        labels: dict[int, str] | None = None,
     ) -> str:
-        """Classic chain format with SNR on arrival."""
+        """Compact chain format with names and SNR on arrival."""
         lines: list[str] = []
         forward = self._format_traceroute_chain(
-            source_id, route, dest_id, snr_towards
+            source_id,
+            route,
+            dest_id,
+            snr_towards,
+            labels=labels,
+            compact_snr=True,
         )
         if forward:
             lines.append(f"TR → {forward}")
         if route_back or snr_back:
             back = self._format_traceroute_chain(
-                dest_id, route_back, source_id, snr_back
+                dest_id,
+                route_back,
+                source_id,
+                snr_back,
+                labels=labels,
+                compact_snr=True,
             )
             if back:
                 lines.append(f"← {back}")
         if not lines:
-            src = self._short_node_id(source_id) if source_id else "?"
-            dst = self._short_node_id(dest_id) if dest_id else "?"
+            src = self._traceroute_label(source_id, labels=labels)
+            dst = self._traceroute_label(dest_id, labels=labels)
             lines.append(f"TR → {src} > {dst}")
         return "\n".join(lines)
 
@@ -1099,42 +1230,53 @@ class BotService:
         snr_back: list[float | None],
         source_id: int,
         dest_id: int,
+        *,
+        labels: dict[int, str] | None = None,
     ) -> str:
-        """Numbered hop-list format."""
+        """Numbered hop-list format with node names."""
         hop_lines = self._format_traceroute_hops(
-            source_id, route, dest_id, snr_towards
+            source_id,
+            route,
+            dest_id,
+            snr_towards,
+            labels=labels,
         )
         forward_hops = len(hop_lines) if hop_lines else (
             1 if source_id and dest_id else 0
         )
 
-        dst_label = self._short_node_id(dest_id) if dest_id else "?"
+        dst_label = self._traceroute_label(dest_id, labels=labels)
         lines = [f"TR to {dst_label} ({forward_hops} hops)"]
         if hop_lines:
             lines.extend(hop_lines)
         else:
-            src = self._short_node_id(source_id) if source_id else "?"
+            src = self._traceroute_label(source_id, labels=labels)
             lines.append(f"1 {src}→{dst_label}")
 
         if route_back or snr_back:
             back_nodes = [dest_id, *route_back, source_id]
             parts: list[str] = []
             for index in range(len(back_nodes) - 1):
-                to_label = self._short_node_id(back_nodes[index + 1])
+                to_label = self._traceroute_label(back_nodes[index + 1], labels=labels)
                 snr = snr_back[index] if index < len(snr_back) else None
                 if index == 0:
-                    from_label = self._short_node_id(back_nodes[index])
+                    from_label = self._traceroute_label(
+                        back_nodes[index], labels=labels
+                    )
                     if snr is None:
                         parts.append(f"{from_label}→{to_label}")
                     else:
                         parts.append(
-                            f"{from_label}→{to_label} {self._format_snr(snr)}"
+                            f"{from_label}→{to_label} "
+                            f"{self._format_snr(snr, compact=True)}"
                         )
                 else:
                     if snr is None:
                         parts.append(f"→{to_label}")
                     else:
-                        parts.append(f"→{to_label} {self._format_snr(snr)}")
+                        parts.append(
+                            f"→{to_label} {self._format_snr(snr, compact=True)}"
+                        )
             if parts:
                 lines.append("← " + " ".join(parts))
 
@@ -1148,24 +1290,45 @@ class BotService:
         snr_back: list[float | None],
         source_id: int,
         dest_id: int,
+        *,
+        labels: dict[int, str] | None = None,
     ) -> str:
-        """Names-first chain format with short-ID fallback."""
-        lines: list[str] = []
+        """Default names-first path with hop count and compact SNR."""
+        forward_hops = 0
+        if source_id and dest_id:
+            forward_hops = max(len(snr_towards), len(route) + 1, 1)
+
+        dst = self._traceroute_label(dest_id, labels=labels)
+        lines = [f"TR to {dst} ({forward_hops} hop{'s' if forward_hops != 1 else ''})"]
+
         forward = self._format_traceroute_chain(
-            source_id, route, dest_id, snr_towards, use_names=True
+            source_id,
+            route,
+            dest_id,
+            snr_towards,
+            labels=labels,
+            separator=" → ",
+            compact_snr=True,
         )
         if forward:
-            lines.append("TR " + forward.replace(" > ", " → "))
+            lines.append(forward)
+        elif source_id and dest_id:
+            src = self._traceroute_label(source_id, labels=labels)
+            lines.append(f"{src} → {dst}")
+
         if route_back or snr_back:
             back = self._format_traceroute_chain(
-                dest_id, route_back, source_id, snr_back, use_names=True
+                dest_id,
+                route_back,
+                source_id,
+                snr_back,
+                labels=labels,
+                separator=" → ",
+                compact_snr=True,
             )
             if back:
-                lines.append("← " + back.replace(" > ", " → "))
-        if not lines:
-            src = self._traceroute_label(source_id, use_names=True)
-            dst = self._traceroute_label(dest_id, use_names=True)
-            lines.append(f"TR {src} → {dst}")
+                lines.append(f"← {back}")
+
         return "\n".join(lines)
 
     def _worker_loop(self) -> None:
@@ -1343,11 +1506,19 @@ class BotService:
     def _get_node_name(self, node_id: int) -> str | None:
         """Get the display name for a node ID."""
         try:
-            from ..database.repositories import NodeRepository
+            from ..database.connection import get_db_connection
 
-            node = NodeRepository.get_node_details(node_id)
-            if node:
-                return node.get("long_name") or node.get("short_name")
+            conn = get_db_connection()
+            cursor = conn.cursor()
+            cursor.execute(
+                "SELECT short_name, long_name FROM node_info WHERE node_id = ?",
+                (node_id,),
+            )
+            row = cursor.fetchone()
+            conn.close()
+            if row:
+                name = (row["long_name"] or row["short_name"] or "").strip()
+                return name or None
         except Exception:
             pass
         return None

@@ -1780,9 +1780,9 @@
                                     <div class="mb-2">
                                         <label class="form-label small mb-1" for="botTracerouteFormat"><strong>Traceroute format</strong></label>
                                         <select class="form-select form-select-sm" id="botTracerouteFormat">
-                                            <option value="chain">Chain — A &gt; B(-5.0) &gt; C</option>
-                                            <option value="hops">Hops — numbered hop list</option>
-                                            <option value="names">Names — use node names</option>
+                                            <option value="names">Names — path with node names (default)</option>
+                                            <option value="chain">Chain — compact named path</option>
+                                            <option value="hops">Hops — numbered hop list with names</option>
                                         </select>
                                     </div>
                                     <div class="mb-2">
@@ -9937,7 +9937,7 @@
             setIfBlurred('botRespondChannelIndex', data.respond_channel_index ?? 1);
             setIfBlurred('botDailyDigestHour', data.daily_digest_hour ?? 8);
             setIfBlurred('botBroadcastIntervalHours', data.broadcast_interval_hours ?? 12);
-            setIfBlurred('botTracerouteFormat', data.traceroute_format || 'chain');
+            setIfBlurred('botTracerouteFormat', data.traceroute_format || 'names');
 
             const waitEl = document.getElementById('botWaitForJobs');
             if (waitEl && document.activeElement !== waitEl) {
@@ -10228,7 +10228,7 @@
         const dailyDigestHour = parseInt(document.getElementById('botDailyDigestHour').value, 10);
         const channelBroadcastEnabled = document.getElementById('botChannelBroadcastEnabled').checked;
         const broadcastIntervalHours = parseFloat(document.getElementById('botBroadcastIntervalHours').value);
-        const tracerouteFormat = document.getElementById('botTracerouteFormat').value || 'chain';
+            const tracerouteFormat = document.getElementById('botTracerouteFormat').value || 'names';
         const welcomeNewNodes = document.getElementById('botWelcomeNewNodes').checked;
 
         try {
