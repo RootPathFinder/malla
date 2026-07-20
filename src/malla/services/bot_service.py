@@ -167,6 +167,23 @@ class BotService:
         self._broadcast_interval_hours = 12  # Broadcast every 12 hours
         self._last_broadcast_time: float = 0.0
 
+        # Daily mesh network digest
+        self._daily_digest_enabled = True
+        self._daily_digest_hour = 8  # Local hour (0-23) to broadcast
+        self._last_daily_digest_date: str | None = None
+        self._last_digest_text: str | None = None
+        # Only report routers offline within this window (skip long-dead nodes)
+        self._digest_offline_max_hours = 24.0
+        self._digest_offline_min_hours = 1.0
+        self._digest_lowbat_hours = 24.0
+        self._digest_lowbat_threshold = 20.0
+        self._digest_router_roles = {
+            "ROUTER",
+            "ROUTER_CLIENT",
+            "ROUTER_LATE",
+            "REPEATER",
+        }
+
         # Register built-in commands
         self._register_builtin_commands()
 
@@ -176,6 +193,7 @@ class BotService:
         """Register the built-in command handlers."""
         self.register_command("ping", self._cmd_ping, "Check if the bot is online")
         self.register_command("status", self._cmd_status, "Get mesh status summary")
+        self.register_command("net", self._cmd_net, "Daily mesh network update")
         self.register_command(
             "traceroute", self._cmd_traceroute, "Request traceroute to this node"
         )
@@ -2618,7 +2636,7 @@ class BotService:
         logger.info("Channel directory broadcast thread started")
 
     def _broadcast_loop(self) -> None:
-        """Background loop that broadcasts channel directory twice per day."""
+        """Background loop for channel directory and daily net digests."""
         # Wait 60 seconds after startup before first potential broadcast
         self._stop_event.wait(timeout=60.0)
 
@@ -2632,8 +2650,10 @@ class BotService:
                     self._broadcast_channel_directory()
                     self._last_broadcast_time = now
 
-                # Check every 5 minutes
-                self._stop_event.wait(timeout=300.0)
+                self._maybe_send_daily_digest()
+
+                # Check every minute so the daily digest hits near the hour
+                self._stop_event.wait(timeout=60.0)
             except Exception as e:
                 logger.error(f"Error in channel broadcast loop: {e}", exc_info=True)
                 self._stop_event.wait(timeout=60.0)
@@ -2686,6 +2706,304 @@ class BotService:
 
         except Exception as e:
             logger.error(f"Error broadcasting channel directory: {e}", exc_info=True)
+
+    # =========================================================================
+    # Daily mesh network digest
+    # =========================================================================
+
+    def _cmd_net(self, ctx: CommandContext) -> str:
+        """Handle !net - show the daily mesh network update on demand."""
+        try:
+            digest = self._build_daily_digest()
+            if not digest:
+                return "Net update unavailable"
+            return digest
+        except Exception as e:
+            logger.error(f"Error in net command: {e}", exc_info=True)
+            return "Net update unavailable"
+
+    def _maybe_send_daily_digest(self) -> None:
+        """Send the daily digest once per local day after the configured hour."""
+        if not self._daily_digest_enabled or not self._enabled:
+            return
+
+        local_now = time.localtime()
+        today = time.strftime("%Y-%m-%d", local_now)
+        if self._last_daily_digest_date == today:
+            return
+        if local_now.tm_hour < self._daily_digest_hour:
+            return
+
+        digest = self._build_daily_digest()
+        if not digest:
+            return
+
+        self._last_digest_text = digest
+        self._last_daily_digest_date = today
+        self.queue_message(
+            text=digest,
+            destination=0xFFFFFFFF,
+            channel_index=self._respond_channel_index,
+            priority=BotMessagePriority.LOW,
+        )
+        self._log_activity(
+            "daily_digest",
+            {"date": today, "hour": self._daily_digest_hour},
+        )
+        logger.info("Queued daily mesh network digest for %s", today)
+
+    def _build_daily_digest(self) -> str | None:
+        """Build a compact daily mesh network update for LoRa payloads."""
+        try:
+            from .alert_service import AlertService
+
+            vitals = AlertService.get_network_vitals()
+            offline_routers = self._get_recently_offline_routers()
+            lowbat_count = self._get_recent_lowbat_count()
+            top_names = self._get_digest_top_names(limit=3)
+            nodes_delta = self._get_active_nodes_delta()
+
+            return self._format_daily_digest(
+                vitals=vitals,
+                nodes_delta=nodes_delta,
+                offline_routers=offline_routers,
+                lowbat_count=lowbat_count,
+                top_names=top_names,
+                when=time.localtime(),
+            )
+        except Exception as e:
+            logger.error(f"Error building daily digest: {e}", exc_info=True)
+            return None
+
+    def _format_daily_digest(
+        self,
+        vitals: dict[str, Any],
+        nodes_delta: int | None,
+        offline_routers: list[str],
+        lowbat_count: int,
+        top_names: list[str],
+        when: time.struct_time | None = None,
+    ) -> str:
+        """Format digest fields into a Meshtastic-friendly message."""
+        when = when or time.localtime()
+        date_label = f"{when.tm_mon}/{when.tm_mday}"
+
+        nodes = int(vitals.get("active_nodes_24h") or 0)
+        packets = int(vitals.get("packets_24h") or 0)
+        avg_snr = vitals.get("avg_snr")
+        packets_trend = float(vitals.get("packets_trend") or 0)
+
+        lines = [f"📡 Net {date_label}"]
+        lines.append(f"Nodes: {nodes}{self._format_count_delta(nodes_delta)}")
+        lines.append(
+            f"Pkts: {self._format_compact_count(packets)}"
+            f"{self._format_percent_trend(packets_trend)}"
+        )
+
+        if avg_snr not in (None, 0, 0.0):
+            snr_trend = float(vitals.get("signal_trend") or 0)
+            trend = ""
+            if abs(snr_trend) >= 0.3:
+                arrow = "↑" if snr_trend > 0 else "↓"
+                trend = f" ({arrow}{abs(snr_trend):.1f})"
+            lines.append(f"SNR: {float(avg_snr):.1f}dB{trend}")
+
+        alert_parts: list[str] = []
+        if lowbat_count > 0:
+            alert_parts.append(f"Lowbat: {lowbat_count}")
+        if offline_routers:
+            alert_parts.append(f"Off routers: {len(offline_routers)}")
+        if alert_parts:
+            lines.append(" | ".join(alert_parts))
+            if offline_routers:
+                names = ", ".join(offline_routers[:2])
+                lines.append(f"Routers: {names}")
+
+        if top_names:
+            lines.append(f"Top: {', '.join(top_names)}")
+
+        message = "\n".join(lines)
+        if len(message.encode("utf-8")) > 220:
+            message = message.encode("utf-8")[:217].decode("utf-8", errors="ignore")
+            message = message.rstrip() + "..."
+        return message
+
+    def _format_count_delta(self, delta: int | None) -> str:
+        if delta is None or delta == 0:
+            return ""
+        arrow = "↑" if delta > 0 else "↓"
+        return f" ({arrow}{abs(delta)})"
+
+    def _format_percent_trend(self, percent: float) -> str:
+        if abs(percent) < 1:
+            return ""
+        arrow = "↑" if percent > 0 else "↓"
+        return f" ({arrow}{abs(percent):.0f}%)"
+
+    def _format_compact_count(self, value: int) -> str:
+        if value >= 10000:
+            return f"{value / 1000:.0f}k"
+        if value >= 1000:
+            return f"{value / 1000:.1f}k".replace(".0k", "k")
+        return str(value)
+
+    def _get_active_nodes_delta(self) -> int | None:
+        """Return 24h active-node count minus prior-day active-node count."""
+        try:
+            from ..database.connection import get_db_connection
+
+            conn = get_db_connection()
+            cursor = conn.cursor()
+            now = time.time()
+            cursor.execute(
+                """
+                SELECT COUNT(DISTINCT from_node_id) as cnt
+                FROM packet_history
+                WHERE timestamp > ?
+                """,
+                (now - 24 * 3600,),
+            )
+            today = cursor.fetchone()["cnt"] or 0
+            cursor.execute(
+                """
+                SELECT COUNT(DISTINCT from_node_id) as cnt
+                FROM packet_history
+                WHERE timestamp BETWEEN ? AND ?
+                """,
+                (now - 48 * 3600, now - 24 * 3600),
+            )
+            yesterday = cursor.fetchone()["cnt"] or 0
+            conn.close()
+            return int(today) - int(yesterday)
+        except Exception as e:
+            logger.debug(f"Could not compute active node delta: {e}")
+            return None
+
+    def _get_recently_offline_routers(self) -> list[str]:
+        """Return short names of routers offline recently, not long-dead.
+
+        Only includes infrastructure/repeater nodes last heard within the
+        configured window (default: 1-24 hours ago).
+        """
+        try:
+            from ..database.connection import get_db_connection
+
+            conn = get_db_connection()
+            cursor = conn.cursor()
+            now = time.time()
+            newest = now - (self._digest_offline_min_hours * 3600)
+            oldest = now - (self._digest_offline_max_hours * 3600)
+            roles = sorted(self._digest_router_roles)
+            placeholders = ",".join("?" * len(roles))
+
+            cursor.execute(
+                f"""
+                SELECT n.node_id, n.short_name, n.long_name,
+                       MAX(p.timestamp) as last_seen
+                FROM node_info n
+                JOIN packet_history p ON n.node_id = p.from_node_id
+                WHERE COALESCE(n.archived, 0) = 0
+                  AND n.role IN ({placeholders})
+                GROUP BY n.node_id
+                HAVING last_seen BETWEEN ? AND ?
+                ORDER BY last_seen DESC
+                LIMIT 5
+                """,
+                (*roles, oldest, newest),
+            )
+            rows = cursor.fetchall()
+            conn.close()
+
+            names: list[str] = []
+            for row in rows:
+                name = (
+                    row["short_name"]
+                    or row["long_name"]
+                    or f"!{row['node_id']:08x}"
+                )
+                if len(name) > 10:
+                    name = name[:10]
+                names.append(name)
+            return names
+        except Exception as e:
+            logger.error(f"Error getting recently offline routers: {e}", exc_info=True)
+            return []
+
+    def _get_recent_lowbat_count(self) -> int:
+        """Count nodes with recent low-battery telemetry only."""
+        try:
+            from ..database.connection import get_db_connection
+
+            conn = get_db_connection()
+            cursor = conn.cursor()
+            since = time.time() - (self._digest_lowbat_hours * 3600)
+            cursor.execute(
+                """
+                SELECT COUNT(*) as cnt
+                FROM (
+                    SELECT t.node_id, t.battery_level
+                    FROM telemetry_data t
+                    JOIN (
+                        SELECT node_id, MAX(timestamp) as max_ts
+                        FROM telemetry_data
+                        WHERE timestamp > ?
+                          AND battery_level IS NOT NULL
+                          AND battery_level > 0
+                        GROUP BY node_id
+                    ) latest
+                      ON t.node_id = latest.node_id
+                     AND t.timestamp = latest.max_ts
+                    WHERE t.battery_level < ?
+                      AND t.battery_level > 0
+                )
+                """,
+                (since, self._digest_lowbat_threshold),
+            )
+            count = cursor.fetchone()["cnt"] or 0
+            conn.close()
+            return int(count)
+        except Exception as e:
+            logger.error(f"Error getting recent lowbat count: {e}", exc_info=True)
+            return 0
+
+    def _get_digest_top_names(self, limit: int = 3) -> list[str]:
+        """Return short names of the most active nodes in the last 24 hours."""
+        try:
+            from ..database.connection import get_db_connection
+
+            conn = get_db_connection()
+            cursor = conn.cursor()
+            since = time.time() - (24 * 3600)
+            cursor.execute(
+                """
+                SELECT p.from_node_id, n.short_name, n.long_name, COUNT(*) as pkt_cnt
+                FROM packet_history p
+                JOIN node_info n ON p.from_node_id = n.node_id
+                WHERE p.timestamp > ?
+                  AND COALESCE(n.archived, 0) = 0
+                GROUP BY p.from_node_id
+                ORDER BY pkt_cnt DESC
+                LIMIT ?
+                """,
+                (since, limit),
+            )
+            rows = cursor.fetchall()
+            conn.close()
+
+            names: list[str] = []
+            for row in rows:
+                name = (
+                    row["short_name"]
+                    or row["long_name"]
+                    or f"!{row['from_node_id']:08x}"
+                )
+                if len(name) > 10:
+                    name = name[:10]
+                names.append(name)
+            return names
+        except Exception as e:
+            logger.error(f"Error getting digest top names: {e}", exc_info=True)
+            return []
 
 
 # Singleton accessor

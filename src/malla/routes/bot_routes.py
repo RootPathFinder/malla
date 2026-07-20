@@ -133,6 +133,8 @@ def api_bot_get_config():
                 "respond_channel_index": bot._respond_channel_index,
                 "wait_for_jobs": bot._wait_for_jobs,
                 "min_send_interval": bot._min_send_interval,
+                "daily_digest_enabled": bot._daily_digest_enabled,
+                "daily_digest_hour": bot._daily_digest_hour,
             }
         )
 
@@ -165,6 +167,15 @@ def api_bot_update_config():
         if "min_send_interval" in data:
             bot._min_send_interval = float(data["min_send_interval"])
 
+        if "daily_digest_enabled" in data:
+            bot._daily_digest_enabled = bool(data["daily_digest_enabled"])
+
+        if "daily_digest_hour" in data:
+            hour = int(data["daily_digest_hour"])
+            if hour < 0 or hour > 23:
+                return jsonify({"error": "daily_digest_hour must be 0-23"}), 400
+            bot._daily_digest_hour = hour
+
         return jsonify(
             {
                 "message": "Configuration updated",
@@ -175,6 +186,8 @@ def api_bot_update_config():
                     "respond_channel_index": bot._respond_channel_index,
                     "wait_for_jobs": bot._wait_for_jobs,
                     "min_send_interval": bot._min_send_interval,
+                    "daily_digest_enabled": bot._daily_digest_enabled,
+                    "daily_digest_hour": bot._daily_digest_hour,
                 },
             }
         )
