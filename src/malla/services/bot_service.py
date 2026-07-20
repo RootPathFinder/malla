@@ -116,8 +116,10 @@ class BotService:
         # Command handlers
         self._commands: dict[str, CommandHandler] = {}
         self._command_descriptions: dict[str, str] = {}  # Store descriptions separately
-        self._disabled_commands: set[str] = set()  # Commands that are disabled
+        # Keep LongFast quieter by default; ops can re-enable in Mesh Bot UI
+        self._disabled_commands: set[str] = {"uptime", "time"}
         self._command_prefix = "!"
+        self._starter_commands = ("net", "channels", "mystats", "find")
 
         # Activity log (circular buffer)
         self._activity_log: list[dict[str, Any]] = []
@@ -176,6 +178,15 @@ class BotService:
         # Traceroute reply style: chain | hops | names
         self._traceroute_format = "chain"
         self._traceroute_formats = ("chain", "hops", "names")
+
+        # Welcome newly discovered nodes (rate-limited)
+        self._welcome_new_nodes_enabled = True
+        self._welcomed_node_ids: set[int] = set()
+        self._last_welcome_check = time.time()  # ignore nodes first_seen before bot start
+        self._last_welcome_broadcast_time = 0.0
+        self._welcome_min_interval = 300.0  # seconds between welcome broadcasts
+        self._welcome_lookback_seconds = 900.0  # only consider recent first_seen
+
         # Only report routers offline within this window (skip long-dead nodes)
         self._digest_offline_max_hours = 24.0
         self._digest_offline_min_hours = 1.0
@@ -202,6 +213,7 @@ class BotService:
             "traceroute", self._cmd_traceroute, "Request traceroute to this node"
         )
         self.register_command("help", self._cmd_help, "Show available commands")
+        self.register_command("start", self._cmd_start, "New user starter tips")
         self.register_command("nodes", self._cmd_nodes, "Count of known nodes")
         self.register_command("uptime", self._cmd_uptime, "Bot uptime")
         self.register_command("mystats", self._cmd_mystats, "Your node statistics")
@@ -1690,16 +1702,57 @@ class BotService:
             )
             logger.info(f"Traceroute to !{dest_id:08x} timed out after 60s")
 
-    def _cmd_help(self, ctx: CommandContext) -> str:
-        """Handle !help command."""
-        # Keep help message short to fit in Meshtastic payload (~230 bytes)
+    def _with_dm_tip(self, ctx: CommandContext, text: str) -> str:
+        """Append a short DM tip on public channel replies when space allows."""
+        if not text or ctx.is_dm:
+            return text
+        tip = f"\nDM {self._command_prefix}help for more"
+        candidate = text + tip
+        if len(candidate.encode("utf-8")) <= 220:
+            return candidate
+        return text
+
+    def _starter_help_text(self) -> str:
+        """Compact starter card for public channels and !start."""
+        prefix = self._command_prefix
+        starters = [
+            f"{prefix}{name}"
+            for name in self._starter_commands
+            if name in self._commands and name not in self._disabled_commands
+        ]
+        if not starters:
+            starters = [f"{prefix}net", f"{prefix}channels"]
+        return (
+            f"👋 Mesh bot. Try: {' '.join(starters)}\n"
+            f"DM {prefix}help for all cmds"
+        )
+
+    def _full_help_text(self) -> str:
+        """Full enabled-command list (best sent via DM)."""
         enabled_cmds = [
             name
             for name in sorted(self._commands.keys())
             if name not in self._disabled_commands
         ]
-        cmd_list = " ".join(f"!{name}" for name in enabled_cmds)
-        return f"Cmds: {cmd_list}"
+        cmd_list = " ".join(f"{self._command_prefix}{name}" for name in enabled_cmds)
+        message = f"Cmds: {cmd_list}"
+        if len(message.encode("utf-8")) > 220:
+            message = message.encode("utf-8")[:217].decode("utf-8", errors="ignore")
+            message = message.rstrip() + "..."
+        return message
+
+    def _cmd_start(self, ctx: CommandContext) -> str:
+        """Handle !start — new-user onboarding tips."""
+        return self._starter_help_text()
+
+    def _cmd_help(self, ctx: CommandContext) -> str:
+        """Handle !help — starter on channel, full list in DM."""
+        want_full = ctx.is_dm or (
+            bool(ctx.args) and ctx.args[0].lower() in {"all", "more", "full"}
+        )
+        if want_full:
+            return self._full_help_text()
+        return self._starter_help_text()
 
     def _cmd_nodes(self, ctx: CommandContext) -> str:
         """Handle !nodes command."""
@@ -1856,7 +1909,7 @@ class BotService:
                 if telem_parts:
                     lines.append(" ".join(telem_parts))
 
-            return "\n".join(lines)
+            return self._with_dm_tip(ctx, "\n".join(lines))
 
         except Exception as e:
             logger.error(f"Error in mystats command: {e}", exc_info=True)
@@ -1921,7 +1974,7 @@ class BotService:
                 hours = telem["uptime_seconds"] // 3600
                 lines.append(f"Node up: {hours}h")
 
-            return "\n".join(lines)
+            return self._with_dm_tip(ctx, "\n".join(lines))
         except Exception as e:
             logger.error(f"Error in whoami: {e}", exc_info=True)
             return "Info unavailable"
@@ -1960,7 +2013,7 @@ class BotService:
                 snr = f"{row['avg_snr']:.1f}dB" if row["avg_snr"] else "?"
                 lines.append(f"{gw}: {row['cnt']}pkts {snr}")
 
-            return "\n".join(lines)
+            return self._with_dm_tip(ctx, "\n".join(lines))
         except Exception as e:
             logger.error(f"Error in heard: {e}", exc_info=True)
             return "Heard data unavailable"
@@ -1975,28 +2028,63 @@ class BotService:
             node_id = ctx.sender_id
             one_day_ago = time.time() - 86400
 
-            # Find nodes that relayed packets with good SNR (direct neighbors)
+            # Prefer named relay neighbors when available
             cursor.execute(
-                """SELECT DISTINCT relay_node, AVG(snr) as avg_snr, COUNT(*) as cnt
-                   FROM packet_history
-                   WHERE from_node_id = ? AND timestamp > ?
-                   AND relay_node IS NOT NULL AND relay_node != 0
-                   GROUP BY relay_node
-                   ORDER BY avg_snr DESC LIMIT 5""",
+                """
+                SELECT p.relay_node as node_id,
+                       n.short_name, n.long_name,
+                       AVG(p.snr) as avg_snr, COUNT(*) as cnt
+                FROM packet_history p
+                LEFT JOIN node_info n ON n.node_id = p.relay_node
+                WHERE p.from_node_id = ? AND p.timestamp > ?
+                  AND p.relay_node IS NOT NULL AND p.relay_node != 0
+                GROUP BY p.relay_node
+                ORDER BY avg_snr DESC
+                LIMIT 5
+                """,
                 (node_id, one_day_ago),
             )
             rows = cursor.fetchall()
+
+            # Fallback: strongest direct-hop nodes heard on the mesh recently
+            if not rows:
+                cursor.execute(
+                    """
+                    SELECT p.from_node_id as node_id,
+                           n.short_name, n.long_name,
+                           AVG(p.snr) as avg_snr, COUNT(*) as cnt
+                    FROM packet_history p
+                    LEFT JOIN node_info n ON n.node_id = p.from_node_id
+                    WHERE p.timestamp > ?
+                      AND p.from_node_id IS NOT NULL
+                      AND p.from_node_id != ?
+                      AND p.snr IS NOT NULL
+                      AND p.hop_start IS NOT NULL
+                      AND p.hop_limit IS NOT NULL
+                      AND (p.hop_start - p.hop_limit) = 0
+                      AND COALESCE(n.archived, 0) = 0
+                    GROUP BY p.from_node_id
+                    ORDER BY avg_snr DESC
+                    LIMIT 5
+                    """,
+                    (one_day_ago, node_id),
+                )
+                rows = cursor.fetchall()
+
             conn.close()
 
             if not rows:
-                return "📡 No relay neighbors found"
+                return "📡 No neighbors found"
 
-            lines = ["📡 Neighbors (24h):"]
+            lines = ["📡 Near you:"]
             for row in rows:
-                snr = f"{row['avg_snr']:.1f}dB" if row["avg_snr"] else "?"
-                lines.append(f"!{row['relay_node']:08x}: {snr}")
+                name = self._digest_node_label(
+                    row["node_id"], row["short_name"], row["long_name"], max_len=10
+                )
+                snr = f"{row['avg_snr']:.0f}dB" if row["avg_snr"] is not None else "?"
+                lines.append(f"{name} {snr}")
 
-            return "\n".join(lines)
+            return self._with_dm_tip(ctx, "\n".join(lines))
         except Exception as e:
             logger.error(f"Error in neighbors: {e}", exc_info=True)
             return "Neighbor data unavailable"
@@ -2205,7 +2293,7 @@ class BotService:
                 lines.append(f"Avg hops: {row['avg_hops']:.1f}")
             lines.append(f"Packets: {row['pkt_cnt']}")
 
-            return "\n".join(lines)
+            return self._with_dm_tip(ctx, "\n".join(lines))
         except Exception as e:
             logger.error(f"Error in quality: {e}", exc_info=True)
             return "Quality data unavailable"
@@ -2812,6 +2900,7 @@ class BotService:
                     self._last_broadcast_time = now
 
                 self._maybe_send_daily_digest()
+                self._maybe_welcome_new_nodes()
 
                 # Check every minute so the daily digest hits near the hour
                 self._stop_event.wait(timeout=60.0)
@@ -2882,6 +2971,80 @@ class BotService:
         except Exception as e:
             logger.error(f"Error in net command: {e}", exc_info=True)
             return "Net update unavailable"
+
+    def _maybe_welcome_new_nodes(self) -> None:
+        """Welcome newly discovered nodes with a short public message."""
+        if not self._welcome_new_nodes_enabled or not self._enabled:
+            return
+
+        now = time.time()
+        if now - self._last_welcome_broadcast_time < self._welcome_min_interval:
+            return
+
+        try:
+            from ..database.connection import get_db_connection
+
+            conn = get_db_connection()
+            cursor = conn.cursor()
+            since = max(
+                self._last_welcome_check,
+                now - self._welcome_lookback_seconds,
+            )
+            cursor.execute(
+                """
+                SELECT node_id, short_name, long_name, first_seen
+                FROM node_info
+                WHERE COALESCE(archived, 0) = 0
+                  AND first_seen IS NOT NULL
+                  AND first_seen > ?
+                ORDER BY first_seen ASC
+                LIMIT 5
+                """,
+                (since,),
+            )
+            rows = cursor.fetchall()
+            conn.close()
+            self._last_welcome_check = now
+
+            newcomers = [
+                row
+                for row in rows
+                if row["node_id"] not in self._welcomed_node_ids
+            ]
+            if not newcomers:
+                return
+
+            # Welcome one node at a time to avoid channel spam
+            row = newcomers[0]
+            node_id = int(row["node_id"])
+            name = self._digest_node_label(
+                node_id, row["short_name"], row["long_name"], max_len=12
+            )
+            prefix = self._command_prefix
+            message = (
+                f"👋 Welcome {name} to the mesh!\n"
+                f"Try {prefix}start {prefix}channels {prefix}mystats"
+            )
+
+            self._welcomed_node_ids.add(node_id)
+            # Bound memory growth
+            if len(self._welcomed_node_ids) > 500:
+                self._welcomed_node_ids = set(list(self._welcomed_node_ids)[-200:])
+
+            self._last_welcome_broadcast_time = now
+            self.queue_message(
+                text=message,
+                destination=0xFFFFFFFF,
+                channel_index=self._respond_channel_index,
+                priority=BotMessagePriority.LOW,
+            )
+            self._log_activity(
+                "node_welcome",
+                {"node_id": f"!{node_id:08x}", "name": name},
+            )
+            logger.info("Queued welcome for new node !%08x (%s)", node_id, name)
+        except Exception as e:
+            logger.error(f"Error welcoming new nodes: {e}", exc_info=True)
 
     def _maybe_send_daily_digest(self) -> None:
         """Send the daily digest once per local day after the configured hour."""
@@ -2987,10 +3150,9 @@ class BotService:
                 names = ", ".join(offline_routers[:2])
                 lines.append(f"Routers: {names}")
 
-        new_line = self._format_new_nodes_line(
-            int(new_nodes.get("count") or 0),
-            list(new_nodes.get("names") or []),
-        )
+        new_count = int(new_nodes.get("count") or 0)
+        new_names = list(new_nodes.get("names") or [])
+        new_line = self._format_new_nodes_line(new_count, new_names)
         if new_line:
             lines.append(new_line)
 
@@ -3001,9 +3163,20 @@ class BotService:
                 f"Long TR: {longest_tr['hops']} hops {from_name}→{to_name}"
             )
 
+        # Social CTA when newcomers showed up today
+        optional_cta = None
+        if new_count > 0:
+            optional_cta = f"Say hi! {self._command_prefix}channels"
+
         # Top talkers are nice-to-have; drop first if payload is tight
         optional_top = f"Top: {', '.join(top_names)}" if top_names else None
         message = "\n".join(lines)
+
+        if optional_cta:
+            candidate = message + "\n" + optional_cta
+            if len(candidate.encode("utf-8")) <= 220:
+                message = candidate
+
         if optional_top:
             candidate = message + "\n" + optional_top
             if len(candidate.encode("utf-8")) <= 220:

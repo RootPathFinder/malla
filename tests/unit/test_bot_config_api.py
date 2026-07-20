@@ -24,6 +24,7 @@ class TestBotConfigDict:
         bot_service._command_prefix = "?"
         bot_service._min_send_interval = 3.5
         bot_service._traceroute_format = "hops"
+        bot_service._welcome_new_nodes_enabled = False
 
         config = _bot_config_dict(bot_service)
 
@@ -35,6 +36,7 @@ class TestBotConfigDict:
         assert config["min_send_interval"] == 3.5
         assert config["traceroute_format"] == "hops"
         assert config["traceroute_formats"] == ["chain", "hops", "names"]
+        assert config["welcome_new_nodes_enabled"] is False
         assert "listen_channels" in config
         assert "respond_channel_index" in config
         assert "wait_for_jobs" in config

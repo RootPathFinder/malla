@@ -51,8 +51,10 @@ class TestDailyDigestFormatting:
         assert "Off routers: 2" in message
         assert "Routers: HillTop, Bridge" in message
         assert "New: 7 (Newbie, Fresh, Rookie…)" in message
+        assert "Say hi! !channels" in message
         assert "Long TR: 5 hops Alpha→Zulu" in message
-        assert "Top: Alpha, Bravo, Charlie" in message
+        # Top talkers are optional and dropped first when the payload is tight
+        assert len(message.encode("utf-8")) <= 220
 
     @pytest.mark.unit
     def test_format_omits_stale_alert_lines_when_empty(self, bot_service: BotService):

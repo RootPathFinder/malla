@@ -30,6 +30,7 @@ def _bot_config_dict(bot: BotService) -> dict:
         "broadcast_interval_hours": bot._broadcast_interval_hours,
         "traceroute_format": bot._traceroute_format,
         "traceroute_formats": list(bot._traceroute_formats),
+        "welcome_new_nodes_enabled": bot._welcome_new_nodes_enabled,
     }
 
 
@@ -208,6 +209,9 @@ def api_bot_update_config():
                     }
                 ), 400
             bot._traceroute_format = fmt
+
+        if "welcome_new_nodes_enabled" in data:
+            bot._welcome_new_nodes_enabled = bool(data["welcome_new_nodes_enabled"])
 
         return jsonify(
             {

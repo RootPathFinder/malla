@@ -1785,6 +1785,15 @@
                                             <option value="names">Names — use node names</option>
                                         </select>
                                     </div>
+                                    <div class="mb-2">
+                                        <div class="form-check form-switch">
+                                            <input class="form-check-input" type="checkbox" id="botWelcomeNewNodes" checked>
+                                            <label class="form-check-label small" for="botWelcomeNewNodes">
+                                                Welcome new nodes
+                                            </label>
+                                        </div>
+                                        <div class="text-muted small">Rate-limited public hello when a node is first seen.</div>
+                                    </div>
                                     <hr class="my-2">
                                     <div class="small fw-semibold mb-2">Daily Net Update</div>
                                     <div class="d-flex align-items-center justify-content-between gap-2 mb-2">
@@ -9942,6 +9951,10 @@
             if (channelBroadcastEl && document.activeElement !== channelBroadcastEl) {
                 channelBroadcastEl.checked = data.channel_broadcast_enabled !== false;
             }
+            const welcomeEl = document.getElementById('botWelcomeNewNodes');
+            if (welcomeEl && document.activeElement !== welcomeEl) {
+                welcomeEl.checked = data.welcome_new_nodes_enabled !== false;
+            }
 
         } catch (error) {
             console.error('Error fetching bot status:', error);
@@ -10216,6 +10229,7 @@
         const channelBroadcastEnabled = document.getElementById('botChannelBroadcastEnabled').checked;
         const broadcastIntervalHours = parseFloat(document.getElementById('botBroadcastIntervalHours').value);
         const tracerouteFormat = document.getElementById('botTracerouteFormat').value || 'chain';
+        const welcomeNewNodes = document.getElementById('botWelcomeNewNodes').checked;
 
         try {
             const response = await fetch('/api/bot/config', {
@@ -10231,7 +10245,8 @@
                     daily_digest_hour: Number.isFinite(dailyDigestHour) ? dailyDigestHour : 8,
                     channel_broadcast_enabled: channelBroadcastEnabled,
                     broadcast_interval_hours: Number.isFinite(broadcastIntervalHours) ? broadcastIntervalHours : 12,
-                    traceroute_format: tracerouteFormat
+                    traceroute_format: tracerouteFormat,
+                    welcome_new_nodes_enabled: welcomeNewNodes
                 })
             });
             const data = await response.json();
