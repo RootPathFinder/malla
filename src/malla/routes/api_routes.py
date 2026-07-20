@@ -237,7 +237,8 @@ def api_packets_activity():
             timestamp,
             portnum_name,
             hop_limit,
-            hop_start
+            hop_start,
+            raw_payload
         FROM packet_history
         WHERE timestamp >= ?
         ORDER BY timestamp DESC
@@ -248,19 +249,48 @@ def api_packets_activity():
         rows = cursor.fetchall()
         conn.close()
 
-        # Build activity data
+        # Build activity data; enrich traceroute rows with hop paths
         activities = []
         for row in rows:
-            activities.append(
-                {
-                    "from_node_id": row["from_node_id"],
-                    "to_node_id": row["to_node_id"],
-                    "timestamp": row["timestamp"],
-                    "portnum_name": row["portnum_name"],
-                    "hop_limit": row["hop_limit"],
-                    "hop_start": row["hop_start"],
-                }
-            )
+            activity = {
+                "from_node_id": row["from_node_id"],
+                "to_node_id": row["to_node_id"],
+                "timestamp": row["timestamp"],
+                "portnum_name": row["portnum_name"],
+                "hop_limit": row["hop_limit"],
+                "hop_start": row["hop_start"],
+            }
+
+            portnum_name = row["portnum_name"] or ""
+            raw_payload = row["raw_payload"]
+            if portnum_name == "TRACEROUTE_APP" and raw_payload:
+                try:
+                    from ..models.traceroute import TraceroutePacket
+
+                    tr_packet = TraceroutePacket(
+                        {
+                            "from_node_id": row["from_node_id"],
+                            "to_node_id": row["to_node_id"],
+                            "raw_payload": raw_payload,
+                        },
+                        resolve_names=False,
+                    )
+                    path = tr_packet.actual_rf_path or tr_packet.forward_path
+                    path_nodes = list(getattr(path, "node_ids", []) or [])
+                    cleaned: list[int] = []
+                    for node_id in path_nodes:
+                        if node_id and (not cleaned or cleaned[-1] != node_id):
+                            cleaned.append(int(node_id))
+                    if len(cleaned) >= 2:
+                        activity["path_nodes"] = cleaned
+                        activity["path_kind"] = "traceroute"
+                except Exception:
+                    logger.debug(
+                        "Could not parse traceroute path for activity",
+                        exc_info=True,
+                    )
+
+            activities.append(activity)
 
         return jsonify(
             {"activities": activities, "seconds": seconds, "count": len(activities)}

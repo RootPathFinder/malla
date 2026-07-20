@@ -193,5 +193,8 @@ def traceroute_graph_server():
 
 @pytest.fixture(scope="session")
 def traceroute_graph_url(traceroute_graph_server):
-    """Provide the traceroute graph URL from the test server."""
-    return f"http://127.0.0.1:{traceroute_graph_server.port}/traceroute-graph"
+    """Provide the traceroute graph URL from the test server.
+
+    Force classic 2D mode so Playwright assertions on SVG still apply.
+    """
+    return f"http://127.0.0.1:{traceroute_graph_server.port}/traceroute-graph?view=2d"
