@@ -70,26 +70,32 @@ class TestGetDeviceFavorites:
         return service
 
     @pytest.mark.unit
-    def test_remote_returns_tracked_list(self, service, admin_db):
+    def test_remote_returns_tracked_list_not_live_fetch(self, service, admin_db):
         target = 0xABCDEF01
         fav = 0x12345678
         AdminRepository.upsert_remote_device_favorite(target, fav, source="managed")
 
-        service.gateway_node_id = 0x99999999
-        result = service.get_device_favorites(target)
+        publisher = MagicMock()
+        publisher.is_connected = True
+        publisher.get_local_node_id.return_value = 0x99999999
+        with patch.object(service, "_get_publisher", return_value=publisher):
+            result = service.get_device_favorites(target)
 
         assert result["success"] is True
         assert result["source"] == "tracked"
         assert result["is_local"] is False
+        assert result["fetchable"] is False
         assert result["count"] == 1
         assert int(result["favorites"][0]["node_id"]) == fav
-        assert "cannot return" in result["note"].lower()
+        assert "no remote get-favorites" in result["note"].lower()
 
     @pytest.mark.unit
     def test_local_reads_nodedb_favorites(self, service, admin_db):
         gateway = 0x11111111
         fav_id = 0x22222222
         publisher = MagicMock()
+        publisher.is_connected = True
+        publisher.get_local_node_id.return_value = gateway
         publisher._interface.nodesByNum = {
             fav_id: {
                 "num": fav_id,
@@ -106,14 +112,37 @@ class TestGetDeviceFavorites:
             },
         }
 
-        service.gateway_node_id = gateway
         with patch.object(service, "_get_publisher", return_value=publisher):
             result = service.get_device_favorites(gateway)
 
         assert result["success"] is True
         assert result["source"] == "device"
         assert result["is_local"] is True
+        assert result["fetchable"] is True
         assert result["count"] == 1
         fav = result["favorites"][0]
         assert int(fav["node_id"]) == fav_id
         assert fav["long_name"] == "Hill Top Roof"
+
+    @pytest.mark.unit
+    def test_local_match_uses_unsigned_node_ids(self, service, admin_db):
+        # High bit set node nums must still compare equal after normalization
+        gateway = 0xA5592387
+        publisher = MagicMock()
+        publisher.is_connected = True
+        publisher.get_local_node_id.return_value = gateway
+        publisher._interface.nodesByNum = {
+            0x0C3A3DE4: {
+                "num": 0x0C3A3DE4,
+                "is_favorite": True,
+                "user": {"longName": "Neighbor", "shortName": "NBR"},
+            }
+        }
+
+        with patch.object(service, "_get_publisher", return_value=publisher):
+            result = service.get_device_favorites(gateway)
+
+        assert result["is_local"] is True
+        assert result["fetchable"] is True
+        assert result["count"] == 1
+        assert result["favorites"][0]["short_name"] == "NBR"
