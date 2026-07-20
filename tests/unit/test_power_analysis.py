@@ -615,6 +615,7 @@ def test_get_solar_power_conditions_groups_nodes(db_with_telemetry):
 
     conditions = get_solar_power_conditions(db_with_telemetry)
     assert conditions["total"] == 2
+    assert conditions["recent_max_age_hours"] == 48
     assert conditions["counts"]["at_risk"] + conditions["counts"]["watching"] >= 1
     at_risk_ids = {n["node_id"] for n in conditions["at_risk"]}
     watching_ids = {n["node_id"] for n in conditions["watching"]}
@@ -622,3 +623,51 @@ def test_get_solar_power_conditions_groups_nodes(db_with_telemetry):
     assert at_risk_id in at_risk_ids or at_risk_id in watching_ids
     # Healthy node should not be at_risk
     assert healthy_id not in at_risk_ids
+
+
+def test_get_solar_power_conditions_excludes_stale_telemetry(db_with_telemetry):
+    """Nodes whose newest telemetry is older than 48h are excluded from monitoring."""
+    from malla.power_analysis import get_solar_power_conditions
+
+    cursor = db_with_telemetry.cursor()
+    stale_id = 8101
+    fresh_id = 8102
+    cursor.execute(
+        "INSERT INTO node_info (node_id, hex_id, long_name, power_type) VALUES (?, ?, ?, ?)",
+        (stale_id, "!00001fa5", "Stale Solar", "solar"),
+    )
+    cursor.execute(
+        "INSERT INTO node_info (node_id, hex_id, long_name, power_type) VALUES (?, ?, ?, ?)",
+        (fresh_id, "!00001fa6", "Fresh Solar", "solar"),
+    )
+
+    now = time.time()
+    # Stale: last sample ~5 days ago
+    for i in range(10):
+        cursor.execute(
+            """
+            INSERT INTO telemetry_data (timestamp, node_id, voltage, battery_level)
+            VALUES (?, ?, ?, ?)
+            """,
+            (now - (5 * 86400) - i * 3600, stale_id, 3.5, 40),
+        )
+    # Fresh: samples within last day
+    for i in range(10):
+        cursor.execute(
+            """
+            INSERT INTO telemetry_data (timestamp, node_id, voltage, battery_level)
+            VALUES (?, ?, ?, ?)
+            """,
+            (now - i * 3600, fresh_id, 3.9, 80),
+        )
+    db_with_telemetry.commit()
+
+    conditions = get_solar_power_conditions(db_with_telemetry)
+    ids = {
+        n["node_id"]
+        for bucket in ("at_risk", "watching", "healthy", "unknown")
+        for n in conditions[bucket]
+    }
+    assert fresh_id in ids
+    assert stale_id not in ids
+    assert conditions["total"] == 1

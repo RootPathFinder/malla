@@ -731,9 +731,11 @@ class AlertService:
             conn = get_db_connection()
             cursor = conn.cursor()
 
-            # Get latest valid battery telemetry for each node
-            # We fetch battery and voltage separately to handle cases where they are sent in different packets
-            # or where one value is 0/invalid
+            # Latest valid battery telemetry — only within the recent window so
+            # abandoned nodes with old readings do not keep firing alerts.
+            from ..power_analysis import recent_telemetry_cutoff
+
+            cutoff = recent_telemetry_cutoff()
             logger.debug("Fetching battery health data from telemetry_data table...")
             cursor.execute(
                 """
@@ -741,13 +743,16 @@ class AlertService:
                     n.node_id,
                     (SELECT t.battery_level FROM telemetry_data t
                      WHERE t.node_id = n.node_id AND t.battery_level > 0
+                       AND t.timestamp > ?
                      ORDER BY t.timestamp DESC LIMIT 1) as battery_level,
                     (SELECT t.voltage FROM telemetry_data t
                      WHERE t.node_id = n.node_id AND t.voltage > 0
+                       AND t.timestamp > ?
                      ORDER BY t.timestamp DESC LIMIT 1) as voltage
                 FROM node_info n
                 WHERE COALESCE(n.archived, 0) = 0
-            """
+            """,
+                (cutoff, cutoff),
             )
 
             rows = cursor.fetchall()
@@ -761,6 +766,9 @@ class AlertService:
                 node_id = row["node_id"]
                 battery = row["battery_level"]
                 voltage = cls._correct_voltage(row["voltage"])
+                # Skip nodes with no recent telemetry entirely
+                if battery is None and voltage is None:
+                    continue
                 node_battery_status[node_id] = {
                     "battery_level": battery,
                     "voltage": voltage,
@@ -771,16 +779,15 @@ class AlertService:
                     nodes_with_voltage += 1
 
             logger.info(
-                f"Battery health: {len(rows)} nodes checked, "
+                f"Battery health: {len(node_battery_status)} nodes with recent telemetry, "
                 f"{nodes_with_battery} with battery data, "
                 f"{nodes_with_voltage} with voltage data"
             )
 
             # Check for nodes that need new alerts
-            for row in rows:
-                node_id = row["node_id"]
-                battery_level = row["battery_level"]
-                voltage = cls._correct_voltage(row["voltage"])
+            for node_id, status in node_battery_status.items():
+                battery_level = status["battery_level"]
+                voltage = status["voltage"]
 
                 # Check battery percentage
                 if battery_level is not None and battery_level > 0:
@@ -863,7 +870,15 @@ class AlertService:
                 status = node_battery_status.get(node_id)
 
                 if status is None:
-                    # No recent telemetry for this node, can't verify - skip
+                    # No recent telemetry — drop stale battery alerts so they
+                    # don't linger for abandoned nodes.
+                    alert_type = AlertType(alert_type_str)
+                    if cls.resolve_alert(alert_type, node_id):
+                        logger.info(
+                            f"Battery alert resolved for node {node_id}: "
+                            f"no recent telemetry"
+                        )
+                        alerts_resolved += 1
                     continue
 
                 battery_level = status.get("battery_level")
@@ -1069,7 +1084,8 @@ class AlertService:
                 )
                 alerts_generated += 1
 
-            # Resolve recovered nodes
+            # Resolve recovered, watching-downgraded, or stale (no recent telemetry) nodes
+            active_condition_ids = at_risk_ids | watching_ids
             healthy_ids = {n["node_id"] for n in (conditions.get("healthy") or [])} | {
                 n["node_id"] for n in (conditions.get("unknown") or [])
             }
@@ -1087,6 +1103,36 @@ class AlertService:
                 if node_id not in at_risk_ids:
                     if cls.resolve_alert(AlertType.SOLAR_POWER_AT_RISK, node_id):
                         alerts_resolved += 1
+
+            # Drop solar alerts for nodes no longer in the recent-telemetry set
+            conn = get_db_connection()
+            try:
+                cursor = conn.cursor()
+                cursor.execute(
+                    """
+                    SELECT node_id, alert_type FROM alerts
+                    WHERE alert_type IN (?, ?) AND resolved = 0
+                    """,
+                    (
+                        AlertType.SOLAR_POWER_AT_RISK.value,
+                        AlertType.SOLAR_POWER_WATCHING.value,
+                    ),
+                )
+                open_solar_alerts = cursor.fetchall()
+            finally:
+                conn.close()
+
+            for alert_row in open_solar_alerts:
+                node_id = alert_row["node_id"]
+                if node_id in active_condition_ids or node_id in healthy_ids:
+                    continue
+                alert_type = AlertType(alert_row["alert_type"])
+                if cls.resolve_alert(alert_type, node_id):
+                    alerts_resolved += 1
+                    logger.info(
+                        f"Solar alert resolved for node {node_id}: "
+                        f"stale/no recent telemetry"
+                    )
 
         except Exception as e:
             logger.error(f"Error checking solar power condition: {e}", exc_info=True)
@@ -1927,8 +1973,10 @@ class AlertService:
                     }
                 )
 
-            # 2. Check for low battery nodes
-            # Use correlated subqueries to get latest VALID battery/voltage
+            # 2. Check for low battery nodes (recent telemetry only)
+            from ..power_analysis import recent_telemetry_cutoff
+
+            telemetry_cutoff = recent_telemetry_cutoff(now)
             cursor.execute(
                 """
                 SELECT
@@ -1936,13 +1984,16 @@ class AlertService:
                     COALESCE(n.long_name, n.short_name, printf('!%08x', n.node_id)) as name,
                     (SELECT t.battery_level FROM telemetry_data t
                      WHERE t.node_id = n.node_id AND t.battery_level > 0
+                       AND t.timestamp > ?
                      ORDER BY t.timestamp DESC LIMIT 1) as battery_level,
                     (SELECT t.voltage FROM telemetry_data t
                      WHERE t.node_id = n.node_id AND t.voltage > 0
+                       AND t.timestamp > ?
                      ORDER BY t.timestamp DESC LIMIT 1) as voltage
                 FROM node_info n
                 WHERE COALESCE(n.archived, 0) = 0
-                """
+                """,
+                (telemetry_cutoff, telemetry_cutoff),
             )
 
             all_nodes_battery = cursor.fetchall()
@@ -1951,6 +2002,8 @@ class AlertService:
             for n in all_nodes_battery:
                 batt = n["battery_level"]
                 volt = cls._correct_voltage(n["voltage"])
+                if batt is None and volt is None:
+                    continue
                 is_low = False
 
                 if batt is not None and batt < 30:
@@ -2300,8 +2353,10 @@ class AlertService:
                 row["from_node_id"]: row["last_seen"] for row in cursor.fetchall()
             }
 
-            # Get all active nodes with their latest telemetry
-            # Filter for valid (>0) values to avoid 0.00V issues
+            # Latest telemetry for battery/solar checks — recent window only
+            from ..power_analysis import recent_telemetry_cutoff
+
+            telemetry_cutoff = recent_telemetry_cutoff(now)
             cursor.execute(
                 """
                 SELECT
@@ -2312,13 +2367,16 @@ class AlertService:
                     n.power_type,
                     (SELECT t.battery_level FROM telemetry_data t
                      WHERE t.node_id = n.node_id AND t.battery_level > 0
+                       AND t.timestamp > ?
                      ORDER BY t.timestamp DESC LIMIT 1) as battery_level,
                     (SELECT t.voltage FROM telemetry_data t
                      WHERE t.node_id = n.node_id AND t.voltage > 0
+                       AND t.timestamp > ?
                      ORDER BY t.timestamp DESC LIMIT 1) as voltage
                 FROM node_info n
                 WHERE COALESCE(n.archived, 0) = 0
-                """
+                """,
+                (telemetry_cutoff, telemetry_cutoff),
             )
 
             all_rows = cursor.fetchall()
@@ -2550,8 +2608,10 @@ class AlertService:
                 if power_type == "solar":
                     solar_nodes += count
 
-            # Battery stats
-            # Use subquery to get latest valid battery level for each node
+            # Battery stats — recent telemetry only
+            from ..power_analysis import recent_telemetry_cutoff
+
+            telemetry_cutoff = recent_telemetry_cutoff(now)
             cursor.execute(
                 """
                 SELECT
@@ -2559,18 +2619,22 @@ class AlertService:
                     COUNT(CASE WHEN latest_batt.battery_level < 30 THEN 1 END) as low_battery
                 FROM node_info n
                 LEFT JOIN (
-                    SELECT node_id, battery_level
+                    SELECT t1.node_id, t1.battery_level
                     FROM telemetry_data t1
-                    WHERE battery_level > 0
-                    AND timestamp = (
-                        SELECT MAX(timestamp)
+                    WHERE t1.battery_level > 0
+                      AND t1.timestamp > ?
+                      AND t1.timestamp = (
+                        SELECT MAX(t2.timestamp)
                         FROM telemetry_data t2
-                        WHERE t2.node_id = t1.node_id AND t2.battery_level > 0
-                    )
+                        WHERE t2.node_id = t1.node_id
+                          AND t2.battery_level > 0
+                          AND t2.timestamp > ?
+                      )
                 ) latest_batt ON n.node_id = latest_batt.node_id
                 WHERE COALESCE(n.archived, 0) = 0
                   AND latest_batt.battery_level IS NOT NULL
-                """
+                """,
+                (telemetry_cutoff, telemetry_cutoff),
             )
             battery_stats = cursor.fetchone()
 

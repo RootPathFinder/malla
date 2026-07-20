@@ -25,6 +25,52 @@ DAY_HOURS = range(6, 18)
 MORNING_HOURS = range(6, 11)
 AFTERNOON_HOURS = range(14, 19)
 
+# Health/monitoring only includes nodes with telemetry newer than this.
+# 48h excludes abandoned/stale nodes while still covering sparse solar reporters.
+RECENT_TELEMETRY_MAX_AGE_HOURS = 48
+RECENT_TELEMETRY_MAX_AGE_SECONDS = RECENT_TELEMETRY_MAX_AGE_HOURS * 3600
+
+
+def recent_telemetry_cutoff(now: float | None = None) -> float:
+    """Unix timestamp cutoff for "recent enough" telemetry in health/monitoring."""
+    return (now if now is not None else time.time()) - RECENT_TELEMETRY_MAX_AGE_SECONDS
+
+
+def get_latest_telemetry_timestamp(
+    db_connection: Any, node_id: int
+) -> float | None:
+    """Return the newest battery/voltage telemetry timestamp for a node, if any."""
+    cursor = db_connection.cursor()
+    cursor.execute(
+        """
+        SELECT MAX(timestamp) as last_ts
+        FROM telemetry_data
+        WHERE node_id = ?
+          AND (voltage IS NOT NULL OR battery_level IS NOT NULL)
+        """,
+        (node_id,),
+    )
+    row = cursor.fetchone()
+    if not row:
+        return None
+    last_ts = row["last_ts"] if hasattr(row, "keys") else row[0]
+    return float(last_ts) if last_ts is not None else None
+
+
+def has_recent_telemetry(
+    db_connection: Any,
+    node_id: int,
+    *,
+    max_age_seconds: int = RECENT_TELEMETRY_MAX_AGE_SECONDS,
+    now: float | None = None,
+) -> bool:
+    """True when the node has battery/voltage telemetry within max_age_seconds."""
+    last_ts = get_latest_telemetry_timestamp(db_connection, node_id)
+    if last_ts is None:
+        return False
+    cutoff = (now if now is not None else time.time()) - max_age_seconds
+    return last_ts >= cutoff
+
 
 def normalize_voltage(voltage: float | None) -> float | None:
     """Normalize telemetry voltage to volts (handles mV-as-fraction mistakes)."""
@@ -932,7 +978,10 @@ def set_power_type_override(
 
 def get_solar_power_conditions(db_connection: Any) -> dict[str, Any]:
     """
-    Analyze all non-archived solar nodes and group by condition.
+    Analyze non-archived solar nodes with recent telemetry and group by condition.
+
+    Nodes without battery/voltage telemetry within
+    RECENT_TELEMETRY_MAX_AGE_HOURS are excluded from health/monitoring lists.
 
     Returns:
         {
@@ -941,17 +990,26 @@ def get_solar_power_conditions(db_connection: Any) -> dict[str, Any]:
           "healthy": [...],
           "unknown": [...],
           "counts": {...},
+          "recent_max_age_hours": int,
         }
     """
     cursor = db_connection.cursor()
+    cutoff = recent_telemetry_cutoff()
     cursor.execute(
         """
-        SELECT node_id, hex_id, long_name, short_name, power_type,
-               COALESCE(power_type_locked, 0) as power_type_locked
-        FROM node_info
-        WHERE power_type = 'solar' AND COALESCE(archived, 0) = 0
-        ORDER BY long_name COLLATE NOCASE, hex_id
-        """
+        SELECT ni.node_id, ni.hex_id, ni.long_name, ni.short_name, ni.power_type,
+               COALESCE(ni.power_type_locked, 0) as power_type_locked,
+               MAX(td.timestamp) as last_telemetry
+        FROM node_info ni
+        INNER JOIN telemetry_data td ON td.node_id = ni.node_id
+        WHERE ni.power_type = 'solar'
+          AND COALESCE(ni.archived, 0) = 0
+          AND td.timestamp > ?
+          AND (td.voltage IS NOT NULL OR td.battery_level IS NOT NULL)
+        GROUP BY ni.node_id
+        ORDER BY ni.long_name COLLATE NOCASE, ni.hex_id
+        """,
+        (cutoff,),
     )
     try:
         rows = cursor.fetchall()
@@ -959,11 +1017,18 @@ def get_solar_power_conditions(db_connection: Any) -> dict[str, Any]:
         # Older DBs without power_type_locked
         cursor.execute(
             """
-            SELECT node_id, hex_id, long_name, short_name, power_type
-            FROM node_info
-            WHERE power_type = 'solar' AND COALESCE(archived, 0) = 0
-            ORDER BY long_name COLLATE NOCASE, hex_id
-            """
+            SELECT ni.node_id, ni.hex_id, ni.long_name, ni.short_name, ni.power_type,
+                   MAX(td.timestamp) as last_telemetry
+            FROM node_info ni
+            INNER JOIN telemetry_data td ON td.node_id = ni.node_id
+            WHERE ni.power_type = 'solar'
+              AND COALESCE(ni.archived, 0) = 0
+              AND td.timestamp > ?
+              AND (td.voltage IS NOT NULL OR td.battery_level IS NOT NULL)
+            GROUP BY ni.node_id
+            ORDER BY ni.long_name COLLATE NOCASE, ni.hex_id
+            """,
+            (cutoff,),
         )
         rows = cursor.fetchall()
 
@@ -980,11 +1045,16 @@ def get_solar_power_conditions(db_connection: Any) -> dict[str, Any]:
         long_name = row["long_name"] if hasattr(row, "keys") else row[2]
         short_name = row["short_name"] if hasattr(row, "keys") else row[3]
         locked = False
+        last_telemetry = None
         if hasattr(row, "keys"):
             try:
                 locked = bool(row["power_type_locked"])
             except (KeyError, IndexError):
                 locked = False
+            try:
+                last_telemetry = row["last_telemetry"]
+            except (KeyError, IndexError):
+                last_telemetry = None
 
         status = analyze_node_power(node_id, db_connection)
         condition = status.get("condition") or "unknown"
@@ -1011,6 +1081,7 @@ def get_solar_power_conditions(db_connection: Any) -> dict[str, Any]:
             "hours_to_critical": status.get("hours_to_critical"),
             "solar": status.get("solar"),
             "reason": status.get("reason"),
+            "last_telemetry": last_telemetry,
         }
         groups[condition].append(entry)
 
@@ -1018,6 +1089,7 @@ def get_solar_power_conditions(db_connection: Any) -> dict[str, Any]:
         **groups,
         "counts": {k: len(v) for k, v in groups.items()},
         "total": sum(len(v) for v in groups.values()),
+        "recent_max_age_hours": RECENT_TELEMETRY_MAX_AGE_HOURS,
     }
 
 

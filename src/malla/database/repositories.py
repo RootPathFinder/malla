@@ -4321,6 +4321,9 @@ class BatteryAnalyticsRepository:
     def get_mesh_power_stats() -> dict[str, Any]:
         """Get comprehensive mesh-wide power statistics.
 
+        Health/monitoring metrics use recent telemetry only (see
+        power_analysis.RECENT_TELEMETRY_MAX_AGE_HOURS).
+
         Returns:
             Dictionary with mesh-wide power analytics including:
             - Total nodes with telemetry
@@ -4333,21 +4336,26 @@ class BatteryAnalyticsRepository:
             - Total telemetry records
         """
         try:
+            from ..power_analysis import recent_telemetry_cutoff
+
             conn = get_db_connection()
             cursor = conn.cursor()
+            monitoring_cutoff = recent_telemetry_cutoff()
 
-            # Get total nodes with any telemetry data
+            # Nodes with recent telemetry (health/monitoring window)
             cursor.execute(
                 """
                 SELECT COUNT(DISTINCT ni.node_id) as total
                 FROM node_info ni
                 INNER JOIN telemetry_data td ON ni.node_id = td.node_id
-                WHERE td.voltage IS NOT NULL OR td.battery_level IS NOT NULL
-            """
+                WHERE (td.voltage IS NOT NULL OR td.battery_level IS NOT NULL)
+                  AND td.timestamp > ?
+            """,
+                (monitoring_cutoff,),
             )
             total_nodes = cursor.fetchone()["total"]
 
-            # Get nodes with recent telemetry (last 24 hours)
+            # Nodes with telemetry in the last 24 hours (activity card)
             recent_cutoff = time.time() - (24 * 3600)
             cursor.execute(
                 """
@@ -4361,19 +4369,27 @@ class BatteryAnalyticsRepository:
             )
             active_nodes = cursor.fetchone()["active"]
 
-            # Get average battery level (from most recent telemetry per node)
+            # Average battery level from latest reading within monitoring window
             cursor.execute(
                 """
                 WITH latest_telemetry AS (
-                    SELECT node_id, battery_level, MAX(timestamp) as max_ts
-                    FROM telemetry_data
-                    WHERE battery_level IS NOT NULL
-                    GROUP BY node_id
+                    SELECT t1.node_id, t1.battery_level
+                    FROM telemetry_data t1
+                    WHERE t1.battery_level IS NOT NULL
+                      AND t1.timestamp > ?
+                      AND t1.timestamp = (
+                        SELECT MAX(t2.timestamp)
+                        FROM telemetry_data t2
+                        WHERE t2.node_id = t1.node_id
+                          AND t2.battery_level IS NOT NULL
+                          AND t2.timestamp > ?
+                      )
                 )
                 SELECT AVG(battery_level) as avg_battery, COUNT(*) as count
                 FROM latest_telemetry
                 WHERE battery_level > 0 AND battery_level <= 100
-            """
+            """,
+                (monitoring_cutoff, monitoring_cutoff),
             )
             battery_result = cursor.fetchone()
             avg_battery = (
@@ -4383,20 +4399,28 @@ class BatteryAnalyticsRepository:
             )
             nodes_with_battery = battery_result["count"]
 
-            # Get average voltage (from most recent telemetry per node)
+            # Average voltage from latest reading within monitoring window
             cursor.execute(
                 """
                 WITH latest_telemetry AS (
-                    SELECT td.node_id, td.voltage, MAX(td.timestamp) as max_ts
-                    FROM telemetry_data td
-                    WHERE td.voltage IS NOT NULL
-                    GROUP BY td.node_id
+                    SELECT t1.node_id, t1.voltage
+                    FROM telemetry_data t1
+                    WHERE t1.voltage IS NOT NULL
+                      AND t1.timestamp > ?
+                      AND t1.timestamp = (
+                        SELECT MAX(t2.timestamp)
+                        FROM telemetry_data t2
+                        WHERE t2.node_id = t1.node_id
+                          AND t2.voltage IS NOT NULL
+                          AND t2.timestamp > ?
+                      )
                 )
                 SELECT AVG(voltage) as avg_voltage, MIN(voltage) as min_voltage,
                        MAX(voltage) as max_voltage, COUNT(*) as count
                 FROM latest_telemetry
                 WHERE voltage > 0
-            """
+            """,
+                (monitoring_cutoff, monitoring_cutoff),
             )
             voltage_result = cursor.fetchone()
 
@@ -4417,14 +4441,21 @@ class BatteryAnalyticsRepository:
             max_voltage = round(max_voltage, 2) if max_voltage else None
             nodes_with_voltage = voltage_result["count"]
 
-            # Count nodes by status based on latest voltage
+            # Count nodes by status based on latest recent voltage
             cursor.execute(
                 """
                 WITH latest_telemetry AS (
-                    SELECT td.node_id, td.voltage, MAX(td.timestamp) as max_ts
-                    FROM telemetry_data td
-                    WHERE td.voltage IS NOT NULL
-                    GROUP BY td.node_id
+                    SELECT t1.node_id, t1.voltage
+                    FROM telemetry_data t1
+                    WHERE t1.voltage IS NOT NULL
+                      AND t1.timestamp > ?
+                      AND t1.timestamp = (
+                        SELECT MAX(t2.timestamp)
+                        FROM telemetry_data t2
+                        WHERE t2.node_id = t1.node_id
+                          AND t2.voltage IS NOT NULL
+                          AND t2.timestamp > ?
+                      )
                 )
                 SELECT
                     SUM(CASE
@@ -4442,7 +4473,8 @@ class BatteryAnalyticsRepository:
                     END) as good
                 FROM latest_telemetry
                 WHERE voltage > 0
-            """
+            """,
+                (monitoring_cutoff, monitoring_cutoff),
             )
             status_result = cursor.fetchone()
             nodes_critical = status_result["critical"] or 0
@@ -4467,14 +4499,21 @@ class BatteryAnalyticsRepository:
             if oldest_ts and newest_ts:
                 data_days = round((newest_ts - oldest_ts) / 86400, 1)
 
-            # Get average health score from node_info (if available)
+            # Average health score for nodes with recent telemetry
             cursor.execute(
                 """
-                SELECT AVG(battery_health_score) as avg_health,
+                SELECT AVG(ni.battery_health_score) as avg_health,
                        COUNT(*) as count
-                FROM node_info
-                WHERE battery_health_score IS NOT NULL
-            """
+                FROM node_info ni
+                WHERE ni.battery_health_score IS NOT NULL
+                  AND EXISTS (
+                    SELECT 1 FROM telemetry_data td
+                    WHERE td.node_id = ni.node_id
+                      AND td.timestamp > ?
+                      AND (td.voltage IS NOT NULL OR td.battery_level IS NOT NULL)
+                  )
+            """,
+                (monitoring_cutoff,),
             )
             health_result = cursor.fetchone()
             avg_health = (
@@ -4523,21 +4562,22 @@ class BatteryAnalyticsRepository:
 
     @staticmethod
     def get_battery_health_overview() -> list[dict[str, Any]]:
-        """Get overview of all nodes with battery health information.
+        """Get overview of nodes with recent battery health information.
 
-        Returns all nodes that have telemetry data with battery health analysis:
-        - Voltage trends and current level
-        - Battery health score based on charging behavior
-        - Comparison to baseline performance
+        Only includes nodes with telemetry within the health/monitoring window
+        (power_analysis.RECENT_TELEMETRY_MAX_AGE_HOURS).
 
         Returns:
             List of dictionaries with node battery health data
         """
         try:
+            from ..power_analysis import recent_telemetry_cutoff
+
             conn = get_db_connection()
             cursor = conn.cursor()
+            cutoff = recent_telemetry_cutoff()
 
-            # Get all nodes with any telemetry data - simplified query for reliability
+            # Nodes with recent telemetry only
             cursor.execute(
                 """
                 SELECT DISTINCT
@@ -4550,14 +4590,16 @@ class BatteryAnalyticsRepository:
                     ni.last_updated
                 FROM node_info ni
                 INNER JOIN telemetry_data td ON ni.node_id = td.node_id
-                WHERE td.voltage IS NOT NULL OR td.battery_level IS NOT NULL
+                WHERE (td.voltage IS NOT NULL OR td.battery_level IS NOT NULL)
+                  AND td.timestamp > ?
                 ORDER BY ni.last_updated DESC
-            """
+            """,
+                (cutoff,),
             )
 
             nodes = cursor.fetchall()
             logger.info(
-                f"Battery health overview: found {len(nodes)} nodes with telemetry"
+                f"Battery health overview: found {len(nodes)} nodes with recent telemetry"
             )
 
             results = []
@@ -4565,16 +4607,18 @@ class BatteryAnalyticsRepository:
                 node_id = row["node_id"]
                 node_name = row["long_name"] or row["short_name"] or row["hex_id"]
 
-                # Get latest telemetry for this node
+                # Get latest telemetry for this node within the monitoring window
                 cursor.execute(
                     """
                     SELECT voltage, battery_level, timestamp
                     FROM telemetry_data
-                    WHERE node_id = ? AND (voltage IS NOT NULL OR battery_level IS NOT NULL)
+                    WHERE node_id = ?
+                      AND (voltage IS NOT NULL OR battery_level IS NOT NULL)
+                      AND timestamp > ?
                     ORDER BY timestamp DESC
                     LIMIT 1
                 """,
-                    (node_id,),
+                    (node_id, cutoff),
                 )
                 latest = cursor.fetchone()
 
@@ -4837,14 +4881,17 @@ class BatteryAnalyticsRepository:
 
     @staticmethod
     def get_critical_batteries() -> list[dict[str, Any]]:
-        """Get nodes with critical battery levels.
+        """Get nodes with critical battery levels and recent telemetry.
 
         Returns:
             List of nodes with voltage < 3.3V or health score < 40
         """
         try:
+            from ..power_analysis import recent_telemetry_cutoff
+
             conn = get_db_connection()
             cursor = conn.cursor()
+            cutoff = recent_telemetry_cutoff()
 
             cursor.execute(
                 """
@@ -4857,20 +4904,42 @@ class BatteryAnalyticsRepository:
                     ni.power_type_reason,
                     ni.last_battery_voltage,
                     ni.battery_health_score,
-                    ni.last_updated
+                    ni.last_updated,
+                    (
+                        SELECT MAX(td.timestamp)
+                        FROM telemetry_data td
+                        WHERE td.node_id = ni.node_id
+                          AND (td.voltage IS NOT NULL OR td.battery_level IS NOT NULL)
+                    ) as last_telemetry
                 FROM node_info ni
                 WHERE ni.power_type IN ('solar', 'battery')
+                  AND EXISTS (
+                    SELECT 1 FROM telemetry_data td
+                    WHERE td.node_id = ni.node_id
+                      AND td.timestamp > ?
+                      AND (td.voltage IS NOT NULL OR td.battery_level IS NOT NULL)
+                  )
                 ORDER BY ni.last_battery_voltage ASC NULLS LAST
                 LIMIT 10
-            """
+            """,
+                (cutoff,),
             )
 
             results = []
             for row in cursor.fetchall():
                 node_name = row["long_name"] or row["short_name"] or row["hex_id"]
 
-                # Scale voltage from fractional volts to actual volts (0.004 -> 4.0)
-                voltage = row["last_battery_voltage"]
+                # Prefer latest recent telemetry voltage over stale cached value
+                cursor.execute(
+                    """
+                    SELECT voltage FROM telemetry_data
+                    WHERE node_id = ? AND voltage IS NOT NULL AND timestamp > ?
+                    ORDER BY timestamp DESC LIMIT 1
+                    """,
+                    (row["node_id"], cutoff),
+                )
+                latest_v = cursor.fetchone()
+                voltage = latest_v["voltage"] if latest_v else row["last_battery_voltage"]
                 if voltage is not None and voltage < 1:
                     voltage = voltage * 1000
 
@@ -4879,6 +4948,7 @@ class BatteryAnalyticsRepository:
                     row["battery_health_score"] is not None
                     and row["battery_health_score"] < 40
                 ):
+                    last_seen_src = row["last_telemetry"] or row["last_updated"]
                     results.append(
                         {
                             "node_id": row["node_id"],
@@ -4888,7 +4958,7 @@ class BatteryAnalyticsRepository:
                             "power_type_reason": row["power_type_reason"],
                             "voltage": voltage,
                             "health_score": row["battery_health_score"],
-                            "last_seen": format_time_ago(row["last_updated"]),
+                            "last_seen": format_time_ago(last_seen_src),
                         }
                     )
 
@@ -4950,16 +5020,21 @@ class BatteryAnalyticsRepository:
 
     @staticmethod
     def get_nodes_with_battery_telemetry() -> list[dict[str, Any]]:
-        """Get all nodes that have shared battery telemetry data.
+        """Get nodes with recent battery telemetry data.
+
+        Only includes nodes with telemetry within the health/monitoring window.
 
         Returns:
             List of nodes with battery telemetry sorted by power type and recency
         """
         try:
+            from ..power_analysis import recent_telemetry_cutoff
+
             conn = get_db_connection()
             cursor = conn.cursor()
+            cutoff = recent_telemetry_cutoff()
 
-            # Get all nodes with telemetry, fetching latest voltage directly
+            # Nodes with recent telemetry only
             cursor.execute(
                 """
                 SELECT DISTINCT
@@ -4971,11 +5046,13 @@ class BatteryAnalyticsRepository:
                     ni.power_type_reason
                 FROM node_info ni
                 INNER JOIN telemetry_data td ON ni.node_id = td.node_id
-                WHERE td.voltage IS NOT NULL OR td.battery_level IS NOT NULL
-            """
+                WHERE (td.voltage IS NOT NULL OR td.battery_level IS NOT NULL)
+                  AND td.timestamp > ?
+            """,
+                (cutoff,),
             )
             nodes = cursor.fetchall()
-            logger.info(f"Found {len(nodes)} nodes with battery telemetry")
+            logger.info(f"Found {len(nodes)} nodes with recent battery telemetry")
 
             results = []
             for row in nodes:
@@ -4983,16 +5060,18 @@ class BatteryAnalyticsRepository:
                 node_name = row["long_name"] or row["short_name"] or row["hex_id"]
                 power_type = row["power_type"] or "unknown"
 
-                # Get latest telemetry for this node
+                # Get latest telemetry within the monitoring window
                 cursor.execute(
                     """
                     SELECT voltage, battery_level, timestamp
                     FROM telemetry_data
-                    WHERE node_id = ? AND (voltage IS NOT NULL OR battery_level IS NOT NULL)
+                    WHERE node_id = ?
+                      AND (voltage IS NOT NULL OR battery_level IS NOT NULL)
+                      AND timestamp > ?
                     ORDER BY timestamp DESC
                     LIMIT 1
                 """,
-                    (node_id,),
+                    (node_id, cutoff),
                 )
                 latest = cursor.fetchone()
 
@@ -5010,6 +5089,8 @@ class BatteryAnalyticsRepository:
                             )
                         except Exception:
                             pass
+                else:
+                    continue
 
                 # Calculate battery health for this node
                 battery_health = BatteryAnalyticsRepository._calculate_battery_health(
@@ -5273,16 +5354,19 @@ class BatteryAnalyticsRepository:
 
     @staticmethod
     def get_solar_nodes_with_charging_issues() -> list[dict[str, Any]]:
-        """Get all solar nodes that are experiencing charging issues.
+        """Get solar nodes with charging issues and recent telemetry.
 
         Returns:
             List of solar nodes with poor/critical charging status
         """
         try:
+            from ..power_analysis import recent_telemetry_cutoff
+
             conn = get_db_connection()
             cursor = conn.cursor()
+            cutoff = recent_telemetry_cutoff()
 
-            # Get all solar-powered nodes
+            # Solar nodes with recent telemetry only
             cursor.execute(
                 """
                 SELECT
@@ -5294,7 +5378,14 @@ class BatteryAnalyticsRepository:
                     ni.last_battery_voltage
                 FROM node_info ni
                 WHERE ni.power_type = 'solar'
-            """
+                  AND EXISTS (
+                    SELECT 1 FROM telemetry_data td
+                    WHERE td.node_id = ni.node_id
+                      AND td.timestamp > ?
+                      AND (td.voltage IS NOT NULL OR td.battery_level IS NOT NULL)
+                  )
+            """,
+                (cutoff,),
             )
             solar_nodes = cursor.fetchall()
             conn.close()
