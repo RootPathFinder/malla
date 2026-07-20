@@ -25,6 +25,7 @@ from meshtastic import (
 from paho.mqtt.enums import CallbackAPIVersion
 
 from ..config import get_config
+from ..utils.telemetry_request import apply_telemetry_request_type
 
 logger = logging.getLogger(__name__)
 
@@ -593,16 +594,10 @@ class MQTTPublisher:
 
         try:
             # Create telemetry request
-            telemetry = telemetry_pb2.Telemetry()
+            from meshtastic import telemetry_pb2
 
-            if telemetry_type == "environment_metrics":
-                telemetry.environment_metrics.CopyFrom(
-                    telemetry_pb2.EnvironmentMetrics()
-                )
-            elif telemetry_type == "power_metrics":
-                telemetry.power_metrics.CopyFrom(telemetry_pb2.PowerMetrics())
-            else:
-                telemetry.device_metrics.CopyFrom(telemetry_pb2.DeviceMetrics())
+            telemetry = telemetry_pb2.Telemetry()
+            telemetry_type = apply_telemetry_request_type(telemetry, telemetry_type)
 
             # Generate a unique packet ID
             packet_id = random.getrandbits(32)

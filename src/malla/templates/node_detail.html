@@ -93,41 +93,66 @@
         color: #842029;
     }
     .live-metric-tile {
-        position: relative;
-        overflow: hidden;
+        display: flex;
+        flex-direction: column;
+        gap: 0.35rem;
         border-radius: 0.5rem;
         background: var(--bs-tertiary-bg, #f8f9fa);
         border: 1px solid var(--bs-border-color, #dee2e6);
-        min-height: 92px;
-        padding: 0.85rem 0.75rem 0.7rem;
-    }
-    .live-metric-tile .live-spark {
-        position: absolute;
-        left: 0;
-        right: 0;
-        bottom: 0;
-        width: 100%;
-        height: 44px;
-        opacity: 0.7;
-        pointer-events: none;
-    }
-    .live-metric-tile .live-spark .area {
-        opacity: 0.18;
-    }
-    .live-metric-tile .live-spark .poll-dot {
-        opacity: 0.9;
-    }
-    .live-metric-tile .live-spark .poll-dot-latest {
-        opacity: 1;
+        min-height: 118px;
+        padding: 0.7rem 0.65rem 0.55rem;
     }
     .live-metric-tile .live-metric-body {
-        position: relative;
-        z-index: 1;
         text-align: center;
+        flex: 0 0 auto;
     }
     .live-metric-tile .live-metric-body small {
         display: block;
-        margin-top: 0.15rem;
+        margin-top: 0.1rem;
+    }
+    .live-spark-wrap {
+        display: grid;
+        grid-template-columns: 2.6rem 1fr;
+        gap: 0.2rem;
+        align-items: stretch;
+        min-height: 48px;
+        flex: 1 1 auto;
+    }
+    .live-spark-axis {
+        display: flex;
+        flex-direction: column;
+        justify-content: space-between;
+        font-size: 0.62rem;
+        line-height: 1;
+        color: var(--bs-secondary-color, #6c757d);
+        text-align: right;
+        padding: 1px 0;
+        font-variant-numeric: tabular-nums;
+    }
+    .live-spark-axis .live-spark-max,
+    .live-spark-axis .live-spark-min {
+        white-space: nowrap;
+        overflow: hidden;
+        text-overflow: ellipsis;
+    }
+    .live-metric-tile .live-spark {
+        width: 100%;
+        height: 48px;
+        display: block;
+    }
+    .live-metric-tile .live-spark .poll-bar {
+        opacity: 0.55;
+    }
+    .live-metric-tile .live-spark .poll-bar-latest {
+        opacity: 0.95;
+    }
+    .live-metric-tile .live-spark .poll-dot {
+        opacity: 0.95;
+    }
+    .live-metric-tile .live-spark .guide {
+        stroke: var(--bs-border-color, #dee2e6);
+        stroke-width: 0.6;
+        stroke-dasharray: 1.5 1.5;
     }
     [data-bs-theme="dark"] .live-metric-tile {
         background: rgba(255, 255, 255, 0.04);
@@ -510,7 +535,7 @@
                                    data-bs-toggle="tooltip" data-bs-placement="top"
                                    title="Requests real-time telemetry from the node. Not all nodes respond: Routers typically do, but Client/Tracker/Sensor roles or sleeping nodes may not."></i>
                             </h5>
-                            <small class="text-muted" id="live-telemetry-interval-info">Hop-aware polling with mesh ACK retries</small>
+                            <small class="text-muted" id="live-telemetry-interval-info">Rotating device / env / local stats / power / AQ</small>
                         </div>
                         <div class="d-flex align-items-center gap-2 flex-wrap">
                             <div class="btn-group btn-group-sm" role="group" id="live-duration-selector">
@@ -534,37 +559,61 @@
                              Sparklines render behind the value as each sample arrives. -->
                         <div class="col-md-3 col-6" id="live-battery-tile" style="display: none;">
                             <div class="live-metric-tile">
-                                <svg class="live-spark" id="live-spark-battery" viewBox="0 0 100 44" preserveAspectRatio="none" aria-hidden="true"></svg>
                                 <div class="live-metric-body">
                                     <div class="h4 mb-0" id="live-battery">--</div>
                                     <small class="text-muted">Battery</small>
+                                </div>
+                                <div class="live-spark-wrap">
+                                    <div class="live-spark-axis">
+                                        <span class="live-spark-max" id="live-spark-battery-max"></span>
+                                        <span class="live-spark-min" id="live-spark-battery-min"></span>
+                                    </div>
+                                    <svg class="live-spark" id="live-spark-battery" viewBox="0 0 100 40" preserveAspectRatio="none" role="img" aria-label="Battery poll history"></svg>
                                 </div>
                             </div>
                         </div>
                         <div class="col-md-3 col-6" id="live-voltage-tile" style="display: none;">
                             <div class="live-metric-tile">
-                                <svg class="live-spark" id="live-spark-voltage" viewBox="0 0 100 44" preserveAspectRatio="none" aria-hidden="true"></svg>
                                 <div class="live-metric-body">
                                     <div class="h4 mb-0" id="live-voltage">--</div>
                                     <small class="text-muted">Voltage</small>
+                                </div>
+                                <div class="live-spark-wrap">
+                                    <div class="live-spark-axis">
+                                        <span class="live-spark-max" id="live-spark-voltage-max"></span>
+                                        <span class="live-spark-min" id="live-spark-voltage-min"></span>
+                                    </div>
+                                    <svg class="live-spark" id="live-spark-voltage" viewBox="0 0 100 40" preserveAspectRatio="none" role="img" aria-label="Voltage poll history"></svg>
                                 </div>
                             </div>
                         </div>
                         <div class="col-md-3 col-6" id="live-channel-util-tile" style="display: none;">
                             <div class="live-metric-tile">
-                                <svg class="live-spark" id="live-spark-channel-util" viewBox="0 0 100 44" preserveAspectRatio="none" aria-hidden="true"></svg>
                                 <div class="live-metric-body">
                                     <div class="h4 mb-0" id="live-channel-util">--</div>
                                     <small class="text-muted">Channel Util</small>
+                                </div>
+                                <div class="live-spark-wrap">
+                                    <div class="live-spark-axis">
+                                        <span class="live-spark-max" id="live-spark-channel-util-max"></span>
+                                        <span class="live-spark-min" id="live-spark-channel-util-min"></span>
+                                    </div>
+                                    <svg class="live-spark" id="live-spark-channel-util" viewBox="0 0 100 40" preserveAspectRatio="none" role="img" aria-label="Channel util poll history"></svg>
                                 </div>
                             </div>
                         </div>
                         <div class="col-md-3 col-6" id="live-air-util-tile" style="display: none;">
                             <div class="live-metric-tile">
-                                <svg class="live-spark" id="live-spark-air-util" viewBox="0 0 100 44" preserveAspectRatio="none" aria-hidden="true"></svg>
                                 <div class="live-metric-body">
                                     <div class="h4 mb-0" id="live-air-util">--</div>
                                     <small class="text-muted">Air Util TX</small>
+                                </div>
+                                <div class="live-spark-wrap">
+                                    <div class="live-spark-axis">
+                                        <span class="live-spark-max" id="live-spark-air-util-max"></span>
+                                        <span class="live-spark-min" id="live-spark-air-util-min"></span>
+                                    </div>
+                                    <svg class="live-spark" id="live-spark-air-util" viewBox="0 0 100 40" preserveAspectRatio="none" role="img" aria-label="Air util poll history"></svg>
                                 </div>
                             </div>
                         </div>
@@ -578,14 +627,20 @@
                         </div>
                         <div class="col-md-4 col-6" id="live-temperature-tile" style="display: none;">
                             <div class="live-metric-tile">
-                                <svg class="live-spark" id="live-spark-temperature" viewBox="0 0 100 44" preserveAspectRatio="none" aria-hidden="true"></svg>
                                 <div class="live-metric-body">
                                     <div class="h5 mb-0" id="live-temperature">--</div>
                                     <small class="text-muted">Temperature</small>
                                 </div>
+                                <div class="live-spark-wrap">
+                                    <div class="live-spark-axis">
+                                        <span class="live-spark-max" id="live-spark-temperature-max"></span>
+                                        <span class="live-spark-min" id="live-spark-temperature-min"></span>
+                                    </div>
+                                    <svg class="live-spark" id="live-spark-temperature" viewBox="0 0 100 40" preserveAspectRatio="none" role="img" aria-label="Temperature poll history"></svg>
+                                </div>
                             </div>
                         </div>
-                        <div class="col-md-4 col-12" id="live-last-update-tile" style="display: none;">
+                        <div class="col-md-3 col-6" id="live-last-update-tile" style="display: none;">
                             <div class="live-metric-tile">
                                 <div class="live-metric-body">
                                     <div class="h5 mb-0" id="live-last-update">--</div>
@@ -593,6 +648,127 @@
                                 </div>
                             </div>
                         </div>
+                        <div class="col-md-3 col-6" id="live-humidity-tile" style="display: none;">
+                            <div class="live-metric-tile">
+                                <div class="live-metric-body">
+                                    <div class="h5 mb-0" id="live-humidity">--</div>
+                                    <small class="text-muted">Humidity</small>
+                                </div>
+                                <div class="live-spark-wrap">
+                                    <div class="live-spark-axis">
+                                        <span class="live-spark-max" id="live-spark-humidity-max"></span>
+                                        <span class="live-spark-min" id="live-spark-humidity-min"></span>
+                                    </div>
+                                    <svg class="live-spark" id="live-spark-humidity" viewBox="0 0 100 40" preserveAspectRatio="none" role="img" aria-label="Humidity poll history"></svg>
+                                </div>
+                            </div>
+                        </div>
+                        <div class="col-md-3 col-6" id="live-pressure-tile" style="display: none;">
+                            <div class="live-metric-tile">
+                                <div class="live-metric-body">
+                                    <div class="h5 mb-0" id="live-pressure">--</div>
+                                    <small class="text-muted">Pressure</small>
+                                </div>
+                                <div class="live-spark-wrap">
+                                    <div class="live-spark-axis">
+                                        <span class="live-spark-max" id="live-spark-pressure-max"></span>
+                                        <span class="live-spark-min" id="live-spark-pressure-min"></span>
+                                    </div>
+                                    <svg class="live-spark" id="live-spark-pressure" viewBox="0 0 100 40" preserveAspectRatio="none" role="img" aria-label="Pressure poll history"></svg>
+                                </div>
+                            </div>
+                        </div>
+                        <div class="col-md-3 col-6" id="live-iaq-tile" style="display: none;">
+                            <div class="live-metric-tile">
+                                <div class="live-metric-body">
+                                    <div class="h5 mb-0" id="live-iaq">--</div>
+                                    <small class="text-muted">IAQ</small>
+                                </div>
+                                <div class="live-spark-wrap">
+                                    <div class="live-spark-axis">
+                                        <span class="live-spark-max" id="live-spark-iaq-max"></span>
+                                        <span class="live-spark-min" id="live-spark-iaq-min"></span>
+                                    </div>
+                                    <svg class="live-spark" id="live-spark-iaq" viewBox="0 0 100 40" preserveAspectRatio="none" role="img" aria-label="IAQ poll history"></svg>
+                                </div>
+                            </div>
+                        </div>
+                        <div class="col-md-3 col-6" id="live-online-nodes-tile" style="display: none;">
+                            <div class="live-metric-tile">
+                                <div class="live-metric-body">
+                                    <div class="h5 mb-0" id="live-online-nodes">--</div>
+                                    <small class="text-muted">Online nodes</small>
+                                </div>
+                                <div class="live-spark-wrap">
+                                    <div class="live-spark-axis">
+                                        <span class="live-spark-max" id="live-spark-online-nodes-max"></span>
+                                        <span class="live-spark-min" id="live-spark-online-nodes-min"></span>
+                                    </div>
+                                    <svg class="live-spark" id="live-spark-online-nodes" viewBox="0 0 100 40" preserveAspectRatio="none" role="img" aria-label="Online nodes poll history"></svg>
+                                </div>
+                            </div>
+                        </div>
+                        <div class="col-md-3 col-6" id="live-packets-rx-tile" style="display: none;">
+                            <div class="live-metric-tile">
+                                <div class="live-metric-body">
+                                    <div class="h5 mb-0" id="live-packets-rx">--</div>
+                                    <small class="text-muted">Packets RX</small>
+                                </div>
+                                <div class="live-spark-wrap">
+                                    <div class="live-spark-axis">
+                                        <span class="live-spark-max" id="live-spark-packets-rx-max"></span>
+                                        <span class="live-spark-min" id="live-spark-packets-rx-min"></span>
+                                    </div>
+                                    <svg class="live-spark" id="live-spark-packets-rx" viewBox="0 0 100 40" preserveAspectRatio="none" role="img" aria-label="Packets RX poll history"></svg>
+                                </div>
+                            </div>
+                        </div>
+                        <div class="col-md-3 col-6" id="live-heap-free-tile" style="display: none;">
+                            <div class="live-metric-tile">
+                                <div class="live-metric-body">
+                                    <div class="h5 mb-0" id="live-heap-free">--</div>
+                                    <small class="text-muted">Heap free</small>
+                                </div>
+                                <div class="live-spark-wrap">
+                                    <div class="live-spark-axis">
+                                        <span class="live-spark-max" id="live-spark-heap-free-max"></span>
+                                        <span class="live-spark-min" id="live-spark-heap-free-min"></span>
+                                    </div>
+                                    <svg class="live-spark" id="live-spark-heap-free" viewBox="0 0 100 40" preserveAspectRatio="none" role="img" aria-label="Heap free poll history"></svg>
+                                </div>
+                            </div>
+                        </div>
+                        <div class="col-md-3 col-6" id="live-ch1-voltage-tile" style="display: none;">
+                            <div class="live-metric-tile">
+                                <div class="live-metric-body">
+                                    <div class="h5 mb-0" id="live-ch1-voltage">--</div>
+                                    <small class="text-muted">CH1 voltage</small>
+                                </div>
+                                <div class="live-spark-wrap">
+                                    <div class="live-spark-axis">
+                                        <span class="live-spark-max" id="live-spark-ch1-voltage-max"></span>
+                                        <span class="live-spark-min" id="live-spark-ch1-voltage-min"></span>
+                                    </div>
+                                    <svg class="live-spark" id="live-spark-ch1-voltage" viewBox="0 0 100 40" preserveAspectRatio="none" role="img" aria-label="CH1 voltage poll history"></svg>
+                                </div>
+                            </div>
+                        </div>
+                        <div class="col-md-3 col-6" id="live-pm25-tile" style="display: none;">
+                            <div class="live-metric-tile">
+                                <div class="live-metric-body">
+                                    <div class="h5 mb-0" id="live-pm25">--</div>
+                                    <small class="text-muted">PM2.5</small>
+                                </div>
+                                <div class="live-spark-wrap">
+                                    <div class="live-spark-axis">
+                                        <span class="live-spark-max" id="live-spark-pm25-max"></span>
+                                        <span class="live-spark-min" id="live-spark-pm25-min"></span>
+                                    </div>
+                                    <svg class="live-spark" id="live-spark-pm25" viewBox="0 0 100 40" preserveAspectRatio="none" role="img" aria-label="PM2.5 poll history"></svg>
+                                </div>
+                            </div>
+                        </div>
+
                     </div>
 
                     <div class="mt-3">
@@ -3040,16 +3216,131 @@ let liveChartData = {
     voltage: [],
     channelUtil: [],
     airUtil: [],
-    temperature: []
+    temperature: [],
+    humidity: [],
+    pressure: [],
+    iaq: [],
+    onlineNodes: [],
+    packetsRx: [],
+    heapFree: [],
+    ch1Voltage: [],
+    pm25: []
 };
 
-// Auto-scale live series so recent movement is readable (fixed 0–100 fills look like solid blocks).
+// Keep device metrics frequent; rotate secondary types to limit mesh traffic.
+const LIVE_TELEMETRY_TYPE_ROTATION = [
+    'device_metrics',
+    'environment_metrics',
+    'device_metrics',
+    'local_stats',
+    'device_metrics',
+    'power_metrics',
+    'device_metrics',
+    'air_quality_metrics'
+];
+let liveTelemetryPollIndex = 0;
+
+function nextLiveTelemetryType() {
+    const type = LIVE_TELEMETRY_TYPE_ROTATION[
+        liveTelemetryPollIndex % LIVE_TELEMETRY_TYPE_ROTATION.length
+    ];
+    liveTelemetryPollIndex += 1;
+    return type;
+}
+
+function liveTelemetryTypeLabel(type) {
+    return ({
+        device_metrics: 'device',
+        environment_metrics: 'environment',
+        local_stats: 'local stats',
+        power_metrics: 'power',
+        air_quality_metrics: 'air quality',
+        health_metrics: 'health',
+        host_metrics: 'host'
+    })[type] || type;
+}
+
+function pickTelemetrySection(telemetry, snake, camel) {
+    if (!telemetry) return {};
+    return telemetry[snake] || telemetry[camel] || {};
+}
+
+// Compact labeled bar charts under each metric (min/max axis + one bar per poll).
 const LIVE_SPARK_SERIES = {
-    battery: { el: 'live-spark-battery', color: '#198754' },
-    voltage: { el: 'live-spark-voltage', color: '#0d6efd' },
-    channelUtil: { el: 'live-spark-channel-util', color: '#fd7e14' },
-    airUtil: { el: 'live-spark-air-util', color: '#6f42c1' },
-    temperature: { el: 'live-spark-temperature', color: '#dc3545' }
+    battery: {
+        el: 'live-spark-battery',
+        color: '#198754',
+        format: (v) => Number(v).toFixed(0) + '%'
+    },
+    voltage: {
+        el: 'live-spark-voltage',
+        color: '#0d6efd',
+        format: (v) => Number(v).toFixed(2) + 'V'
+    },
+    channelUtil: {
+        el: 'live-spark-channel-util',
+        color: '#fd7e14',
+        format: (v) => Number(v).toFixed(1) + '%'
+    },
+    airUtil: {
+        el: 'live-spark-air-util',
+        color: '#6f42c1',
+        format: (v) => Number(v).toFixed(1) + '%'
+    },
+    temperature: {
+        el: 'live-spark-temperature',
+        color: '#dc3545',
+        format: (v) => {
+            const unit = localStorage.getItem('temperatureUnit') || 'celsius';
+            if (unit === 'fahrenheit') {
+                return ((Number(v) * 9 / 5) + 32).toFixed(1) + '°F';
+            }
+            return Number(v).toFixed(1) + '°C';
+        }
+    },
+    humidity: {
+        el: 'live-spark-humidity',
+        color: '#0dcaf0',
+        format: (v) => Number(v).toFixed(1) + '%'
+    },
+    pressure: {
+        el: 'live-spark-pressure',
+        color: '#6610f2',
+        format: (v) => Number(v).toFixed(0) + ' hPa'
+    },
+    iaq: {
+        el: 'live-spark-iaq',
+        color: '#20c997',
+        format: (v) => Number(v).toFixed(0)
+    },
+    onlineNodes: {
+        el: 'live-spark-online-nodes',
+        color: '#198754',
+        format: (v) => Number(v).toFixed(0)
+    },
+    packetsRx: {
+        el: 'live-spark-packets-rx',
+        color: '#0d6efd',
+        format: (v) => Number(v).toFixed(0)
+    },
+    heapFree: {
+        el: 'live-spark-heap-free',
+        color: '#6c757d',
+        format: (v) => {
+            const kb = Number(v) / 1024;
+            return kb >= 1024 ? (kb / 1024).toFixed(1) + ' MB' : kb.toFixed(0) + ' KB';
+        }
+    },
+    ch1Voltage: {
+        el: 'live-spark-ch1-voltage',
+        color: '#ffc107',
+        format: (v) => Number(v).toFixed(2) + 'V'
+    },
+    pm25: {
+        el: 'live-spark-pm25',
+        color: '#d63384',
+        format: (v) => Number(v).toFixed(0) + ' µg/m³'
+    }
 };
 
 // Poll timeline tracking - stores each poll result
@@ -3353,11 +3644,24 @@ function resetLiveSparklines() {
         voltage: [],
         channelUtil: [],
         airUtil: [],
-        temperature: []
+        temperature: [],
+        humidity: [],
+        pressure: [],
+        iaq: [],
+        onlineNodes: [],
+        packetsRx: [],
+        heapFree: [],
+        ch1Voltage: [],
+        pm25: []
     };
+    liveTelemetryPollIndex = 0;
     Object.values(LIVE_SPARK_SERIES).forEach(cfg => {
         const svg = document.getElementById(cfg.el);
         if (svg) svg.innerHTML = '';
+        const maxEl = document.getElementById(cfg.el + '-max');
+        const minEl = document.getElementById(cfg.el + '-min');
+        if (maxEl) maxEl.textContent = '';
+        if (minEl) minEl.textContent = '';
     });
 }
 
@@ -3369,71 +3673,129 @@ function pushLiveSparkValue(seriesKey, value) {
     liveChartData[seriesKey].push(Number(value));
 }
 
+function escapeSvgTitle(text) {
+    return String(text)
+        .replace(/&/g, '&amp;')
+        .replace(/</g, '&lt;')
+        .replace(/>/g, '&gt;')
+        .replace(/"/g, '&quot;');
+}
+
+function collectLiveSparkSamples(seriesKey) {
+    const series = liveChartData[seriesKey] || [];
+    const samples = [];
+    for (let i = 0; i < series.length; i++) {
+        const v = series[i];
+        if (v === null || v === undefined) continue;
+        samples.push({
+            v: Number(v),
+            t: liveChartData.timestamps[i] || null
+        });
+    }
+    return samples;
+}
+
 function renderLiveSparkline(seriesKey) {
     const cfg = LIVE_SPARK_SERIES[seriesKey];
     if (!cfg) return;
     const svg = document.getElementById(cfg.el);
     if (!svg) return;
 
-    const values = liveChartData[seriesKey].filter(v => v !== null && v !== undefined);
-    if (values.length < 1) {
+    const samples = collectLiveSparkSamples(seriesKey);
+    const maxEl = document.getElementById(cfg.el + '-max');
+    const minEl = document.getElementById(cfg.el + '-min');
+
+    if (samples.length < 1) {
         svg.innerHTML = '';
+        if (maxEl) maxEl.textContent = '';
+        if (minEl) minEl.textContent = '';
         return;
     }
 
-    const width = 100;
-    const height = 44;
-    const padY = 4;
-    let minVal = cfg.min !== undefined ? cfg.min : Math.min(...values);
-    let maxVal = cfg.max !== undefined ? cfg.max : Math.max(...values);
-    if (cfg.min === undefined && cfg.max === undefined) {
-        const span = maxVal - minVal;
-        const pad = span === 0 ? Math.max(Math.abs(maxVal) * 0.05, 0.1) : span * 0.15;
-        minVal -= pad;
-        maxVal += pad;
+    const values = samples.map(s => s.v);
+    const dataMin = Math.min(...values);
+    const dataMax = Math.max(...values);
+    // Pad scale a bit so bars don't touch the chart edges
+    const span = dataMax - dataMin;
+    const pad = span === 0 ? Math.max(Math.abs(dataMax) * 0.05, 0.1) : span * 0.12;
+    const scaleMin = dataMin - pad;
+    const scaleMax = dataMax + pad;
+    const range = (scaleMax - scaleMin) || 1;
+
+    if (maxEl) maxEl.textContent = cfg.format(dataMax);
+    if (minEl) minEl.textContent = cfg.format(dataMin);
+    if (maxEl && minEl && dataMin === dataMax) {
+        minEl.textContent = '';
     }
-    const range = (maxVal - minVal) || 1;
 
-    const coords = values.map((v, i) => {
-        const x = values.length === 1 ? width * 0.5 : (i / (values.length - 1)) * width;
-        const y = height - padY - ((v - minVal) / range) * (height - padY * 2);
-        return { x, y, v };
-    });
-    const linePoints = coords.map(p => `${p.x.toFixed(2)},${p.y.toFixed(2)}`).join(' ');
-
-    // Shrink dots slightly when many samples so the line stays readable
-    const baseR = values.length > 24 ? 1.1 : values.length > 12 ? 1.35 : 1.7;
-    const latestR = baseR + 0.55;
+    const width = 100;
+    const height = 40;
+    const padTop = 3;
+    const padBottom = 2;
+    const chartH = height - padTop - padBottom;
+    const n = samples.length;
+    const slot = width / n;
+    const barW = Math.max(1.4, Math.min(8, slot * 0.62));
 
     let html = '';
-    if (coords.length >= 2) {
-        const areaPoints = `0,${height} ${linePoints} ${width},${height}`;
-        html += `<polygon class="area" points="${areaPoints}" fill="${cfg.color}"></polygon>`;
-        html += `<polyline fill="none" stroke="${cfg.color}" stroke-width="1.75" stroke-linejoin="round" stroke-linecap="round" points="${linePoints}"></polyline>`;
-    }
+    // Mid guide line for easier reading
+    const midY = padTop + chartH / 2;
+    html += `<line class="guide" x1="0" y1="${midY.toFixed(2)}" x2="${width}" y2="${midY.toFixed(2)}"></line>`;
 
-    // One dot per poll sample; latest sample is slightly larger
-    coords.forEach((p, i) => {
-        const isLatest = i === coords.length - 1;
-        const r = isLatest ? latestR : baseR;
-        const cls = isLatest ? 'poll-dot poll-dot-latest' : 'poll-dot';
-        html += `<circle class="${cls}" cx="${p.x.toFixed(2)}" cy="${p.y.toFixed(2)}" r="${r.toFixed(2)}" fill="${cfg.color}" stroke="#fff" stroke-width="0.6"></circle>`;
+    samples.forEach((sample, i) => {
+        const isLatest = i === n - 1;
+        const barH = Math.max(2, ((sample.v - scaleMin) / range) * chartH);
+        const x = i * slot + (slot - barW) / 2;
+        const y = height - padBottom - barH;
+        const cls = isLatest ? 'poll-bar poll-bar-latest' : 'poll-bar';
+        const timeLabel = sample.t
+            ? (sample.t instanceof Date ? sample.t.toLocaleTimeString() : String(sample.t))
+            : '';
+        const tip = timeLabel
+            ? `${cfg.format(sample.v)} · ${timeLabel}`
+            : cfg.format(sample.v);
+        html += `<rect class="${cls}" x="${x.toFixed(2)}" y="${y.toFixed(2)}" width="${barW.toFixed(2)}" height="${barH.toFixed(2)}" rx="0.8" fill="${cfg.color}"><title>${escapeSvgTitle(tip)}</title></rect>`;
+        // Dot on bar top for each poll
+        html += `<circle class="poll-dot" cx="${(x + barW / 2).toFixed(2)}" cy="${y.toFixed(2)}" r="${isLatest ? 1.7 : 1.25}" fill="${cfg.color}" stroke="#fff" stroke-width="0.5"><title>${escapeSvgTitle(tip)}</title></circle>`;
     });
 
     svg.innerHTML = html;
 }
 
-function updateLiveCharts(dm, env) {
-    dm = dm || {};
-    env = env || {};
-    const now = new Date();
+function updateLiveCharts(telemetryOrDm, maybeEnv) {
+    // Back-compat: updateLiveCharts(dm, env) or updateLiveCharts(telemetry)
+    let dm = {};
+    let env = {};
+    let localStats = {};
+    let power = {};
+    let aq = {};
+    if (maybeEnv !== undefined || (telemetryOrDm && (telemetryOrDm.battery_level !== undefined || telemetryOrDm.batteryLevel !== undefined || telemetryOrDm.voltage !== undefined))) {
+        dm = telemetryOrDm || {};
+        env = maybeEnv || {};
+    } else {
+        const telemetry = telemetryOrDm || {};
+        dm = pickTelemetrySection(telemetry, 'device_metrics', 'deviceMetrics');
+        env = pickTelemetrySection(telemetry, 'environment_metrics', 'environmentMetrics');
+        localStats = pickTelemetrySection(telemetry, 'local_stats', 'localStats');
+        power = pickTelemetrySection(telemetry, 'power_metrics', 'powerMetrics');
+        aq = pickTelemetrySection(telemetry, 'air_quality_metrics', 'airQualityMetrics');
+    }
 
+    const now = new Date();
     liveChartData.timestamps.push(now);
     pushLiveSparkValue('battery', dm.battery_level ?? dm.batteryLevel);
     pushLiveSparkValue('voltage', dm.voltage);
     pushLiveSparkValue('channelUtil', dm.channel_utilization ?? dm.channelUtilization);
     pushLiveSparkValue('airUtil', dm.air_util_tx ?? dm.airUtilTx);
     pushLiveSparkValue('temperature', env.temperature);
+    pushLiveSparkValue('humidity', env.relative_humidity ?? env.relativeHumidity);
+    pushLiveSparkValue('pressure', env.barometric_pressure ?? env.barometricPressure);
+    pushLiveSparkValue('iaq', env.iaq);
+    pushLiveSparkValue('onlineNodes', localStats.num_online_nodes ?? localStats.numOnlineNodes);
+    pushLiveSparkValue('packetsRx', localStats.num_packets_rx ?? localStats.numPacketsRx);
+    pushLiveSparkValue('heapFree', localStats.heap_free_bytes ?? localStats.heapFreeBytes);
+    pushLiveSparkValue('ch1Voltage', power.ch1_voltage ?? power.ch1Voltage);
+    pushLiveSparkValue('pm25', aq.pm25_standard ?? aq.pm25Standard ?? aq.pm25_environmental ?? aq.pm25Environmental);
 
     const maxPoints = 60;
     if (liveChartData.timestamps.length > maxPoints) {
@@ -3589,12 +3951,13 @@ async function pollLiveTelemetry() {
             liveTelemetryEstimatedHops !== null ? liveTelemetryEstimatedHops : getPageAvgHops()
         );
         const requestTimeoutSec = hopBudget.timeoutS;
+        const requestedType = nextLiveTelemetryType();
 
         const response = await fetch(`/api/admin/node/${nodeId}/telemetry/live`, {
             method: 'POST',
             headers: {'Content-Type': 'application/json'},
             body: JSON.stringify({
-                telemetry_type: 'device_metrics',
+                telemetry_type: requestedType,
                 timeout: requestTimeoutSec,
                 estimated_hops: hopBudget.hops
             }),
@@ -3641,17 +4004,13 @@ async function pollLiveTelemetry() {
                 ? '<span class="badge bg-info">Cached</span>'
                 : '<span class="badge bg-success">Live</span>';
             const sourceNote = source === 'last_known' ? ' · last-known' : (source === 'late_cache' ? ' · late' : '');
-            statusIndicator.innerHTML = `${badge} <small class="text-muted ms-2">${hopNote} · ${responseSec}s${retryNote}${sourceNote} · next ${intervalSec}s</small>`;
+            const typeNote = liveTelemetryTypeLabel(requestedType);
+            statusIndicator.innerHTML = `${badge} <small class="text-muted ms-2">${typeNote} · ${hopNote} · ${responseSec}s${retryNote}${sourceNote} · next ${intervalSec}s</small>`;
             // Treat last-known as soft success for adaptive interval (don't back off hard)
             adjustPollingInterval(responseTime, source !== 'last_known' ? true : responseTime < 8000);
 
-            const telemetry = data.telemetry;
-            // Handle both snake_case and camelCase keys from API
-            const dm = telemetry.device_metrics || telemetry.deviceMetrics || {};
-            const env = telemetry.environment_metrics || telemetry.environmentMetrics || {};
-
-            updateTelemetryDisplay(dm, env);
-            updateLiveCharts(dm, env);
+            updateTelemetryDisplay(data.telemetry);
+            updateLiveCharts(data.telemetry);
             scheduleNextPoll();
             return;
         }
@@ -3720,10 +4079,7 @@ async function pollCachedTelemetry() {
         const telemetry = data.telemetry;
         if (!telemetry) return;
 
-        const dm = telemetry.device_metrics || {};
-        const env = telemetry.environment_metrics || {};
-
-        updateTelemetryDisplay(dm, env);
+        updateTelemetryDisplay(telemetry);
     } catch (error) {
         console.error('Cached telemetry fetch failed:', error);
     }
@@ -3742,15 +4098,38 @@ function setLiveTile(tileId, valueElId, text, className) {
     if (className) el.className = className;
 }
 
-function updateTelemetryDisplay(dm, env) {
-    dm = dm || {};
-    env = env || {};
+function updateTelemetryDisplay(telemetryOrDm, maybeEnv) {
+    let dm = {};
+    let env = {};
+    let localStats = {};
+    let power = {};
+    let aq = {};
+    if (maybeEnv !== undefined || (telemetryOrDm && (telemetryOrDm.battery_level !== undefined || telemetryOrDm.batteryLevel !== undefined || telemetryOrDm.voltage !== undefined))) {
+        dm = telemetryOrDm || {};
+        env = maybeEnv || {};
+    } else {
+        const telemetry = telemetryOrDm || {};
+        dm = pickTelemetrySection(telemetry, 'device_metrics', 'deviceMetrics');
+        env = pickTelemetrySection(telemetry, 'environment_metrics', 'environmentMetrics');
+        localStats = pickTelemetrySection(telemetry, 'local_stats', 'localStats');
+        power = pickTelemetrySection(telemetry, 'power_metrics', 'powerMetrics');
+        aq = pickTelemetrySection(telemetry, 'air_quality_metrics', 'airQualityMetrics');
+    }
+
     const batteryLevel = dm.battery_level ?? dm.batteryLevel;
     const voltage = dm.voltage;
     const channelUtil = dm.channel_utilization ?? dm.channelUtilization;
     const airUtilTx = dm.air_util_tx ?? dm.airUtilTx;
     const uptimeSeconds = dm.uptime_seconds ?? dm.uptimeSeconds;
     const temperature = env.temperature;
+    const humidity = env.relative_humidity ?? env.relativeHumidity;
+    const pressure = env.barometric_pressure ?? env.barometricPressure;
+    const iaq = env.iaq;
+    const onlineNodes = localStats.num_online_nodes ?? localStats.numOnlineNodes;
+    const packetsRx = localStats.num_packets_rx ?? localStats.numPacketsRx;
+    const heapFree = localStats.heap_free_bytes ?? localStats.heapFreeBytes;
+    const ch1Voltage = power.ch1_voltage ?? power.ch1Voltage;
+    const pm25 = aq.pm25_standard ?? aq.pm25Standard ?? aq.pm25_environmental ?? aq.pm25Environmental;
 
     // Only update tiles for fields present in this sample (keep prior values otherwise)
     if (batteryLevel !== undefined) {
@@ -3794,6 +4173,36 @@ function updateTelemetryDisplay(dm, env) {
         }
         setLiveTile('live-temperature-tile', 'live-temperature', tempText, 'h5 mb-0');
     }
+    if (humidity !== undefined) {
+        setLiveTile('live-humidity-tile', 'live-humidity', Number(humidity).toFixed(1) + '%', 'h5 mb-0');
+    }
+    if (pressure !== undefined) {
+        setLiveTile('live-pressure-tile', 'live-pressure', Number(pressure).toFixed(0) + ' hPa', 'h5 mb-0');
+    }
+    if (iaq !== undefined) {
+        setLiveTile('live-iaq-tile', 'live-iaq', Number(iaq).toFixed(0), 'h5 mb-0');
+    }
+    if (onlineNodes !== undefined) {
+        setLiveTile('live-online-nodes-tile', 'live-online-nodes', String(onlineNodes), 'h5 mb-0');
+    }
+    if (packetsRx !== undefined) {
+        setLiveTile('live-packets-rx-tile', 'live-packets-rx', String(packetsRx), 'h5 mb-0');
+    }
+    if (heapFree !== undefined) {
+        const kb = Number(heapFree) / 1024;
+        const text = kb >= 1024 ? (kb / 1024).toFixed(1) + ' MB' : kb.toFixed(0) + ' KB';
+        setLiveTile('live-heap-free-tile', 'live-heap-free', text, 'h5 mb-0');
+    }
+    if (ch1Voltage !== undefined) {
+        setLiveTile('live-ch1-voltage-tile', 'live-ch1-voltage', Number(ch1Voltage).toFixed(2) + 'V', 'h5 mb-0');
+    }
+    if (pm25 !== undefined) {
+        setLiveTile(
+            'live-pm25-tile', 'live-pm25',
+            Number(pm25).toFixed(0) + ' µg/m³',
+            'h5 mb-0 ' + (pm25 > 35 ? 'text-danger' : pm25 > 12 ? 'text-warning' : 'text-success')
+        );
+    }
 
     const lastUpdateEl = document.getElementById('live-last-update');
     if (lastUpdateEl) {
@@ -3810,6 +4219,21 @@ function updateTelemetryDisplay(dm, env) {
     }
 }
 
+async function requestLiveTelemetryType(nodeId, telemetryType, hopBudget) {
+    const response = await fetch(`/api/admin/node/${nodeId}/telemetry/live`, {
+        method: 'POST',
+        headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({
+            telemetry_type: telemetryType,
+            timeout: hopBudget.timeoutS,
+            estimated_hops: hopBudget.hops
+        })
+    });
+    const data = await response.json();
+    if (data.stats) updateTelemetryStats(data.stats);
+    return data;
+}
+
 async function pollLiveTelemetryOnce() {
     if (liveTelemetryIsPolling) return;
     const status = document.getElementById('live-telemetry-status');
@@ -3822,69 +4246,41 @@ async function pollLiveTelemetryOnce() {
 
     if (pollOnceBtn) pollOnceBtn.disabled = true;
     if (status) {
-        status.innerHTML = '<i class="bi bi-hourglass-split text-primary"></i> Requesting a single telemetry sample...';
+        status.innerHTML = '<i class="bi bi-hourglass-split text-primary"></i> Sampling device, environment, and local stats...';
     }
 
     try {
-        const response = await fetch(`/api/admin/node/${nodeId}/telemetry/live`, {
-            method: 'POST',
-            headers: {'Content-Type': 'application/json'},
-            body: JSON.stringify({
-                telemetry_type: 'device_metrics',
-                timeout: hopBudget.timeoutS,
-                estimated_hops: hopBudget.hops
-            })
-        });
-        const data = await response.json();
-        if (data.stats) updateTelemetryStats(data.stats);
+        // One click gathers the highest-value types without flooding the mesh
+        const sampleTypes = ['device_metrics', 'environment_metrics', 'local_stats'];
+        let anySuccess = false;
+        const received = [];
 
-        if (data.success && data.telemetry) {
-            const telemetry = data.telemetry;
-            const dm = telemetry.device_metrics || telemetry.deviceMetrics || {};
-            let env = telemetry.environment_metrics || telemetry.environmentMetrics || {};
-            updateTelemetryDisplay(dm, env);
-            updateLiveCharts(dm, env);
-            const source = data.source || 'live';
-            const note = source === 'last_known' ? ' (last-known)' : '';
+        for (const telemetryType of sampleTypes) {
             if (status) {
-                status.innerHTML = `<span class="badge bg-success">Sample</span> <small class="text-muted ms-2">Received${note}. Poll once again or Start Live.</small>`;
+                status.innerHTML = `<i class="bi bi-hourglass-split text-primary"></i> Requesting ${liveTelemetryTypeLabel(telemetryType)}...`;
             }
-            // Optionally fetch environment metrics when temperature is missing
-            if (env.temperature === undefined) {
-                try {
-                    const envResp = await fetch(`/api/admin/node/${nodeId}/telemetry/live`, {
-                        method: 'POST',
-                        headers: {'Content-Type': 'application/json'},
-                        body: JSON.stringify({
-                            telemetry_type: 'environment_metrics',
-                            timeout: hopBudget.timeoutS,
-                            estimated_hops: hopBudget.hops
-                        })
-                    });
-                    const envData = await envResp.json();
-                    if (envData.success && envData.telemetry) {
-                        const envOnly = envData.telemetry.environment_metrics
-                            || envData.telemetry.environmentMetrics || {};
-                        if (Object.keys(envOnly).length) {
-                            env = envOnly;
-                            updateTelemetryDisplay(dm, envOnly);
-                            // Amend last spark sample with temperature instead of adding a new point
-                            if (liveChartData.temperature.length) {
-                                liveChartData.temperature[liveChartData.temperature.length - 1] =
-                                    envOnly.temperature !== undefined ? Number(envOnly.temperature) : null;
-                                renderLiveSparkline('temperature');
-                            }
-                        }
-                    }
-                } catch (e) {
-                    // ignore optional env follow-up
+            try {
+                const data = await requestLiveTelemetryType(nodeId, telemetryType, hopBudget);
+                if (data.success && data.telemetry) {
+                    anySuccess = true;
+                    received.push(liveTelemetryTypeLabel(telemetryType));
+                    updateTelemetryDisplay(data.telemetry);
+                    updateLiveCharts(data.telemetry);
                 }
+            } catch (e) {
+                // continue remaining sample types
+            }
+        }
+
+        if (anySuccess) {
+            if (status) {
+                status.innerHTML = `<span class="badge bg-success">Sample</span> <small class="text-muted ms-2">Got ${received.join(', ')}. Poll once again or Start Live.</small>`;
             }
             return;
         }
 
         if (status) {
-            status.innerHTML = `<span class="badge bg-warning">No Response</span> <small class="text-muted ms-2">${data.error || 'Node did not reply'}</small>`;
+            status.innerHTML = '<span class="badge bg-warning">No Response</span> <small class="text-muted ms-2">Node did not reply</small>';
         }
     } catch (error) {
         console.error('Poll once failed:', error);

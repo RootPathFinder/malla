@@ -2897,7 +2897,9 @@ def api_request_live_telemetry(node_id):
     a response. Use this for real-time polling of node status.
 
     Request body (optional):
-        telemetry_type: Type of telemetry (device_metrics, environment_metrics)
+        telemetry_type: Type of telemetry (device_metrics, environment_metrics,
+            local_stats, power_metrics, air_quality_metrics, health_metrics,
+            host_metrics)
         timeout: Timeout hint in seconds (server floors to hop budget, max 55)
         estimated_hops: Optional hop-distance hint from the UI
 

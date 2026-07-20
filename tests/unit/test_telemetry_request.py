@@ -10,11 +10,14 @@ from malla.routes.admin_routes import (
     _request_live_telemetry_with_retry,
 )
 from malla.utils.telemetry_request import (
+    LIVE_TELEMETRY_TYPE_ROTATION,
+    apply_telemetry_request_type,
     complete_pending_telemetry,
     extract_from_node_id,
     extract_request_id,
     find_matching_telemetry_request,
     live_telemetry_budget,
+    next_live_telemetry_type,
     normalize_mesh_node_id,
     normalize_request_id,
     split_live_telemetry_attempts,
@@ -371,3 +374,47 @@ class TestSerialTelemetryStatsShape:
         assert "node_stats" in stats
         assert stats["node_stats"]["successes"] == 3
         assert stats["success_rate"] == 75.0
+
+
+@pytest.mark.unit
+class TestLiveTelemetryTypeRotation:
+    def test_rotation_keeps_device_metrics_frequent(self):
+        types = [next_live_telemetry_type(i) for i in range(len(LIVE_TELEMETRY_TYPE_ROTATION))]
+        assert types.count("device_metrics") >= 4
+        assert "environment_metrics" in types
+        assert "local_stats" in types
+        assert "power_metrics" in types
+        assert "air_quality_metrics" in types
+
+    def test_rotation_wraps(self):
+        assert next_live_telemetry_type(0) == next_live_telemetry_type(
+            len(LIVE_TELEMETRY_TYPE_ROTATION)
+        )
+
+
+@pytest.mark.unit
+class TestApplyTelemetryRequestType:
+    def test_applies_supported_types(self):
+        from meshtastic import telemetry_pb2
+
+        for telemetry_type, field in [
+            ("device_metrics", "device_metrics"),
+            ("environment_metrics", "environment_metrics"),
+            ("local_stats", "local_stats"),
+            ("power_metrics", "power_metrics"),
+            ("air_quality_metrics", "air_quality_metrics"),
+            ("health_metrics", "health_metrics"),
+            ("host_metrics", "host_metrics"),
+        ]:
+            tel = telemetry_pb2.Telemetry()
+            applied = apply_telemetry_request_type(tel, telemetry_type)
+            assert applied == telemetry_type
+            assert tel.HasField(field)
+
+    def test_unknown_falls_back_to_device_metrics(self):
+        from meshtastic import telemetry_pb2
+
+        tel = telemetry_pb2.Telemetry()
+        applied = apply_telemetry_request_type(tel, "not_a_real_type")
+        assert applied == "device_metrics"
+        assert tel.HasField("device_metrics")

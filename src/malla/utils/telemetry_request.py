@@ -22,6 +22,56 @@ TELEMETRY_TYPE_KEYS: dict[str, tuple[str, ...]] = {
     "host_metrics": ("host_metrics", "hostMetrics"),
 }
 
+# Keep device metrics frequent; rotate secondary types so RF load stays light.
+LIVE_TELEMETRY_TYPE_ROTATION: tuple[str, ...] = (
+    "device_metrics",
+    "environment_metrics",
+    "device_metrics",
+    "local_stats",
+    "device_metrics",
+    "power_metrics",
+    "device_metrics",
+    "air_quality_metrics",
+)
+
+
+def next_live_telemetry_type(poll_index: int) -> str:
+    """Return the telemetry type for a 0-based live-poll index."""
+    if not LIVE_TELEMETRY_TYPE_ROTATION:
+        return "device_metrics"
+    idx = int(poll_index) % len(LIVE_TELEMETRY_TYPE_ROTATION)
+    return LIVE_TELEMETRY_TYPE_ROTATION[idx]
+
+
+def apply_telemetry_request_type(telemetry: Any, telemetry_type: str) -> str:
+    """
+    Fill an empty Telemetry protobuf with the requested metrics oneof.
+
+    Returns the type that was applied (falls back to device_metrics).
+    """
+    from meshtastic import telemetry_pb2
+
+    requested = (telemetry_type or "device_metrics").strip()
+    if requested not in TELEMETRY_TYPE_KEYS:
+        requested = "device_metrics"
+
+    if requested == "environment_metrics":
+        telemetry.environment_metrics.CopyFrom(telemetry_pb2.EnvironmentMetrics())
+    elif requested == "power_metrics":
+        telemetry.power_metrics.CopyFrom(telemetry_pb2.PowerMetrics())
+    elif requested == "local_stats":
+        telemetry.local_stats.CopyFrom(telemetry_pb2.LocalStats())
+    elif requested == "air_quality_metrics":
+        telemetry.air_quality_metrics.CopyFrom(telemetry_pb2.AirQualityMetrics())
+    elif requested == "health_metrics":
+        telemetry.health_metrics.CopyFrom(telemetry_pb2.HealthMetrics())
+    elif requested == "host_metrics":
+        telemetry.host_metrics.CopyFrom(telemetry_pb2.HostMetrics())
+    else:
+        telemetry.device_metrics.CopyFrom(telemetry_pb2.DeviceMetrics())
+        requested = "device_metrics"
+    return requested
+
 
 def normalize_mesh_node_id(value: Any) -> int | None:
     """
