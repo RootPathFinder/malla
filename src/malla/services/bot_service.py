@@ -172,7 +172,23 @@ class BotService:
 
         # Daily mesh network digest
         self._daily_digest_enabled = True
-        self._daily_digest_hour = 8  # Local hour (0-23) to broadcast
+        self._daily_digest_hour = 8  # Hour (0-23) in _daily_digest_timezone
+        # Digests were previously scheduled with time.localtime() (= UTC on
+        # most hosts). Keep UTC as the default, but make timezone explicit.
+        self._daily_digest_timezone = "UTC"
+        self._daily_digest_timezones = (
+            "UTC",
+            "America/New_York",
+            "America/Chicago",
+            "America/Denver",
+            "America/Los_Angeles",
+            "America/Phoenix",
+            "America/Anchorage",
+            "Pacific/Honolulu",
+            "Europe/London",
+            "Europe/Berlin",
+            "Australia/Sydney",
+        )
         self._last_daily_digest_date: str | None = None
         self._last_digest_text: str | None = None
         # Traceroute reply style: names (default) | longnames | chain | hops
@@ -218,6 +234,7 @@ class BotService:
             "min_send_interval": self._min_send_interval,
             "daily_digest_enabled": self._daily_digest_enabled,
             "daily_digest_hour": self._daily_digest_hour,
+            "daily_digest_timezone": self._daily_digest_timezone,
             "channel_broadcast_enabled": self._channel_broadcast_enabled,
             "broadcast_interval_hours": self._broadcast_interval_hours,
             "traceroute_format": self._traceroute_format,
@@ -293,6 +310,11 @@ class BotService:
             except (TypeError, ValueError):
                 pass
 
+        if "daily_digest_timezone" in stored and stored["daily_digest_timezone"]:
+            tz_name = str(stored["daily_digest_timezone"]).strip()
+            if self._is_valid_digest_timezone(tz_name):
+                self._daily_digest_timezone = tz_name
+
         if "channel_broadcast_enabled" in stored:
             self._channel_broadcast_enabled = bool(stored["channel_broadcast_enabled"])
 
@@ -338,9 +360,9 @@ class BotService:
         else:
             # If today's digest window already opened, mark today as sent so a
             # deploy/restart does not immediately dump another digest.
-            local_now = time.localtime()
-            today = time.strftime("%Y-%m-%d", local_now)
-            if local_now.tm_hour >= self._daily_digest_hour:
+            digest_now = self._digest_now()
+            today = digest_now.strftime("%Y-%m-%d")
+            if digest_now.hour >= self._daily_digest_hour:
                 self._last_daily_digest_date = today
                 seed_updates["last_daily_digest_date"] = today
 
@@ -3580,16 +3602,47 @@ class BotService:
         except Exception as e:
             logger.error(f"Error welcoming new nodes: {e}", exc_info=True)
 
+    def _is_valid_digest_timezone(self, tz_name: str) -> bool:
+        """Return True if tz_name is a usable IANA timezone."""
+        if not tz_name:
+            return False
+        try:
+            from zoneinfo import ZoneInfo
+
+            ZoneInfo(tz_name)
+            return True
+        except Exception:
+            return False
+
+    def _digest_tz(self):
+        """Return the ZoneInfo used for daily digest scheduling."""
+        from zoneinfo import ZoneInfo
+
+        try:
+            return ZoneInfo(self._daily_digest_timezone or "UTC")
+        except Exception:
+            logger.warning(
+                "Invalid digest timezone %r; falling back to UTC",
+                self._daily_digest_timezone,
+            )
+            return ZoneInfo("UTC")
+
+    def _digest_now(self):
+        """Current datetime in the configured digest timezone."""
+        from datetime import datetime
+
+        return datetime.now(self._digest_tz())
+
     def _maybe_send_daily_digest(self) -> None:
-        """Send the daily digest once per local day after the configured hour."""
+        """Send the daily digest once per configured timezone-day after the hour."""
         if not self._daily_digest_enabled or not self._enabled:
             return
 
-        local_now = time.localtime()
-        today = time.strftime("%Y-%m-%d", local_now)
+        digest_now = self._digest_now()
+        today = digest_now.strftime("%Y-%m-%d")
         if self._last_daily_digest_date == today:
             return
-        if local_now.tm_hour < self._daily_digest_hour:
+        if digest_now.hour < self._daily_digest_hour:
             return
 
         digest = self._build_daily_digest()
@@ -3607,9 +3660,18 @@ class BotService:
         )
         self._log_activity(
             "daily_digest",
-            {"date": today, "hour": self._daily_digest_hour},
+            {
+                "date": today,
+                "hour": self._daily_digest_hour,
+                "timezone": self._daily_digest_timezone,
+            },
         )
-        logger.info("Queued daily mesh network digest for %s", today)
+        logger.info(
+            "Queued daily mesh network digest for %s %02d:00 %s",
+            today,
+            self._daily_digest_hour,
+            self._daily_digest_timezone,
+        )
 
     def _build_daily_digest(self) -> str | None:
         """Build a compact daily mesh network update for LoRa payloads."""
@@ -3623,6 +3685,7 @@ class BotService:
             nodes_delta = self._get_active_nodes_delta()
             new_nodes = self._get_new_nodes_24h(name_limit=3)
             longest_tr = self._get_longest_traceroute_24h()
+            when = self._digest_now().timetuple()
 
             return self._format_daily_digest(
                 vitals=vitals,
@@ -3632,7 +3695,7 @@ class BotService:
                 top_names=top_names,
                 new_nodes=new_nodes,
                 longest_tr=longest_tr,
-                when=time.localtime(),
+                when=when,
             )
         except Exception as e:
             logger.error(f"Error building daily digest: {e}", exc_info=True)
