@@ -92,6 +92,40 @@
         background: #f8d7da;
         color: #842029;
     }
+    .live-metric-tile {
+        position: relative;
+        overflow: hidden;
+        border-radius: 0.5rem;
+        background: var(--bs-tertiary-bg, #f8f9fa);
+        border: 1px solid var(--bs-border-color, #dee2e6);
+        min-height: 92px;
+        padding: 0.85rem 0.75rem 0.7rem;
+    }
+    .live-metric-tile .live-spark {
+        position: absolute;
+        left: 0;
+        right: 0;
+        bottom: 0;
+        width: 100%;
+        height: 44px;
+        opacity: 0.7;
+        pointer-events: none;
+    }
+    .live-metric-tile .live-spark path.area {
+        opacity: 0.22;
+    }
+    .live-metric-tile .live-metric-body {
+        position: relative;
+        z-index: 1;
+        text-align: center;
+    }
+    .live-metric-tile .live-metric-body small {
+        display: block;
+        margin-top: 0.15rem;
+    }
+    [data-bs-theme="dark"] .live-metric-tile {
+        background: rgba(255, 255, 255, 0.04);
+    }
 </style>
 {% endblock %}
 
@@ -490,47 +524,67 @@
                 </div>
                 <div class="card-body" id="live-telemetry-content">
                     <div class="row g-3" id="live-values-row">
-                        <!-- Metric tiles stay hidden until a live sample provides that field -->
+                        <!-- Metric tiles stay hidden until a live sample provides that field.
+                             Sparklines render behind the value as each sample arrives. -->
                         <div class="col-md-3 col-6" id="live-battery-tile" style="display: none;">
-                            <div class="text-center p-3 bg-light rounded">
-                                <div class="h4 mb-0" id="live-battery">--</div>
-                                <small class="text-muted">Battery</small>
+                            <div class="live-metric-tile">
+                                <svg class="live-spark" id="live-spark-battery" viewBox="0 0 100 44" preserveAspectRatio="none" aria-hidden="true"></svg>
+                                <div class="live-metric-body">
+                                    <div class="h4 mb-0" id="live-battery">--</div>
+                                    <small class="text-muted">Battery</small>
+                                </div>
                             </div>
                         </div>
                         <div class="col-md-3 col-6" id="live-voltage-tile" style="display: none;">
-                            <div class="text-center p-3 bg-light rounded">
-                                <div class="h4 mb-0" id="live-voltage">--</div>
-                                <small class="text-muted">Voltage</small>
+                            <div class="live-metric-tile">
+                                <svg class="live-spark" id="live-spark-voltage" viewBox="0 0 100 44" preserveAspectRatio="none" aria-hidden="true"></svg>
+                                <div class="live-metric-body">
+                                    <div class="h4 mb-0" id="live-voltage">--</div>
+                                    <small class="text-muted">Voltage</small>
+                                </div>
                             </div>
                         </div>
                         <div class="col-md-3 col-6" id="live-channel-util-tile" style="display: none;">
-                            <div class="text-center p-3 bg-light rounded">
-                                <div class="h4 mb-0" id="live-channel-util">--</div>
-                                <small class="text-muted">Channel Util</small>
+                            <div class="live-metric-tile">
+                                <svg class="live-spark" id="live-spark-channel-util" viewBox="0 0 100 44" preserveAspectRatio="none" aria-hidden="true"></svg>
+                                <div class="live-metric-body">
+                                    <div class="h4 mb-0" id="live-channel-util">--</div>
+                                    <small class="text-muted">Channel Util</small>
+                                </div>
                             </div>
                         </div>
                         <div class="col-md-3 col-6" id="live-air-util-tile" style="display: none;">
-                            <div class="text-center p-3 bg-light rounded">
-                                <div class="h4 mb-0" id="live-air-util">--</div>
-                                <small class="text-muted">Air Util TX</small>
+                            <div class="live-metric-tile">
+                                <svg class="live-spark" id="live-spark-air-util" viewBox="0 0 100 44" preserveAspectRatio="none" aria-hidden="true"></svg>
+                                <div class="live-metric-body">
+                                    <div class="h4 mb-0" id="live-air-util">--</div>
+                                    <small class="text-muted">Air Util TX</small>
+                                </div>
                             </div>
                         </div>
                         <div class="col-md-4 col-6" id="live-uptime-tile" style="display: none;">
-                            <div class="text-center p-2 bg-light rounded">
-                                <div class="h5 mb-0" id="live-uptime">--</div>
-                                <small class="text-muted">Uptime</small>
+                            <div class="live-metric-tile">
+                                <div class="live-metric-body">
+                                    <div class="h5 mb-0" id="live-uptime">--</div>
+                                    <small class="text-muted">Uptime</small>
+                                </div>
                             </div>
                         </div>
                         <div class="col-md-4 col-6" id="live-temperature-tile" style="display: none;">
-                            <div class="text-center p-2 bg-light rounded">
-                                <div class="h5 mb-0" id="live-temperature">--</div>
-                                <small class="text-muted">Temperature</small>
+                            <div class="live-metric-tile">
+                                <svg class="live-spark" id="live-spark-temperature" viewBox="0 0 100 44" preserveAspectRatio="none" aria-hidden="true"></svg>
+                                <div class="live-metric-body">
+                                    <div class="h5 mb-0" id="live-temperature">--</div>
+                                    <small class="text-muted">Temperature</small>
+                                </div>
                             </div>
                         </div>
                         <div class="col-md-4 col-12" id="live-last-update-tile" style="display: none;">
-                            <div class="text-center p-2 bg-light rounded">
-                                <div class="h5 mb-0" id="live-last-update">--</div>
-                                <small class="text-muted">Last Update</small>
+                            <div class="live-metric-tile">
+                                <div class="live-metric-body">
+                                    <div class="h5 mb-0" id="live-last-update">--</div>
+                                    <small class="text-muted">Last Update</small>
+                                </div>
                             </div>
                         </div>
                     </div>
@@ -600,24 +654,6 @@
                                             <span id="stats-success-rate">0</span>% success
                                         </span>
                                     </small>
-                                </div>
-                            </div>
-
-                            <div id="live-charts-container" class="mt-3">
-                                <h6 class="mb-3"><i class="bi bi-graph-up"></i> Live Trends</h6>
-                                <div class="row g-3">
-                                    <div class="col-md-6">
-                                        <div id="live-chart-battery" style="height: 150px;"></div>
-                                    </div>
-                                    <div class="col-md-6">
-                                        <div id="live-chart-voltage" style="height: 150px;"></div>
-                                    </div>
-                                    <div class="col-md-6">
-                                        <div id="live-chart-channel-util" style="height: 150px;"></div>
-                                    </div>
-                                    <div class="col-md-6">
-                                        <div id="live-chart-air-util" style="height: 150px;"></div>
-                                    </div>
                                 </div>
                             </div>
                         </div>
@@ -2991,13 +3027,22 @@ function applyLiveTelemetryHopBudget(estimatedHops) {
     return budget;
 }
 
-// Live chart data storage
+// Live sparkline series (kept in the metric tiles, not under diagnostics)
 let liveChartData = {
     timestamps: [],
     battery: [],
     voltage: [],
     channelUtil: [],
-    airUtil: []
+    airUtil: [],
+    temperature: []
+};
+
+const LIVE_SPARK_SERIES = {
+    battery: { el: 'live-spark-battery', color: '#198754', min: 0, max: 100 },
+    voltage: { el: 'live-spark-voltage', color: '#0d6efd' },
+    channelUtil: { el: 'live-spark-channel-util', color: '#fd7e14', min: 0, max: 100 },
+    airUtil: { el: 'live-spark-air-util', color: '#6f42c1', min: 0, max: 50 },
+    temperature: { el: 'live-spark-temperature', color: '#dc3545' }
 };
 
 // Poll timeline tracking - stores each poll result
@@ -3194,14 +3239,8 @@ function startLiveTelemetry() {
     // Reset stats display
     resetTelemetryStats();
 
-    // Reset chart data
-    liveChartData = {
-        timestamps: [],
-        battery: [],
-        voltage: [],
-        channelUtil: [],
-        airUtil: []
-    };
+    // Reset sparkline series (trends sit behind the metric tiles)
+    resetLiveSparklines();
 
     // Update UI state
     btn.innerHTML = '<i class="bi bi-stop-fill"></i> Stop';
@@ -3215,9 +3254,6 @@ function startLiveTelemetry() {
     liveTelemetryIsPolling = true;
     const hopLabel = hopBudget.hops === 0 ? 'direct (0 hop)' : `${hopBudget.hops}-hop`;
     status.innerHTML = `<i class="bi bi-broadcast text-success"></i> Polling live telemetry (${hopLabel}, up to ${hopBudget.timeoutS}s/request)...`;
-
-    // Initialize empty charts (inside collapsed diagnostics)
-    initializeLiveCharts();
 
     // Start polling immediately
     pollLiveTelemetry();
@@ -3303,109 +3339,88 @@ function updateLiveTelemetryCountdown() {
     }
 }
 
-function initializeLiveCharts() {
-    const isDarkMode = document.documentElement.getAttribute('data-bs-theme') === 'dark';
-    const textColor = isDarkMode ? '#adb5bd' : '#6c757d';
-    const gridColor = isDarkMode ? 'rgba(255,255,255,0.1)' : 'rgba(0,0,0,0.1)';
-
-    const commonLayout = {
-        margin: { t: 30, r: 10, b: 30, l: 40 },
-        paper_bgcolor: 'transparent',
-        plot_bgcolor: 'transparent',
-        font: { color: textColor, size: 10 },
-        xaxis: {
-            showgrid: true,
-            gridcolor: gridColor,
-            tickformat: '%H:%M:%S'
-        },
-        yaxis: {
-            showgrid: true,
-            gridcolor: gridColor
-        },
-        showlegend: false
+function resetLiveSparklines() {
+    liveChartData = {
+        timestamps: [],
+        battery: [],
+        voltage: [],
+        channelUtil: [],
+        airUtil: [],
+        temperature: []
     };
-
-    const commonConfig = {
-        displayModeBar: false,
-        responsive: true
-    };
-
-    // Battery chart
-    Plotly.newPlot('live-chart-battery', [{
-        x: [],
-        y: [],
-        type: 'scatter',
-        mode: 'lines+markers',
-        line: { color: '#198754', width: 2 },
-        marker: { size: 4 },
-        name: 'Battery'
-    }], { ...commonLayout, title: { text: 'Battery %', font: { size: 12 } }, yaxis: { ...commonLayout.yaxis, range: [0, 100] } }, commonConfig);
-
-    // Voltage chart
-    Plotly.newPlot('live-chart-voltage', [{
-        x: [],
-        y: [],
-        type: 'scatter',
-        mode: 'lines+markers',
-        line: { color: '#0d6efd', width: 2 },
-        marker: { size: 4 },
-        name: 'Voltage'
-    }], { ...commonLayout, title: { text: 'Voltage (V)', font: { size: 12 } } }, commonConfig);
-
-    // Channel utilization chart
-    Plotly.newPlot('live-chart-channel-util', [{
-        x: [],
-        y: [],
-        type: 'scatter',
-        mode: 'lines+markers',
-        line: { color: '#fd7e14', width: 2 },
-        marker: { size: 4 },
-        name: 'Channel Util'
-    }], { ...commonLayout, title: { text: 'Channel Util %', font: { size: 12 } }, yaxis: { ...commonLayout.yaxis, range: [0, 100] } }, commonConfig);
-
-    // Air util chart
-    Plotly.newPlot('live-chart-air-util', [{
-        x: [],
-        y: [],
-        type: 'scatter',
-        mode: 'lines+markers',
-        line: { color: '#6f42c1', width: 2 },
-        marker: { size: 4 },
-        name: 'Air Util TX'
-    }], { ...commonLayout, title: { text: 'Air Util TX %', font: { size: 12 } }, yaxis: { ...commonLayout.yaxis, range: [0, 100] } }, commonConfig);
+    Object.values(LIVE_SPARK_SERIES).forEach(cfg => {
+        const svg = document.getElementById(cfg.el);
+        if (svg) svg.innerHTML = '';
+    });
 }
 
-function updateLiveCharts(dm) {
-    const now = new Date();
-    const getBatteryLevel = () => dm.battery_level ?? dm.batteryLevel;
-    const getVoltage = () => dm.voltage;
-    const getChannelUtil = () => dm.channel_utilization ?? dm.channelUtilization;
-    const getAirUtilTx = () => dm.air_util_tx ?? dm.airUtilTx;
+function pushLiveSparkValue(seriesKey, value) {
+    if (value === undefined || value === null || Number.isNaN(Number(value))) {
+        liveChartData[seriesKey].push(null);
+        return;
+    }
+    liveChartData[seriesKey].push(Number(value));
+}
 
-    // Add new data points
-    liveChartData.timestamps.push(now);
-    liveChartData.battery.push(getBatteryLevel());
-    liveChartData.voltage.push(getVoltage());
-    liveChartData.channelUtil.push(getChannelUtil());
-    liveChartData.airUtil.push(getAirUtilTx());
+function renderLiveSparkline(seriesKey) {
+    const cfg = LIVE_SPARK_SERIES[seriesKey];
+    if (!cfg) return;
+    const svg = document.getElementById(cfg.el);
+    if (!svg) return;
 
-    // Keep only last 60 data points to avoid memory issues
-    const maxPoints = 60;
-    if (liveChartData.timestamps.length > maxPoints) {
-        liveChartData.timestamps = liveChartData.timestamps.slice(-maxPoints);
-        liveChartData.battery = liveChartData.battery.slice(-maxPoints);
-        liveChartData.voltage = liveChartData.voltage.slice(-maxPoints);
-        liveChartData.channelUtil = liveChartData.channelUtil.slice(-maxPoints);
-        liveChartData.airUtil = liveChartData.airUtil.slice(-maxPoints);
+    const values = liveChartData[seriesKey].filter(v => v !== null && v !== undefined);
+    if (values.length < 2) {
+        svg.innerHTML = '';
+        return;
     }
 
-    // Update charts with animation
-    const updateData = { x: [liveChartData.timestamps], y: [liveChartData.battery] };
-    Plotly.update('live-chart-battery', updateData, {}, [0]);
+    const width = 100;
+    const height = 44;
+    const padY = 4;
+    let minVal = cfg.min !== undefined ? cfg.min : Math.min(...values);
+    let maxVal = cfg.max !== undefined ? cfg.max : Math.max(...values);
+    if (cfg.min === undefined && cfg.max === undefined) {
+        const span = maxVal - minVal;
+        const pad = span === 0 ? Math.max(Math.abs(maxVal) * 0.05, 0.1) : span * 0.15;
+        minVal -= pad;
+        maxVal += pad;
+    }
+    const range = (maxVal - minVal) || 1;
 
-    Plotly.update('live-chart-voltage', { x: [liveChartData.timestamps], y: [liveChartData.voltage] }, {}, [0]);
-    Plotly.update('live-chart-channel-util', { x: [liveChartData.timestamps], y: [liveChartData.channelUtil] }, {}, [0]);
-    Plotly.update('live-chart-air-util', { x: [liveChartData.timestamps], y: [liveChartData.airUtil] }, {}, [0]);
+    const points = values.map((v, i) => {
+        const x = values.length === 1 ? width : (i / (values.length - 1)) * width;
+        const y = height - padY - ((v - minVal) / range) * (height - padY * 2);
+        return `${x.toFixed(2)},${y.toFixed(2)}`;
+    });
+    const linePoints = points.join(' ');
+    const areaPoints = `0,${height} ${linePoints} ${width},${height}`;
+
+    svg.innerHTML = `
+        <polygon class="area" points="${areaPoints}" fill="${cfg.color}"></polygon>
+        <polyline fill="none" stroke="${cfg.color}" stroke-width="1.75" stroke-linejoin="round" stroke-linecap="round" points="${linePoints}"></polyline>
+    `;
+}
+
+function updateLiveCharts(dm, env) {
+    dm = dm || {};
+    env = env || {};
+    const now = new Date();
+
+    liveChartData.timestamps.push(now);
+    pushLiveSparkValue('battery', dm.battery_level ?? dm.batteryLevel);
+    pushLiveSparkValue('voltage', dm.voltage);
+    pushLiveSparkValue('channelUtil', dm.channel_utilization ?? dm.channelUtilization);
+    pushLiveSparkValue('airUtil', dm.air_util_tx ?? dm.airUtilTx);
+    pushLiveSparkValue('temperature', env.temperature);
+
+    const maxPoints = 60;
+    if (liveChartData.timestamps.length > maxPoints) {
+        Object.keys(liveChartData).forEach(key => {
+            liveChartData[key] = liveChartData[key].slice(-maxPoints);
+        });
+    }
+
+    Object.keys(LIVE_SPARK_SERIES).forEach(renderLiveSparkline);
 }
 
 function adjustPollingInterval(responseTime, success) {
@@ -3614,7 +3629,7 @@ async function pollLiveTelemetry() {
             const env = telemetry.environment_metrics || telemetry.environmentMetrics || {};
 
             updateTelemetryDisplay(dm, env);
-            updateLiveCharts(dm);
+            updateLiveCharts(dm, env);
             scheduleNextPoll();
             return;
         }
@@ -3804,8 +3819,9 @@ async function pollLiveTelemetryOnce() {
         if (data.success && data.telemetry) {
             const telemetry = data.telemetry;
             const dm = telemetry.device_metrics || telemetry.deviceMetrics || {};
-            const env = telemetry.environment_metrics || telemetry.environmentMetrics || {};
+            let env = telemetry.environment_metrics || telemetry.environmentMetrics || {};
             updateTelemetryDisplay(dm, env);
+            updateLiveCharts(dm, env);
             const source = data.source || 'live';
             const note = source === 'last_known' ? ' (last-known)' : '';
             if (status) {
@@ -3828,7 +3844,14 @@ async function pollLiveTelemetryOnce() {
                         const envOnly = envData.telemetry.environment_metrics
                             || envData.telemetry.environmentMetrics || {};
                         if (Object.keys(envOnly).length) {
+                            env = envOnly;
                             updateTelemetryDisplay(dm, envOnly);
+                            // Amend last spark sample with temperature instead of adding a new point
+                            if (liveChartData.temperature.length) {
+                                liveChartData.temperature[liveChartData.temperature.length - 1] =
+                                    envOnly.temperature !== undefined ? Number(envOnly.temperature) : null;
+                                renderLiveSparkline('temperature');
+                            }
                         }
                     }
                 } catch (e) {

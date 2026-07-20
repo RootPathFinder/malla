@@ -154,6 +154,34 @@ class TestNodeRoutes:
             assert "Count" in response_text
 
     @pytest.mark.integration
+    def test_node_detail_live_tiles_use_inline_sparklines(self, client, monkeypatch):
+        """Live telemetry cards should include inline sparkline SVGs (not buried charts)."""
+        from unittest.mock import MagicMock
+
+        mock_admin = MagicMock()
+        mock_admin.get_connection_status.return_value = {
+            "connected": True,
+            "connection_type": "tcp",
+        }
+        monkeypatch.setattr(
+            "malla.routes.node_routes.get_admin_service", lambda: mock_admin
+        )
+
+        node_id = 1128074276  # Test Gateway Alpha
+        response = client.get(f"/node/{node_id}")
+        assert response.status_code == 200
+        response_text = response.data.decode("utf-8")
+
+        # Sparkline hosts live behind metric values
+        assert 'id="live-spark-battery"' in response_text
+        assert 'id="live-spark-voltage"' in response_text
+        assert 'class="live-metric-tile"' in response_text
+        assert "renderLiveSparkline" in response_text
+        # Old Plotly live chart containers should be gone from diagnostics
+        assert 'id="live-chart-battery"' not in response_text
+        assert 'id="live-charts-container"' not in response_text
+
+    @pytest.mark.integration
     def test_node_detail_navigation_links(self, client):
         """Test that node detail page contains proper navigation links."""
         node_id = 1128074276  # Test Gateway Alpha
