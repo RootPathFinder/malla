@@ -1969,8 +1969,16 @@ class NodeRepository:
                 )
                 power_info = cursor.fetchone()
             except Exception:
-                # Columns might not exist yet if migration hasn't run or old DB
-                pass
+                # battery_health_score may be missing on older DBs — retry without it
+                try:
+                    cursor.execute(
+                        "SELECT power_type, power_type_reason, power_analysis_timestamp FROM node_info WHERE node_id = ?",
+                        (node_id,),
+                    )
+                    power_info = cursor.fetchone()
+                except Exception:
+                    # Columns might not exist yet if migration hasn't run or old DB
+                    pass
 
             conn.close()
 
