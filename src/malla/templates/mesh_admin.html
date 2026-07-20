@@ -5590,8 +5590,13 @@
             const data = await response.json();
 
             if (data.success) {
-                finalizeCommandLog(`✓ ${data.message}`);
-                showAlert('success', data.message);
+                if (data.acknowledged) {
+                    finalizeCommandLog(`✓ ${data.message}`);
+                    showAlert('success', data.message);
+                } else {
+                    finalizeCommandLog(`⚠ ${data.message}`);
+                    showAlert('warning', data.message || 'Command sent but no ACK from remote node');
+                }
                 const favInput = document.getElementById('favoriteNodeInput');
                 if (favInput) {
                     favInput.value = '';
@@ -5630,8 +5635,13 @@
             const data = await response.json();
 
             if (data.success) {
-                finalizeCommandLog(`✓ ${data.message}`);
-                showAlert('success', data.message);
+                if (data.acknowledged) {
+                    finalizeCommandLog(`✓ ${data.message}`);
+                    showAlert('success', data.message);
+                } else {
+                    finalizeCommandLog(`⚠ ${data.message}`);
+                    showAlert('warning', data.message || 'Command sent but no ACK from remote node');
+                }
                 if (Array.isArray(data.favorites)) {
                     renderDeviceFavoritesList(data.favorites, {
                         source: data.favorites_source || 'tracked',
