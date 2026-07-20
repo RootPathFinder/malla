@@ -167,7 +167,7 @@ class BotService:
         # Channel directory broadcast scheduling
         self._broadcast_thread: threading.Thread | None = None
         self._channel_broadcast_enabled = True
-        self._broadcast_interval_hours = 12  # Broadcast every 12 hours
+        self._broadcast_interval_hours: float = 12  # Broadcast every 12 hours
         self._last_broadcast_time: float = 0.0
 
         # Daily mesh network digest
