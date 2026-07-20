@@ -165,6 +165,21 @@ def init_admin_tables() -> None:
         )
     """)
 
+    # Track on-device favorites managed (or last-seen) per remote/local target
+    cursor.execute("""
+        CREATE TABLE IF NOT EXISTS remote_device_favorites (
+            target_node_id INTEGER NOT NULL,
+            favorite_node_id INTEGER NOT NULL,
+            updated_at REAL NOT NULL,
+            source TEXT,
+            PRIMARY KEY (target_node_id, favorite_node_id)
+        )
+    """)
+    cursor.execute(
+        "CREATE INDEX IF NOT EXISTS idx_remote_device_favorites_target "
+        "ON remote_device_favorites(target_node_id, updated_at DESC)"
+    )
+
     conn.commit()
     conn.close()
     logger.info("Admin tables initialized")
@@ -1449,3 +1464,109 @@ class AdminRepository:
         conn.close()
 
         return result is not None
+
+    # =========================================================================
+    # Remote / on-device favorites (per admin target)
+    # =========================================================================
+
+    @staticmethod
+    def list_remote_device_favorites(target_node_id: int) -> list[dict[str, Any]]:
+        """List tracked on-device favorites for a target node, with names."""
+        conn = get_db_connection()
+        cursor = conn.cursor()
+        cursor.execute(
+            """
+            SELECT
+                rdf.target_node_id,
+                rdf.favorite_node_id as node_id,
+                rdf.updated_at,
+                rdf.source,
+                ni.hex_id,
+                ni.long_name,
+                ni.short_name,
+                ni.hw_model
+            FROM remote_device_favorites rdf
+            LEFT JOIN node_info ni ON ni.node_id = rdf.favorite_node_id
+            WHERE rdf.target_node_id = ?
+            ORDER BY
+                COALESCE(ni.long_name, ni.short_name, printf('!%08x', rdf.favorite_node_id))
+            """,
+            (target_node_id,),
+        )
+        rows = [dict(row) for row in cursor.fetchall()]
+        conn.close()
+        for row in rows:
+            nid = int(row["node_id"])
+            row["hex_id"] = row.get("hex_id") or f"!{nid:08x}"
+        return rows
+
+    @staticmethod
+    def upsert_remote_device_favorite(
+        target_node_id: int,
+        favorite_node_id: int,
+        source: str = "managed",
+    ) -> None:
+        """Add or refresh a tracked on-device favorite for a target."""
+        conn = get_db_connection()
+        cursor = conn.cursor()
+        cursor.execute(
+            """
+            INSERT INTO remote_device_favorites
+                (target_node_id, favorite_node_id, updated_at, source)
+            VALUES (?, ?, ?, ?)
+            ON CONFLICT(target_node_id, favorite_node_id) DO UPDATE SET
+                updated_at = excluded.updated_at,
+                source = excluded.source
+            """,
+            (target_node_id, favorite_node_id, time.time(), source),
+        )
+        conn.commit()
+        conn.close()
+
+    @staticmethod
+    def remove_remote_device_favorite(
+        target_node_id: int, favorite_node_id: int
+    ) -> bool:
+        """Remove a tracked on-device favorite for a target."""
+        conn = get_db_connection()
+        cursor = conn.cursor()
+        cursor.execute(
+            """
+            DELETE FROM remote_device_favorites
+            WHERE target_node_id = ? AND favorite_node_id = ?
+            """,
+            (target_node_id, favorite_node_id),
+        )
+        removed = cursor.rowcount > 0
+        conn.commit()
+        conn.close()
+        return removed
+
+    @staticmethod
+    def replace_remote_device_favorites(
+        target_node_id: int,
+        favorite_node_ids: list[int],
+        source: str = "device",
+    ) -> None:
+        """Replace tracked favorites for a target with a fresh device snapshot."""
+        conn = get_db_connection()
+        cursor = conn.cursor()
+        cursor.execute(
+            "DELETE FROM remote_device_favorites WHERE target_node_id = ?",
+            (target_node_id,),
+        )
+        now = time.time()
+        cursor.executemany(
+            """
+            INSERT INTO remote_device_favorites
+                (target_node_id, favorite_node_id, updated_at, source)
+            VALUES (?, ?, ?, ?)
+            """,
+            [
+                (target_node_id, int(nid), now, source)
+                for nid in favorite_node_ids
+                if nid
+            ],
+        )
+        conn.commit()
+        conn.close()

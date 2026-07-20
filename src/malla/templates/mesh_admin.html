@@ -1009,18 +1009,37 @@
                             </div>
 
                             <div class="mb-3">
-                                <label class="form-label">Favorite Nodes Management</label>
-                                <div class="input-group mb-2">
-                                    <input type="text" class="form-control" id="nodeToFavoriteInput"
-                                           placeholder="Node ID to favorite/unfavorite (e.g., !3ac468fa)">
-                                    <button class="btn btn-outline-warning" type="button" onclick="confirmSetFavoriteNode()">
-                                        <i class="bi bi-star-fill"></i> Set Favorite
-                                    </button>
-                                    <button class="btn btn-outline-secondary" type="button" onclick="confirmRemoveFavoriteNode()">
-                                        <i class="bi bi-star"></i> Remove Favorite
+                                <div class="d-flex align-items-center justify-content-between gap-2 mb-2">
+                                    <label class="form-label mb-0">On-device Favorites</label>
+                                    <button type="button" class="btn btn-outline-primary btn-sm"
+                                            id="requestFavoritesBtn" onclick="requestDeviceFavorites()">
+                                        <i class="bi bi-arrow-clockwise"></i> Request List
                                     </button>
                                 </div>
-                                <div class="form-text">Remotely manage the target node's on-device favorite nodes list</div>
+                                <div id="deviceFavoritesNote" class="form-text mb-2">
+                                    Request the target node's favorites list, then add or remove entries.
+                                </div>
+                                <div id="deviceFavoritesList" class="border rounded bg-body-tertiary p-2 mb-2"
+                                     style="max-height: 220px; overflow-y: auto;">
+                                    <div class="text-muted small" id="deviceFavoritesEmpty">
+                                        No list loaded yet — choose a target and click Request List.
+                                    </div>
+                                </div>
+                                <div class="node-autocomplete-container">
+                                    <div class="input-group">
+                                        <input type="text" class="form-control" id="favoriteNodeInput"
+                                               placeholder="Search node to add as favorite..."
+                                               autocomplete="off"
+                                               oninput="onFavoriteNodeInput(this.value)"
+                                               onfocus="onFavoriteNodeInput(this.value)"
+                                               onblur="setTimeout(() => hideAutocomplete('favoriteNodeResults'), 200)">
+                                        <button class="btn btn-outline-warning" type="button"
+                                                onclick="confirmAddFavoriteNode()">
+                                            <i class="bi bi-star-fill"></i> Add
+                                        </button>
+                                    </div>
+                                    <div id="favoriteNodeResults" class="node-autocomplete-results" style="display:none;"></div>
+                                </div>
                             </div>
                         </div>
 
@@ -3164,7 +3183,9 @@
     function selectAutocompleteNode(nodeId, nodeName, resultsContainerId) {
         // Find the input associated with this results container
         const resultsDiv = document.getElementById(resultsContainerId);
-        const inputId = resultsContainerId === 'testNodeResults' ? 'testNodeInput' : 'targetNodeInput';
+        let inputId = 'targetNodeInput';
+        if (resultsContainerId === 'testNodeResults') inputId = 'testNodeInput';
+        else if (resultsContainerId === 'favoriteNodeResults') inputId = 'favoriteNodeInput';
         const input = document.getElementById(inputId);
 
         // Display both hex ID and node name for easy identification
@@ -3177,6 +3198,19 @@
         if (inputId === 'targetNodeInput') {
             selectedNodeId = nodeId;
             checkAdminStatus(nodeId);
+            // Clear previous target's favorites until re-requested
+            renderDeviceFavoritesList([], {});
+            const noteEl = document.getElementById('deviceFavoritesNote');
+            if (noteEl) {
+                noteEl.textContent = 'Request the target node\'s favorites list, then add or remove entries.';
+            }
+            const emptyList = document.getElementById('deviceFavoritesList');
+            if (emptyList && deviceFavoritesCache.length === 0) {
+                emptyList.innerHTML = `
+                    <div class="text-muted small" id="deviceFavoritesEmpty">
+                        No list loaded yet — choose a target and click Request List.
+                    </div>`;
+            }
         }
     }
 
@@ -5372,28 +5406,172 @@
         }
     }
 
-    // Confirm set favorite node
-    function confirmSetFavoriteNode() {
+    // ========================================================================
+    // On-device favorites list management
+    // ========================================================================
+    let deviceFavoritesCache = [];
+    let deviceFavoritesSource = null;
+
+    function onFavoriteNodeInput(value) {
+        if (!value || value.length < 1) {
+            hideAutocomplete('favoriteNodeResults');
+            return;
+        }
+        searchNodes(value, 'favoriteNodeResults');
+    }
+
+    function renderDeviceFavoritesList(favorites, meta = {}) {
+        deviceFavoritesCache = Array.isArray(favorites) ? favorites : [];
+        deviceFavoritesSource = meta.source || null;
+
+        const listEl = document.getElementById('deviceFavoritesList');
+        const noteEl = document.getElementById('deviceFavoritesNote');
+        if (!listEl) return;
+
+        if (noteEl) {
+            const count = deviceFavoritesCache.length;
+            if (meta.note) {
+                noteEl.textContent = meta.note;
+            } else if (meta.source === 'device') {
+                noteEl.textContent = `${count} favorite${count === 1 ? '' : 's'} from connected radio NodeDB.`;
+            } else if (meta.source === 'tracked') {
+                noteEl.textContent = `${count} favorite${count === 1 ? '' : 's'} managed from Malla for this remote node.`;
+            } else {
+                noteEl.textContent = 'Request the target node\'s favorites list, then add or remove entries.';
+            }
+        }
+
+        if (deviceFavoritesCache.length === 0) {
+            listEl.innerHTML = `
+                <div class="text-muted small" id="deviceFavoritesEmpty">
+                    No favorites on this list yet.
+                </div>`;
+            return;
+        }
+
+        let html = '<div class="list-group list-group-flush">';
+        for (const fav of deviceFavoritesCache) {
+            const hexId = fav.hex_id || (fav.node_id != null
+                ? `!${(Number(fav.node_id) >>> 0).toString(16).padStart(8, '0')}`
+                : '?');
+            const longName = fav.long_name || '';
+            const shortName = fav.short_name || '';
+            let title = longName || shortName || hexId;
+            if (longName && shortName && !longName.toLowerCase().includes(shortName.toLowerCase())) {
+                title = `${longName} (${shortName})`;
+            }
+            const safeHexAttr = encodeURIComponent(hexId);
+            const safeTitleAttr = encodeURIComponent(title);
+            html += `
+                <div class="list-group-item list-group-item-action d-flex justify-content-between align-items-center px-2 py-2">
+                    <div class="me-2 overflow-hidden">
+                        <div class="fw-semibold text-truncate">${escapeHtml(title)}</div>
+                        <div class="small text-muted font-monospace">${escapeHtml(hexId)}</div>
+                    </div>
+                    <button type="button" class="btn btn-outline-secondary btn-sm flex-shrink-0"
+                            title="Remove favorite"
+                            onclick="confirmRemoveFavoriteFromList(decodeURIComponent('${safeHexAttr}'), decodeURIComponent('${safeTitleAttr}'))">
+                        <i class="bi bi-star"></i>
+                    </button>
+                </div>`;
+        }
+        html += '</div>';
+        listEl.innerHTML = html;
+    }
+
+    async function requestDeviceFavorites() {
         const targetNodeId = getNodeIdFromInput('targetNodeInput');
-        const nodeToFavorite = document.getElementById('nodeToFavoriteInput').value.trim();
+        if (!targetNodeId) {
+            alert('Please select a target node first');
+            return;
+        }
+
+        const btn = document.getElementById('requestFavoritesBtn');
+        const prevHtml = btn ? btn.innerHTML : '';
+        if (btn) {
+            btn.disabled = true;
+            btn.innerHTML = '<span class="spinner-border spinner-border-sm"></span> Requesting…';
+        }
+
+        initCommandLog();
+        addCommandLog(`Requesting favorites list for ${targetNodeId}...`);
+        try {
+            const response = await fetch(
+                `/api/admin/node/${encodeURIComponent(targetNodeId)}/favorites`
+            );
+            const data = await response.json();
+            if (!response.ok || data.error) {
+                throw new Error(data.error || `HTTP ${response.status}`);
+            }
+            renderDeviceFavoritesList(data.favorites || [], data);
+            finalizeCommandLog(
+                `✓ Favorites list loaded (${data.count ?? (data.favorites || []).length}, source=${data.source})`
+            );
+        } catch (error) {
+            finalizeCommandLog(`✗ Failed to request favorites: ${error.message}`, false);
+            showAlert('danger', `Failed to request favorites: ${error.message}`);
+        } finally {
+            if (btn) {
+                btn.disabled = false;
+                btn.innerHTML = prevHtml || '<i class="bi bi-arrow-clockwise"></i> Request List';
+            }
+        }
+    }
+
+    function confirmAddFavoriteNode() {
+        const targetNodeId = getNodeIdFromInput('targetNodeInput');
+        const nodeToFavorite = getNodeIdFromInput('favoriteNodeInput');
 
         if (!targetNodeId) {
-            alert('Please enter a target node ID first');
+            alert('Please select a target node first');
             return;
         }
         if (!nodeToFavorite) {
-            alert('Please enter the node ID to set as favorite');
+            alert('Please select or enter a node to favorite');
             return;
         }
 
         showConfirmModal(
-            'Confirm Set Favorite Node',
-            `Set node <strong>${nodeToFavorite}</strong> as a favorite on <strong>${targetNodeId}</strong>'s device?<br><br>
-            <span class="text-muted">This will mark the node as a favorite in the target's on-device node database.</span>`,
+            'Add Favorite',
+            `Add <strong>${escapeHtml(nodeToFavorite)}</strong> to favorites on <strong>${escapeHtml(targetNodeId)}</strong>?`,
             async () => {
                 await sendSetFavoriteNode(targetNodeId, nodeToFavorite);
             }
         );
+    }
+
+    function confirmRemoveFavoriteFromList(nodeHex, displayName) {
+        const targetNodeId = getNodeIdFromInput('targetNodeInput');
+        if (!targetNodeId) {
+            alert('Please select a target node first');
+            return;
+        }
+        const label = displayName || nodeHex;
+        showConfirmModal(
+            'Remove Favorite',
+            `Remove <strong>${escapeHtml(label)}</strong> from <strong>${escapeHtml(targetNodeId)}</strong>'s favorites?`,
+            async () => {
+                await sendRemoveFavoriteNode(targetNodeId, nodeHex);
+            }
+        );
+    }
+
+    function confirmSetFavoriteNode() {
+        confirmAddFavoriteNode();
+    }
+
+    function confirmRemoveFavoriteNode() {
+        const targetNodeId = getNodeIdFromInput('targetNodeInput');
+        const nodeToUnfavorite = getNodeIdFromInput('favoriteNodeInput');
+        if (!targetNodeId) {
+            alert('Please select a target node first');
+            return;
+        }
+        if (!nodeToUnfavorite) {
+            alert('Please select a favorite to remove, or use the list Remove button');
+            return;
+        }
+        confirmRemoveFavoriteFromList(nodeToUnfavorite, nodeToUnfavorite);
     }
 
     // Send set favorite node command
@@ -5414,7 +5592,18 @@
             if (data.success) {
                 finalizeCommandLog(`✓ ${data.message}`);
                 showAlert('success', data.message);
-                document.getElementById('nodeToFavoriteInput').value = '';
+                const favInput = document.getElementById('favoriteNodeInput');
+                if (favInput) {
+                    favInput.value = '';
+                    delete favInput.dataset.nodeId;
+                }
+                if (Array.isArray(data.favorites)) {
+                    renderDeviceFavoritesList(data.favorites, {
+                        source: data.favorites_source || 'tracked',
+                    });
+                } else {
+                    await requestDeviceFavorites();
+                }
             } else {
                 finalizeCommandLog(`✗ Failed: ${data.error}`, false);
                 showAlert('danger', data.error);
@@ -5423,30 +5612,6 @@
             finalizeCommandLog(`✗ Error: ${error.message}`, false);
             showAlert('danger', `Error: ${error.message}`);
         }
-    }
-
-    // Confirm remove favorite node
-    function confirmRemoveFavoriteNode() {
-        const targetNodeId = getNodeIdFromInput('targetNodeInput');
-        const nodeToUnfavorite = document.getElementById('nodeToFavoriteInput').value.trim();
-
-        if (!targetNodeId) {
-            alert('Please enter a target node ID first');
-            return;
-        }
-        if (!nodeToUnfavorite) {
-            alert('Please enter the node ID to remove from favorites');
-            return;
-        }
-
-        showConfirmModal(
-            'Confirm Remove Favorite Node',
-            `Remove node <strong>${nodeToUnfavorite}</strong> from <strong>${targetNodeId}</strong>'s favorites?<br><br>
-            <span class="text-muted">This will unmark the node as a favorite in the target's on-device node database.</span>`,
-            async () => {
-                await sendRemoveFavoriteNode(targetNodeId, nodeToUnfavorite);
-            }
-        );
     }
 
     // Send remove favorite node command
@@ -5467,7 +5632,13 @@
             if (data.success) {
                 finalizeCommandLog(`✓ ${data.message}`);
                 showAlert('success', data.message);
-                document.getElementById('nodeToFavoriteInput').value = '';
+                if (Array.isArray(data.favorites)) {
+                    renderDeviceFavoritesList(data.favorites, {
+                        source: data.favorites_source || 'tracked',
+                    });
+                } else {
+                    await requestDeviceFavorites();
+                }
             } else {
                 finalizeCommandLog(`✗ Failed: ${data.error}`, false);
                 showAlert('danger', data.error);

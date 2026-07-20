@@ -1087,6 +1087,46 @@ class SerialPublisher:
             want_response=True,
         )
 
+    def send_set_favorite_node(
+        self,
+        target_node_id: int,
+        node_to_favorite: int,
+    ) -> int | None:
+        """Set a node as a favorite on the target node's device."""
+        admin_msg = admin_pb2.AdminMessage()
+        admin_msg.set_favorite_node = node_to_favorite
+
+        logger.info(
+            f"Sending set_favorite_node command to !{target_node_id:08x} "
+            f"to favorite !{node_to_favorite:08x}"
+        )
+
+        return self.send_admin_message(
+            target_node_id=target_node_id,
+            admin_message=admin_msg,
+            want_response=True,
+        )
+
+    def send_remove_favorite_node(
+        self,
+        target_node_id: int,
+        node_to_unfavorite: int,
+    ) -> int | None:
+        """Remove a node from the target node's favorites."""
+        admin_msg = admin_pb2.AdminMessage()
+        admin_msg.remove_favorite_node = node_to_unfavorite
+
+        logger.info(
+            f"Sending remove_favorite_node command to !{target_node_id:08x} "
+            f"to unfavorite !{node_to_unfavorite:08x}"
+        )
+
+        return self.send_admin_message(
+            target_node_id=target_node_id,
+            admin_message=admin_msg,
+            want_response=True,
+        )
+
     def send_nodedb_reset(
         self,
         target_node_id: int,

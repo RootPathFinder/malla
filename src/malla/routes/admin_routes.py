@@ -2551,6 +2551,25 @@ def api_remove_node_from_nodedb(node_id):
         return jsonify({"error": str(e)}), 500
 
 
+@admin_bp.route("/api/admin/node/<node_id>/favorites", methods=["GET"])
+def api_get_device_favorites(node_id):
+    """
+    Request/list on-device favorites for a target node.
+
+    For the connected gateway radio, returns live NodeDB favorites.
+    For remote targets, returns favorites previously managed from Malla
+    (firmware has no remote get-favorites API).
+    """
+    try:
+        target_node_id = convert_node_id(node_id)
+        admin_service = get_admin_service()
+        result = admin_service.get_device_favorites(target_node_id)
+        return jsonify(result)
+    except Exception as e:
+        logger.error(f"Error getting device favorites: {e}")
+        return jsonify({"error": str(e)}), 500
+
+
 @admin_bp.route("/api/admin/node/<node_id>/set-favorite-node", methods=["POST"])
 def api_set_favorite_node(node_id):
     """
@@ -2579,6 +2598,7 @@ def api_set_favorite_node(node_id):
 
         if result.success:
             message = result.response.get("message") if result.response else None
+            favorites = admin_service.get_device_favorites(target_node_id)
             return jsonify(
                 {
                     "success": True,
@@ -2586,6 +2606,8 @@ def api_set_favorite_node(node_id):
                     "node_favorited": f"!{node_to_favorite:08x}",
                     "message": message,
                     "log_id": result.log_id,
+                    "favorites": favorites.get("favorites", []),
+                    "favorites_source": favorites.get("source"),
                 }
             )
         else:
@@ -2630,6 +2652,7 @@ def api_remove_favorite_node(node_id):
 
         if result.success:
             message = result.response.get("message") if result.response else None
+            favorites = admin_service.get_device_favorites(target_node_id)
             return jsonify(
                 {
                     "success": True,
@@ -2637,6 +2660,8 @@ def api_remove_favorite_node(node_id):
                     "node_unfavorited": f"!{node_to_unfavorite:08x}",
                     "message": message,
                     "log_id": result.log_id,
+                    "favorites": favorites.get("favorites", []),
+                    "favorites_source": favorites.get("source"),
                 }
             )
         else:
