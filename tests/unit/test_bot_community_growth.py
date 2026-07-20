@@ -74,29 +74,97 @@ class TestDmTipsAndNeighbors:
         assert private == "📊 stats"
 
     @pytest.mark.unit
-    def test_neighbors_uses_names(self, bot_service: BotService):
+    def test_neighbors_prefers_long_names_from_neighborinfo(
+        self, bot_service: BotService
+    ):
         cursor = MagicMock()
-        cursor.fetchall.return_value = [
-            {
-                "node_id": 0x11111111,
-                "short_name": "Hill",
-                "long_name": "Hill Top",
-                "avg_snr": -8.2,
-                "cnt": 3,
-            }
-        ]
         conn = MagicMock()
         conn.cursor.return_value = cursor
 
-        with patch(
-            "src.malla.database.connection.get_db_connection", return_value=conn
+        rf_rows = [
+            {
+                "node_id": 0x11111111,
+                "short_name": "Hill",
+                "long_name": "Hill Top Roof",
+                "role": "ROUTER",
+                "avg_snr": -8.2,
+                "cnt": None,
+                "last_ts": time.time() - 120,
+            }
+        ]
+
+        with (
+            patch(
+                "src.malla.database.connection.get_db_connection", return_value=conn
+            ),
+            patch.object(
+                bot_service,
+                "_load_neighborinfo_neighbors",
+                return_value=(rf_rows, time.time() - 120),
+            ),
         ):
             result = bot_service._cmd_neighbors(_ctx(command="neighbors"))
 
-        assert "Near you:" in result
-        assert "Hill" in result
+        assert "RF neighbors" in result
+        assert "Hill Top Roof" in result
         assert "-8dB" in result
+        assert "rtr" in result
         assert "DM !help for more" in result
+
+    @pytest.mark.unit
+    def test_neighbors_falls_back_to_relay_with_long_names(
+        self, bot_service: BotService
+    ):
+        cursor = MagicMock()
+        conn = MagicMock()
+        conn.cursor.return_value = cursor
+
+        relay_rows = [
+            {
+                "node_id": 0x22222222,
+                "short_name": "Ada",
+                "long_name": "Ada Lake Node",
+                "role": "CLIENT",
+                "avg_snr": 7.4,
+                "cnt": 12,
+                "last_ts": time.time() - 600,
+            }
+        ]
+
+        with (
+            patch(
+                "src.malla.database.connection.get_db_connection", return_value=conn
+            ),
+            patch.object(
+                bot_service, "_load_neighborinfo_neighbors", return_value=([], None)
+            ),
+            patch.object(
+                bot_service,
+                "_load_inferred_neighbors",
+                return_value=(relay_rows, "relay"),
+            ),
+        ):
+            result = bot_service._cmd_neighbors(_ctx(command="neighbors"))
+
+        assert "relay neighbors" in result
+        assert "Ada Lake Node" in result
+        assert "7dB" in result
+        assert "12pk" in result
+
+    @pytest.mark.unit
+    def test_neighbor_display_name_includes_short_when_useful(
+        self, bot_service: BotService
+    ):
+        label = bot_service._neighbor_display_name(
+            0xABC, short_name="Fox", long_name="North Ridge", max_len=30
+        )
+        assert label == "North Ridge (Fox)"
+
+        same = bot_service._neighbor_display_name(
+            0xABC, short_name="Hill", long_name="Hill Top", max_len=30
+        )
+        assert same == "Hill Top"
+        assert "(Hill)" not in same
 
 
 class TestWelcomeAndDigestCta:
