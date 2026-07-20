@@ -179,7 +179,7 @@
             renderFromTelemetry(data.history);
         } catch (e) {
             document.getElementById(containerId).innerHTML = `
-                <div class="text-muted small"><i class="bi bi-exclamation-triangle"></i> Unable to load availability data</div>`;
+                <div class="text-muted small"><i class="bi bi-exclamation-triangle"></i> Unable to load telemetry coverage data</div>`;
         }
     }
 
@@ -330,10 +330,10 @@
         const pctClass = pct >= 80 ? 'good' : pct >= 50 ? 'warn' : 'bad';
 
         html += `<div class="uptime-footer">`;
-        html += `<span class="uptime-pct ${pctClass}">${pct}% availability</span>`;
+        html += `<span class="uptime-pct ${pctClass}">${pct}% coverage</span>`;
         html += `<div class="uptime-legend">`;
-        html += `<span class="uptime-legend-item"><span class="uptime-legend-dot available"></span>Data</span>`;
-        html += `<span class="uptime-legend-item"><span class="uptime-legend-dot unavailable"></span>No Data</span>`;
+        html += `<span class="uptime-legend-item"><span class="uptime-legend-dot available"></span>Sample</span>`;
+        html += `<span class="uptime-legend-item"><span class="uptime-legend-dot unavailable"></span>No sample</span>`;
         html += `</div></div>`;
 
         container.innerHTML = html;

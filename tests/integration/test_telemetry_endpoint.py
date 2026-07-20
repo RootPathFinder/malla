@@ -186,6 +186,86 @@ class TestTelemetryEndpoint:
         assert telemetry_data["environment_metrics"]["relative_humidity"] == 65.0
         assert telemetry_data["environment_metrics"]["barometric_pressure"] == 1013.25
 
+    def test_telemetry_endpoint_extra_sensor_and_power_fields(self, client, temp_database):
+        """Env V/I, air-quality environmental PM, and battery health are exposed."""
+        conn = get_db_connection()
+        cursor = conn.cursor()
+        node_id = 555666777
+        analysis_ts = time.time() - 120
+
+        cursor.execute(
+            """
+            INSERT INTO node_info (
+                node_id, hex_id, long_name, short_name, first_seen, last_updated,
+                power_type, power_type_reason, power_analysis_timestamp, battery_health_score
+            )
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                node_id,
+                f"!{node_id:08x}",
+                "Sensor Node",
+                "SENS",
+                time.time(),
+                time.time(),
+                "solar",
+                "diurnal voltage pattern",
+                analysis_ts,
+                82,
+            ),
+        )
+
+        env_tel = telemetry_pb2.Telemetry()
+        env_tel.environment_metrics.temperature = 19.0
+        env_tel.environment_metrics.voltage = 3.85
+        env_tel.environment_metrics.current = 12.5
+
+        aq_tel = telemetry_pb2.Telemetry()
+        aq_tel.air_quality_metrics.pm25_standard = 8
+        aq_tel.air_quality_metrics.pm25_environmental = 11
+        aq_tel.air_quality_metrics.pm10_environmental = 6
+        aq_tel.air_quality_metrics.pm100_environmental = 14
+
+        now = time.time()
+        for tel, ts in ((env_tel, now - 1), (aq_tel, now)):
+            payload = tel.SerializeToString()
+            cursor.execute(
+                """
+                INSERT INTO packet_history
+                (timestamp, topic, from_node_id, to_node_id, portnum, portnum_name, gateway_id,
+                 processed_successfully, raw_payload, payload_length)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    ts,
+                    "test/topic",
+                    node_id,
+                    node_id,
+                    3,
+                    "TELEMETRY_APP",
+                    f"!{node_id:08x}",
+                    1,
+                    payload,
+                    len(payload),
+                ),
+            )
+        conn.commit()
+        conn.close()
+
+        response = client.get(f"/api/node/{node_id}/telemetry")
+        assert response.status_code == 200
+        telemetry_data = json.loads(response.data)["telemetry"]
+
+        assert telemetry_data["power_type"] == "solar"
+        assert telemetry_data["battery_health_score"] == 82
+        assert telemetry_data["power_analysis_timestamp"] == analysis_ts
+        assert telemetry_data["environment_metrics"]["voltage"] == pytest.approx(3.85)
+        assert telemetry_data["environment_metrics"]["current"] == pytest.approx(12.5)
+        assert telemetry_data["air_quality_metrics"]["pm25_standard"] == 8
+        assert telemetry_data["air_quality_metrics"]["pm25_environmental"] == 11
+        assert telemetry_data["air_quality_metrics"]["pm10_environmental"] == 6
+        assert telemetry_data["air_quality_metrics"]["pm100_environmental"] == 14
+
     def test_telemetry_endpoint_hex_node_id(self, client, temp_database):
         """Test telemetry endpoint with hex node ID format."""
         # Create a test node

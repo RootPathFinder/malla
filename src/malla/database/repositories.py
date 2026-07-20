@@ -1964,7 +1964,7 @@ class NodeRepository:
             power_info = None
             try:
                 cursor.execute(
-                    "SELECT power_type, power_type_reason, power_analysis_timestamp FROM node_info WHERE node_id = ?",
+                    "SELECT power_type, power_type_reason, power_analysis_timestamp, battery_health_score FROM node_info WHERE node_id = ?",
                     (node_id,),
                 )
                 power_info = cursor.fetchone()
@@ -2109,6 +2109,13 @@ class NodeRepository:
                 if power_info["power_analysis_timestamp"]:
                     telemetry_dict["power_analysis_timestamp"] = power_info[
                         "power_analysis_timestamp"
+                    ]
+                if (
+                    "battery_health_score" in power_info.keys()
+                    and power_info["battery_health_score"] is not None
+                ):
+                    telemetry_dict["battery_health_score"] = power_info[
+                        "battery_health_score"
                     ]
 
             timestamp = datetime.fromtimestamp(latest_timestamp, UTC)
