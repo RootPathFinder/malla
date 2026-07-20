@@ -1698,6 +1698,12 @@ class AdminService:
             ),
         )
 
+        AdminRepository.upsert_remote_device_favorite(
+            target_node_id=target_node_id,
+            favorite_node_id=node_to_favorite,
+            source="managed",
+        )
+
         return AdminCommandResult(
             success=True,
             packet_id=packet_id,
@@ -1786,6 +1792,11 @@ class AdminService:
             ),
         )
 
+        AdminRepository.remove_remote_device_favorite(
+            target_node_id=target_node_id,
+            favorite_node_id=node_to_unfavorite,
+        )
+
         return AdminCommandResult(
             success=True,
             packet_id=packet_id,
@@ -1794,6 +1805,127 @@ class AdminService:
                 "message": f"Node !{node_to_unfavorite:08x} removed from favorites on !{target_node_id:08x}"
             },
         )
+
+    def _read_local_nodedb_favorites(self) -> list[dict[str, Any]]:
+        """Read isFavorite nodes from the connected radio's NodeDB."""
+        publisher = self._get_publisher()
+        interface = getattr(publisher, "_interface", None)
+        if not interface:
+            return []
+
+        nodes_by_num = getattr(interface, "nodesByNum", None) or {}
+        if not nodes_by_num:
+            # Fall back to nodes keyed by !hex id
+            nodes = getattr(interface, "nodes", None) or {}
+            nodes_by_num = {}
+            for key, node in nodes.items():
+                num = node.get("num")
+                if num is None and isinstance(key, str) and key.startswith("!"):
+                    try:
+                        num = int(key[1:], 16)
+                    except ValueError:
+                        continue
+                if num is not None:
+                    nodes_by_num[int(num)] = node
+
+        favorites: list[dict[str, Any]] = []
+        for num, node in nodes_by_num.items():
+            if not (node.get("isFavorite") or node.get("is_favorite")):
+                continue
+            user = node.get("user") or {}
+            node_id = int(num)
+            favorites.append(
+                {
+                    "node_id": node_id,
+                    "hex_id": f"!{node_id:08x}",
+                    "long_name": user.get("longName") or user.get("long_name"),
+                    "short_name": user.get("shortName") or user.get("short_name"),
+                    "hw_model": user.get("hwModel") or user.get("hw_model"),
+                    "source": "device",
+                }
+            )
+
+        favorites.sort(
+            key=lambda n: (
+                (n.get("long_name") or n.get("short_name") or n["hex_id"]).lower()
+            )
+        )
+        return favorites
+
+    def get_device_favorites(self, target_node_id: int) -> dict[str, Any]:
+        """
+        Get on-device favorites for a target node.
+
+        For the connected gateway, reads live NodeDB favorites.
+        For remote targets, Meshtastic has no get-favorites admin API, so
+        returns favorites previously managed from Malla.
+        """
+        gateway_id = self.gateway_node_id
+        is_local = bool(gateway_id and int(target_node_id) == int(gateway_id))
+        conn_type = self.connection_type
+
+        if is_local and conn_type in (
+            AdminConnectionType.TCP,
+            AdminConnectionType.SERIAL,
+        ):
+            live = self._read_local_nodedb_favorites()
+            live_ids = {int(n["node_id"]) for n in live}
+            previously = AdminRepository.list_remote_device_favorites(target_node_id)
+
+            # Keep recently managed favorites that the radio NodeDB has not
+            # echoed back yet (set_favorite is async on-device).
+            pending_managed = [
+                int(row["node_id"])
+                for row in previously
+                if int(row["node_id"]) not in live_ids
+                and (row.get("source") or "") == "managed"
+            ]
+
+            combined_ids = list(live_ids) + pending_managed
+            AdminRepository.replace_remote_device_favorites(
+                target_node_id=target_node_id,
+                favorite_node_ids=combined_ids,
+                source="device",
+            )
+            for nid in pending_managed:
+                AdminRepository.upsert_remote_device_favorite(
+                    target_node_id=target_node_id,
+                    favorite_node_id=nid,
+                    source="managed",
+                )
+
+            favorites = AdminRepository.list_remote_device_favorites(target_node_id)
+            live_by_id = {int(n["node_id"]): n for n in live}
+            for fav in favorites:
+                live_n = live_by_id.get(int(fav["node_id"]))
+                if live_n:
+                    for key in ("long_name", "short_name", "hw_model", "hex_id"):
+                        if live_n.get(key):
+                            fav[key] = live_n[key]
+                    fav["source"] = "device"
+            return {
+                "success": True,
+                "target_node_id": f"!{target_node_id:08x}",
+                "is_local": True,
+                "source": "device",
+                "favorites": favorites,
+                "count": len(favorites),
+                "note": "Loaded from connected radio NodeDB.",
+            }
+
+        favorites = AdminRepository.list_remote_device_favorites(target_node_id)
+        return {
+            "success": True,
+            "target_node_id": f"!{target_node_id:08x}",
+            "is_local": is_local,
+            "source": "tracked",
+            "favorites": favorites,
+            "count": len(favorites),
+            "note": (
+                "Remote firmware cannot return its favorites list. "
+                "Showing favorites managed from Malla for this node."
+            ),
+        }
 
     def reset_nodedb(
         self,
