@@ -28,7 +28,7 @@ from ..database.scheduled_telemetry_repository import (
 from ..models.user import UserRole
 from ..services.admin_service import ConfigType, get_admin_service
 from ..services.live_telemetry import (
-    solicit_node_telemetry,
+    request_live_node_telemetry,
 )
 from ..services.scheduled_telemetry_service import (
     get_runner_status,
@@ -2822,13 +2822,11 @@ def api_request_live_telemetry(node_id):
         data = request.get_json() or {}
         telemetry_type = data.get("telemetry_type", "device_metrics")
 
-        # Soft last-known keeps node-detail charts alive; schedules use 0.
-        outcome = solicit_node_telemetry(
+        # Same acquisition path as scheduled telemetry (persist=False for live UI).
+        outcome = request_live_node_telemetry(
             node_id_int,
             telemetry_type,
             client_hops=data.get("estimated_hops"),
-            fallback_device_metrics=False,
-            accept_last_known_s=20.0,
             persist=False,
         )
 

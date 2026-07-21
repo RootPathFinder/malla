@@ -18,7 +18,7 @@ from ..database.scheduled_telemetry_repository import (
     ScheduledTelemetryRepository,
     init_scheduled_telemetry_tables,
 )
-from .live_telemetry import get_connected_mesh_publisher, solicit_node_telemetry
+from .live_telemetry import get_connected_mesh_publisher, request_live_node_telemetry
 
 logger = logging.getLogger(__name__)
 
@@ -122,31 +122,31 @@ def _evaluate_schedule_outcome(
     """
     Decide schedule success and build a verbose last-run detail payload.
 
-    Success requires a fresh mesh reply that was written to packet_history
-    (so node-detail "last telemetry" age updates).
+    Schedules use the same live acquisition path; success requires that path
+    to return telemetry and write packet_history (node-detail age update).
     """
-    fresh = bool(outcome.get("fresh")) and bool(
-        outcome.get("persisted_packet_history")
-    )
-    ok = bool(outcome.get("success")) and fresh
     used_type = str(outcome.get("telemetry_type") or requested_type)
+    live_ok = bool(outcome.get("success"))
+    persisted = bool(outcome.get("persisted_packet_history"))
+    ok = live_ok and persisted
     error: str | None = None
     if not ok:
-        if outcome.get("source") == "last_known":
-            error = "No fresh mesh reply (stale cache only)"
-        elif outcome.get("success") and not outcome.get("persisted_packet_history"):
-            error = "Got reply but failed to persist telemetry packet for node details"
+        if live_ok and not persisted:
+            error = "Live telemetry ok but failed to persist packet for node details"
+        elif outcome.get("source") == "last_known" and not persisted:
+            error = "No mesh reply and no recent live cache to store"
         else:
             error = str(outcome.get("error") or "request failed")
 
     detail = {
         "ok": ok,
+        "live_ok": live_ok,
         "fresh": bool(outcome.get("fresh")),
         "source": outcome.get("source"),
         "attempts": outcome.get("attempts"),
         "estimated_hops": outcome.get("estimated_hops"),
         "hop_source": outcome.get("hop_source"),
-        "persisted_packet_history": bool(outcome.get("persisted_packet_history")),
+        "persisted_packet_history": persisted,
         "persisted_telemetry_data": bool(outcome.get("persisted_telemetry_data")),
         "telemetry_type": used_type,
         "error": error,
@@ -205,15 +205,12 @@ def run_due_schedules_once(
         if _runner_stop_event.is_set():
             break
         node_id = int(schedule["node_id"])
-        # Always solicit device_metrics for health freshness; secondary types
-        # are unreliable on routers and previously marked "success" without
-        # updating node-detail last telemetry (packet_history).
+        # Identical acquisition to Admin live telemetry; persist so node-detail
+        # "last telemetry" age updates.
         telemetry_type = "device_metrics"
-        outcome = solicit_node_telemetry(
+        outcome = request_live_node_telemetry(
             node_id,
             telemetry_type,
-            fallback_device_metrics=False,
-            accept_last_known_s=0.0,
             persist=True,
         )
         ok, error, used_type, detail = _evaluate_schedule_outcome(
@@ -293,14 +290,11 @@ def run_schedule_now(node_id: int) -> dict[str, Any]:
     conn.commit()
     conn.close()
 
-    # Health schedules always solicit device_metrics so node-detail last
-    # telemetry (packet_history) and battery tables stay in sync.
+    # Identical acquisition to Admin live telemetry; persist for node details.
     telemetry_type = "device_metrics"
-    outcome = solicit_node_telemetry(
+    outcome = request_live_node_telemetry(
         node_id,
         telemetry_type,
-        fallback_device_metrics=False,
-        accept_last_known_s=0.0,
         persist=True,
     )
     ok, error, used_type, detail = _evaluate_schedule_outcome(

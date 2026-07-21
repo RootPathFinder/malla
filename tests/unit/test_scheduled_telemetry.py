@@ -167,7 +167,7 @@ class TestScheduledTelemetryRunner:
                 return_value=(fake_publisher, "tcp"),
             ),
             patch(
-                "malla.services.scheduled_telemetry_service.solicit_node_telemetry",
+                "malla.services.scheduled_telemetry_service.request_live_node_telemetry",
                 return_value={
                     "success": True,
                     "fresh": True,
@@ -190,7 +190,6 @@ class TestScheduledTelemetryRunner:
         kwargs = solicit.call_args.kwargs
         assert args[0] == 0x0A11C001
         assert args[1] == "device_metrics"
-        assert kwargs.get("accept_last_known_s") == 0.0
         assert kwargs.get("persist") is True
 
         schedule = ScheduledTelemetryRepository.get_schedule(0x0A11C001)
@@ -248,7 +247,7 @@ class TestSolicitHardening:
         assert row is not None
         assert row["battery_level"] == 77
 
-    def test_schedule_success_requires_fresh_persisted_reply(self, scheduled_db):
+    def test_schedule_success_requires_persisted_reply(self, scheduled_db):
         ScheduledTelemetryRepository.upsert_schedule(
             0x0A11C001, interval_seconds=1800, enabled=True
         )
@@ -258,7 +257,7 @@ class TestSolicitHardening:
                 return_value=(object(), "tcp"),
             ),
             patch(
-                "malla.services.scheduled_telemetry_service.solicit_node_telemetry",
+                "malla.services.scheduled_telemetry_service.request_live_node_telemetry",
                 return_value={
                     "success": True,
                     "fresh": False,
@@ -276,9 +275,89 @@ class TestSolicitHardening:
         schedule = ScheduledTelemetryRepository.get_schedule(0x0A11C001)
         assert schedule is not None
         assert schedule["last_success_at"] is None
-        assert "fresh" in (schedule["last_error"] or "").lower() or "stale" in (
+        assert "persist" in (schedule["last_error"] or "").lower() or "cache" in (
             schedule["last_error"] or ""
         ).lower()
+
+    def test_schedule_ok_when_live_cache_is_persisted(self, scheduled_db):
+        """Schedules share live's last-known window; persisted cache counts as OK."""
+        ScheduledTelemetryRepository.upsert_schedule(
+            0x0A11C001, interval_seconds=1800, enabled=True
+        )
+        with (
+            patch(
+                "malla.services.scheduled_telemetry_service.get_connected_mesh_publisher",
+                return_value=(object(), "tcp"),
+            ),
+            patch(
+                "malla.services.scheduled_telemetry_service.request_live_node_telemetry",
+                return_value={
+                    "success": True,
+                    "fresh": True,
+                    "source": "last_known",
+                    "telemetry_type": "device_metrics",
+                    "persisted_packet_history": True,
+                    "persisted_telemetry_data": True,
+                    "persisted": True,
+                },
+            ),
+        ):
+            summary = run_due_schedules_once(limit=1)
+
+        assert summary["succeeded"] == 1
+        schedule = ScheduledTelemetryRepository.get_schedule(0x0A11C001)
+        assert schedule is not None
+        assert schedule["last_success_at"] is not None
+        assert schedule["last_error"] is None
+
+    def test_request_live_persists_age_gated_cache(self, scheduled_db):
+        """Canonical live path with persist=True stores last-known window hits."""
+        from malla.services.live_telemetry import (
+            LIVE_TELEMETRY_ACCEPT_LAST_KNOWN_S,
+            request_live_node_telemetry,
+        )
+
+        assert LIVE_TELEMETRY_ACCEPT_LAST_KNOWN_S == 20.0
+
+        publisher = MagicMock()
+        publisher.is_connected = True
+        publisher.get_telemetry_stats.return_value = {}
+        publisher.send_telemetry_request.return_value = None
+        publisher.get_latest_node_telemetry.return_value = {
+            "telemetry": {"device_metrics": {"battery_level": 66, "voltage": 3.9}},
+            "timestamp": time.time() - 5,
+            "raw_payload": b"\x08\x01",
+        }
+
+        with (
+            patch(
+                "malla.services.live_telemetry.get_connected_mesh_publisher",
+                return_value=(publisher, "tcp"),
+            ),
+            patch(
+                "malla.services.live_telemetry.resolve_live_telemetry_hops",
+                return_value=(0, "test"),
+            ),
+            patch("malla.services.live_telemetry.time.sleep"),
+            patch(
+                "malla.services.live_telemetry.persist_solicited_telemetry",
+                return_value={"packet_history": True, "telemetry_data": True},
+            ) as persist,
+        ):
+            outcome = request_live_node_telemetry(
+                0x5FFBA832, "device_metrics", persist=True
+            )
+
+        assert outcome["success"] is True
+        assert outcome["source"] == "last_known"
+        assert outcome["persisted_packet_history"] is True
+        assert outcome["fresh"] is True
+        persist.assert_called_once()
+        publisher.get_latest_node_telemetry.assert_called()
+        assert (
+            publisher.get_latest_node_telemetry.call_args.kwargs.get("max_age_s")
+            == LIVE_TELEMETRY_ACCEPT_LAST_KNOWN_S
+        )
 
     def test_solicit_falls_back_to_device_metrics(self, scheduled_db):
         from malla.services.live_telemetry import solicit_node_telemetry
@@ -375,7 +454,7 @@ class TestSolicitHardening:
                 return_value=(object(), "tcp"),
             ),
             patch(
-                "malla.services.scheduled_telemetry_service.solicit_node_telemetry",
+                "malla.services.scheduled_telemetry_service.request_live_node_telemetry",
                 return_value={
                     "success": True,
                     "fresh": True,
@@ -414,7 +493,7 @@ class TestSolicitHardening:
                 return_value=(object(), "tcp"),
             ),
             patch(
-                "malla.services.scheduled_telemetry_service.solicit_node_telemetry",
+                "malla.services.scheduled_telemetry_service.request_live_node_telemetry",
                 return_value={
                     "success": True,
                     "fresh": True,
