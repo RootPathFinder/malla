@@ -699,6 +699,35 @@ class BotService:
         """Get the current message queue size."""
         return self._message_queue.qsize()
 
+    def _parse_command_text(self, text: str) -> tuple[str, list[str]] | None:
+        """Parse inbound text into (command, args), or None if not a bot command.
+
+        Accepts:
+        - Prefixed commands: ``!ping``, ``!wx 90210`` (prefix from config)
+        - Bare single-word commands that exactly match a registered name: ``ping``, ``PING``
+
+        Multi-word messages without the prefix are ignored so normal chat is not
+        treated as a command (e.g. ``wx 90210`` without ``!`` is not a command).
+        """
+        stripped = (text or "").strip()
+        if not stripped:
+            return None
+
+        prefix = self._command_prefix
+        if stripped.startswith(prefix):
+            parts = stripped[len(prefix) :].strip().split()
+            if not parts:
+                return None
+            return parts[0].lower(), parts[1:]
+
+        # Bare form: entire message must be exactly one word matching a command.
+        if " " in stripped or "\t" in stripped:
+            return None
+        command = stripped.lower()
+        if command not in self._commands:
+            return None
+        return command, []
+
     def _on_message_received(
         self, packet: dict[str, Any], interface: Any = None
     ) -> None:
@@ -747,10 +776,6 @@ class BotService:
             if not text:
                 return
 
-            # Check if this is a command
-            if not text.startswith(self._command_prefix):
-                return
-
             # Get sender info early (needed for logging)
             sender_id_raw = packet.get("from") or packet.get("fromId")
             if isinstance(sender_id_raw, str) and sender_id_raw.startswith("!"):
@@ -760,13 +785,11 @@ class BotService:
             else:
                 sender_id = 0
 
-            # Parse command and args
-            parts = text[len(self._command_prefix) :].strip().split()
-            if not parts:
+            parsed = self._parse_command_text(text)
+            if parsed is None:
                 return
 
-            command = parts[0].lower()
-            args = parts[1:]
+            command, args = parsed
 
             # Check if we have a handler for this command
             if command not in self._commands:
