@@ -1718,9 +1718,10 @@
                     <div class="alert alert-info small mb-3">
                         <i class="bi bi-info-circle"></i>
                         Routers on recent firmware often broadcast telemetry at most every 12 hours.
-                        Schedule <strong>solicited</strong> device/battery polls here (minimum 30 minutes).
-                        Requires TCP or Serial. A run only counts as success when a fresh mesh reply is
-                        stored — that updates node “last telemetry” age, not just the schedule timestamp.
+                        Schedule <strong>solicited</strong> device/battery polls here (minimum 30 minutes)
+                        using the <strong>same live telemetry path</strong> as node-detail polling.
+                        Requires TCP or Serial. A run counts as success when that live path returns
+                        telemetry and it is stored — updating node “last telemetry” age.
                     </div>
                     <div class="row">
                         <div class="col-lg-5 mb-4">
