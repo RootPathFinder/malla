@@ -170,9 +170,13 @@ class TestScheduledTelemetryRunner:
                 "malla.services.scheduled_telemetry_service.solicit_node_telemetry",
                 return_value={
                     "success": True,
+                    "fresh": True,
                     "telemetry": {"device_metrics": {"battery_level": 88}},
                     "source": "live",
                     "estimated_hops": 1,
+                    "telemetry_type": "device_metrics",
+                    "persisted_packet_history": True,
+                    "persisted": True,
                 },
             ) as solicit,
         ):
@@ -186,7 +190,7 @@ class TestScheduledTelemetryRunner:
         kwargs = solicit.call_args.kwargs
         assert args[0] == 0x0A11C001
         assert args[1] == "device_metrics"
-        assert kwargs.get("fallback_device_metrics") is True
+        assert kwargs.get("accept_last_known_s") == 0.0
         assert kwargs.get("persist") is True
 
         schedule = ScheduledTelemetryRepository.get_schedule(0x0A11C001)
@@ -201,11 +205,11 @@ class TestScheduledTelemetryRunner:
 
 @pytest.mark.unit
 class TestSolicitHardening:
-    def test_persist_device_metrics(self, scheduled_db):
+    def test_persist_writes_packet_history_and_telemetry_data(self, scheduled_db):
         from malla.database.connection import get_db_connection
-        from malla.services.live_telemetry import persist_solicited_device_telemetry
+        from malla.services.live_telemetry import persist_solicited_telemetry
 
-        assert persist_solicited_device_telemetry(
+        info = persist_solicited_telemetry(
             0x0A11C001,
             {
                 "device_metrics": {
@@ -216,11 +220,22 @@ class TestSolicitHardening:
             },
             timestamp=1_700_000_000.0,
         )
+        assert info["packet_history"] is True
+        assert info["telemetry_data"] is True
 
         conn = get_db_connection()
+        pkt = conn.execute(
+            """
+            SELECT portnum_name, raw_payload, timestamp
+            FROM packet_history
+            WHERE from_node_id = ? AND portnum_name = 'TELEMETRY_APP'
+            ORDER BY timestamp DESC LIMIT 1
+            """,
+            (0x0A11C001,),
+        ).fetchone()
         row = conn.execute(
             """
-            SELECT battery_level, voltage, uptime_seconds
+            SELECT battery_level, voltage
             FROM telemetry_data
             WHERE node_id = ?
             ORDER BY timestamp DESC LIMIT 1
@@ -228,9 +243,42 @@ class TestSolicitHardening:
             (0x0A11C001,),
         ).fetchone()
         conn.close()
+        assert pkt is not None
+        assert pkt["raw_payload"] is not None
         assert row is not None
         assert row["battery_level"] == 77
-        assert abs(float(row["voltage"]) - 3.95) < 0.001
+
+    def test_schedule_success_requires_fresh_persisted_reply(self, scheduled_db):
+        ScheduledTelemetryRepository.upsert_schedule(
+            0x0A11C001, interval_seconds=1800, enabled=True
+        )
+        with (
+            patch(
+                "malla.services.scheduled_telemetry_service.get_connected_mesh_publisher",
+                return_value=(object(), "tcp"),
+            ),
+            patch(
+                "malla.services.scheduled_telemetry_service.solicit_node_telemetry",
+                return_value={
+                    "success": True,
+                    "fresh": False,
+                    "source": "last_known",
+                    "telemetry_type": "device_metrics",
+                    "persisted_packet_history": False,
+                },
+            ),
+        ):
+            summary = run_due_schedules_once(limit=1)
+
+        assert summary["claimed"] == 1
+        assert summary["succeeded"] == 0
+        assert summary["failed"] == 1
+        schedule = ScheduledTelemetryRepository.get_schedule(0x0A11C001)
+        assert schedule is not None
+        assert schedule["last_success_at"] is None
+        assert "fresh" in (schedule["last_error"] or "").lower() or "stale" in (
+            schedule["last_error"] or ""
+        ).lower()
 
     def test_solicit_falls_back_to_device_metrics(self, scheduled_db):
         from malla.services.live_telemetry import solicit_node_telemetry

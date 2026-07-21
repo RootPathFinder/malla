@@ -164,24 +164,35 @@ def run_due_schedules_once(
         if _runner_stop_event.is_set():
             break
         node_id = int(schedule["node_id"])
-        # Prefer the scheduled rotation, but solicit_node_telemetry falls back
-        # to device_metrics — critical for router health when secondary types
-        # (env/power/local_stats) produce routing NO_RESPONSE.
-        telemetry_type = ScheduledTelemetryRepository.pick_next_type(schedule)
+        # Always solicit device_metrics for health freshness; secondary types
+        # are unreliable on routers and previously marked "success" without
+        # updating node-detail last telemetry (packet_history).
+        telemetry_type = "device_metrics"
         outcome = solicit_node_telemetry(
             node_id,
             telemetry_type,
-            fallback_device_metrics=True,
-            accept_last_known_s=45.0,
+            fallback_device_metrics=False,
+            accept_last_known_s=0.0,
             persist=True,
         )
-        ok = bool(outcome.get("success"))
+        fresh = bool(outcome.get("fresh")) and bool(
+            outcome.get("persisted_packet_history")
+        )
+        ok = bool(outcome.get("success")) and fresh
         used_type = str(outcome.get("telemetry_type") or telemetry_type)
+        error = None
+        if not ok:
+            if outcome.get("source") == "last_known":
+                error = "No fresh mesh reply (stale cache only)"
+            elif outcome.get("success") and not outcome.get("persisted_packet_history"):
+                error = "Got reply but failed to persist telemetry packet"
+            else:
+                error = str(outcome.get("error") or "request failed")
         ScheduledTelemetryRepository.record_result(
             node_id,
             success=ok,
             telemetry_type=used_type,
-            error=None if ok else str(outcome.get("error") or "request failed"),
+            error=error,
         )
         if ok:
             succeeded += 1
@@ -246,24 +257,40 @@ def run_schedule_now(node_id: int) -> dict[str, Any]:
     conn.commit()
     conn.close()
 
-    telemetry_type = ScheduledTelemetryRepository.pick_next_type(schedule)
+    # Health schedules always solicit device_metrics so node-detail last
+    # telemetry (packet_history) and battery tables stay in sync.
+    telemetry_type = "device_metrics"
     outcome = solicit_node_telemetry(
         node_id,
         telemetry_type,
-        fallback_device_metrics=True,
-        accept_last_known_s=45.0,
+        fallback_device_metrics=False,
+        accept_last_known_s=0.0,
         persist=True,
     )
-    ok = bool(outcome.get("success"))
+    fresh = bool(outcome.get("fresh")) and bool(
+        outcome.get("persisted_packet_history")
+    )
+    ok = bool(outcome.get("success")) and fresh
     used_type = str(outcome.get("telemetry_type") or telemetry_type)
+    error = None
+    if not ok:
+        if outcome.get("source") == "last_known":
+            error = "No fresh mesh reply (stale cache only)"
+        elif outcome.get("success") and not outcome.get("persisted_packet_history"):
+            error = "Got reply but failed to persist telemetry packet"
+        else:
+            error = str(outcome.get("error") or "request failed")
     ScheduledTelemetryRepository.record_result(
         node_id,
         success=ok,
         telemetry_type=used_type,
-        error=None if ok else str(outcome.get("error") or "request failed"),
+        error=error,
     )
     outcome = dict(outcome)
+    outcome["success"] = ok
     outcome["telemetry_type"] = used_type
+    if error and not ok:
+        outcome["error"] = error
     outcome["schedule"] = ScheduledTelemetryRepository.get_schedule(node_id)
     return outcome
 

@@ -188,6 +188,51 @@ def telemetry_has_requested_metrics(
     return False
 
 
+def extract_telemetry_raw_payload(packet: dict[str, Any]) -> bytes | None:
+    """Extract TELEMETRY_APP payload bytes from a received mesh packet, if present."""
+    decoded = packet.get("decoded") or {}
+    payload = decoded.get("payload")
+    if isinstance(payload, (bytes, bytearray)):
+        return bytes(payload)
+    if isinstance(payload, str):
+        # Some paths hex-encode payload
+        try:
+            return bytes.fromhex(payload)
+        except ValueError:
+            return None
+
+    telemetry_obj = decoded.get("telemetry")
+    if telemetry_obj is not None and hasattr(telemetry_obj, "SerializeToString"):
+        try:
+            return telemetry_obj.SerializeToString()
+        except Exception:
+            return None
+    return None
+
+
+def telemetry_dict_to_raw_payload(telemetry: dict[str, Any] | None) -> bytes | None:
+    """Rebuild a Telemetry protobuf payload from a decoded metrics dict."""
+    if not telemetry or not isinstance(telemetry, dict):
+        return None
+    try:
+        from google.protobuf.json_format import ParseDict
+        from meshtastic import telemetry_pb2
+
+        # Drop non-proto helpers
+        cleaned = {
+            k: v
+            for k, v in telemetry.items()
+            if k not in ("raw", "time") and not str(k).startswith("_")
+        }
+        if not cleaned:
+            return None
+        msg = telemetry_pb2.Telemetry()
+        ParseDict(cleaned, msg, ignore_unknown_fields=True)
+        return msg.SerializeToString()
+    except Exception:
+        return None
+
+
 def extract_portnum(packet: dict[str, Any]) -> str | None:
     """Return decoded portnum name if present."""
     decoded = packet.get("decoded") or {}
@@ -272,6 +317,7 @@ def complete_pending_telemetry(
     telemetry: dict[str, Any],
     from_node_id: int | None,
     request_id: int | None = None,
+    raw_payload: bytes | None = None,
 ) -> bool:
     """
     Mark a pending request complete and signal its waiters.
@@ -295,6 +341,8 @@ def complete_pending_telemetry(
         response_data["from_node"] = from_node_id
     if request_id is not None:
         response_data["request_id"] = request_id
+    if raw_payload is not None:
+        response_data["raw_payload"] = raw_payload
 
     event = pending.get("event")
     if event is not None:

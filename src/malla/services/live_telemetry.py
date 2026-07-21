@@ -158,8 +158,8 @@ def persist_solicited_device_telemetry(
     """
     Persist device_metrics from a solicited reply into telemetry_data.
 
-    Live/scheduled TCP replies are otherwise only kept in memory, so health
-    monitoring would never see them without this write.
+    Prefer ``persist_solicited_telemetry`` which also writes packet_history so
+    node-detail "last telemetry" age updates.
     """
     if not telemetry or not isinstance(telemetry, dict):
         return False
@@ -240,7 +240,6 @@ def persist_solicited_device_telemetry(
                     (voltage, int(node_id) & 0xFFFFFFFF),
                 )
             except Exception:
-                # node_info may be missing columns in sparse test DBs
                 pass
         conn.commit()
         conn.close()
@@ -254,13 +253,108 @@ def persist_solicited_device_telemetry(
         return False
 
 
+def persist_solicited_telemetry(
+    node_id: int,
+    telemetry: dict[str, Any] | None,
+    *,
+    timestamp: float | None = None,
+    raw_payload: bytes | None = None,
+    mesh_packet_id: int | None = None,
+) -> dict[str, bool]:
+    """
+    Persist a fresh solicited telemetry reply for UI + health.
+
+    Writes:
+    - ``packet_history`` TELEMETRY_APP row (what node detail "last telemetry" reads)
+    - ``telemetry_data`` device metrics (what battery/health analytics read)
+    """
+    from ..utils.telemetry_request import telemetry_dict_to_raw_payload
+
+    result = {"packet_history": False, "telemetry_data": False}
+    if not telemetry or not isinstance(telemetry, dict):
+        return result
+
+    payload = raw_payload or telemetry_dict_to_raw_payload(telemetry)
+    if not payload:
+        return result
+
+    now = time.time() if timestamp is None else float(timestamp)
+    node_id_int = int(node_id) & 0xFFFFFFFF
+
+    try:
+        from meshtastic import portnums_pb2
+
+        from ..database.connection import get_db_connection
+
+        conn = get_db_connection()
+        cursor = conn.cursor()
+        cursor.execute(
+            """
+            CREATE TABLE IF NOT EXISTS packet_history (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                timestamp REAL NOT NULL,
+                topic TEXT NOT NULL,
+                from_node_id INTEGER,
+                to_node_id INTEGER,
+                portnum INTEGER,
+                portnum_name TEXT,
+                gateway_id TEXT,
+                channel_id TEXT,
+                mesh_packet_id INTEGER,
+                payload_length INTEGER,
+                raw_payload BLOB,
+                processed_successfully BOOLEAN DEFAULT TRUE,
+                message_type TEXT
+            )
+            """
+        )
+        cursor.execute(
+            """
+            INSERT INTO packet_history (
+                timestamp, topic, from_node_id, to_node_id, portnum, portnum_name,
+                gateway_id, channel_id, mesh_packet_id, payload_length, raw_payload,
+                processed_successfully, message_type
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                now,
+                "solicited/telemetry",
+                node_id_int,
+                None,
+                int(portnums_pb2.PortNum.TELEMETRY_APP),
+                "TELEMETRY_APP",
+                "local-solicit",
+                None,
+                mesh_packet_id,
+                len(payload),
+                payload,
+                True,
+                "solicited_telemetry",
+            ),
+        )
+        conn.commit()
+        conn.close()
+        result["packet_history"] = True
+    except Exception as e:
+        logger.warning(
+            "Failed to persist solicited packet_history for !%08x: %s",
+            node_id_int,
+            e,
+        )
+
+    result["telemetry_data"] = persist_solicited_device_telemetry(
+        node_id_int, telemetry, timestamp=now
+    )
+    return result
+
+
 def solicit_node_telemetry(
     node_id_int: int,
     telemetry_type: str = "device_metrics",
     *,
     client_hops: Any = None,
     fallback_device_metrics: bool = True,
-    accept_last_known_s: float = 30.0,
+    accept_last_known_s: float = 0.0,
     persist: bool = True,
 ) -> dict[str, Any]:
     """
@@ -268,10 +362,8 @@ def solicit_node_telemetry(
 
     Returns a result dict with success/error fields (does not raise for RF miss).
 
-    For scheduled health polls this:
-    - retries with ``device_metrics`` when a secondary type gets no reply
-    - accepts a very fresh publisher cache (same as live Admin UI)
-    - persists device metrics into ``telemetry_data`` for health/alerts
+    ``fresh`` is True only for live/late RF replies (not recycled last_known).
+    Scheduled polls should require ``fresh`` + packet_history persistence.
     """
     publisher, connection_type = get_connected_mesh_publisher()
     if publisher is None:
@@ -294,10 +386,7 @@ def solicit_node_telemetry(
     requested_type = (telemetry_type or "device_metrics").strip() or "device_metrics"
 
     types_to_try = [requested_type]
-    if (
-        fallback_device_metrics
-        and requested_type != "device_metrics"
-    ):
+    if fallback_device_metrics and requested_type != "device_metrics":
         types_to_try.append("device_metrics")
 
     result: dict[str, Any] | None = None
@@ -345,22 +434,30 @@ def solicit_node_telemetry(
                         else {},
                         "late_cache": True,
                         "last_known": True,
+                        "raw_payload": cached.get("raw_payload"),
                     }
 
     if result:
         source = "late_cache" if result.get("late_cache") else "live"
         if result.get("last_known"):
             source = "last_known"
+        fresh = source in ("live", "late_cache")
         telemetry = result.get("telemetry", {}) or {}
         persisted = False
-        if persist:
-            persisted = persist_solicited_device_telemetry(
+        persisted_packet = False
+        if persist and fresh:
+            persist_info = persist_solicited_telemetry(
                 node_id_int,
                 telemetry,
-                timestamp=result.get("timestamp"),
+                timestamp=time.time(),  # wall-clock now so UI age is "just now"
+                raw_payload=result.get("raw_payload"),
+                mesh_packet_id=result.get("request_id"),
             )
+            persisted_packet = bool(persist_info.get("packet_history"))
+            persisted = persisted_packet or bool(persist_info.get("telemetry_data"))
         return {
             "success": True,
+            "fresh": fresh,
             "node_id": node_id_int,
             "hex_id": f"!{node_id_int:08x}",
             "telemetry": telemetry,
@@ -374,11 +471,13 @@ def solicit_node_telemetry(
             "telemetry_type": used_type,
             "requested_telemetry_type": requested_type,
             "persisted": persisted,
+            "persisted_packet_history": persisted_packet,
             "routing_warning": result.get("routing_warning"),
         }
 
     return {
         "success": False,
+        "fresh": False,
         "error": (
             f"No response from node after {attempts} attempt(s) "
             f"(~{budget.get('total_budget_s', timeout)}s, "
