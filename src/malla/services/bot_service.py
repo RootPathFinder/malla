@@ -130,7 +130,11 @@ class BotService:
         self._pending_traceroutes: dict[int, tuple[int, str | None, int, float]] = {}
         self._traceroute_lock = threading.Lock()
         self._traceroute_unk_snr = -128  # Meshtastic unknown SNR marker (raw protobuf value)
-        self._traceroute_timeout = 60.0  # Seconds to wait for traceroute response
+        # Multi-hop round-trips often exceed 60s; scale wait with hopLimit.
+        # Meshtastic itself waits ~20s * min(nodes, hopLimit).
+        self._traceroute_hop_limit = 7
+        self._traceroute_timeout_base = 90.0
+        self._traceroute_timeout_per_hop = 25.0
 
         # Traceroute rate limiting (hardware firmware limit)
         self._traceroute_min_interval = 30.0  # Seconds between traceroutes
@@ -952,6 +956,24 @@ class BotService:
                     return None
         return None
 
+    def _get_traceroute_timeout(self) -> float:
+        """Seconds to keep a traceroute pending before timing out."""
+        hops = max(0, int(self._traceroute_hop_limit))
+        return max(
+            float(self._traceroute_timeout_base),
+            float(self._traceroute_timeout_per_hop) * (hops + 1),
+        )
+
+    def _traceroute_forward_complete(
+        self, route: list[int], snr_towards: list[float | None]
+    ) -> bool:
+        """True when forward path SNR covers every hop including the destination.
+
+        Meshtastic convention: ``len(snr_towards) == len(route) + 1``.
+        Direct (0 intermediate hops) still needs one SNR entry for the dest.
+        """
+        return len(snr_towards) >= len(route) + 1
+
     def _normalize_snr_list(
         self, values: list[Any], *, scale_protobuf: bool = True
     ) -> list[float | None]:
@@ -1055,30 +1077,32 @@ class BotService:
         snr_towards: list[float | None],
         snr_back: list[float | None],
     ) -> int | None:
-        """Find a pending traceroute destination that matches this packet."""
+        """Find a pending traceroute destination that matches this packet.
+
+        Prefer responses that originate from the traceroute target. Avoid matching
+        overheard multi-hop traffic that merely lists the target in ``route``.
+        """
         local_node_id = self._get_local_node_id()
 
         with self._traceroute_lock:
             pending_destinations = list(self._pending_traceroutes.keys())
 
         for dest_id in pending_destinations:
+            # Canonical success: reply from the target node.
             if from_id == dest_id:
                 return dest_id
 
-            if local_node_id and to_id == local_node_id and from_id == dest_id:
-                return dest_id
-
+            # Some stacks echo the completed traceroute back from the gateway
+            # toward the target with a request id — only accept when addressed
+            # to the pending dest and we still have usable path SNR.
             if (
                 local_node_id
                 and from_id == local_node_id
                 and to_id == dest_id
                 and request_id
+                and self._traceroute_forward_complete(route, snr_towards)
             ):
                 return dest_id
-
-            if dest_id in route or dest_id in route_back:
-                if snr_towards or snr_back:
-                    return dest_id
 
         return None
 
@@ -1090,13 +1114,21 @@ class BotService:
         local_node_id: int | None,
     ) -> bool:
         """Return True when this packet is a traceroute response, not our request."""
+        # Outbound request we just sent: from us, no requestId (we are originator).
+        if (
+            local_node_id
+            and from_id == local_node_id
+            and to_id != local_node_id
+            and not request_id
+        ):
+            return False
+
+        # Responses typically carry requestId linking to our traceroute.
         if request_id:
             return True
 
-        if local_node_id and from_id == local_node_id and to_id != local_node_id:
-            return False
-
-        return bool(from_id and to_id)
+        # Dest-originated replies without requestId still count.
+        return bool(from_id)
 
     def _handle_traceroute_packet(self, packet: dict[str, Any]) -> None:
         """Process a traceroute packet and send results if we initiated it."""
@@ -1128,16 +1160,6 @@ class BotService:
                 packet, decoded
             )
 
-            current_time = time.time()
-            with self._traceroute_lock:
-                expired = [
-                    dest_id
-                    for dest_id, pending in self._pending_traceroutes.items()
-                    if current_time - pending[3] > self._traceroute_timeout
-                ]
-                for dest_id in expired:
-                    del self._pending_traceroutes[dest_id]
-
             matched_dest = self._match_pending_traceroute(
                 from_id,
                 to_id,
@@ -1152,6 +1174,18 @@ class BotService:
                     "Received traceroute packet from !%08x to !%s with no pending match",
                     from_id,
                     f"{to_id:08x}" if to_id is not None else "?",
+                )
+                return
+
+            # Incomplete multi-hop replies are common mid-flight — keep waiting
+            # for a complete forward path instead of publishing a bogus 1-hop result.
+            if not self._traceroute_forward_complete(route, snr_towards):
+                logger.info(
+                    "Ignoring incomplete traceroute for !%08x "
+                    "(route=%d, snr_towards=%d); waiting for full path",
+                    matched_dest,
+                    len(route),
+                    len(snr_towards),
                 )
                 return
 
@@ -2098,7 +2132,7 @@ class BotService:
             # waiting for responses, which would stall the pubsub receive callback.
             threading.Thread(
                 target=self._send_traceroute_packet,
-                args=(sender_id, publisher),
+                args=(sender_id, publisher, channel_index, sender_name),
                 name=f"traceroute-{sender_id:08x}",
                 daemon=True,
             ).start()
@@ -2115,6 +2149,8 @@ class BotService:
                     "target": f"!{sender_id:08x}",
                     "target_name": display_name,
                     "channel": channel_name or f"ch{channel_index}",
+                    "hop_limit": self._traceroute_hop_limit,
+                    "timeout_s": int(self._get_traceroute_timeout()),
                     "status": "sent",
                 },
             )
@@ -2124,15 +2160,28 @@ class BotService:
             logger.error(f"Error executing traceroute: {e}")
             return "Traceroute failed"
 
-    def _send_traceroute_packet(self, sender_id: int, publisher: Any) -> None:
+    def _send_traceroute_packet(
+        self,
+        sender_id: int,
+        publisher: Any,
+        channel_index: int = 0,
+        sender_name: str | None = None,
+    ) -> None:
         """Send a traceroute request without blocking pubsub callbacks."""
         try:
             if publisher._interface is None:
+                self._fail_pending_traceroute(
+                    sender_id,
+                    channel_index,
+                    sender_name,
+                    reason="not connected",
+                )
                 return
 
             publisher._interface.sendTraceRoute(
                 dest=sender_id,
-                hopLimit=7,
+                hopLimit=int(self._traceroute_hop_limit),
+                channelIndex=int(channel_index),
             )
         except Exception as e:
             logger.error(
@@ -2141,6 +2190,58 @@ class BotService:
                 e,
                 exc_info=True,
             )
+            # Library wait may time out before a slow multi-hop reply arrives via
+            # pubsub — only fail pending on hard send errors, not wait timeouts.
+            err_text = str(e).lower()
+            if "timed out" in err_text or "timeout" in err_text:
+                logger.info(
+                    "Meshtastic traceroute wait timed out for !%08x; "
+                    "keeping pending for pubsub reply (bot timeout %.0fs)",
+                    sender_id,
+                    self._get_traceroute_timeout(),
+                )
+                return
+            self._fail_pending_traceroute(
+                sender_id,
+                channel_index,
+                sender_name,
+                reason="send failed",
+            )
+
+    def _fail_pending_traceroute(
+        self,
+        dest_id: int,
+        channel_index: int,
+        requester_name: str | None,
+        *,
+        reason: str,
+    ) -> None:
+        """Clear a pending traceroute and notify the channel of failure."""
+        with self._traceroute_lock:
+            pending = self._pending_traceroutes.pop(dest_id, None)
+        if pending is None:
+            return
+
+        _requester_id, stored_name, stored_channel, _start = pending
+        name = requester_name or stored_name or f"!{dest_id:08x}"
+        if len(name) > 15:
+            name = name[:12] + "..."
+        ch = channel_index if channel_index is not None else stored_channel
+        self.queue_message(
+            text=f"❌ TR to {name} failed ({reason})",
+            destination=0xFFFFFFFF,
+            channel_index=ch,
+            priority=BotMessagePriority.LOW,
+        )
+        self._log_activity(
+            "traceroute_failed",
+            {
+                "target": f"!{dest_id:08x}",
+                "target_name": stored_name,
+                "channel": self._get_channel_name(ch) or f"ch{ch}",
+                "status": reason,
+            },
+        )
 
     def _process_queued_traceroutes(self) -> None:
         """Process any queued traceroute requests if rate limit allows."""
@@ -2200,6 +2301,7 @@ class BotService:
             return
 
         current_time = time.time()
+        timeout_s = self._get_traceroute_timeout()
         timed_out = []
 
         # Find timed-out traceroutes
@@ -2210,7 +2312,7 @@ class BotService:
                 channel_index,
                 start_time,
             ) in self._pending_traceroutes.items():
-                if current_time - start_time > self._traceroute_timeout:
+                if current_time - start_time > timeout_s:
                     timed_out.append((dest_id, requester_id, requester_name, channel_index))
 
         # Process timed-out traceroutes
@@ -2237,10 +2339,15 @@ class BotService:
                     "target": f"!{dest_id:08x}",
                     "target_name": requester_name,
                     "channel": channel_name or f"ch{channel_index}",
+                    "timeout_s": int(timeout_s),
                     "status": "timed out",
                 },
             )
-            logger.info(f"Traceroute to !{dest_id:08x} timed out after 60s")
+            logger.info(
+                "Traceroute to !%08x timed out after %.0fs",
+                dest_id,
+                timeout_s,
+            )
 
     def _with_dm_tip(self, ctx: CommandContext, text: str) -> str:
         """Append a short DM tip on public channel replies when space allows."""

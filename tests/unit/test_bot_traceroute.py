@@ -132,6 +132,158 @@ class TestBotTracerouteMatching:
 
         assert matched == dest_id
 
+    @pytest.mark.unit
+    def test_match_ignores_overheard_route_mention(self, bot_service: BotService):
+        """Target listed mid-route on someone else's traceroute must not match."""
+        dest_id = 0x87654321
+        bot_service._pending_traceroutes[dest_id] = (
+            dest_id,
+            "Requester",
+            1,
+            time.time(),
+        )
+
+        matched = bot_service._match_pending_traceroute(
+            from_id=0xAABBCCDD,
+            to_id=0x12345678,
+            request_id=7,
+            route=[dest_id, 0x11111111],
+            route_back=[],
+            snr_towards=[-5.0, -6.0, -7.0],
+            snr_back=[],
+        )
+        assert matched is None
+
+
+class TestBotTracerouteCompleteness:
+    @pytest.mark.unit
+    def test_forward_complete_direct_and_multihop(self, bot_service: BotService):
+        assert bot_service._traceroute_forward_complete([], [-4.0]) is True
+        assert bot_service._traceroute_forward_complete([0x11111111], [-5.0, -8.0]) is True
+        assert bot_service._traceroute_forward_complete([0x11111111], [-5.0]) is False
+        assert bot_service._traceroute_forward_complete([0x11111111], []) is False
+        assert bot_service._traceroute_forward_complete([], []) is False
+
+    @pytest.mark.unit
+    def test_timeout_scales_with_hop_limit(self, bot_service: BotService):
+        bot_service._traceroute_hop_limit = 7
+        bot_service._traceroute_timeout_base = 90.0
+        bot_service._traceroute_timeout_per_hop = 25.0
+        assert bot_service._get_traceroute_timeout() == 200.0
+
+        bot_service._traceroute_hop_limit = 1
+        assert bot_service._get_traceroute_timeout() == 90.0
+
+    @pytest.mark.unit
+    def test_incomplete_multihop_keeps_pending(self, bot_service: BotService):
+        dest_id = 0x87654321
+        local_id = 0x12345678
+        bot_service._pending_traceroutes[dest_id] = (
+            dest_id,
+            "You",
+            1,
+            time.time(),
+        )
+        # Missing final SNR → incomplete for 1 intermediate hop
+        payload = _build_route_discovery_payload(
+            route=[0x11111111],
+            snr_towards=[-5.0],
+        )
+        packet = {
+            "from": dest_id,
+            "to": local_id,
+            "requestId": 99,
+            "decoded": {"portnum": "TRACEROUTE_APP", "payload": payload},
+        }
+
+        with patch.object(bot_service, "_get_local_node_id", return_value=local_id):
+            with patch.object(bot_service, "queue_message") as queue_message:
+                bot_service._handle_traceroute_packet(packet)
+
+        queue_message.assert_not_called()
+        assert dest_id in bot_service._pending_traceroutes
+
+    @pytest.mark.unit
+    def test_complete_multihop_clears_pending(self, bot_service: BotService):
+        dest_id = 0x87654321
+        local_id = 0x12345678
+        bot_service._pending_traceroutes[dest_id] = (
+            dest_id,
+            "You",
+            1,
+            time.time(),
+        )
+        payload = _build_route_discovery_payload(
+            route=[0x11111111],
+            snr_towards=[-5.0, -8.0],
+            route_back=[0x11111111],
+            snr_back=[-7.0, -6.0],
+        )
+        packet = {
+            "from": dest_id,
+            "to": local_id,
+            "requestId": 99,
+            "decoded": {"portnum": "TRACEROUTE_APP", "payload": payload},
+        }
+
+        with patch.object(bot_service, "_get_local_node_id", return_value=local_id):
+            with patch.object(
+                bot_service, "_fetch_node_labels", return_value=_name_map()
+            ):
+                with patch.object(bot_service, "queue_message") as queue_message:
+                    bot_service._handle_traceroute_packet(packet)
+
+        queue_message.assert_called_once()
+        assert dest_id not in bot_service._pending_traceroutes
+
+    @pytest.mark.unit
+    def test_send_hard_failure_notifies_and_clears(self, bot_service: BotService):
+        dest_id = 0x87654321
+        bot_service._pending_traceroutes[dest_id] = (
+            dest_id,
+            "You",
+            1,
+            time.time(),
+        )
+        publisher = MagicMock()
+        publisher._interface = MagicMock()
+        publisher._interface.sendTraceRoute.side_effect = RuntimeError("radio busy")
+
+        with patch.object(bot_service, "queue_message") as queue_message:
+            bot_service._send_traceroute_packet(
+                dest_id, publisher, channel_index=1, sender_name="You"
+            )
+
+        assert dest_id not in bot_service._pending_traceroutes
+        queue_message.assert_called_once()
+        assert "failed" in queue_message.call_args.kwargs["text"].lower()
+
+    @pytest.mark.unit
+    def test_library_wait_timeout_keeps_pending(self, bot_service: BotService):
+        dest_id = 0x87654321
+        bot_service._pending_traceroutes[dest_id] = (
+            dest_id,
+            "You",
+            1,
+            time.time(),
+        )
+        publisher = MagicMock()
+        publisher._interface = MagicMock()
+        publisher._interface.sendTraceRoute.side_effect = RuntimeError(
+            "Timed out waiting for traceroute"
+        )
+
+        with patch.object(bot_service, "queue_message") as queue_message:
+            bot_service._send_traceroute_packet(
+                dest_id, publisher, channel_index=1, sender_name="You"
+            )
+
+        assert dest_id in bot_service._pending_traceroutes
+        queue_message.assert_not_called()
+        publisher._interface.sendTraceRoute.assert_called_once_with(
+            dest=dest_id, hopLimit=7, channelIndex=1
+        )
+
 
 class TestBotTracerouteFormatting:
     @pytest.mark.unit
