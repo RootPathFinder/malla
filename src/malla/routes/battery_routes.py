@@ -383,6 +383,69 @@ def set_node_power_type(node_id):
         return jsonify({"error": str(e)}), 500
 
 
+@battery_bp.route("/api/node/<node_id>/battery-voltage-model", methods=["POST"])
+def set_node_battery_voltage_model(node_id):
+    """Set or clear per-node Admin Power charge-full voltage / near-full % overrides.
+
+    JSON body:
+        charge_full_voltage: number | null (omit to leave unchanged)
+        near_full_pct: int | null (omit to leave unchanged)
+        clear: bool — when true, clears both overrides (HW profile)
+    """
+    try:
+        from ..power_analysis import set_battery_voltage_override
+        from ..utils.node_utils import convert_node_id
+
+        node_id_int = convert_node_id(node_id)
+        payload = request.get_json(silent=True) or {}
+        clear = payload.get("clear", False)
+        if isinstance(clear, str):
+            clear = clear.lower() in ("1", "true", "yes", "on")
+
+        update_voltage = "charge_full_voltage" in payload
+        update_pct = "near_full_pct" in payload
+        charge_full_voltage = payload.get("charge_full_voltage")
+        near_full_pct = payload.get("near_full_pct")
+
+        # Empty strings from forms → clear that field
+        if update_voltage and charge_full_voltage == "":
+            charge_full_voltage = None
+        if update_pct and near_full_pct == "":
+            near_full_pct = None
+
+        conn = get_db_connection()
+        try:
+            status = set_battery_voltage_override(
+                node_id_int,
+                conn,
+                charge_full_voltage=charge_full_voltage,
+                near_full_pct=near_full_pct,
+                clear=bool(clear),
+                update_voltage=update_voltage,
+                update_pct=update_pct,
+            )
+        finally:
+            conn.close()
+
+        vm = status.get("voltage_model") or {}
+        return jsonify(
+            {
+                "message": "Battery voltage model updated",
+                "node_id": node_id_int,
+                "voltage_model": vm,
+                "power_status": status,
+            }
+        )
+    except ValueError as e:
+        return jsonify({"error": str(e)}), 400
+    except Exception as e:
+        logger.error(
+            f"Error setting battery voltage model for node {node_id}: {e}",
+            exc_info=True,
+        )
+        return jsonify({"error": str(e)}), 500
+
+
 @battery_bp.route("/api/node/<node_id>/solar-forecast", methods=["GET", "POST"])
 def node_solar_forecast(node_id):
     """Get or configure opt-in solar weather forecasting for a node.

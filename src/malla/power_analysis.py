@@ -789,11 +789,19 @@ def _format_outlook(
 
 def _read_stored_power_meta(
     db_connection: Any, node_id: int
-) -> tuple[str | None, bool, str | None]:
-    """Return (power_type, locked, hw_model) from node_info."""
-    stored_type = None
-    locked = False
-    hw_model = None
+) -> dict[str, Any]:
+    """Return stored power metadata from node_info.
+
+    Keys: power_type, locked, hw_model, battery_charge_full_voltage,
+    battery_near_full_pct.
+    """
+    meta: dict[str, Any] = {
+        "power_type": None,
+        "locked": False,
+        "hw_model": None,
+        "battery_charge_full_voltage": None,
+        "battery_near_full_pct": None,
+    }
     try:
         cursor = db_connection.cursor()
         # Prefer full row; tolerate DBs missing newer columns.
@@ -803,7 +811,9 @@ def _read_stored_power_meta(
                 """
                 SELECT power_type,
                        COALESCE(power_type_locked, 0) as power_type_locked,
-                       hw_model
+                       hw_model,
+                       battery_charge_full_voltage,
+                       battery_near_full_pct
                 FROM node_info WHERE node_id = ?
                 """,
                 (node_id,),
@@ -814,36 +824,58 @@ def _read_stored_power_meta(
                 cursor.execute(
                     """
                     SELECT power_type,
-                           COALESCE(power_type_locked, 0) as power_type_locked
+                           COALESCE(power_type_locked, 0) as power_type_locked,
+                           hw_model
                     FROM node_info WHERE node_id = ?
                     """,
                     (node_id,),
                 )
                 row = cursor.fetchone()
             except Exception:
-                cursor.execute(
-                    "SELECT power_type FROM node_info WHERE node_id = ?",
-                    (node_id,),
-                )
-                row = cursor.fetchone()
+                try:
+                    cursor.execute(
+                        """
+                        SELECT power_type,
+                               COALESCE(power_type_locked, 0) as power_type_locked
+                        FROM node_info WHERE node_id = ?
+                        """,
+                        (node_id,),
+                    )
+                    row = cursor.fetchone()
+                except Exception:
+                    cursor.execute(
+                        "SELECT power_type FROM node_info WHERE node_id = ?",
+                        (node_id,),
+                    )
+                    row = cursor.fetchone()
 
         if row:
             if hasattr(row, "keys"):
                 keys = set(row.keys())
-                stored_type = row["power_type"]
+                meta["power_type"] = row["power_type"]
                 if "power_type_locked" in keys:
-                    locked = bool(row["power_type_locked"])
+                    meta["locked"] = bool(row["power_type_locked"])
                 if "hw_model" in keys:
-                    hw_model = row["hw_model"]
+                    meta["hw_model"] = row["hw_model"]
+                if "battery_charge_full_voltage" in keys:
+                    meta["battery_charge_full_voltage"] = row[
+                        "battery_charge_full_voltage"
+                    ]
+                if "battery_near_full_pct" in keys:
+                    meta["battery_near_full_pct"] = row["battery_near_full_pct"]
             else:
-                stored_type = row[0]
+                meta["power_type"] = row[0]
                 if len(row) > 1:
-                    locked = bool(row[1])
+                    meta["locked"] = bool(row[1])
                 if len(row) > 2:
-                    hw_model = row[2]
+                    meta["hw_model"] = row[2]
+                if len(row) > 3:
+                    meta["battery_charge_full_voltage"] = row[3]
+                if len(row) > 4:
+                    meta["battery_near_full_pct"] = row[4]
     except Exception:
         pass
-    return stored_type, locked, hw_model
+    return meta
 
 
 def analyze_node_power(node_id: int, db_connection: Any) -> dict[str, Any]:
@@ -852,8 +884,15 @@ def analyze_node_power(node_id: int, db_connection: Any) -> dict[str, Any]:
     if len(rows) < 3:
         rows = _fetch_telemetry_rows(db_connection, node_id, days=30)
 
-    stored_type, locked, hw_model = _read_stored_power_meta(db_connection, node_id)
-    bat_model = resolve_battery_model(hw_model)
+    meta = _read_stored_power_meta(db_connection, node_id)
+    stored_type = meta.get("power_type")
+    locked = bool(meta.get("locked"))
+    hw_model = meta.get("hw_model")
+    bat_model = resolve_battery_model(
+        hw_model,
+        charge_full_voltage=meta.get("battery_charge_full_voltage"),
+        near_full_pct=meta.get("battery_near_full_pct"),
+    )
 
     timestamps, voltages, batteries = _prepare_series(rows)
     if not timestamps:
@@ -1050,6 +1089,100 @@ def set_power_type_override(
         except Exception:
             pass
         raise RuntimeError(f"Failed to set power type override: {e}") from e
+
+    return analyze_node_power(node_id, db_connection)
+
+
+def set_battery_voltage_override(
+    node_id: int,
+    db_connection: Any,
+    *,
+    charge_full_voltage: float | None = None,
+    near_full_pct: int | None = None,
+    clear: bool = False,
+    update_voltage: bool = False,
+    update_pct: bool = False,
+) -> dict[str, Any]:
+    """
+    Set or clear per-node Admin Power voltage / near-full % overrides.
+
+    Pass ``clear=True`` to remove both overrides (fall back to HW profile).
+    Otherwise set ``update_voltage`` / ``update_pct`` to write the matching
+    value (``None`` clears that field).
+
+    Returns the refreshed power status.
+    """
+    if clear:
+        update_voltage = True
+        update_pct = True
+        charge_full_voltage = None
+        near_full_pct = None
+
+    if update_voltage and charge_full_voltage is not None:
+        try:
+            charge_full_voltage = float(charge_full_voltage)
+        except (TypeError, ValueError) as e:
+            raise ValueError("charge_full_voltage must be a number") from e
+        if not (3.0 <= charge_full_voltage <= 4.35):
+            raise ValueError(
+                "charge_full_voltage must be between 3.0 and 4.35 volts"
+            )
+
+    if update_pct and near_full_pct is not None:
+        try:
+            near_full_pct = int(near_full_pct)
+        except (TypeError, ValueError) as e:
+            raise ValueError("near_full_pct must be an integer") from e
+        if not (50 <= near_full_pct <= 100):
+            raise ValueError("near_full_pct must be between 50 and 100")
+
+    if not update_voltage and not update_pct:
+        raise ValueError(
+            "Provide charge_full_voltage and/or near_full_pct, or clear=true"
+        )
+
+    cursor = db_connection.cursor()
+    try:
+        cursor.execute(
+            """
+            SELECT battery_charge_full_voltage, battery_near_full_pct
+            FROM node_info WHERE node_id = ?
+            """,
+            (node_id,),
+        )
+        row = cursor.fetchone()
+        if row is None:
+            raise ValueError(f"Node {node_id} not found")
+        if hasattr(row, "keys"):
+            cur_v = row["battery_charge_full_voltage"]
+            cur_pct = row["battery_near_full_pct"]
+        else:
+            cur_v, cur_pct = row[0], row[1]
+
+        new_v = charge_full_voltage if update_voltage else cur_v
+        new_pct = near_full_pct if update_pct else cur_pct
+
+        cursor.execute(
+            """
+            UPDATE node_info
+            SET battery_charge_full_voltage = ?,
+                battery_near_full_pct = ?,
+                power_analysis_timestamp = ?
+            WHERE node_id = ?
+            """,
+            (new_v, new_pct, time.time(), node_id),
+        )
+        if cursor.rowcount == 0:
+            raise ValueError(f"Node {node_id} not found")
+        db_connection.commit()
+    except ValueError:
+        raise
+    except Exception as e:
+        try:
+            db_connection.rollback()
+        except Exception:
+            pass
+        raise RuntimeError(f"Failed to set battery voltage override: {e}") from e
 
     return analyze_node_power(node_id, db_connection)
 

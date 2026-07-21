@@ -2272,7 +2272,85 @@ function bindPowerTypeOverride(nodeId) {
         }
     });
 
+    bindBatteryVoltageOverride(nodeId);
     bindSolarForecastControls(nodeId);
+}
+
+function bindBatteryVoltageOverride(nodeId) {
+    const saveBtn = document.getElementById('battery-voltage-save-btn');
+    const clearBtn = document.getElementById('battery-voltage-clear-btn');
+    const voltEl = document.getElementById('battery-charge-full-voltage');
+    const pctEl = document.getElementById('battery-near-full-pct');
+    const statusEl = document.getElementById('battery-voltage-override-status');
+    if (!saveBtn || !voltEl || !pctEl) {
+        return;
+    }
+
+    async function postVoltageModel(body) {
+        saveBtn.disabled = true;
+        if (clearBtn) clearBtn.disabled = true;
+        if (statusEl) {
+            statusEl.textContent = 'Saving...';
+            statusEl.className = 'small text-muted mt-1';
+        }
+        try {
+            const resp = await fetch(`/api/node/${nodeId}/battery-voltage-model`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify(body)
+            });
+            const data = await resp.json();
+            if (!resp.ok) {
+                throw new Error(data.error || 'Save failed');
+            }
+            if (statusEl) {
+                statusEl.textContent = body.clear
+                    ? 'Cleared — using hardware profile'
+                    : 'Saved charge thresholds';
+                statusEl.className = 'small text-success mt-1';
+            }
+            setTimeout(function() { loadTelemetryData(); }, 400);
+        } catch (err) {
+            console.error('Battery voltage override failed:', err);
+            if (statusEl) {
+                statusEl.textContent = err.message || 'Save failed';
+                statusEl.className = 'small text-danger mt-1';
+            }
+        } finally {
+            saveBtn.disabled = false;
+            if (clearBtn) clearBtn.disabled = false;
+        }
+    }
+
+    saveBtn.addEventListener('click', function() {
+        const voltRaw = voltEl.value.trim();
+        const pctRaw = pctEl.value.trim();
+        const body = {
+            charge_full_voltage: voltRaw === '' ? null : Number(voltRaw),
+            near_full_pct: pctRaw === '' ? null : Number(pctRaw)
+        };
+        if (voltRaw !== '' && Number.isNaN(body.charge_full_voltage)) {
+            if (statusEl) {
+                statusEl.textContent = 'Charge-full voltage must be a number';
+                statusEl.className = 'small text-danger mt-1';
+            }
+            return;
+        }
+        if (pctRaw !== '' && Number.isNaN(body.near_full_pct)) {
+            if (statusEl) {
+                statusEl.textContent = 'Near-full % must be a number';
+                statusEl.className = 'small text-danger mt-1';
+            }
+            return;
+        }
+        postVoltageModel(body);
+    });
+
+    if (clearBtn) {
+        clearBtn.addEventListener('click', function() {
+            postVoltageModel({ clear: true });
+        });
+    }
 }
 
 function bindSolarForecastControls(nodeId) {
@@ -2542,6 +2620,31 @@ async function loadTelemetryData() {
         html += '<button type="button" class="btn btn-sm btn-outline-secondary" id="power-type-save-btn" title="Save power type override">Save</button>';
         html += '</div>';
         html += '<div id="power-type-override-status" class="small text-muted mt-1"></div>';
+        html += '</td></tr>';
+
+        // HW voltage model + per-node Admin Power charge thresholds
+        const vm = (ps && ps.voltage_model) || null;
+        const vmLabel = vm && vm.label ? vm.label : 'Generic LiPo';
+        const vmFullV = vm && vm.charge_full_voltage != null ? Number(vm.charge_full_voltage) : 4.10;
+        const vmNearPct = vm && vm.near_full_pct != null ? Number(vm.near_full_pct) : 95;
+        const vmCustom = !!(vm && vm.has_node_override);
+        html += '<tr>';
+        html += '<td class="text-muted align-top">Charge model</td>';
+        html += '<td class="text-end">';
+        html += '<div class="small mb-1">' + vmLabel;
+        if (vmCustom) {
+            html += ' <span class="badge bg-info-subtle text-info border border-info-subtle">override</span>';
+        }
+        html += '</div>';
+        html += '<div class="d-inline-flex align-items-center gap-1 flex-wrap justify-content-end">';
+        html += '<label class="small text-muted m-0" for="battery-charge-full-voltage">Full V</label>';
+        html += '<input type="number" step="0.01" min="3" max="4.35" id="battery-charge-full-voltage" class="form-control form-control-sm" style="width: 4.5rem;" value="' + vmFullV.toFixed(2) + '" title="Charge-full / float voltage for this node">';
+        html += '<label class="small text-muted m-0" for="battery-near-full-pct">Near %</label>';
+        html += '<input type="number" step="1" min="50" max="100" id="battery-near-full-pct" class="form-control form-control-sm" style="width: 3.5rem;" value="' + vmNearPct + '" title="Battery % treated as fully charged">';
+        html += '<button type="button" class="btn btn-sm btn-outline-secondary" id="battery-voltage-save-btn" title="Save charge thresholds">Save</button>';
+        html += '<button type="button" class="btn btn-sm btn-outline-secondary" id="battery-voltage-clear-btn" title="Clear overrides (use HW profile)">Reset</button>';
+        html += '</div>';
+        html += '<div id="battery-voltage-override-status" class="small text-muted mt-1">Solar “full” uses these thresholds</div>';
         html += '</td></tr>';
 
         // Opt-in solar weather forecasting (Open-Meteo)

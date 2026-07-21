@@ -12,7 +12,7 @@ Default OCV curve (mV, 100% → 0%) matches Meshtastic firmware:
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from typing import Any
 
 # Meshtastic firmware default OCV_ARRAY (single-cell mV, full → empty)
@@ -46,6 +46,8 @@ class BatteryVoltageModel:
     warning_voltage: float = 3.40
     # Explicit near-full % override; if None, derived from charge_full_voltage.
     near_full_pct_override: int | None = None
+    # True when per-node Admin Power values replaced the HW defaults.
+    has_node_override: bool = False
 
     @property
     def near_full_pct(self) -> int:
@@ -117,8 +119,31 @@ class BatteryVoltageModel:
             "near_full_voltage": self.near_full_voltage,
             "critical_voltage": self.critical_voltage,
             "warning_voltage": self.warning_voltage,
+            "has_node_override": self.has_node_override,
             "ocv_mv": list(self.ocv_mv),
         }
+
+    def with_overrides(
+        self,
+        *,
+        charge_full_voltage: float | None = None,
+        near_full_pct: int | None = None,
+    ) -> BatteryVoltageModel:
+        """Return a copy with optional per-node Admin Power overrides applied."""
+        updates: dict[str, Any] = {}
+        if charge_full_voltage is not None:
+            updates["charge_full_voltage"] = float(charge_full_voltage)
+        if near_full_pct is not None:
+            updates["near_full_pct_override"] = int(near_full_pct)
+        if not updates:
+            return self
+        updates["has_node_override"] = True
+        # Keep key/label as HW family but annotate that overrides are active.
+        label = self.label
+        if not self.has_node_override:
+            label = f"{self.label} (custom)"
+            updates["label"] = label
+        return replace(self, **updates)
 
 
 # ---------------------------------------------------------------------------
@@ -129,13 +154,22 @@ class BatteryVoltageModel:
 # firmware OCV table reports ~90–91% when “full”.
 _RAK4631 = BatteryVoltageModel(
     key="rak4631",
-    label="RAK4631",
+    label="RAK / WisBlock",
     charge_full_voltage=4.07,
     charge_resume_voltage=3.95,
     near_full_pct_override=90,
 )
 
-# AXP192 / AXP2101 PMUs (T-Beam, many LilyGO boards) target 4.2 V.
+# Dedicated solar products that commonly float below a true 4.2 V top-off.
+_SOLAR_BOARD = BatteryVoltageModel(
+    key="solar_board",
+    label="Solar board (soft cutoff)",
+    charge_full_voltage=4.07,
+    charge_resume_voltage=3.95,
+    near_full_pct_override=90,
+)
+
+# AXP192 / AXP2101 PMUs (T-Beam, many LilyGO / M5 boards) target 4.2 V.
 _AXP_LIPO = BatteryVoltageModel(
     key="axp_lipo",
     label="AXP LiPo (4.2V charge)",
@@ -157,7 +191,7 @@ _HELTEC = BatteryVoltageModel(
 # Nordic T-Echo / similar nRF boards with onboard charger ~4.2 V.
 _TECHO = BatteryVoltageModel(
     key="t_echo",
-    label="T-Echo",
+    label="T-Echo / nRF charger",
     charge_full_voltage=4.15,
     charge_resume_voltage=4.00,
     near_full_pct_override=95,
@@ -182,7 +216,10 @@ _DEFAULT = BatteryVoltageModel(
 
 # Substring match order matters — more specific keys first.
 _HW_MATCHERS: tuple[tuple[tuple[str, ...], BatteryVoltageModel], ...] = (
-    (("RAK4631", "RAK2560", "WISMESH", "WISBLOCK"), _RAK4631),
+    # Dedicated solar SKUs before broader HELTEC / SEEED families.
+    (("HELTEC_MESH_SOLAR", "SEEED_SOLAR", "MESH_SOLAR"), _SOLAR_BOARD),
+    # All RAK* / WisMesh / WisBlock share soft solar-charger behaviour.
+    (("RAK", "WISMESH", "WISBLOCK", "THINKNODE"), _RAK4631),
     (
         (
             "TBEAM",
@@ -193,10 +230,14 @@ _HW_MATCHERS: tuple[tuple[tuple[str, ...], BatteryVoltageModel], ...] = (
             "T_DECK",
             "TDECK",
             "T_WATCH",
+            "T_ETH",
+            "T_LORA_PAGER",
+            "M5STACK",
+            "NANO_G",
         ),
         _AXP_LIPO,
     ),
-    (("T_ECHO", "TECHO", "T-ECHO"), _TECHO),
+    (("T_ECHO", "TECHO", "T-ECHO", "XIAO_NRF"), _TECHO),
     (
         (
             "HELTEC",
@@ -208,10 +249,13 @@ _HW_MATCHERS: tuple[tuple[tuple[str, ...], BatteryVoltageModel], ...] = (
             "MESH_NODE_T114",
             "MESH_POCKET",
             "CAPSULE_SENSOR",
+            "SENSELORA",
+            "CDEBYTE",
+            "EBYTE",
         ),
         _HELTEC,
     ),
-    (("SENSECAP", "STATION_G", "TRACKER_T1000", "SEEED"), _SENSECAP),
+    (("SENSECAP", "STATION_G", "TRACKER_T1000", "SEEED", "WIO_"), _SENSECAP),
 )
 
 
@@ -231,13 +275,53 @@ def normalize_hw_model_key(hw_model: Any) -> str:
     return text.replace("-", "_").replace(" ", "_")
 
 
-def resolve_battery_model(hw_model: Any = None) -> BatteryVoltageModel:
-    """Return the best battery/charger model for a Meshtastic ``hw_model``."""
+def resolve_battery_model(
+    hw_model: Any = None,
+    *,
+    charge_full_voltage: float | None = None,
+    near_full_pct: int | None = None,
+) -> BatteryVoltageModel:
+    """Return the best battery/charger model for a Meshtastic ``hw_model``.
+
+    Optional ``charge_full_voltage`` / ``near_full_pct`` apply per-node Admin
+    Power overrides on top of the HW family profile.
+    """
     key = normalize_hw_model_key(hw_model)
-    if not key:
-        return _DEFAULT
-    for needles, model in _HW_MATCHERS:
-        for needle in needles:
-            if needle in key:
-                return model
-    return _DEFAULT
+    model = _DEFAULT
+    if key:
+        for needles, candidate in _HW_MATCHERS:
+            matched = False
+            for needle in needles:
+                if needle in key:
+                    model = candidate
+                    matched = True
+                    break
+            if matched:
+                break
+    return model.with_overrides(
+        charge_full_voltage=charge_full_voltage,
+        near_full_pct=near_full_pct,
+    )
+
+
+def hw_model_coverage_stats(hw_names: list[str] | None = None) -> dict[str, Any]:
+    """Return matcher coverage counts (useful for tests / diagnostics)."""
+    if hw_names is None:
+        try:
+            from meshtastic import mesh_pb2
+
+            hw_names = list(mesh_pb2.HardwareModel.keys())
+        except Exception:
+            hw_names = []
+    by_key: dict[str, list[str]] = {}
+    for name in hw_names:
+        model = resolve_battery_model(name)
+        by_key.setdefault(model.key, []).append(str(name))
+    total = len(hw_names)
+    non_default = total - len(by_key.get("default", []))
+    return {
+        "total": total,
+        "non_default": non_default,
+        "by_key": {k: len(v) for k, v in sorted(by_key.items())},
+        "default_models": sorted(by_key.get("default", [])),
+    }
