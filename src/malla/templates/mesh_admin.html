@@ -1956,7 +1956,8 @@
                                     <hr class="my-2">
                                     <div class="small fw-semibold mb-2">NWS Weather Alerts</div>
                                     <div class="form-check form-switch mb-2">
-                                        <input class="form-check-input" type="checkbox" id="botNwsAlertEnabled">
+                                        <input class="form-check-input" type="checkbox" id="botNwsAlertEnabled"
+                                               onchange="markBotConfigDirty('botNwsAlertEnabled')">
                                         <label class="form-check-label small" for="botNwsAlertEnabled">
                                             Enable periodic alerts
                                         </label>
@@ -1965,13 +1966,15 @@
                                         <label class="form-label small mb-1" for="botNwsAlertZip">US ZIP code</label>
                                         <input type="text" class="form-control form-control-sm"
                                                id="botNwsAlertZip" maxlength="10" placeholder="90210"
-                                               inputmode="numeric" autocomplete="postal-code">
+                                               inputmode="numeric" autocomplete="postal-code"
+                                               oninput="markBotConfigDirty('botNwsAlertZip')">
                                     </div>
                                     <div class="d-flex align-items-center gap-1 mb-2">
                                         <label class="form-label small mb-0" for="botNwsAlertInterval">Poll every</label>
                                         <input type="number" class="form-control form-control-sm"
                                                id="botNwsAlertInterval" min="5" max="360" value="30"
-                                               style="width: 4.5rem;">
+                                               style="width: 4.5rem;"
+                                               oninput="markBotConfigDirty('botNwsAlertInterval')">
                                         <span class="small text-muted">min</span>
                                     </div>
                                     <div class="text-muted small mb-2">
@@ -10266,6 +10269,17 @@
     let botStatusInterval = null;
     let botActivityInterval = null;
     let lastActivityTimestamp = null;
+    // Fields the user edited but has not successfully saved yet — status
+    // polling must not overwrite them (that was wiping the NWS ZIP on blur).
+    const botConfigDirty = new Set();
+
+    function markBotConfigDirty(id) {
+        if (id) botConfigDirty.add(id);
+    }
+
+    function clearBotConfigDirty() {
+        botConfigDirty.clear();
+    }
 
     // Initialize bot status when tab is shown
     document.getElementById('bot-tab')?.addEventListener('shown.bs.tab', function() {
@@ -10360,10 +10374,11 @@
             // Update commands table with toggle switches
             updateBotCommandsTable(data.commands || [], data.command_prefix || '!');
 
-            // Update config fields (only if not focused)
+            // Update config fields (only if not focused and not dirty/unsaved)
             const setIfBlurred = (id, value) => {
                 const el = document.getElementById(id);
                 if (!el) return;
+                if (botConfigDirty.has(id)) return;
                 if (document.activeElement !== el) {
                     el.value = value;
                 }
@@ -10376,8 +10391,14 @@
             setIfBlurred('botDailyDigestTimezone', data.daily_digest_timezone || 'UTC');
             setIfBlurred('botBroadcastIntervalHours', data.broadcast_interval_hours ?? 12);
             setIfBlurred('botTracerouteFormat', data.traceroute_format || 'names');
-            setIfBlurred('botNwsAlertZip', data.nws_alert_zip || '');
-            setIfBlurred('botNwsAlertInterval', data.nws_alert_interval_minutes ?? 30);
+            // Only apply NWS fields when the API actually returns them — older
+            // processes without these keys were wiping the ZIP to '' every poll.
+            if (Object.prototype.hasOwnProperty.call(data, 'nws_alert_zip')) {
+                setIfBlurred('botNwsAlertZip', data.nws_alert_zip || '');
+            }
+            if (Object.prototype.hasOwnProperty.call(data, 'nws_alert_interval_minutes')) {
+                setIfBlurred('botNwsAlertInterval', data.nws_alert_interval_minutes ?? 30);
+            }
 
             const waitEl = document.getElementById('botWaitForJobs');
             if (waitEl && document.activeElement !== waitEl) {
@@ -10396,7 +10417,12 @@
                 welcomeEl.checked = data.welcome_new_nodes_enabled !== false;
             }
             const nwsEl = document.getElementById('botNwsAlertEnabled');
-            if (nwsEl && document.activeElement !== nwsEl) {
+            if (
+                nwsEl &&
+                document.activeElement !== nwsEl &&
+                !botConfigDirty.has('botNwsAlertEnabled') &&
+                Object.prototype.hasOwnProperty.call(data, 'nws_alert_enabled')
+            ) {
                 nwsEl.checked = !!data.nws_alert_enabled;
             }
 
@@ -10701,9 +10727,32 @@
                     nws_alert_interval_minutes: Number.isFinite(nwsAlertInterval) ? nwsAlertInterval : 30
                 })
             });
-            const data = await response.json();
+            const data = await response.json().catch(() => ({}));
 
-            if (data.success) {
+            if (response.ok && data.success) {
+                clearBotConfigDirty();
+                // Apply saved NWS values immediately so a slow status poll
+                // cannot flash an empty ZIP.
+                if (data.config) {
+                    const zipEl = document.getElementById('botNwsAlertZip');
+                    if (zipEl && Object.prototype.hasOwnProperty.call(data.config, 'nws_alert_zip')) {
+                        zipEl.value = data.config.nws_alert_zip || '';
+                    }
+                    const intervalEl = document.getElementById('botNwsAlertInterval');
+                    if (
+                        intervalEl &&
+                        Object.prototype.hasOwnProperty.call(data.config, 'nws_alert_interval_minutes')
+                    ) {
+                        intervalEl.value = data.config.nws_alert_interval_minutes ?? 30;
+                    }
+                    const nwsEl = document.getElementById('botNwsAlertEnabled');
+                    if (
+                        nwsEl &&
+                        Object.prototype.hasOwnProperty.call(data.config, 'nws_alert_enabled')
+                    ) {
+                        nwsEl.checked = !!data.config.nws_alert_enabled;
+                    }
+                }
                 showAlert('success', 'Bot configuration saved');
                 refreshBotStatus();
             } else {
