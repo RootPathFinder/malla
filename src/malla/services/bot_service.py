@@ -376,7 +376,11 @@ class BotService:
 
     def _register_builtin_commands(self) -> None:
         """Register the built-in command handlers."""
-        self.register_command("ping", self._cmd_ping, "Check if the bot is online")
+        self.register_command(
+            "ping",
+            self._cmd_ping,
+            "Check reachability; replies with hops/SNR/RSSI",
+        )
         self.register_command("status", self._cmd_status, "Get mesh status summary")
         self.register_command("net", self._cmd_net, "Daily mesh network update")
         self.register_command(
@@ -1756,10 +1760,88 @@ class BotService:
     # Built-in Command Handlers
     # =========================================================================
 
+    @staticmethod
+    def _packet_field(packet: dict[str, Any], *keys: str) -> Any:
+        """Return the first present non-None field from camelCase or snake_case keys."""
+        for key in keys:
+            if key in packet and packet[key] is not None:
+                return packet[key]
+        return None
+
+    def _extract_ping_rf_stats(self, packet: dict[str, Any]) -> dict[str, Any]:
+        """Pull hop/SNR/RSSI metadata from a received Meshtastic packet dict."""
+        hop_start = self._packet_field(packet, "hopStart", "hop_start")
+        hop_limit = self._packet_field(packet, "hopLimit", "hop_limit")
+        hops: int | None = None
+        if hop_start is not None and hop_limit is not None:
+            try:
+                start_i = int(hop_start)
+                limit_i = int(hop_limit)
+                if start_i >= limit_i:
+                    hops = start_i - limit_i
+            except (TypeError, ValueError):
+                hops = None
+
+        if hops is None:
+            hops_away = self._packet_field(packet, "hopsAway", "hops_away")
+            if hops_away is not None:
+                try:
+                    hops = int(hops_away)
+                except (TypeError, ValueError):
+                    hops = None
+
+        snr = self._packet_field(packet, "rxSnr", "rx_snr", "snr")
+        rssi = self._packet_field(packet, "rxRssi", "rx_rssi", "rssi")
+        via_mqtt = bool(self._packet_field(packet, "viaMqtt", "via_mqtt") or False)
+
+        return {
+            "hops": hops,
+            "snr": snr,
+            "rssi": rssi,
+            "via_mqtt": via_mqtt,
+        }
+
+    def _format_ping_reply(self, stats: dict[str, Any]) -> str:
+        """Format a compact ping reply from RF stats (fits LoRa payload)."""
+        lines = ["Pong!"]
+
+        hops = stats.get("hops")
+        if hops is not None:
+            if hops == 0:
+                lines.append("hops: 0 (direct)")
+            else:
+                lines.append(f"hops: {hops}")
+
+        snr = stats.get("snr")
+        if snr is not None:
+            try:
+                snr_f = float(snr)
+                snr_s = (
+                    f"{snr_f:.0f}" if float(snr_f).is_integer() else f"{snr_f:.1f}"
+                )
+                lines.append(f"snr: {snr_s} dB")
+            except (TypeError, ValueError):
+                pass
+
+        rssi = stats.get("rssi")
+        if rssi is not None:
+            try:
+                lines.append(f"rssi: {int(round(float(rssi)))} dBm")
+            except (TypeError, ValueError):
+                pass
+
+        if stats.get("via_mqtt"):
+            lines.append("via: MQTT")
+
+        if len(lines) == 1:
+            lines.append("bot online")
+
+        return "\n".join(lines)
+
     def _cmd_ping(self, ctx: CommandContext) -> str:
-        """Handle !ping command."""
-        latency = (time.time() - ctx.received_at) * 1000
-        return f"Pong! 🏓 (processed in {latency:.0f}ms)"
+        """Handle !ping — confirm reachability with inbound RF path stats."""
+        stats = self._extract_ping_rf_stats(ctx.packet or {})
+        return self._format_ping_reply(stats)
 
     def _cmd_status(self, ctx: CommandContext) -> str:
         """Handle !status command."""
