@@ -890,8 +890,8 @@
 {% block extra_js %}
 <!-- Leaflet JS -->
 <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
-<!-- D3.js for graph visualisation -->
-<script src="https://d3js.org/d3.v7.min.js"></script>
+<!-- D3.js for graph visualisation (local; avoids d3js.org CDN failures) -->
+<script src="{{ url_for('static', filename='js/d3.v7.min.js') }}"></script>
 
 <script>
 // Embed data directly in JavaScript variables to avoid HTML attribute parsing issues
