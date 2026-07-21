@@ -48,8 +48,15 @@ class TestZeroHopNeighbors:
         with (
             patch.object(NeighborService, "get_node_neighbors", return_value=ni),
             patch.object(
+                NeighborService, "_apply_neighborinfo_both_ways", return_value=None
+            ),
+            patch.object(
                 NeighborService, "_load_observed_zero_hop_peers", return_value=observed
             ),
+            patch.object(
+                NeighborService, "_load_traceroute_rf_peers", return_value={}
+            ),
+            patch.object(NeighborService, "_apply_peer_distances", return_value=None),
             patch(
                 "src.malla.services.neighbor_service.get_bulk_node_names",
                 return_value={
@@ -59,7 +66,7 @@ class TestZeroHopNeighbors:
                 },
             ),
         ):
-            result = NeighborService.get_zero_hop_neighbors(0xABCDEF01)
+            result = NeighborService.get_zero_hop_neighbors(0xABCDEF01, hours=None)
 
         assert result["has_data"] is True
         assert result["neighbor_count"] == 2
@@ -69,10 +76,10 @@ class TestZeroHopNeighbors:
         assert alpha["source_label"] == "Reported + Observed"
         assert alpha["is_bidirectional"] is True
         assert alpha["rssi"] == -80.0
-        # Prefer stronger SNR across sources (NI 12 > observed 9.5)
         assert alpha["snr"] == 12.0
         assert alpha["quality"] == "excellent"
         assert alpha["packet_count"] == 8
+        assert alpha["direct_receptions_direction"] == "received"
 
         beta = by_id[0x22222222]
         assert beta["source_label"] == "Observed"
@@ -80,9 +87,115 @@ class TestZeroHopNeighbors:
         assert beta["heard_from"] is False
         assert beta["is_bidirectional"] is False
         assert beta["node_name"] == "Beta"
+        assert beta["direct_receptions_direction"] == "transmitted"
 
-        # Sorted by SNR descending
         assert result["neighbors"][0]["node_id"] == 0x11111111
+
+    @pytest.mark.unit
+    def test_traceroute_only_peer_labeled(self):
+        with (
+            patch.object(
+                NeighborService,
+                "get_node_neighbors",
+                return_value={"has_data": False, "neighbors": []},
+            ),
+            patch.object(
+                NeighborService, "_apply_neighborinfo_both_ways", return_value=None
+            ),
+            patch.object(
+                NeighborService, "_load_observed_zero_hop_peers", return_value={}
+            ),
+            patch.object(
+                NeighborService,
+                "_load_traceroute_rf_peers",
+                return_value={
+                    0x33333333: {
+                        "node_id": 0x33333333,
+                        "snr_avg": 4.0,
+                        "packet_count": 2,
+                        "last_seen": 1_700_000_000.0,
+                    }
+                },
+            ),
+            patch.object(NeighborService, "_apply_peer_distances", return_value=None),
+            patch(
+                "src.malla.services.neighbor_service.get_bulk_node_names",
+                return_value={0x1: "Solo", 0x33333333: "Charlie"},
+            ),
+        ):
+            result = NeighborService.get_zero_hop_neighbors(0x1, hours=24)
+
+        assert result["neighbor_count"] == 1
+        peer = result["neighbors"][0]
+        assert peer["sources"] == ["traceroute"]
+        assert peer["source_label"] == "Traceroute RF"
+        assert peer["node_name"] == "Charlie"
+
+    @pytest.mark.unit
+    def test_confirmed_both_ways_from_topology(self):
+        by_id = {
+            0x11111111: {
+                "node_id": 0x11111111,
+                "hex_id": "!11111111",
+                "node_name": "Alpha",
+                "snr": 5.0,
+                "rssi": None,
+                "quality": "good",
+                "packet_count": None,
+                "last_seen": 100.0,
+                "sources": ["neighborinfo"],
+                "heard_from": False,
+                "heard_by": False,
+                "is_bidirectional": False,
+                "confirmed_both_ways": False,
+                "distance_km": None,
+                "distance_display": None,
+            }
+        }
+        topo = {
+            "edges": [
+                {
+                    "node_a": 0xABCDEF01,
+                    "node_b": 0x11111111,
+                    "confirmed_both_ways": True,
+                    "avg_snr": 11.0,
+                    "last_seen": 200.0,
+                    "node_a_name": "Self",
+                    "node_b_name": "Alpha",
+                }
+            ]
+        }
+        with patch.object(NeighborService, "get_mesh_topology", return_value=topo):
+            NeighborService._apply_neighborinfo_both_ways(
+                0xABCDEF01, by_id, hours=24
+            )
+
+        assert by_id[0x11111111]["confirmed_both_ways"] is True
+        assert by_id[0x11111111]["is_bidirectional"] is True
+        assert by_id[0x11111111]["snr"] == 11.0
+
+    @pytest.mark.unit
+    def test_apply_peer_distances(self):
+        by_id = {
+            0x22222222: {
+                "node_id": 0x22222222,
+                "distance_km": None,
+                "distance_display": None,
+            }
+        }
+        locations = [
+            {"node_id": 0x11111111, "latitude": 40.0, "longitude": -74.0},
+            {"node_id": 0x22222222, "latitude": 40.001, "longitude": -74.0},
+        ]
+        with patch(
+            "src.malla.database.repositories.LocationRepository.get_node_locations",
+            return_value=locations,
+        ):
+            NeighborService._apply_peer_distances(0x11111111, by_id)
+
+        assert by_id[0x22222222]["distance_km"] is not None
+        assert by_id[0x22222222]["distance_display"] is not None
+        assert "m" in by_id[0x22222222]["distance_display"]
 
     @pytest.mark.unit
     def test_empty_when_no_sources(self):
@@ -93,8 +206,15 @@ class TestZeroHopNeighbors:
                 return_value={"has_data": False, "neighbors": []},
             ),
             patch.object(
+                NeighborService, "_apply_neighborinfo_both_ways", return_value=None
+            ),
+            patch.object(
                 NeighborService, "_load_observed_zero_hop_peers", return_value={}
             ),
+            patch.object(
+                NeighborService, "_load_traceroute_rf_peers", return_value={}
+            ),
+            patch.object(NeighborService, "_apply_peer_distances", return_value=None),
             patch(
                 "src.malla.services.neighbor_service.get_bulk_node_names",
                 return_value={0x1: "Solo"},
@@ -113,6 +233,18 @@ class TestZeroHopNeighbors:
         assert NeighborService._classify_snr_quality(1) == "fair"
         assert NeighborService._classify_snr_quality(-3) == "poor"
         assert NeighborService._classify_snr_quality(None) == "unknown"
+
+    @pytest.mark.unit
+    def test_source_label_combinations(self):
+        assert (
+            NeighborService._source_label(["neighborinfo", "observed"])
+            == "Reported + Observed"
+        )
+        assert (
+            NeighborService._source_label(["observed", "traceroute"])
+            == "Observed · Traceroute RF"
+        )
+        assert NeighborService._source_label(["traceroute"]) == "Traceroute RF"
 
     @pytest.mark.unit
     def test_load_observed_merges_directions(self):

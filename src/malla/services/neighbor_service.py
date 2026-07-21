@@ -665,19 +665,26 @@ class NeighborService:
 
     @staticmethod
     def _load_observed_zero_hop_peers(
-        node_id: int, *, limit: int = 50
+        node_id: int, *, limit: int = 50, hours: int | None = None
     ) -> dict[int, dict[str, Any]]:
         """Load 0-hop packet peers (heard-by / heard-from) without per-packet series."""
         peers: dict[int, dict[str, Any]] = {}
         gateway_hex = f"!{node_id:08x}"
+        cutoff = (time.time() - hours * 3600) if hours and hours > 0 else None
 
         try:
             conn = get_db_connection()
             cursor = conn.cursor()
 
+            time_clause = ""
+            time_params: list[Any] = []
+            if cutoff is not None:
+                time_clause = "AND p.timestamp >= ?"
+                time_params = [cutoff]
+
             # Nodes this radio heard directly (as gateway).
             cursor.execute(
-                """
+                f"""
                 SELECT
                     p.from_node_id AS peer_id,
                     COUNT(*) AS packet_count,
@@ -691,11 +698,12 @@ class NeighborService:
                   AND p.hop_start IS NOT NULL
                   AND p.hop_limit IS NOT NULL
                   AND p.hop_start = p.hop_limit
+                  {time_clause}
                 GROUP BY p.from_node_id
                 ORDER BY packet_count DESC
                 LIMIT ?
                 """,
-                (gateway_hex, node_id, limit),
+                (gateway_hex, node_id, *time_params, limit),
             )
             for row in cursor.fetchall():
                 peer_id = int(row["peer_id"])
@@ -715,7 +723,7 @@ class NeighborService:
 
             # Gateways that heard this node directly.
             cursor.execute(
-                """
+                f"""
                 SELECT
                     p.gateway_id,
                     COUNT(*) AS packet_count,
@@ -729,11 +737,12 @@ class NeighborService:
                   AND p.hop_start IS NOT NULL
                   AND p.hop_limit IS NOT NULL
                   AND p.hop_start = p.hop_limit
+                  {time_clause}
                 GROUP BY p.gateway_id
                 ORDER BY packet_count DESC
                 LIMIT ?
                 """,
-                (node_id, gateway_hex, limit),
+                (node_id, gateway_hex, *time_params, limit),
             )
             for row in cursor.fetchall():
                 peer_id = NeighborService._parse_gateway_node_id(row["gateway_id"])
@@ -783,19 +792,207 @@ class NeighborService:
         return peers
 
     @staticmethod
-    def get_zero_hop_neighbors(node_id: int, *, limit: int = 50) -> dict[str, Any]:
-        """Build a zero-hop neighbor list for node detail.
+    def _load_traceroute_rf_peers(
+        node_id: int, *, hours: int = 168
+    ) -> dict[int, dict[str, Any]]:
+        """RF-adjacent peers from traceroute hops (not hop_count==0 receptions)."""
+        peers: dict[int, dict[str, Any]] = {}
+        try:
+            from .traceroute_service import TracerouteService
+
+            graph = TracerouteService.get_network_graph_data(hours=max(hours, 1))
+            for link in graph.get("links") or []:
+                source = link.get("source")
+                target = link.get("target")
+                if source == node_id:
+                    peer_id = target
+                elif target == node_id:
+                    peer_id = source
+                else:
+                    continue
+                if peer_id is None:
+                    continue
+                peer_id = int(peer_id)
+                snr = link.get("avg_snr")
+                try:
+                    snr_f = float(snr) if snr is not None else None
+                except (TypeError, ValueError):
+                    snr_f = None
+                existing = peers.get(peer_id)
+                packet_count = int(link.get("packet_count") or 0)
+                last_seen = link.get("last_seen")
+                if existing is None:
+                    peers[peer_id] = {
+                        "node_id": peer_id,
+                        "snr_avg": snr_f,
+                        "packet_count": packet_count,
+                        "last_seen": last_seen,
+                    }
+                else:
+                    existing["packet_count"] = int(existing["packet_count"] or 0) + (
+                        packet_count
+                    )
+                    if snr_f is not None and (
+                        existing["snr_avg"] is None or snr_f > existing["snr_avg"]
+                    ):
+                        existing["snr_avg"] = snr_f
+                    if last_seen and (
+                        existing["last_seen"] is None
+                        or last_seen > existing["last_seen"]
+                    ):
+                        existing["last_seen"] = last_seen
+        except Exception as e:
+            logger.warning(
+                "Failed loading traceroute RF peers for %s: %s", node_id, e
+            )
+        return peers
+
+    @staticmethod
+    def _apply_neighborinfo_both_ways(
+        node_id: int,
+        by_id: dict[int, dict[str, Any]],
+        *,
+        hours: int = 168,
+    ) -> None:
+        """Mark NeighborInfo links confirmed when the peer also reports this node."""
+        try:
+            topo = NeighborService.get_mesh_topology(hours=max(hours, 1))
+        except Exception as e:
+            logger.debug("Topology both-ways lookup failed for %s: %s", node_id, e)
+            return
+
+        for edge in topo.get("edges") or []:
+            a = edge.get("node_a")
+            b = edge.get("node_b")
+            if a == node_id:
+                peer_id = b
+            elif b == node_id:
+                peer_id = a
+            else:
+                continue
+            if peer_id is None:
+                continue
+            peer_id = int(peer_id)
+            confirmed = bool(edge.get("confirmed_both_ways"))
+            snr = edge.get("avg_snr")
+            try:
+                snr_f = float(snr) if snr is not None else None
+            except (TypeError, ValueError):
+                snr_f = None
+
+            entry = by_id.get(peer_id)
+            if entry is None:
+                by_id[peer_id] = {
+                    "node_id": peer_id,
+                    "hex_id": f"!{peer_id:08x}",
+                    "node_name": edge.get("node_a_name")
+                    if peer_id == a
+                    else edge.get("node_b_name"),
+                    "snr": snr_f,
+                    "rssi": None,
+                    "quality": NeighborService._classify_snr_quality(snr_f),
+                    "packet_count": None,
+                    "last_seen": edge.get("last_seen"),
+                    "sources": ["neighborinfo"],
+                    "heard_from": False,
+                    "heard_by": False,
+                    "is_bidirectional": confirmed,
+                    "confirmed_both_ways": confirmed,
+                    "distance_km": None,
+                    "distance_display": None,
+                }
+            else:
+                if "neighborinfo" not in entry["sources"]:
+                    entry["sources"].append("neighborinfo")
+                entry["confirmed_both_ways"] = confirmed or entry.get(
+                    "confirmed_both_ways", False
+                )
+                if entry["confirmed_both_ways"]:
+                    entry["is_bidirectional"] = True
+                if snr_f is not None and (
+                    entry.get("snr") is None or snr_f > entry["snr"]
+                ):
+                    entry["snr"] = snr_f
+                    entry["quality"] = NeighborService._classify_snr_quality(snr_f)
+
+    @staticmethod
+    def _apply_peer_distances(
+        node_id: int, by_id: dict[int, dict[str, Any]]
+    ) -> None:
+        """Attach geographic distance when both nodes have known positions."""
+        if not by_id:
+            return
+        try:
+            from ..database.repositories import LocationRepository
+            from ..utils.geo_utils import calculate_distance
+
+            node_ids = [node_id, *by_id.keys()]
+            locations = LocationRepository.get_node_locations(
+                {"node_ids": node_ids}
+            )
+            by_loc = {
+                int(loc["node_id"]): loc
+                for loc in locations
+                if loc.get("latitude") is not None and loc.get("longitude") is not None
+            }
+            self_loc = by_loc.get(node_id)
+            if not self_loc:
+                return
+            for peer_id, entry in by_id.items():
+                peer_loc = by_loc.get(peer_id)
+                if not peer_loc:
+                    continue
+                dist_km = calculate_distance(
+                    self_loc["latitude"],
+                    self_loc["longitude"],
+                    peer_loc["latitude"],
+                    peer_loc["longitude"],
+                )
+                entry["distance_km"] = round(dist_km, 2)
+                if dist_km < 1:
+                    entry["distance_display"] = f"{int(round(dist_km * 1000))} m"
+                else:
+                    entry["distance_display"] = f"{dist_km:.1f} km"
+        except Exception as e:
+            logger.debug("Distance enrichment failed for %s: %s", node_id, e)
+
+    @staticmethod
+    def _source_label(sources: list[str]) -> str:
+        parts: list[str] = []
+        has_ni = "neighborinfo" in sources
+        has_obs = "observed" in sources
+        has_tr = "traceroute" in sources
+        if has_ni and has_obs:
+            parts.append("Reported + Observed")
+        elif has_ni:
+            parts.append("NeighborInfo")
+        elif has_obs:
+            parts.append("Observed")
+        if has_tr:
+            parts.append("Traceroute RF")
+        return " · ".join(parts) if parts else "Unknown"
+
+    @staticmethod
+    def get_zero_hop_neighbors(
+        node_id: int, *, limit: int = 50, hours: int | None = 168
+    ) -> dict[str, Any]:
+        """Build a zero-hop / direct-RF neighbor list for node detail.
 
         Merges:
         - NeighborInfo reports (node-advertised RF neighbors)
         - Observed 0-hop packet partners (``hop_start = hop_limit``)
+        - Traceroute RF-adjacent peers (labeled separately)
 
-        Returns a dict with ``neighbors`` suitable for the node detail sidebar.
+        ``hours`` limits observed/traceroute/topology windows. ``None`` or ``0``
+        means no time filter for observed packets (traceroute still uses 168h).
         """
         from ..utils.formatting import format_time_ago
 
         node_id = int(node_id) & 0xFFFFFFFF
         by_id: dict[int, dict[str, Any]] = {}
+        window_hours = hours if hours and hours > 0 else None
+        cutoff = (time.time() - window_hours * 3600) if window_hours else None
+        topo_hours = window_hours or 168
 
         # --- NeighborInfo (authoritative when present) ---
         ni_last_report: float | None = None
@@ -808,6 +1005,9 @@ class NeighborService:
                     if nid is None:
                         continue
                     nid = int(nid)
+                    last_seen = n.get("last_rx_time") or ni_last_report
+                    if cutoff is not None and last_seen is not None and last_seen < cutoff:
+                        continue
                     snr = n.get("snr")
                     try:
                         snr_f = float(snr) if snr is not None else None
@@ -821,18 +1021,36 @@ class NeighborService:
                         "rssi": None,
                         "quality": NeighborService._classify_snr_quality(snr_f),
                         "packet_count": None,
-                        "last_seen": n.get("last_rx_time") or ni_last_report,
+                        "last_seen": last_seen,
                         "sources": ["neighborinfo"],
                         "heard_from": False,
                         "heard_by": False,
                         "is_bidirectional": False,
+                        "confirmed_both_ways": False,
+                        "distance_km": None,
+                        "distance_display": None,
                     }
         except Exception as e:
             logger.warning("NeighborInfo lookup failed for %s: %s", node_id, e)
 
+        # Topology both-ways confirmation (+ reverse-only NI edges)
+        NeighborService._apply_neighborinfo_both_ways(
+            node_id, by_id, hours=topo_hours
+        )
+
         # --- Observed 0-hop packet partners ---
-        observed = NeighborService._load_observed_zero_hop_peers(node_id, limit=limit)
-        name_ids = list(observed.keys()) + [node_id]
+        observed = NeighborService._load_observed_zero_hop_peers(
+            node_id, limit=limit, hours=window_hours
+        )
+
+        # --- Traceroute RF-adjacent peers ---
+        traceroute_peers = NeighborService._load_traceroute_rf_peers(
+            node_id, hours=topo_hours
+        )
+
+        name_ids = list(
+            {node_id, *by_id.keys(), *observed.keys(), *traceroute_peers.keys()}
+        )
         names = get_bulk_node_names(name_ids)
 
         for peer_id, obs in observed.items():
@@ -851,7 +1069,12 @@ class NeighborService:
                     "sources": ["observed"],
                     "heard_from": bool(obs.get("heard_from")),
                     "heard_by": bool(obs.get("heard_by")),
-                    "is_bidirectional": bool(obs.get("heard_from") and obs.get("heard_by")),
+                    "is_bidirectional": bool(
+                        obs.get("heard_from") and obs.get("heard_by")
+                    ),
+                    "confirmed_both_ways": False,
+                    "distance_km": None,
+                    "distance_display": None,
                 }
                 by_id[peer_id] = entry
             else:
@@ -861,11 +1084,10 @@ class NeighborService:
                 entry["heard_by"] = bool(obs.get("heard_by"))
                 entry["is_bidirectional"] = bool(
                     entry["heard_from"] and entry["heard_by"]
-                )
+                ) or bool(entry.get("confirmed_both_ways"))
                 entry["packet_count"] = obs.get("packet_count")
                 if obs.get("rssi_avg") is not None:
                     entry["rssi"] = obs["rssi_avg"]
-                # Prefer stronger SNR when both sources report.
                 if snr_f is not None and (
                     entry["snr"] is None or snr_f > entry["snr"]
                 ):
@@ -878,18 +1100,66 @@ class NeighborService:
                 if not entry.get("node_name"):
                     entry["node_name"] = names.get(peer_id, f"!{peer_id:08x}")
 
+        for peer_id, tr in traceroute_peers.items():
+            snr_f = tr.get("snr_avg")
+            entry = by_id.get(peer_id)
+            if entry is None:
+                by_id[peer_id] = {
+                    "node_id": peer_id,
+                    "hex_id": f"!{peer_id:08x}",
+                    "node_name": names.get(peer_id, f"!{peer_id:08x}"),
+                    "snr": snr_f,
+                    "rssi": None,
+                    "quality": NeighborService._classify_snr_quality(snr_f),
+                    "packet_count": tr.get("packet_count"),
+                    "last_seen": tr.get("last_seen"),
+                    "sources": ["traceroute"],
+                    "heard_from": False,
+                    "heard_by": False,
+                    "is_bidirectional": False,
+                    "confirmed_both_ways": False,
+                    "distance_km": None,
+                    "distance_display": None,
+                }
+            else:
+                if "traceroute" not in entry["sources"]:
+                    entry["sources"].append("traceroute")
+                if tr.get("packet_count") and not entry.get("packet_count"):
+                    entry["packet_count"] = tr.get("packet_count")
+                if snr_f is not None and (
+                    entry["snr"] is None or snr_f > entry["snr"]
+                ):
+                    entry["snr"] = snr_f
+                    entry["quality"] = NeighborService._classify_snr_quality(snr_f)
+                if tr.get("last_seen") and (
+                    entry["last_seen"] is None or tr["last_seen"] > entry["last_seen"]
+                ):
+                    entry["last_seen"] = tr["last_seen"]
+                if not entry.get("node_name"):
+                    entry["node_name"] = names.get(peer_id, f"!{peer_id:08x}")
+
+        # Ensure names for topology-added peers
+        for peer_id, entry in by_id.items():
+            if not entry.get("node_name") or str(entry["node_name"]).startswith("!"):
+                named = names.get(peer_id)
+                if named:
+                    entry["node_name"] = named
+            entry["hex_id"] = f"!{peer_id:08x}"
+
+        NeighborService._apply_peer_distances(node_id, by_id)
+
         neighbors = list(by_id.values())
         for n in neighbors:
             n["last_seen_relative"] = format_time_ago(n.get("last_seen"))
-            sources = n.get("sources") or []
-            if "neighborinfo" in sources and "observed" in sources:
-                n["source_label"] = "Reported + Observed"
-            elif "neighborinfo" in sources:
-                n["source_label"] = "NeighborInfo"
+            n["source_label"] = NeighborService._source_label(n.get("sources") or [])
+            # Prefer observed direction for Direct Receptions deep-link
+            if n.get("heard_from"):
+                n["direct_receptions_direction"] = "received"
+            elif n.get("heard_by"):
+                n["direct_receptions_direction"] = "transmitted"
             else:
-                n["source_label"] = "Observed"
+                n["direct_receptions_direction"] = "received"
 
-        # Best SNR first; fall back to packet count / name.
         neighbors.sort(
             key=lambda n: (
                 n.get("snr") is not None,
@@ -908,5 +1178,6 @@ class NeighborService:
             "has_data": bool(neighbors),
             "neighbor_count": len(neighbors),
             "last_neighborinfo_report": ni_last_report,
+            "hours": window_hours,
             "neighbors": neighbors,
         }
