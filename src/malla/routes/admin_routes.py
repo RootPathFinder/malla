@@ -3002,7 +3002,8 @@ def api_list_telemetry_schedules():
 def api_run_due_telemetry_schedules():
     """Manually run due scheduled telemetry solicitations."""
     try:
-        data = request.get_json() or {}
+        # Allow empty POSTs from the Admin UI (no JSON body / content-type).
+        data = request.get_json(silent=True) or {}
         limit = data.get("limit")
         summary = run_due_schedules_once(
             limit=int(limit) if limit is not None else None

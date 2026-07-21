@@ -1597,9 +1597,19 @@ class SerialPublisher:
                 else:
                     response_event.wait(timeout=0.75)
 
-                if not response_data.get("telemetry") and request_id is not None:
+                if not response_data.get("telemetry"):
                     with self._pending_telemetry_lock:
-                        late = self._telemetry_late_by_request.pop(request_id, None)
+                        late = None
+                        if request_id is not None:
+                            late = self._telemetry_late_by_request.pop(request_id, None)
+                        if not late or not late.get("telemetry"):
+                            cached = self._telemetry_latest_by_node.get(target_node_id)
+                            if cached and cached.get("telemetry"):
+                                age = time.time() - float(
+                                    cached.get("timestamp") or 0
+                                )
+                                if age <= 2.5:
+                                    late = cached
                     if late and late.get("telemetry"):
                         response_data.update(
                             {
@@ -1611,7 +1621,17 @@ class SerialPublisher:
                             }
                         )
 
-                if response_data.get("telemetry") and "error" not in response_data:
+                # App telemetry wins over routing NO_RESPONSE.
+                if response_data.get("telemetry"):
+                    routing_error = response_data.pop("error", None)
+                    if routing_error:
+                        response_data["routing_warning"] = routing_error
+                        logger.info(
+                            "Telemetry metrics received for !%08x despite "
+                            "routing %s — treating as success",
+                            target_node_id,
+                            routing_error,
+                        )
                     logger.info(
                         f"Telemetry request successful for !{target_node_id:08x}"
                         + (" (late cache)" if response_data.get("late_cache") else "")

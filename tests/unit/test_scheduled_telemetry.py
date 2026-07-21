@@ -183,8 +183,11 @@ class TestScheduledTelemetryRunner:
         assert summary["failed"] == 0
         solicit.assert_called_once()
         args = solicit.call_args[0]
+        kwargs = solicit.call_args.kwargs
         assert args[0] == 0x0A11C001
         assert args[1] == "device_metrics"
+        assert kwargs.get("fallback_device_metrics") is True
+        assert kwargs.get("persist") is True
 
         schedule = ScheduledTelemetryRepository.get_schedule(0x0A11C001)
         assert schedule is not None
@@ -194,3 +197,77 @@ class TestScheduledTelemetryRunner:
         outcome = run_schedule_now(0xDEADBEEF)
         assert outcome["success"] is False
         assert "No schedule" in outcome["error"]
+
+
+@pytest.mark.unit
+class TestSolicitHardening:
+    def test_persist_device_metrics(self, scheduled_db):
+        from malla.database.connection import get_db_connection
+        from malla.services.live_telemetry import persist_solicited_device_telemetry
+
+        assert persist_solicited_device_telemetry(
+            0x0A11C001,
+            {
+                "device_metrics": {
+                    "battery_level": 77,
+                    "voltage": 3.95,
+                    "uptime_seconds": 123,
+                }
+            },
+            timestamp=1_700_000_000.0,
+        )
+
+        conn = get_db_connection()
+        row = conn.execute(
+            """
+            SELECT battery_level, voltage, uptime_seconds
+            FROM telemetry_data
+            WHERE node_id = ?
+            ORDER BY timestamp DESC LIMIT 1
+            """,
+            (0x0A11C001,),
+        ).fetchone()
+        conn.close()
+        assert row is not None
+        assert row["battery_level"] == 77
+        assert abs(float(row["voltage"]) - 3.95) < 0.001
+
+    def test_solicit_falls_back_to_device_metrics(self, scheduled_db):
+        from malla.services.live_telemetry import solicit_node_telemetry
+
+        publisher = MagicMock()
+        publisher.is_connected = True
+        publisher.get_telemetry_stats.return_value = {}
+        publisher.get_latest_node_telemetry.return_value = None
+        publisher.send_telemetry_request.side_effect = [
+            None,  # power_metrics attempt 1
+            None,  # power_metrics attempt 2
+            {  # device_metrics fallback attempt 1
+                "telemetry": {"device_metrics": {"battery_level": 60, "voltage": 4.0}},
+                "timestamp": time.time(),
+            },
+        ]
+
+        with (
+            patch(
+                "malla.services.live_telemetry.get_connected_mesh_publisher",
+                return_value=(publisher, "tcp"),
+            ),
+            patch(
+                "malla.services.live_telemetry.resolve_live_telemetry_hops",
+                return_value=(1, "test"),
+            ),
+            patch("malla.services.live_telemetry.time.sleep"),
+        ):
+            outcome = solicit_node_telemetry(
+                0x0A11C001,
+                "power_metrics",
+                fallback_device_metrics=True,
+                accept_last_known_s=0,
+                persist=True,
+            )
+
+        assert outcome["success"] is True
+        assert outcome["telemetry_type"] == "device_metrics"
+        assert outcome["persisted"] is True
+        assert publisher.send_telemetry_request.call_count >= 3

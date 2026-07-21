@@ -64,3 +64,15 @@ class TestScheduledTelemetryApi:
         )
         assert deleted.status_code == 200
         assert deleted.get_json()["deleted"] is True
+
+    def test_run_due_accepts_empty_post_without_json_content_type(
+        self, operator_client
+    ):
+        """Admin 'Run due now' may POST with no body / content-type."""
+        resp = operator_client.post("/api/admin/telemetry/schedules/run-due")
+        if resp.status_code == 403:
+            pytest.skip("Admin disabled in test app")
+        assert resp.status_code == 200, resp.get_data(as_text=True)
+        data = resp.get_json()
+        assert data["success"] is True
+        assert "claimed" in data
