@@ -494,7 +494,7 @@
 
 {{ sidebar_styles() }}
 
-<script src="https://d3js.org/d3.v7.min.js"></script>
+<script src="{{ url_for('static', filename='js/d3.v7.min.js') }}"></script>
 <script src="https://cdn.jsdelivr.net/npm/three@0.160.0/build/three.min.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/3d-force-graph@1.73.3/dist/3d-force-graph.min.js"></script>
 <script src="{{ url_for('static', filename='js/network-graph-3d.js') }}"></script>
@@ -548,17 +548,29 @@ document.addEventListener('DOMContentLoaded', function() {
     const radio = document.getElementById(graphViewMode === '2d' ? 'graphView2d' : 'graphView3d');
     if (radio) radio.checked = true;
 
-    // Wait for jQuery to be available
-    function waitForJQuery() {
-        if (typeof $ !== 'undefined') {
+    // Wait for jQuery (and D3 when using the 2D renderer) before loading
+    function waitForDeps(attempt) {
+        const tries = attempt || 0;
+        const hasJQuery = typeof $ !== 'undefined';
+        const needsD3 = graphViewMode === '2d' || typeof window.NetworkGraph3D === 'undefined';
+        const hasD3 = typeof d3 !== 'undefined';
+        if (hasJQuery && (!needsD3 || hasD3)) {
             initializeInterface();
             loadGraph();
-        } else {
-            setTimeout(waitForJQuery, 50);
+            return;
         }
+        if (tries > 100) {
+            if (!hasJQuery) {
+                showError('Failed to load page scripts (jQuery)');
+            } else if (needsD3 && !hasD3) {
+                showError('Failed to render graph: D3 library failed to load');
+            }
+            return;
+        }
+        setTimeout(() => waitForDeps(tries + 1), 50);
     }
 
-    waitForJQuery();
+    waitForDeps(0);
 });
 
 function initializeInterface() {
@@ -808,6 +820,10 @@ function renderActiveGraph(data) {
         return;
     }
     // Fall back to classic D3 2D renderer
+    if (typeof d3 === 'undefined') {
+        showError('Failed to render graph: D3 library failed to load');
+        return;
+    }
     if (window.NetworkGraph3D && NetworkGraph3D.isActive()) {
         NetworkGraph3D.destroy();
     }
@@ -868,6 +884,9 @@ function loadGraph() {
 
 function renderGraph(data) {
     try {
+        if (typeof d3 === 'undefined') {
+            throw new Error('D3 library failed to load');
+        }
         console.log('renderGraph called with data:', data);
 
         const container = d3.select('#networkGraph');

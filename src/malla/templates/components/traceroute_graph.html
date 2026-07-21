@@ -389,7 +389,13 @@ let pathElements = [];
 function loadCombinedTracerouteGraph() {
     const container = document.getElementById('combined-traceroute-graph');
     if (!container || !window.packetGraphData || window.packetGraphData.nodes.length === 0) {
-        container.innerHTML = '<div class="d-flex align-items-center justify-content-center h-100"><p class="text-muted">No graph data available.</p></div>';
+        if (container) {
+            container.innerHTML = '<div class="d-flex align-items-center justify-content-center h-100"><p class="text-muted">No graph data available.</p></div>';
+        }
+        return;
+    }
+    if (typeof d3 === 'undefined') {
+        container.innerHTML = '<div class="d-flex align-items-center justify-content-center h-100"><p class="text-danger">Failed to render graph: D3 library failed to load</p></div>';
         return;
     }
 
