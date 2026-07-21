@@ -11504,7 +11504,11 @@
 
     async function runDueTelemetrySchedules() {
         try {
-            const resp = await fetch('/api/admin/telemetry/schedules/run-due', {method: 'POST'});
+            const resp = await fetch('/api/admin/telemetry/schedules/run-due', {
+                method: 'POST',
+                headers: {'Content-Type': 'application/json'},
+                body: '{}',
+            });
             const data = await resp.json();
             if (!resp.ok) {
                 showTelemetryScheduleFormAlert('danger', data.error || 'Run failed');
