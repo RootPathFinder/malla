@@ -7,6 +7,7 @@ Used by the Admin live-poll API and the scheduled telemetry runner.
 from __future__ import annotations
 
 import logging
+import threading
 import time
 from typing import Any
 
@@ -14,9 +15,14 @@ from ..utils.telemetry_request import (
     LIVE_TELEMETRY_MAX_BUDGET_S,
     live_telemetry_budget,
     split_live_telemetry_attempts,
+    telemetry_has_requested_metrics,
 )
 
 logger = logging.getLogger(__name__)
+
+# Serialize solicits so background schedules and live UI polls do not
+# overwrite each other's pending request for the same publisher.
+_solicit_lock = threading.RLock()
 
 
 def estimate_hops_from_recent_packets(node_id: int) -> int | None:
@@ -116,6 +122,8 @@ def get_connected_mesh_publisher() -> tuple[Any | None, str | None]:
     """
     Return (publisher, connection_type) when TCP or Serial is connected.
 
+    Prefers an actually-connected publisher over AdminService's configured
+    type, so schedules still work if the UI connection type is stale.
     MQTT is unsupported for solicited telemetry (no response wait).
     """
     try:
@@ -123,23 +131,127 @@ def get_connected_mesh_publisher() -> tuple[Any | None, str | None]:
         from .serial_publisher import get_serial_publisher
         from .tcp_publisher import get_tcp_publisher
 
-        admin_service = get_admin_service()
-        connection_type = admin_service.connection_type.value
+        tcp_publisher = get_tcp_publisher()
+        if getattr(tcp_publisher, "is_connected", False):
+            return tcp_publisher, "tcp"
 
-        if connection_type == "tcp":
-            publisher = get_tcp_publisher()
-            if publisher.is_connected:
-                return publisher, "tcp"
-            return None, "tcp"
-        if connection_type == "serial":
-            publisher = get_serial_publisher()
-            if publisher.is_connected:
-                return publisher, "serial"
-            return None, "serial"
+        serial_publisher = get_serial_publisher()
+        if getattr(serial_publisher, "is_connected", False):
+            return serial_publisher, "serial"
+
+        try:
+            connection_type = get_admin_service().connection_type.value
+        except Exception:
+            connection_type = None
         return None, connection_type
     except Exception as e:
         logger.debug(f"Could not resolve mesh publisher: {e}")
         return None, None
+
+
+def persist_solicited_device_telemetry(
+    node_id: int,
+    telemetry: dict[str, Any] | None,
+    *,
+    timestamp: float | None = None,
+) -> bool:
+    """
+    Persist device_metrics from a solicited reply into telemetry_data.
+
+    Live/scheduled TCP replies are otherwise only kept in memory, so health
+    monitoring would never see them without this write.
+    """
+    if not telemetry or not isinstance(telemetry, dict):
+        return False
+
+    metrics = telemetry.get("device_metrics") or telemetry.get("deviceMetrics")
+    if not isinstance(metrics, dict) or not metrics:
+        return False
+
+    def _num(key: str, alt: str | None = None) -> Any:
+        value = metrics.get(key)
+        if value is None and alt:
+            value = metrics.get(alt)
+        return value
+
+    battery_level = _num("battery_level", "batteryLevel")
+    voltage = _num("voltage")
+    channel_utilization = _num("channel_utilization", "channelUtilization")
+    air_util_tx = _num("air_util_tx", "airUtilTx")
+    uptime_seconds = _num("uptime_seconds", "uptimeSeconds")
+
+    if all(
+        v is None
+        for v in (
+            battery_level,
+            voltage,
+            channel_utilization,
+            air_util_tx,
+            uptime_seconds,
+        )
+    ):
+        return False
+
+    try:
+        from ..database.connection import get_db_connection
+
+        now = time.time() if timestamp is None else float(timestamp)
+        conn = get_db_connection()
+        cursor = conn.cursor()
+        cursor.execute(
+            """
+            CREATE TABLE IF NOT EXISTS telemetry_data (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                timestamp REAL NOT NULL,
+                node_id INTEGER NOT NULL,
+                battery_level INTEGER,
+                voltage REAL,
+                channel_utilization REAL,
+                air_util_tx REAL,
+                uptime_seconds INTEGER
+            )
+            """
+        )
+        cursor.execute(
+            """
+            INSERT INTO telemetry_data (
+                timestamp, node_id, battery_level, voltage,
+                channel_utilization, air_util_tx, uptime_seconds
+            ) VALUES (?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                now,
+                int(node_id) & 0xFFFFFFFF,
+                battery_level,
+                voltage,
+                channel_utilization,
+                air_util_tx,
+                uptime_seconds,
+            ),
+        )
+        if voltage is not None:
+            try:
+                cursor.execute(
+                    """
+                    UPDATE node_info
+                    SET last_battery_voltage = ?
+                    WHERE node_id = ?
+                    """,
+                    (voltage, int(node_id) & 0xFFFFFFFF),
+                )
+            except Exception:
+                # node_info may be missing columns in sparse test DBs
+                pass
+        conn.commit()
+        conn.close()
+        return True
+    except Exception as e:
+        logger.warning(
+            "Failed to persist solicited telemetry for !%08x: %s",
+            node_id & 0xFFFFFFFF,
+            e,
+        )
+        return False
 
 
 def solicit_node_telemetry(
@@ -147,11 +259,19 @@ def solicit_node_telemetry(
     telemetry_type: str = "device_metrics",
     *,
     client_hops: Any = None,
+    fallback_device_metrics: bool = True,
+    accept_last_known_s: float = 30.0,
+    persist: bool = True,
 ) -> dict[str, Any]:
     """
     Solicit telemetry from a node using hop-aware retries.
 
     Returns a result dict with success/error fields (does not raise for RF miss).
+
+    For scheduled health polls this:
+    - retries with ``device_metrics`` when a secondary type gets no reply
+    - accepts a very fresh publisher cache (same as live Admin UI)
+    - persists device metrics into ``telemetry_data`` for health/alerts
     """
     publisher, connection_type = get_connected_mesh_publisher()
     if publisher is None:
@@ -171,25 +291,79 @@ def solicit_node_telemetry(
     estimated_hops, hop_source = resolve_live_telemetry_hops(node_id_int, client_hops)
     budget = live_telemetry_budget(estimated_hops)
     timeout = min(LIVE_TELEMETRY_MAX_BUDGET_S, float(budget["timeout_s"]))
+    requested_type = (telemetry_type or "device_metrics").strip() or "device_metrics"
 
-    result, attempts = request_live_telemetry_with_retry(
-        publisher,
-        node_id_int,
-        telemetry_type,
-        timeout,
-        attempts=budget["attempts"],
-        hop_limit=budget["hop_limit"],
-        want_ack=budget["want_ack"],
-        retry_delay_s=budget["retry_delay_s"],
-    )
+    types_to_try = [requested_type]
+    if (
+        fallback_device_metrics
+        and requested_type != "device_metrics"
+    ):
+        types_to_try.append("device_metrics")
+
+    result: dict[str, Any] | None = None
+    attempts = 0
+    used_type = requested_type
+
+    with _solicit_lock:
+        for type_key in types_to_try:
+            used_type = type_key
+            result, attempt_count = request_live_telemetry_with_retry(
+                publisher,
+                node_id_int,
+                type_key,
+                timeout,
+                attempts=budget["attempts"],
+                hop_limit=budget["hop_limit"],
+                want_ack=budget["want_ack"],
+                retry_delay_s=budget["retry_delay_s"],
+            )
+            attempts += attempt_count
+            if result:
+                break
+
+        if not result and accept_last_known_s > 0:
+            getter = getattr(publisher, "get_latest_node_telemetry", None)
+            if callable(getter):
+                cached = getter(node_id_int, max_age_s=float(accept_last_known_s))
+                if (
+                    isinstance(cached, dict)
+                    and cached.get("telemetry")
+                    and (
+                        telemetry_has_requested_metrics(
+                            cached["telemetry"], used_type
+                        )
+                        or telemetry_has_requested_metrics(
+                            cached["telemetry"], "device_metrics"
+                        )
+                    )
+                ):
+                    result = {
+                        "telemetry": cached["telemetry"],
+                        "timestamp": cached.get("timestamp"),
+                        "stats": publisher.get_telemetry_stats(node_id_int)
+                        if hasattr(publisher, "get_telemetry_stats")
+                        else {},
+                        "late_cache": True,
+                        "last_known": True,
+                    }
 
     if result:
         source = "late_cache" if result.get("late_cache") else "live"
+        if result.get("last_known"):
+            source = "last_known"
+        telemetry = result.get("telemetry", {}) or {}
+        persisted = False
+        if persist:
+            persisted = persist_solicited_device_telemetry(
+                node_id_int,
+                telemetry,
+                timestamp=result.get("timestamp"),
+            )
         return {
             "success": True,
             "node_id": node_id_int,
             "hex_id": f"!{node_id_int:08x}",
-            "telemetry": result.get("telemetry", {}),
+            "telemetry": telemetry,
             "timestamp": result.get("timestamp"),
             "stats": result.get("stats", {}),
             "source": source,
@@ -197,7 +371,10 @@ def solicit_node_telemetry(
             "estimated_hops": budget["estimated_hops"],
             "hop_source": hop_source,
             "budget": budget,
-            "telemetry_type": telemetry_type,
+            "telemetry_type": used_type,
+            "requested_telemetry_type": requested_type,
+            "persisted": persisted,
+            "routing_warning": result.get("routing_warning"),
         }
 
     return {
@@ -213,5 +390,6 @@ def solicit_node_telemetry(
         "estimated_hops": budget["estimated_hops"],
         "hop_source": hop_source,
         "budget": budget,
-        "telemetry_type": telemetry_type,
+        "telemetry_type": used_type,
+        "requested_telemetry_type": requested_type,
     }
