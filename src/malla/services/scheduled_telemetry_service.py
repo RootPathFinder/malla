@@ -114,6 +114,47 @@ def stop_scheduled_telemetry_runner() -> None:
     _safe_log(logging.INFO, "Scheduled telemetry runner stopped")
 
 
+def _evaluate_schedule_outcome(
+    outcome: dict[str, Any],
+    *,
+    requested_type: str = "device_metrics",
+) -> tuple[bool, str | None, str, dict[str, Any]]:
+    """
+    Decide schedule success and build a verbose last-run detail payload.
+
+    Success requires a fresh mesh reply that was written to packet_history
+    (so node-detail "last telemetry" age updates).
+    """
+    fresh = bool(outcome.get("fresh")) and bool(
+        outcome.get("persisted_packet_history")
+    )
+    ok = bool(outcome.get("success")) and fresh
+    used_type = str(outcome.get("telemetry_type") or requested_type)
+    error: str | None = None
+    if not ok:
+        if outcome.get("source") == "last_known":
+            error = "No fresh mesh reply (stale cache only)"
+        elif outcome.get("success") and not outcome.get("persisted_packet_history"):
+            error = "Got reply but failed to persist telemetry packet for node details"
+        else:
+            error = str(outcome.get("error") or "request failed")
+
+    detail = {
+        "ok": ok,
+        "fresh": bool(outcome.get("fresh")),
+        "source": outcome.get("source"),
+        "attempts": outcome.get("attempts"),
+        "estimated_hops": outcome.get("estimated_hops"),
+        "hop_source": outcome.get("hop_source"),
+        "persisted_packet_history": bool(outcome.get("persisted_packet_history")),
+        "persisted_telemetry_data": bool(outcome.get("persisted_telemetry_data")),
+        "telemetry_type": used_type,
+        "error": error,
+        "routing_warning": outcome.get("routing_warning"),
+    }
+    return ok, error, used_type, detail
+
+
 def run_due_schedules_once(
     *,
     limit: int | None = None,
@@ -175,24 +216,15 @@ def run_due_schedules_once(
             accept_last_known_s=0.0,
             persist=True,
         )
-        fresh = bool(outcome.get("fresh")) and bool(
-            outcome.get("persisted_packet_history")
+        ok, error, used_type, detail = _evaluate_schedule_outcome(
+            outcome, requested_type=telemetry_type
         )
-        ok = bool(outcome.get("success")) and fresh
-        used_type = str(outcome.get("telemetry_type") or telemetry_type)
-        error = None
-        if not ok:
-            if outcome.get("source") == "last_known":
-                error = "No fresh mesh reply (stale cache only)"
-            elif outcome.get("success") and not outcome.get("persisted_packet_history"):
-                error = "Got reply but failed to persist telemetry packet"
-            else:
-                error = str(outcome.get("error") or "request failed")
         ScheduledTelemetryRepository.record_result(
             node_id,
             success=ok,
             telemetry_type=used_type,
             error=error,
+            run_detail=detail,
         )
         if ok:
             succeeded += 1
@@ -204,10 +236,14 @@ def run_due_schedules_once(
                 "hex_id": f"!{node_id:08x}",
                 "telemetry_type": used_type,
                 "success": ok,
-                "error": outcome.get("error"),
+                "error": error,
                 "source": outcome.get("source"),
+                "attempts": outcome.get("attempts"),
                 "estimated_hops": outcome.get("estimated_hops"),
                 "persisted": outcome.get("persisted"),
+                "persisted_packet_history": outcome.get("persisted_packet_history"),
+                "fresh": outcome.get("fresh"),
+                "detail": detail,
             }
         )
         if idx < len(claimed) - 1 and _inter_node_delay_s > 0:
@@ -267,28 +303,20 @@ def run_schedule_now(node_id: int) -> dict[str, Any]:
         accept_last_known_s=0.0,
         persist=True,
     )
-    fresh = bool(outcome.get("fresh")) and bool(
-        outcome.get("persisted_packet_history")
+    ok, error, used_type, detail = _evaluate_schedule_outcome(
+        outcome, requested_type=telemetry_type
     )
-    ok = bool(outcome.get("success")) and fresh
-    used_type = str(outcome.get("telemetry_type") or telemetry_type)
-    error = None
-    if not ok:
-        if outcome.get("source") == "last_known":
-            error = "No fresh mesh reply (stale cache only)"
-        elif outcome.get("success") and not outcome.get("persisted_packet_history"):
-            error = "Got reply but failed to persist telemetry packet"
-        else:
-            error = str(outcome.get("error") or "request failed")
     ScheduledTelemetryRepository.record_result(
         node_id,
         success=ok,
         telemetry_type=used_type,
         error=error,
+        run_detail=detail,
     )
     outcome = dict(outcome)
     outcome["success"] = ok
     outcome["telemetry_type"] = used_type
+    outcome["detail"] = detail
     if error and not ok:
         outcome["error"] = error
     outcome["schedule"] = ScheduledTelemetryRepository.get_schedule(node_id)

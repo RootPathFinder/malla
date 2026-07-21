@@ -319,3 +319,121 @@ class TestSolicitHardening:
         assert outcome["telemetry_type"] == "device_metrics"
         assert outcome["persisted"] is True
         assert publisher.send_telemetry_request.call_count >= 3
+
+    def test_persist_migrates_legacy_packet_history_without_message_type(
+        self, scheduled_db
+    ):
+        """Older DBs lack message_type; CREATE IF NOT EXISTS must not skip ALTER."""
+        from malla.database.connection import get_db_connection
+        from malla.database.repositories import NodeRepository
+        from malla.services.live_telemetry import persist_solicited_telemetry
+
+        conn = get_db_connection()
+        conn.execute("DROP TABLE IF EXISTS packet_history")
+        conn.execute(
+            """
+            CREATE TABLE packet_history (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                timestamp REAL NOT NULL,
+                topic TEXT NOT NULL,
+                from_node_id INTEGER,
+                to_node_id INTEGER,
+                portnum INTEGER,
+                portnum_name TEXT,
+                gateway_id TEXT,
+                channel_id TEXT,
+                mesh_packet_id INTEGER,
+                payload_length INTEGER,
+                raw_payload BLOB,
+                processed_successfully BOOLEAN DEFAULT TRUE
+            )
+            """
+        )
+        conn.commit()
+        conn.close()
+
+        info = persist_solicited_telemetry(
+            0x0A11C001,
+            {"device_metrics": {"battery_level": 55, "voltage": 3.8}},
+            timestamp=1_700_000_100.0,
+        )
+        assert info["packet_history"] is True
+
+        latest = NodeRepository.get_latest_telemetry(0x0A11C001)
+        assert latest is not None
+        assert latest["timestamp_unix"] == 1_700_000_100.0
+        assert latest["device_metrics"]["battery_level"] == 55
+
+    def test_run_due_stores_verbose_last_run_status(self, scheduled_db):
+        ScheduledTelemetryRepository.upsert_schedule(
+            0x0A11C001, interval_seconds=1800, enabled=True
+        )
+        with (
+            patch(
+                "malla.services.scheduled_telemetry_service.get_connected_mesh_publisher",
+                return_value=(object(), "tcp"),
+            ),
+            patch(
+                "malla.services.scheduled_telemetry_service.solicit_node_telemetry",
+                return_value={
+                    "success": True,
+                    "fresh": True,
+                    "source": "live",
+                    "attempts": 2,
+                    "estimated_hops": 3,
+                    "hop_source": "traceroute",
+                    "telemetry_type": "device_metrics",
+                    "persisted_packet_history": True,
+                    "persisted_telemetry_data": True,
+                    "persisted": True,
+                },
+            ),
+        ):
+            summary = run_due_schedules_once(limit=1)
+
+        assert summary["succeeded"] == 1
+        assert summary["results"][0]["error"] is None
+        schedule = ScheduledTelemetryRepository.get_schedule(0x0A11C001)
+        assert schedule is not None
+        assert schedule["last_run_ok"] is True
+        assert schedule["last_run_at"] is not None
+        detail = schedule["last_run_detail"] or {}
+        assert detail["ok"] is True
+        assert detail["source"] == "live"
+        assert detail["estimated_hops"] == 3
+        assert detail["persisted_packet_history"] is True
+
+    def test_run_due_records_persist_failure_detail(self, scheduled_db):
+        ScheduledTelemetryRepository.upsert_schedule(
+            0x0A11C001, interval_seconds=1800, enabled=True
+        )
+        with (
+            patch(
+                "malla.services.scheduled_telemetry_service.get_connected_mesh_publisher",
+                return_value=(object(), "tcp"),
+            ),
+            patch(
+                "malla.services.scheduled_telemetry_service.solicit_node_telemetry",
+                return_value={
+                    "success": True,
+                    "fresh": True,
+                    "source": "live",
+                    "attempts": 1,
+                    "estimated_hops": 1,
+                    "telemetry_type": "device_metrics",
+                    "persisted_packet_history": False,
+                    "persisted_telemetry_data": True,
+                    "persisted": True,
+                },
+            ),
+        ):
+            summary = run_due_schedules_once(limit=1)
+
+        assert summary["failed"] == 1
+        assert "persist" in (summary["results"][0]["error"] or "").lower()
+        schedule = ScheduledTelemetryRepository.get_schedule(0x0A11C001)
+        assert schedule is not None
+        assert schedule["last_run_ok"] is False
+        assert schedule["last_success_at"] is None
+        assert "persist" in (schedule["last_error"] or "").lower()
+        assert schedule["last_run_detail"]["persisted_packet_history"] is False

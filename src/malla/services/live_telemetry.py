@@ -253,6 +253,57 @@ def persist_solicited_device_telemetry(
         return False
 
 
+def _ensure_packet_history_for_solicit(cursor: Any) -> None:
+    """
+    Ensure packet_history exists with columns needed for solicited writes.
+
+    Older DBs (and CREATE TABLE IF NOT EXISTS no-ops) often lack ``message_type``.
+    Inserting without migrating fails silently for node-detail freshness.
+    """
+    cursor.execute(
+        """
+        CREATE TABLE IF NOT EXISTS packet_history (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            timestamp REAL NOT NULL,
+            topic TEXT NOT NULL,
+            from_node_id INTEGER,
+            to_node_id INTEGER,
+            portnum INTEGER,
+            portnum_name TEXT,
+            gateway_id TEXT,
+            channel_id TEXT,
+            mesh_packet_id INTEGER,
+            payload_length INTEGER,
+            raw_payload BLOB,
+            processed_successfully BOOLEAN DEFAULT TRUE,
+            message_type TEXT
+        )
+        """
+    )
+    for column_name, column_type in (
+        ("mesh_packet_id", "INTEGER"),
+        ("message_type", "TEXT"),
+        ("processed_successfully", "BOOLEAN DEFAULT TRUE"),
+        ("portnum_name", "TEXT"),
+        ("raw_payload", "BLOB"),
+        ("payload_length", "INTEGER"),
+        ("gateway_id", "TEXT"),
+        ("channel_id", "TEXT"),
+        ("from_node_id", "INTEGER"),
+        ("to_node_id", "INTEGER"),
+        ("portnum", "INTEGER"),
+    ):
+        try:
+            cursor.execute(
+                f"ALTER TABLE packet_history ADD COLUMN {column_name} {column_type}"
+            )
+        except Exception as e:
+            # Duplicate column is expected on modern schemas.
+            if "duplicate column" not in str(e).lower():
+                # Ignore other ALTER noise; INSERT will surface real problems.
+                pass
+
+
 def persist_solicited_telemetry(
     node_id: int,
     telemetry: dict[str, Any] | None,
@@ -276,6 +327,10 @@ def persist_solicited_telemetry(
 
     payload = raw_payload or telemetry_dict_to_raw_payload(telemetry)
     if not payload:
+        logger.warning(
+            "Cannot persist solicited telemetry for !%08x: empty payload",
+            int(node_id) & 0xFFFFFFFF,
+        )
         return result
 
     now = time.time() if timestamp is None else float(timestamp)
@@ -288,26 +343,7 @@ def persist_solicited_telemetry(
 
         conn = get_db_connection()
         cursor = conn.cursor()
-        cursor.execute(
-            """
-            CREATE TABLE IF NOT EXISTS packet_history (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                timestamp REAL NOT NULL,
-                topic TEXT NOT NULL,
-                from_node_id INTEGER,
-                to_node_id INTEGER,
-                portnum INTEGER,
-                portnum_name TEXT,
-                gateway_id TEXT,
-                channel_id TEXT,
-                mesh_packet_id INTEGER,
-                payload_length INTEGER,
-                raw_payload BLOB,
-                processed_successfully BOOLEAN DEFAULT TRUE,
-                message_type TEXT
-            )
-            """
-        )
+        _ensure_packet_history_for_solicit(cursor)
         cursor.execute(
             """
             INSERT INTO packet_history (
@@ -445,6 +481,7 @@ def solicit_node_telemetry(
         telemetry = result.get("telemetry", {}) or {}
         persisted = False
         persisted_packet = False
+        persisted_telemetry = False
         if persist and fresh:
             persist_info = persist_solicited_telemetry(
                 node_id_int,
@@ -454,7 +491,8 @@ def solicit_node_telemetry(
                 mesh_packet_id=result.get("request_id"),
             )
             persisted_packet = bool(persist_info.get("packet_history"))
-            persisted = persisted_packet or bool(persist_info.get("telemetry_data"))
+            persisted_telemetry = bool(persist_info.get("telemetry_data"))
+            persisted = persisted_packet or persisted_telemetry
         return {
             "success": True,
             "fresh": fresh,
@@ -472,6 +510,7 @@ def solicit_node_telemetry(
             "requested_telemetry_type": requested_type,
             "persisted": persisted,
             "persisted_packet_history": persisted_packet,
+            "persisted_telemetry_data": persisted_telemetry,
             "routing_warning": result.get("routing_warning"),
         }
 
