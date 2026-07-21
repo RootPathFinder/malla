@@ -267,7 +267,8 @@ def normalize_hw_model_key(hw_model: Any) -> str:
         try:
             from meshtastic import mesh_pb2
 
-            name = mesh_pb2.HardwareModel.Name(hw_model)
+            hw_enum = mesh_pb2.HardwareModel.ValueType(hw_model)
+            name = mesh_pb2.HardwareModel.Name(hw_enum)
             return str(name).upper().replace("-", "_").replace(" ", "_")
         except Exception:
             return str(hw_model)
