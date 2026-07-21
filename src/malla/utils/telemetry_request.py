@@ -147,7 +147,15 @@ def telemetry_to_dict(telemetry_data: Any) -> dict[str, Any]:
     if hasattr(telemetry_data, "DESCRIPTOR"):
         from google.protobuf.json_format import MessageToDict
 
-        return MessageToDict(telemetry_data, preserving_proto_field_name=True)
+        try:
+            # Keep zero/default scalars (battery 0 etc.) so match/persist see fields.
+            return MessageToDict(
+                telemetry_data,
+                preserving_proto_field_name=True,
+                always_print_fields_with_no_presence=True,
+            )
+        except TypeError:
+            return MessageToDict(telemetry_data, preserving_proto_field_name=True)
 
     if isinstance(telemetry_data, dict):
         result: dict[str, Any] = {}
@@ -157,7 +165,16 @@ def telemetry_to_dict(telemetry_data: Any) -> dict[str, Any]:
             if hasattr(value, "DESCRIPTOR"):
                 from google.protobuf.json_format import MessageToDict
 
-                result[key] = MessageToDict(value, preserving_proto_field_name=True)
+                try:
+                    result[key] = MessageToDict(
+                        value,
+                        preserving_proto_field_name=True,
+                        always_print_fields_with_no_presence=True,
+                    )
+                except TypeError:
+                    result[key] = MessageToDict(
+                        value, preserving_proto_field_name=True
+                    )
             elif isinstance(value, dict):
                 # Drop nested raw protobuf copies
                 result[key] = {
@@ -173,16 +190,22 @@ def telemetry_to_dict(telemetry_data: Any) -> dict[str, Any]:
 def telemetry_has_requested_metrics(
     telemetry: dict[str, Any] | None, telemetry_type: str
 ) -> bool:
-    """Return True if telemetry contains a non-empty payload for the requested type."""
+    """
+    Return True if telemetry contains the requested metric oneof.
+
+    An empty dict for the oneof still counts — firmware sometimes answers
+    wantResponse with a DeviceMetrics shell whose scalars are default/omitted.
+    Matching must succeed so we keep the raw payload for persistence.
+    """
     if not telemetry or not isinstance(telemetry, dict):
         return False
 
     keys = TELEMETRY_TYPE_KEYS.get(telemetry_type, (telemetry_type,))
     for key in keys:
+        if key not in telemetry:
+            continue
         value = telemetry.get(key)
         if value is None:
-            continue
-        if isinstance(value, dict) and len(value) == 0:
             continue
         return True
     return False
@@ -431,29 +454,30 @@ def live_telemetry_budget(estimated_hops: int | float | None) -> dict[str, Any]:
     """
     Recommend wait/retry/send settings for live telemetry at a given hop distance.
 
-    ``timeout_s`` is the wait **per send attempt**. Nearby nodes use mesh ACK and
-    full-length retries (short catch-up splits were timing out healthy 0-hop
-    replies). Farther nodes remain less reliable; this only makes monitoring
-    feasible.
+    ``timeout_s`` is the wait **per send attempt**. Nearby nodes alternate
+    ``want_ack`` across retries — ACK+wantResponse often emits a premature
+    ROUTING NO_RESPONSE that used to abort healthy local solicits.
     """
     hops = clamp_estimated_hops(estimated_hops)
 
     if hops <= 0:
-        # 20ft / direct: still lose packets to channel contention — ACK + retries
-        per_attempt_s = 12.0
-        attempts = 2
+        # Direct / local: prefer a no-ACK first try, then ACK retries
+        per_attempt_s = 14.0
+        attempts = 3
         poll_interval_ms = 5000
         min_gap_ms = 1500
-        want_ack = True
-        hop_limit = 3
-        retry_delay_s = 0.5
+        want_ack = False
+        want_ack_sequence = [False, True, True]
+        hop_limit = 7
+        retry_delay_s = 0.75
     elif hops == 1:
         per_attempt_s = 14.0
-        attempts = 2
+        attempts = 3
         poll_interval_ms = 8000
         min_gap_ms = 2000
-        want_ack = True
-        hop_limit = 3
+        want_ack = False
+        want_ack_sequence = [False, True, True]
+        hop_limit = 7
         retry_delay_s = 0.75
     elif hops == 2:
         per_attempt_s = 18.0
@@ -461,6 +485,7 @@ def live_telemetry_budget(estimated_hops: int | float | None) -> dict[str, Any]:
         poll_interval_ms = 12000
         min_gap_ms = 3000
         want_ack = True
+        want_ack_sequence = [True, True]
         hop_limit = 4
         retry_delay_s = 1.25
     else:
@@ -469,6 +494,7 @@ def live_telemetry_budget(estimated_hops: int | float | None) -> dict[str, Any]:
         poll_interval_ms = min(30000, 8000 + hops * 4000)
         min_gap_ms = min(8000, 2500 + hops * 800)
         want_ack = True
+        want_ack_sequence = [True, True, True]
         hop_limit = min(7, hops + 2)
         retry_delay_s = min(3.0, 0.75 + 0.4 * hops)
 
@@ -485,6 +511,7 @@ def live_telemetry_budget(estimated_hops: int | float | None) -> dict[str, Any]:
         "poll_interval_ms": poll_interval_ms,
         "min_gap_ms": min_gap_ms,
         "want_ack": want_ack,
+        "want_ack_sequence": want_ack_sequence,
         "hop_limit": hop_limit,
         "retry_delay_s": retry_delay_s,
     }

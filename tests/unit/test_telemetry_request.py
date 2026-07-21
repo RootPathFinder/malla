@@ -78,7 +78,10 @@ class TestTelemetryPayloadHelpers:
         assert not telemetry_has_requested_metrics(
             {"environment_metrics": {"temperature": 20}}, "device_metrics"
         )
-        assert not telemetry_has_requested_metrics({"device_metrics": {}}, "device_metrics")
+        # Empty oneof shell still counts — firmware may omit default scalars
+        assert telemetry_has_requested_metrics(
+            {"device_metrics": {}}, "device_metrics"
+        )
 
     def test_telemetry_to_dict_strips_raw(self):
         payload = {
@@ -184,19 +187,29 @@ class TestLiveTelemetryHopBudget:
         budget = live_telemetry_budget(0)
         assert budget["estimated_hops"] == 0
         assert budget["timeout_s"] >= 12.0
-        assert budget["want_ack"] is True
-        assert budget["attempts"] == 2
+        assert budget["attempts"] == 3
+        assert budget["want_ack_sequence"][0] is False
+        assert True in budget["want_ack_sequence"]
+        assert budget["hop_limit"] >= 3
         assert budget["poll_interval_ms"] <= 6000
+        assert budget["total_budget_s"] <= 55.0
+
+    def test_one_hop_gets_three_tries_with_no_ack_first(self):
+        near = live_telemetry_budget(1)
+        assert near["attempts"] == 3
+        assert near["want_ack_sequence"] == [False, True, True]
+        assert near["total_budget_s"] <= 55.0
 
     def test_far_hops_get_longer_budget_and_acks(self):
         near = live_telemetry_budget(1)
         far = live_telemetry_budget(4)
         assert far["timeout_s"] >= near["timeout_s"]
-        assert far["attempts"] >= near["attempts"]
+        assert far["attempts"] >= 2
         assert far["want_ack"] is True
         assert far["hop_limit"] >= 4
         assert far["poll_interval_ms"] > near["poll_interval_ms"]
         assert far["timeout_s"] <= 55.0
+        assert far["total_budget_s"] <= 55.0
 
     def test_attempts_use_full_per_attempt_windows(self):
         two = split_live_telemetry_attempts(12, attempts=2)
@@ -269,6 +282,31 @@ class TestLiveTelemetryApiRetryHelpers:
         assert result is None
         assert attempts == 3
         assert sleep_mock.call_count == 2
+
+    def test_retry_helper_uses_want_ack_sequence(self):
+        publisher = MagicMock()
+        publisher.send_telemetry_request.side_effect = [
+            None,
+            None,
+            {"telemetry": {"device_metrics": {"battery_level": 50}}},
+        ]
+        with patch("malla.services.live_telemetry.time.sleep"):
+            result, attempts = request_live_telemetry_with_retry(
+                publisher,
+                0x5FFBA832,
+                "device_metrics",
+                14,
+                attempts=3,
+                want_ack=False,
+                want_ack_sequence=[False, True, True],
+            )
+        assert result is not None
+        assert attempts == 3
+        ack_flags = [
+            call.kwargs.get("want_ack")
+            for call in publisher.send_telemetry_request.call_args_list
+        ]
+        assert ack_flags == [False, True, True]
 
 
 @pytest.mark.unit
