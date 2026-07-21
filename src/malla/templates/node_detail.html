@@ -1325,6 +1325,127 @@
 
         <!-- Neighbors & Analytics -->
         <div class="col-lg-4">
+            <!-- Zero-hop RF Neighbors -->
+            <div class="card mb-4" id="zero-hop-neighbors-card">
+                <div class="card-header">
+                    <div class="d-flex justify-content-between align-items-start gap-2 flex-wrap">
+                        <div>
+                            <h5 class="mb-1"><i class="bi bi-broadcast-pin"></i> Zero-Hop Neighbors</h5>
+                            <small class="text-muted">
+                                Direct RF neighbors from NeighborInfo, 0-hop packets, and traceroute RF hops
+                                {% if zero_hop_meta and zero_hop_meta.neighbor_count %}
+                                    · {{ zero_hop_meta.neighbor_count }}
+                                {% endif %}
+                            </small>
+                        </div>
+                        <div class="btn-group btn-group-sm" role="group" aria-label="Neighbor time window">
+                            {% set zh_h = zero_hop_hours|default(168) %}
+                            <a href="?zh_hours=24"
+                               class="btn btn-outline-secondary {% if zh_h == 24 %}active{% endif %}">24h</a>
+                            <a href="?zh_hours=168"
+                               class="btn btn-outline-secondary {% if zh_h == 168 %}active{% endif %}">7d</a>
+                            <a href="?zh_hours=720"
+                               class="btn btn-outline-secondary {% if zh_h == 720 %}active{% endif %}">30d</a>
+                            <a href="?zh_hours=0"
+                               class="btn btn-outline-secondary {% if zh_h == 0 %}active{% endif %}">All</a>
+                        </div>
+                    </div>
+                </div>
+                <div class="card-body">
+                    {% if zero_hop_neighbors|default([]) %}
+                        {% for neighbor in zero_hop_neighbors %}
+                        <div class="neighbor-card card mb-2"
+                             data-peer-id="{{ neighbor.node_id }}"
+                             data-peer-hex="{{ neighbor.hex_id }}">
+                            <div class="card-body p-2">
+                                <h6 class="card-title mb-1 d-flex flex-wrap align-items-center gap-1">
+                                    {{ node_link(neighbor.node_id, neighbor.node_name) }}
+                                    {% if neighbor.confirmed_both_ways %}
+                                        <span class="badge bg-success"
+                                              title="NeighborInfo reports this link in both directions">NI both ways</span>
+                                    {% elif neighbor.is_bidirectional %}
+                                        <span class="badge bg-success" title="Heard in both directions">Both ways</span>
+                                    {% elif neighbor.heard_from %}
+                                        <span class="badge bg-info text-dark" title="This node heard the neighbor">Heard</span>
+                                    {% elif neighbor.heard_by %}
+                                        <span class="badge bg-secondary" title="Neighbor heard this node">Heard by</span>
+                                    {% endif %}
+                                    {% if neighbor.quality and neighbor.quality != 'unknown' %}
+                                        <span class="badge
+                                            {% if neighbor.quality == 'excellent' %}bg-success
+                                            {% elif neighbor.quality == 'good' %}bg-primary
+                                            {% elif neighbor.quality == 'fair' %}bg-warning text-dark
+                                            {% else %}bg-danger
+                                            {% endif %}"
+                                            title="Link quality from SNR">
+                                            {{ neighbor.quality }}
+                                        </span>
+                                    {% endif %}
+                                    {% if 'traceroute' in (neighbor.sources or []) and neighbor.sources|length == 1 %}
+                                        <span class="badge bg-warning text-dark"
+                                              title="Seen as an RF hop in traceroutes (not hop-count 0)">Traceroute RF</span>
+                                    {% endif %}
+                                </h6>
+                                <div class="row">
+                                    <div class="col-6">
+                                        {% if neighbor.snr is not none %}
+                                            <small><strong>SNR:</strong> {{ '%.1f'|format(neighbor.snr) }} dB</small>
+                                        {% else %}
+                                            <small class="text-muted">SNR: —</small>
+                                        {% endif %}
+                                    </div>
+                                    <div class="col-6">
+                                        {% if neighbor.rssi is not none %}
+                                            <small><strong>RSSI:</strong> {{ neighbor.rssi }} dBm</small>
+                                        {% elif neighbor.distance_display %}
+                                            <small><strong>Dist:</strong> {{ neighbor.distance_display }}</small>
+                                        {% elif neighbor.packet_count %}
+                                            <small><strong>Pkts:</strong> {{ neighbor.packet_count }}</small>
+                                        {% else %}
+                                            <small class="text-muted">{{ neighbor.source_label }}</small>
+                                        {% endif %}
+                                    </div>
+                                </div>
+                                <div class="row mt-1">
+                                    <div class="col-6">
+                                        <small><strong>Last:</strong> {{ neighbor.last_seen_relative or 'Unknown' }}</small>
+                                    </div>
+                                    <div class="col-6">
+                                        {% if neighbor.distance_display and neighbor.rssi is not none %}
+                                            <small><strong>Dist:</strong> {{ neighbor.distance_display }}</small>
+                                        {% else %}
+                                            <small class="text-muted" title="Data source">{{ neighbor.source_label }}</small>
+                                        {% endif %}
+                                    </div>
+                                </div>
+                                {% if 'observed' in (neighbor.sources or []) %}
+                                <div class="mt-1">
+                                    <button type="button"
+                                            class="btn btn-link btn-sm p-0 zero-hop-focus-receptions"
+                                            data-peer-id="{{ neighbor.node_id }}"
+                                            data-direction="{{ neighbor.direct_receptions_direction or 'received' }}">
+                                        View in Direct Receptions
+                                    </button>
+                                </div>
+                                {% endif %}
+                            </div>
+                        </div>
+                        {% endfor %}
+                        <div class="mt-2">
+                            <a href="/mesh/topology" class="small">View mesh topology</a>
+                            ·
+                            <a href="/packets?from_node={{ node.node_id }}&hop_count=0" class="small">0-hop packets</a>
+                        </div>
+                    {% else %}
+                        <p class="text-muted mb-2 small">
+                            No direct RF neighbors found in this window. Sources: NeighborInfo,
+                            hop-count 0 packets, and traceroute RF hops.
+                        </p>
+                        <a href="/mesh/topology" class="small">View mesh topology</a>
+                    {% endif %}
+                </div>
+            </div>
+
             <!-- Received Gateways -->
             {% if received_gateways %}
             <div class="card mb-4">
@@ -1992,6 +2113,22 @@ document.addEventListener('DOMContentLoaded', function() {
         directReceptionsChart = new DirectReceptionsChart(nodeId);
         directReceptionsChart.initialize();
     }
+
+    // Zero-hop neighbor → Direct Receptions deep links
+    document.querySelectorAll('.zero-hop-focus-receptions').forEach((btn) => {
+        btn.addEventListener('click', async (event) => {
+            event.preventDefault();
+            const peerId = btn.getAttribute('data-peer-id');
+            const direction = btn.getAttribute('data-direction') || 'received';
+            if (!directReceptionsChart && nodeId && window.DirectReceptionsChart) {
+                directReceptionsChart = new DirectReceptionsChart(nodeId);
+                await directReceptionsChart.initialize();
+            }
+            if (directReceptionsChart) {
+                await directReceptionsChart.highlightPeer(peerId, direction);
+            }
+        });
+    });
 
     // Format all timestamps based on current timezone preference
     // This ensures timestamps on the detail page respect the timezone setting

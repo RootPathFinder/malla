@@ -133,6 +133,9 @@ class TestNodeRoutes:
         assert "Home" in response_text
         assert "Nodes" in response_text
 
+        # Zero-hop neighbors sidebar section
+        assert "Zero-Hop Neighbors" in response_text
+
     @pytest.mark.integration
     def test_node_detail_packet_data_display(self, client):
         """Test that node detail page displays packet data correctly."""

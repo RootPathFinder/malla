@@ -4,11 +4,12 @@ Node-related routes for the Meshtastic Mesh Health Web UI
 
 import logging
 
-from flask import Blueprint, render_template
+from flask import Blueprint, render_template, request
 
 # Import from the new modular architecture
 from ..database.repositories import NodeRepository
 from ..services.admin_service import get_admin_service
+from ..services.neighbor_service import NeighborService
 
 logger = logging.getLogger(__name__)
 node_bp = Blueprint("node", __name__)
@@ -59,6 +60,33 @@ def node_detail(node_id):
             can_send_commands = False
 
         node_details["can_send_commands"] = can_send_commands
+
+        # Zero-hop RF neighbors: NeighborInfo + observed + traceroute peers
+        zh_hours = request.args.get("zh_hours", default=168, type=int)
+        if zh_hours not in (24, 168, 720, 0):
+            zh_hours = 168
+        try:
+            zero_hop = NeighborService.get_zero_hop_neighbors(
+                node_id_int, hours=zh_hours or None
+            )
+            node_details["zero_hop_neighbors"] = zero_hop.get("neighbors") or []
+            node_details["zero_hop_hours"] = zh_hours
+            node_details["zero_hop_meta"] = {
+                "neighbor_count": zero_hop.get("neighbor_count", 0),
+                "last_neighborinfo_report": zero_hop.get("last_neighborinfo_report"),
+                "hours": zh_hours,
+            }
+        except Exception as e:
+            logger.warning(
+                "Failed to load zero-hop neighbors for %s: %s", node_id_int, e
+            )
+            node_details["zero_hop_neighbors"] = []
+            node_details["zero_hop_hours"] = zh_hours
+            node_details["zero_hop_meta"] = {
+                "neighbor_count": 0,
+                "last_neighborinfo_report": None,
+                "hours": zh_hours,
+            }
 
         logger.info("Node detail page rendered successfully")
         return render_template("node_detail.html", **node_details)

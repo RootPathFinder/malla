@@ -430,6 +430,94 @@ class DirectReceptionsChart {
     async initialize() {
         await this.loadChart();
     }
+
+    /**
+     * Normalize node identifiers from int, decimal string, or !hex form.
+     */
+    normalizeNodeId(nodeId) {
+        if (nodeId === null || nodeId === undefined) {
+            return null;
+        }
+        if (typeof nodeId === 'number') {
+            return nodeId >>> 0;
+        }
+        const text = String(nodeId).trim();
+        if (text.startsWith('!')) {
+            const parsed = parseInt(text.slice(1), 16);
+            return Number.isNaN(parsed) ? null : parsed >>> 0;
+        }
+        if (/^[0-9]+$/.test(text)) {
+            return parseInt(text, 10) >>> 0;
+        }
+        if (/^[0-9a-fA-F]+$/.test(text)) {
+            const parsed = parseInt(text, 16);
+            return Number.isNaN(parsed) ? null : parsed >>> 0;
+        }
+        return null;
+    }
+
+    /**
+     * Scroll to the Direct Receptions card and highlight a peer series.
+     */
+    async highlightPeer(peerNodeId, direction = 'received') {
+        const cardContainer = document.getElementById('direct-receptions-card');
+        if (!cardContainer) {
+            return;
+        }
+
+        const wantedDirection = direction === 'transmitted' ? 'transmitted' : 'received';
+        if (wantedDirection !== this.currentDirection) {
+            const directionToggleGroup = document.getElementById('direction-toggle-group');
+            if (directionToggleGroup) {
+                directionToggleGroup.querySelectorAll('button').forEach(btn => {
+                    const isMatch = btn.getAttribute('data-direction') === wantedDirection;
+                    btn.classList.toggle('active', isMatch);
+                });
+            }
+            await this.loadChart(wantedDirection);
+        } else if (!this.nodeStats.length) {
+            await this.loadChart(wantedDirection);
+        }
+
+        cardContainer.style.display = 'block';
+        cardContainer.scrollIntoView({ behavior: 'smooth', block: 'start' });
+
+        const targetId = this.normalizeNodeId(peerNodeId);
+        if (targetId === null) {
+            return;
+        }
+
+        const chartContainer = document.getElementById('direct-receptions-chart');
+        const tbody = document.querySelector('#direct-receptions-legend tbody');
+        let matchedIndex = -1;
+
+        this.nodeStats.forEach((stats, index) => {
+            if (this.normalizeNodeId(stats.nodeId) === targetId) {
+                matchedIndex = index;
+            }
+        });
+
+        if (matchedIndex < 0) {
+            return;
+        }
+
+        this.nodeStats.forEach((stats, index) => {
+            const visible = index === matchedIndex;
+            stats.visible = visible;
+            if (tbody && tbody.children[index]) {
+                const row = tbody.children[index];
+                const checkbox = row.querySelector('input[type="checkbox"]');
+                if (checkbox) {
+                    checkbox.checked = visible;
+                }
+                row.style.opacity = visible ? '1' : '0.35';
+                row.classList.toggle('table-warning', visible);
+            }
+            if (chartContainer && this.chartTraces.length > 0) {
+                Plotly.restyle(chartContainer, { visible }, index);
+            }
+        });
+    }
 }
 
 // Export for use in other scripts
