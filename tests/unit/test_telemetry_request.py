@@ -1,6 +1,7 @@
 """Unit tests for live telemetry request correlation helpers."""
 
 import threading
+import time
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -303,6 +304,127 @@ class TestTcpTelemetryMatchPath:
         assert pub._match_and_complete_telemetry(packet) is True
         assert event.is_set()
         assert response_data["telemetry"]["device_metrics"]["battery_level"] == 77
+
+    def test_no_response_does_not_wake_waiter(self):
+        """Routing NO_RESPONSE must not abort the wait — TELEMETRY often follows."""
+        from malla.services.tcp_publisher import TCPPublisher
+
+        pub = TCPPublisher.__new__(TCPPublisher)
+        pub._pending_telemetry_requests = {}
+        pub._pending_telemetry_lock = threading.Lock()
+        pub._telemetry_late_by_request = {}
+        pub._telemetry_latest_by_node = {}
+
+        event = threading.Event()
+        response_data: dict = {}
+        pub._pending_telemetry_requests[0x5FFBA832] = {
+            "event": event,
+            "response_data": response_data,
+            "telemetry_type": "device_metrics",
+            "request_id": 0x1001,
+            "completed": False,
+        }
+
+        routing = {
+            "from": 0x5FFBA832,
+            "decoded": {
+                "portnum": "ROUTING_APP",
+                "requestId": 0x1001,
+                "routing": {"errorReason": "NO_RESPONSE"},
+            },
+        }
+        assert pub._match_and_complete_telemetry(routing) is True
+        assert not event.is_set()
+        assert response_data.get("routing_warning") == "NO_RESPONSE"
+        assert "error" not in response_data or response_data.get("error") is None
+
+        telemetry_packet = {
+            "from": 0x5FFBA832,
+            "decoded": {
+                "portnum": "TELEMETRY_APP",
+                "requestId": 0x1001,
+                "telemetry": {"device_metrics": {"battery_level": 91, "voltage": 4.05}},
+            },
+        }
+        assert pub._match_and_complete_telemetry(telemetry_packet) is True
+        assert event.is_set()
+        assert response_data["telemetry"]["device_metrics"]["battery_level"] == 91
+        assert response_data.get("routing_warning") == "NO_RESPONSE"
+
+    def test_serial_no_response_then_telemetry(self):
+        from malla.services.serial_publisher import SerialPublisher
+
+        pub = SerialPublisher.__new__(SerialPublisher)
+        pub._pending_telemetry_requests = {}
+        pub._pending_telemetry_lock = threading.Lock()
+        pub._telemetry_late_by_request = {}
+        pub._telemetry_latest_by_node = {}
+
+        event = threading.Event()
+        response_data: dict = {}
+        pub._pending_telemetry_requests[0x5FFBA832] = {
+            "event": event,
+            "response_data": response_data,
+            "telemetry_type": "device_metrics",
+            "request_id": 0x2002,
+            "completed": False,
+        }
+
+        assert (
+            pub._match_and_complete_telemetry(
+                {
+                    "decoded": {
+                        "portnum": "ROUTING_APP",
+                        "requestId": 0x2002,
+                        "routing": {"error_reason": "NO_RESPONSE"},
+                    }
+                }
+            )
+            is True
+        )
+        assert not event.is_set()
+
+        assert (
+            pub._match_and_complete_telemetry(
+                {
+                    "from": 0x5FFBA832,
+                    "decoded": {
+                        "portnum": "TELEMETRY_APP",
+                        "requestId": 0x2002,
+                        "telemetry": {
+                            "device_metrics": {"battery_level": 80, "voltage": 3.9}
+                        },
+                    },
+                }
+            )
+            is True
+        )
+        assert event.is_set()
+        assert response_data["telemetry"]["device_metrics"]["battery_level"] == 80
+
+    def test_late_cache_pickup_window_covers_in_flight_replies(self):
+        from malla.utils.telemetry_request import (
+            TELEMETRY_LATE_CACHE_S,
+            pickup_late_telemetry_cache,
+        )
+
+        assert TELEMETRY_LATE_CACHE_S >= 10.0
+        now = time.time()
+        latest = {
+            0x5FFBA832: {
+                "telemetry": {"device_metrics": {"battery_level": 70}},
+                "timestamp": now - 8.0,
+                "from_node": 0x5FFBA832,
+            }
+        }
+        late = pickup_late_telemetry_cache(
+            late_by_request={},
+            latest_by_node=latest,
+            request_id=None,
+            target_node_id=0x5FFBA832,
+        )
+        assert late is not None
+        assert late["telemetry"]["device_metrics"]["battery_level"] == 70
 
     def test_generation_cleanup_does_not_remove_newer_request(self):
         from malla.services.tcp_publisher import TCPPublisher

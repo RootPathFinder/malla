@@ -26,8 +26,11 @@ from ..utils.telemetry_request import (
     extract_telemetry_raw_payload,
     find_matching_telemetry_request,
     is_routing_no_response,
+    note_telemetry_routing_no_response,
+    pickup_late_telemetry_cache,
     telemetry_has_requested_metrics,
     telemetry_to_dict,
+    wait_for_telemetry_reply,
 )
 
 # Import get_hardware_model_name - avoid circular import by importing inside function
@@ -655,13 +658,11 @@ class SerialPublisher:
                         )
                         if pending_rid != request_id or pending.get("completed"):
                             continue
-                        pending.setdefault("response_data", {})["error"] = "NO_RESPONSE"
-                        event = pending.get("event")
-                        if event is not None:
-                            event.set()
-                        logger.warning(
-                            "Telemetry NO_RESPONSE for request_id=%s "
-                            "(node may lack telemetry reply support)",
+                        # Do not wake the waiter — TELEMETRY_APP often follows.
+                        note_telemetry_routing_no_response(pending)
+                        logger.info(
+                            "Telemetry routing NO_RESPONSE for request_id=%s "
+                            "(continuing to wait for TELEMETRY_APP)",
                             request_id,
                         )
                         return True
@@ -1604,25 +1605,20 @@ class SerialPublisher:
                     f"(target=!{target_node_id:08x})"
                 )
 
-                # Wait for response, then a short grace for late RF
-                if response_event.wait(timeout=timeout):
-                    pass
-                else:
-                    response_event.wait(timeout=0.75)
+                # Wait full timeout for TELEMETRY_APP. Routing NO_RESPONSE must
+                # not abort early — nearby nodes often reply after that signal.
+                wait_for_telemetry_reply(
+                    response_event, response_data, timeout=timeout
+                )
 
                 if not response_data.get("telemetry"):
                     with self._pending_telemetry_lock:
-                        late = None
-                        if request_id is not None:
-                            late = self._telemetry_late_by_request.pop(request_id, None)
-                        if not late or not late.get("telemetry"):
-                            cached = self._telemetry_latest_by_node.get(target_node_id)
-                            if cached and cached.get("telemetry"):
-                                age = time.time() - float(
-                                    cached.get("timestamp") or 0
-                                )
-                                if age <= 2.5:
-                                    late = cached
+                        late = pickup_late_telemetry_cache(
+                            late_by_request=self._telemetry_late_by_request,
+                            latest_by_node=self._telemetry_latest_by_node,
+                            request_id=request_id,
+                            target_node_id=target_node_id,
+                        )
                     if late and late.get("telemetry"):
                         response_data.update(
                             {
@@ -1638,7 +1634,9 @@ class SerialPublisher:
 
                 # App telemetry wins over routing NO_RESPONSE.
                 if response_data.get("telemetry"):
-                    routing_error = response_data.pop("error", None)
+                    routing_error = response_data.pop("error", None) or response_data.pop(
+                        "routing_warning", None
+                    )
                     if routing_error:
                         response_data["routing_warning"] = routing_error
                         logger.info(
@@ -1665,10 +1663,13 @@ class SerialPublisher:
                     response_data["stats"] = self.get_telemetry_stats(target_node_id)
                     return response_data
 
-                if "error" in response_data:
+                routing_warning = response_data.get("routing_warning") or response_data.get(
+                    "error"
+                )
+                if routing_warning:
                     logger.warning(
                         f"Telemetry request failed for !{target_node_id:08x}: "
-                        f"{response_data.get('error')}"
+                        f"{routing_warning} (no TELEMETRY_APP within timeout)"
                     )
                     with self._telemetry_stats_lock:
                         self._telemetry_stats["errors"] += 1
