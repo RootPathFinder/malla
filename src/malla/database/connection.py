@@ -402,6 +402,32 @@ def _ensure_schema_migrations(cursor: sqlite3.Cursor) -> None:
             else:
                 logging.warning(f"Failed solar forecast migration: {exc}")
 
+    # Migration: Per-node Admin Power battery voltage / near-full overrides
+    if "node_info_battery_voltage_override" not in _SCHEMA_MIGRATIONS_DONE:
+        try:
+            cursor.execute("PRAGMA table_info(node_info)")
+            columns = [row[1] for row in cursor.fetchall()]
+
+            if "battery_charge_full_voltage" not in columns:
+                cursor.execute(
+                    "ALTER TABLE node_info ADD COLUMN battery_charge_full_voltage REAL"
+                )
+            if "battery_near_full_pct" not in columns:
+                cursor.execute(
+                    "ALTER TABLE node_info ADD COLUMN battery_near_full_pct INTEGER"
+                )
+            logging.info(
+                "Added battery voltage override columns to node_info via auto-migration"
+            )
+            _SCHEMA_MIGRATIONS_DONE.add("node_info_battery_voltage_override")
+        except sqlite3.OperationalError as exc:
+            if "duplicate column name" in str(exc).lower():
+                _SCHEMA_MIGRATIONS_DONE.add("node_info_battery_voltage_override")
+            else:
+                logging.warning(
+                    f"Failed to add battery voltage override columns: {exc}"
+                )
+
     # Migration: Add scaling indexes for 1000+ node performance
     if "scaling_indexes" not in _SCHEMA_MIGRATIONS_DONE:
         try:

@@ -448,6 +448,8 @@ def init_database() -> None:
         ("solar_forecast_enabled", "INTEGER DEFAULT 0"),
         ("solar_forecast_lat", "REAL"),
         ("solar_forecast_lon", "REAL"),
+        ("battery_charge_full_voltage", "REAL"),
+        ("battery_near_full_pct", "INTEGER"),
     ]
 
     for column_name, column_type in power_columns:
