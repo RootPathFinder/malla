@@ -15,8 +15,11 @@ import time
 from datetime import UTC, datetime, timedelta
 from typing import Any
 
+from .battery_voltage_model import BatteryVoltageModel, resolve_battery_model
+
 logger = logging.getLogger(__name__)
 
+# Defaults match Generic LiPo; prefer resolve_battery_model(hw_model) in callers.
 CRITICAL_VOLTAGE = 3.2
 WARNING_VOLTAGE = 3.4
 FULL_CHARGE_VOLTAGE = 4.10
@@ -161,6 +164,8 @@ def classify_power_source(
     timestamps: list[float],
     voltages: list[float | None],
     battery_levels: list[int | None],
+    *,
+    model: BatteryVoltageModel | None = None,
 ) -> tuple[str, str, float]:
     """
     Classify power source.
@@ -168,6 +173,10 @@ def classify_power_source(
     Returns:
         (power_type, reason, confidence 0..1)
     """
+    bat_model = model or resolve_battery_model(None)
+    near_full_pct = bat_model.near_full_pct
+    full_v = bat_model.near_full_voltage
+
     valid_levels = [b for b in battery_levels if b is not None]
     valid_voltages = [v for v in voltages if v is not None]
 
@@ -190,36 +199,42 @@ def classify_power_source(
         if sum(1 for b in valid_levels if b == 100) / len(valid_levels) > 0.95:
             return "mains", "Constant 100% battery (powered)", 0.9
 
-    # Battery % cycling strongly indicates solar charging
+    # Battery % cycling strongly indicates solar charging.
+    # Use HW near-full % (e.g. RAK4631 tops out ~90–91% on solar).
     if len(valid_levels) >= 5:
-        bat_min = min(valid_levels)
-        bat_max = max(valid_levels)
-        bat_range = bat_max - bat_min
-        if bat_max >= 98 and bat_range > 10:
-            return (
-                "solar",
-                f"Battery cycling {bat_min}-{bat_max}% indicates solar charging",
-                0.9,
-            )
-
-        # Daytime charging curve even when never hitting 98%
-        hourly: dict[int, list[int]] = {}
-        for ts, level in zip(timestamps, battery_levels, strict=False):
-            if level is None or level >= 101:
-                continue
-            hourly.setdefault(_utc_hour(ts), []).append(level)
-        hourly_avg = {h: sum(v) / len(v) for h, v in hourly.items()}
-        morning = [hourly_avg[h] for h in MORNING_HOURS if h in hourly_avg]
-        afternoon = [hourly_avg[h] for h in AFTERNOON_HOURS if h in hourly_avg]
-        if len(morning) >= 2 and len(afternoon) >= 2:
-            morning_avg = sum(morning) / len(morning)
-            afternoon_avg = sum(afternoon) / len(afternoon)
-            if afternoon_avg > morning_avg + 1.0:
+        usable = [b for b in valid_levels if b < 101]
+        if usable:
+            bat_min = min(usable)
+            bat_max = max(usable)
+            bat_range = bat_max - bat_min
+            if bat_max >= near_full_pct and bat_range > 10:
                 return (
                     "solar",
-                    f"Daytime charging pattern ({morning_avg:.0f}% AM → {afternoon_avg:.0f}% PM UTC)",
-                    0.8,
+                    (
+                        f"Battery cycling {bat_min}-{bat_max}% indicates solar charging"
+                        f" (full≈{near_full_pct}% for {bat_model.label})"
+                    ),
+                    0.9,
                 )
+
+            # Daytime charging curve even when never hitting near-full
+            hourly: dict[int, list[int]] = {}
+            for ts, level in zip(timestamps, battery_levels, strict=False):
+                if level is None or level >= 101:
+                    continue
+                hourly.setdefault(_utc_hour(ts), []).append(level)
+            hourly_avg = {h: sum(v) / len(v) for h, v in hourly.items()}
+            morning = [hourly_avg[h] for h in MORNING_HOURS if h in hourly_avg]
+            afternoon = [hourly_avg[h] for h in AFTERNOON_HOURS if h in hourly_avg]
+            if len(morning) >= 2 and len(afternoon) >= 2:
+                morning_avg = sum(morning) / len(morning)
+                afternoon_avg = sum(afternoon) / len(afternoon)
+                if afternoon_avg > morning_avg + 1.0:
+                    return (
+                        "solar",
+                        f"Daytime charging pattern ({morning_avg:.0f}% AM → {afternoon_avg:.0f}% PM UTC)",
+                        0.8,
+                    )
 
     # Voltage day/night pattern (UTC)
     if len(valid_voltages) >= 10:
@@ -250,7 +265,7 @@ def classify_power_source(
         v_avg = sum(valid_voltages) / len(valid_voltages)
         v_range = v_max - v_min
 
-        if v_range < 0.1 and v_avg >= 4.0:
+        if v_range < 0.1 and v_avg >= max(4.0, full_v - 0.05):
             return (
                 "mains",
                 f"Voltage stable (avg {v_avg:.2f}V, range {v_range:.2f}V)",
@@ -258,7 +273,6 @@ def classify_power_source(
             )
 
         # Linear trend for battery-only decline
-        # Align voltages with their timestamps
         paired = [
             (ts, v)
             for ts, v in zip(timestamps, voltages, strict=False)
@@ -277,7 +291,6 @@ def classify_power_source(
                 if denom
                 else 0.0
             )
-            # Negative slope across samples + meaningful range → battery
             if slope < -0.002 and v_range > 0.15:
                 return (
                     "battery",
@@ -285,20 +298,34 @@ def classify_power_source(
                     0.7,
                 )
 
-        if valid_levels and max(valid_levels) < 98 and v_avg < 4.05:
+        usable_levels = [b for b in valid_levels if b is not None and b < 101]
+        if (
+            usable_levels
+            and max(usable_levels) < near_full_pct
+            and v_avg < full_v - 0.02
+        ):
             return (
                 "battery",
-                f"No recharge observed (max battery {max(valid_levels)}%, avg {v_avg:.2f}V)",
+                (
+                    f"No recharge observed (max battery {max(usable_levels)}%,"
+                    f" avg {v_avg:.2f}V; full≈{near_full_pct}%/{full_v:.2f}V"
+                    f" for {bat_model.label})"
+                ),
                 0.55,
             )
 
-        if v_min >= 4.0 and v_range < 0.2:
+        if v_min >= max(4.0, full_v - 0.05) and v_range < 0.2:
             return "mains", f"High stable voltage ({v_min:.2f}V+)", 0.65
 
-    if len(valid_levels) >= 8 and max(valid_levels) < 98:
+    usable_levels = [b for b in valid_levels if b is not None and b < 101]
+    if len(usable_levels) >= 8 and max(usable_levels) < near_full_pct:
         return (
             "battery",
-            f"Battery discharging without full recharge (max {max(valid_levels)}%)",
+            (
+                f"Battery discharging without full recharge"
+                f" (max {max(usable_levels)}%, full≈{near_full_pct}%"
+                f" for {bat_model.label})"
+            ),
             0.5,
         )
 
@@ -330,21 +357,29 @@ def predict_hours_to_critical(
     timestamps: list[float],
     voltages: list[float | None],
     *,
-    critical_voltage: float = CRITICAL_VOLTAGE,
+    critical_voltage: float | None = None,
+    model: BatteryVoltageModel | None = None,
 ) -> float | None:
     """Estimate hours until voltage hits critical, or None if not discharging."""
+    bat_model = model or resolve_battery_model(None)
+    crit = (
+        float(critical_voltage)
+        if critical_voltage is not None
+        else bat_model.critical_voltage
+    )
     valid = [v for v in voltages if v is not None]
     if not valid:
         return None
     current = valid[-1]
-    if current > 4.15:
+    # Above charge-full → not discharging meaningfully
+    if current > bat_model.near_full_voltage + 0.05:
         return None
-    if current <= critical_voltage:
+    if current <= crit:
         return 0.0
     rate = _recent_discharge_rate_vph(timestamps, voltages)
     if rate is None or rate <= 0:
         return None
-    hours = (current - critical_voltage) / rate
+    hours = (current - crit) / rate
     return min(max(hours, 0.0), 168.0)
 
 
@@ -401,16 +436,19 @@ def analyze_solar_degradation(
     timestamps: list[float],
     voltages: list[float | None],
     battery_levels: list[int | None],
+    *,
+    model: BatteryVoltageModel | None = None,
 ) -> dict[str, Any]:
     """
     Detect early battery/charger problems on solar nodes.
 
     Signals:
-    - days since near-full charge
+    - days since near-full charge (HW-aware full threshold)
     - consecutive days without daytime charge gain
     - declining daily peak charge
     - deeper overnight lows vs prior baseline
     """
+    bat_model = model or resolve_battery_model(None)
     issues: list[str] = []
     now = time.time()
 
@@ -444,10 +482,7 @@ def analyze_solar_degradation(
     days_since_full = None
     last_full_ts = None
     for ts, voltage, level in zip(timestamps, voltages, battery_levels, strict=False):
-        near_full = (level is not None and level >= NEAR_FULL_BATTERY_PCT) or (
-            voltage is not None and voltage >= FULL_CHARGE_VOLTAGE
-        )
-        if near_full:
+        if bat_model.is_near_full(level, voltage):
             last_full_ts = ts
     if last_full_ts is not None:
         days_since_full = max(0, int((now - last_full_ts) / 86400))
@@ -498,8 +533,14 @@ def analyze_solar_degradation(
             1, len(overnight_mins) - 2
         )
 
+    full_desc = (
+        f"≥{bat_model.near_full_pct}% or ≥{bat_model.near_full_voltage:.2f}V"
+        f" ({bat_model.label})"
+    )
     if days_since_full is not None and days_since_full >= 3:
-        issues.append(f"No near-full charge in {days_since_full} day(s)")
+        issues.append(
+            f"No near-full charge ({full_desc}) in {days_since_full} day(s)"
+        )
     if no_gain_streak >= 2:
         issues.append(
             f"Weak/no daytime charge gain for {no_gain_streak} consecutive day(s)"
@@ -534,6 +575,10 @@ def analyze_solar_degradation(
         "baseline_overnight_min_pct": baseline_overnight,
         "issues": issues,
         "condition": condition,
+        "near_full_pct": bat_model.near_full_pct,
+        "near_full_voltage": bat_model.near_full_voltage,
+        "voltage_model": bat_model.key,
+        "voltage_model_label": bat_model.label,
     }
 
 
@@ -594,10 +639,13 @@ def build_power_status(
     stored_power_type: str | None = None,
     force_power_type: bool = False,
     power_type_locked: bool = False,
+    hw_model: Any = None,
+    model: BatteryVoltageModel | None = None,
 ) -> dict[str, Any]:
     """Build explained power status for UI/API from prepared series."""
+    bat_model = model or resolve_battery_model(hw_model)
     power_type, reason, confidence = classify_power_source(
-        timestamps, voltages, battery_levels
+        timestamps, voltages, battery_levels, model=bat_model
     )
     # Manual override / lock always wins over auto-detection
     if (
@@ -620,20 +668,24 @@ def build_power_status(
     state = _infer_charge_state(timestamps, voltages, battery_levels, power_type)
     hours_to_critical = None
     if power_type in ("solar", "battery") and state in ("discharging", "stable"):
-        hours_to_critical = predict_hours_to_critical(timestamps, voltages)
+        hours_to_critical = predict_hours_to_critical(
+            timestamps, voltages, model=bat_model
+        )
 
     solar_info = None
     issues: list[str] = []
     if power_type == "solar":
-        solar_info = analyze_solar_degradation(timestamps, voltages, battery_levels)
+        solar_info = analyze_solar_degradation(
+            timestamps, voltages, battery_levels, model=bat_model
+        )
         issues.extend(solar_info.get("issues") or [])
 
     valid_v = [v for v in voltages if v is not None]
     if valid_v:
         latest_v = valid_v[-1]
-        if latest_v < CRITICAL_VOLTAGE:
+        if latest_v < bat_model.critical_voltage:
             issues.append(f"Voltage critically low ({latest_v:.2f}V)")
-        elif latest_v < WARNING_VOLTAGE:
+        elif latest_v < bat_model.warning_voltage:
             issues.append(f"Voltage low ({latest_v:.2f}V)")
 
     if hours_to_critical is not None and hours_to_critical <= 24:
@@ -696,6 +748,7 @@ def build_power_status(
         ),
         "issues": issues,
         "solar": solar_info,
+        "voltage_model": bat_model.as_dict(),
         "analyzed_at": time.time(),
     }
 
@@ -736,39 +789,61 @@ def _format_outlook(
 
 def _read_stored_power_meta(
     db_connection: Any, node_id: int
-) -> tuple[str | None, bool]:
-    """Return (power_type, locked) from node_info, tolerating missing columns."""
+) -> tuple[str | None, bool, str | None]:
+    """Return (power_type, locked, hw_model) from node_info."""
     stored_type = None
     locked = False
+    hw_model = None
     try:
         cursor = db_connection.cursor()
+        # Prefer full row; tolerate DBs missing newer columns.
+        row = None
         try:
             cursor.execute(
                 """
-                SELECT power_type, COALESCE(power_type_locked, 0) as power_type_locked
+                SELECT power_type,
+                       COALESCE(power_type_locked, 0) as power_type_locked,
+                       hw_model
                 FROM node_info WHERE node_id = ?
                 """,
                 (node_id,),
             )
             row = cursor.fetchone()
-            if row:
-                if hasattr(row, "keys"):
-                    stored_type = row["power_type"]
-                    locked = bool(row["power_type_locked"])
-                else:
-                    stored_type = row[0]
-                    locked = bool(row[1]) if len(row) > 1 else False
         except Exception:
-            cursor.execute(
-                "SELECT power_type FROM node_info WHERE node_id = ?",
-                (node_id,),
-            )
-            row = cursor.fetchone()
-            if row:
-                stored_type = row["power_type"] if hasattr(row, "keys") else row[0]
+            try:
+                cursor.execute(
+                    """
+                    SELECT power_type,
+                           COALESCE(power_type_locked, 0) as power_type_locked
+                    FROM node_info WHERE node_id = ?
+                    """,
+                    (node_id,),
+                )
+                row = cursor.fetchone()
+            except Exception:
+                cursor.execute(
+                    "SELECT power_type FROM node_info WHERE node_id = ?",
+                    (node_id,),
+                )
+                row = cursor.fetchone()
+
+        if row:
+            if hasattr(row, "keys"):
+                keys = set(row.keys())
+                stored_type = row["power_type"]
+                if "power_type_locked" in keys:
+                    locked = bool(row["power_type_locked"])
+                if "hw_model" in keys:
+                    hw_model = row["hw_model"]
+            else:
+                stored_type = row[0]
+                if len(row) > 1:
+                    locked = bool(row[1])
+                if len(row) > 2:
+                    hw_model = row[2]
     except Exception:
         pass
-    return stored_type, locked
+    return stored_type, locked, hw_model
 
 
 def analyze_node_power(node_id: int, db_connection: Any) -> dict[str, Any]:
@@ -777,7 +852,8 @@ def analyze_node_power(node_id: int, db_connection: Any) -> dict[str, Any]:
     if len(rows) < 3:
         rows = _fetch_telemetry_rows(db_connection, node_id, days=30)
 
-    stored_type, locked = _read_stored_power_meta(db_connection, node_id)
+    stored_type, locked, hw_model = _read_stored_power_meta(db_connection, node_id)
+    bat_model = resolve_battery_model(hw_model)
 
     timestamps, voltages, batteries = _prepare_series(rows)
     if not timestamps:
@@ -803,6 +879,7 @@ def analyze_node_power(node_id: int, db_connection: Any) -> dict[str, Any]:
             "hours_to_critical": None,
             "issues": ["No telemetry samples available"],
             "solar": None,
+            "voltage_model": bat_model.as_dict(),
             "analyzed_at": time.time(),
         }
 
@@ -813,6 +890,8 @@ def analyze_node_power(node_id: int, db_connection: Any) -> dict[str, Any]:
         stored_power_type=stored_type,
         force_power_type=locked,
         power_type_locked=locked,
+        hw_model=hw_model,
+        model=bat_model,
     )
 
 
