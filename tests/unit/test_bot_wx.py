@@ -76,6 +76,11 @@ class TestWxCommand:
         assert "RH 55%" in text
 
     @pytest.mark.unit
+    def test_wx_usage_mentions_alerts(self, bot_service: BotService):
+        text = bot_service._cmd_wx(_ctx(args=[]))
+        assert "alerts" in text.lower()
+
+    @pytest.mark.unit
     def test_wx_zip_not_found(self, bot_service: BotService):
         with patch.object(bot_service, "_lookup_zip_location", return_value=None):
             text = bot_service._cmd_wx(_ctx(args=["00000"]))

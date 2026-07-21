@@ -33,6 +33,9 @@ def _bot_config_dict(bot: BotService) -> dict:
         "traceroute_format": bot._traceroute_format,
         "traceroute_formats": list(bot._traceroute_formats),
         "welcome_new_nodes_enabled": bot._welcome_new_nodes_enabled,
+        "nws_alert_enabled": bot._nws_alert_enabled,
+        "nws_alert_zip": bot._nws_alert_zip,
+        "nws_alert_interval_minutes": bot._nws_alert_interval_minutes,
     }
 
 
@@ -220,6 +223,63 @@ def api_bot_update_config():
 
         if "welcome_new_nodes_enabled" in data:
             bot._welcome_new_nodes_enabled = bool(data["welcome_new_nodes_enabled"])
+
+        nws_zip_changed = False
+        if "nws_alert_zip" in data:
+            raw_zip = str(data["nws_alert_zip"] or "").strip()
+            if raw_zip:
+                zip5 = bot._normalize_nws_zip(raw_zip)
+                if not zip5:
+                    return (
+                        jsonify(
+                            {
+                                "error": "nws_alert_zip must be a 5-digit US ZIP code"
+                            }
+                        ),
+                        400,
+                    )
+            else:
+                zip5 = ""
+            if zip5 != bot._nws_alert_zip:
+                nws_zip_changed = True
+            bot._nws_alert_zip = zip5
+
+        if "nws_alert_enabled" in data:
+            enabled = bool(data["nws_alert_enabled"])
+            if enabled and not bot._nws_alert_zip and "nws_alert_zip" not in data:
+                return (
+                    jsonify(
+                        {"error": "Set nws_alert_zip before enabling NWS alerts"}
+                    ),
+                    400,
+                )
+            if enabled and not bot._nws_alert_zip:
+                return (
+                    jsonify(
+                        {"error": "nws_alert_zip is required when enabling NWS alerts"}
+                    ),
+                    400,
+                )
+            if enabled and not bot._nws_alert_enabled:
+                # Turning on: baseline next poll (don't dump currently-active alerts)
+                nws_zip_changed = True
+            bot._nws_alert_enabled = enabled
+
+        if "nws_alert_interval_minutes" in data:
+            minutes = int(data["nws_alert_interval_minutes"])
+            if minutes < 5 or minutes > 360:
+                return (
+                    jsonify(
+                        {
+                            "error": "nws_alert_interval_minutes must be 5-360"
+                        }
+                    ),
+                    400,
+                )
+            bot._nws_alert_interval_minutes = minutes
+
+        if nws_zip_changed:
+            bot._reset_nws_alert_baseline()
 
         # Persist so settings survive bot/process restarts
         bot._save_persisted_settings()

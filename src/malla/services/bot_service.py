@@ -191,6 +191,16 @@ class BotService:
         )
         self._last_daily_digest_date: str | None = None
         self._last_digest_text: str | None = None
+
+        # Periodic NWS severe-weather alerts (US ZIP → api.weather.gov)
+        self._nws_alert_enabled = False
+        self._nws_alert_zip = ""
+        self._nws_alert_interval_minutes = 30  # poll cadence when enabled
+        self._last_nws_alert_check: float = 0.0
+        self._nws_known_alert_ids: set[str] = set()
+        # After enable/restart, first successful poll baselines IDs (no flood).
+        self._nws_alert_ids_seeded = False
+
         # Traceroute reply style: names (default) | longnames | chain | hops
         self._traceroute_format = "names"
         self._traceroute_formats = ("names", "longnames", "chain", "hops")
@@ -239,9 +249,14 @@ class BotService:
             "broadcast_interval_hours": self._broadcast_interval_hours,
             "traceroute_format": self._traceroute_format,
             "welcome_new_nodes_enabled": self._welcome_new_nodes_enabled,
+            "nws_alert_enabled": self._nws_alert_enabled,
+            "nws_alert_zip": self._nws_alert_zip,
+            "nws_alert_interval_minutes": self._nws_alert_interval_minutes,
             "disabled_commands": sorted(self._disabled_commands),
             "last_broadcast_time": self._last_broadcast_time,
             "last_daily_digest_date": self._last_daily_digest_date,
+            "last_nws_alert_check": self._last_nws_alert_check,
+            "nws_known_alert_ids": sorted(self._nws_known_alert_ids),
         }
 
     def _save_persisted_settings(self) -> None:
@@ -334,6 +349,20 @@ class BotService:
         if "welcome_new_nodes_enabled" in stored:
             self._welcome_new_nodes_enabled = bool(stored["welcome_new_nodes_enabled"])
 
+        if "nws_alert_enabled" in stored:
+            self._nws_alert_enabled = bool(stored["nws_alert_enabled"])
+
+        if "nws_alert_zip" in stored and stored["nws_alert_zip"] is not None:
+            self._nws_alert_zip = self._normalize_nws_zip(str(stored["nws_alert_zip"]))
+
+        if "nws_alert_interval_minutes" in stored:
+            try:
+                minutes = int(stored["nws_alert_interval_minutes"])
+                if 5 <= minutes <= 360:
+                    self._nws_alert_interval_minutes = minutes
+            except (TypeError, ValueError):
+                pass
+
         if "disabled_commands" in stored and isinstance(
             stored["disabled_commands"], list
         ):
@@ -365,6 +394,28 @@ class BotService:
             if digest_now.hour >= self._daily_digest_hour:
                 self._last_daily_digest_date = today
                 seed_updates["last_daily_digest_date"] = today
+
+        if "last_nws_alert_check" in stored:
+            try:
+                self._last_nws_alert_check = float(stored["last_nws_alert_check"])
+            except (TypeError, ValueError):
+                self._last_nws_alert_check = time.time()
+                seed_updates["last_nws_alert_check"] = self._last_nws_alert_check
+        else:
+            # Don't immediately hit NWS on first boot after deploy.
+            self._last_nws_alert_check = time.time()
+            seed_updates["last_nws_alert_check"] = self._last_nws_alert_check
+
+        if "nws_known_alert_ids" in stored and isinstance(
+            stored["nws_known_alert_ids"], list
+        ):
+            self._nws_known_alert_ids = {
+                str(aid) for aid in stored["nws_known_alert_ids"] if aid
+            }
+            self._nws_alert_ids_seeded = True
+        else:
+            self._nws_known_alert_ids = set()
+            self._nws_alert_ids_seeded = False
 
         if seed_updates:
             try:
@@ -404,7 +455,9 @@ class BotService:
         self.register_command("quality", self._cmd_quality, "Your link quality")
         self.register_command("distance", self._cmd_distance, "Distance to node")
         self.register_command("time", self._cmd_time, "Server time")
-        self.register_command("wx", self._cmd_wx, "Weather by zip (!wx 90210)")
+        self.register_command(
+            "wx", self._cmd_wx, "Weather by zip / NWS alerts (!wx 90210)"
+        )
         self.register_command("lastseen", self._cmd_lastseen, "Node last activity")
         self.register_command("top", self._cmd_top, "Most active nodes")
         # Channel directory commands
@@ -3206,21 +3259,37 @@ class BotService:
         except Exception:
             return None
 
-    def _http_get_json(self, url: str, timeout: float = 3.0) -> dict[str, Any] | None:
+    def _http_get_json(
+        self,
+        url: str,
+        timeout: float = 3.0,
+        headers: dict[str, str] | None = None,
+    ) -> dict[str, Any] | None:
         """Fetch JSON from a URL with a short timeout."""
         import json
         import urllib.request
 
         try:
-            req = urllib.request.Request(
-                url,
-                headers={"User-Agent": "Malla/1.0 (Meshtastic Mesh Bot)"},
-            )
+            req_headers = {"User-Agent": "Malla/1.0 (Meshtastic Mesh Bot)"}
+            if headers:
+                req_headers.update(headers)
+            req = urllib.request.Request(url, headers=req_headers)
             with urllib.request.urlopen(req, timeout=timeout) as response:
                 return json.loads(response.read().decode())
         except Exception as e:
             logger.debug("HTTP JSON fetch failed for %s: %s", url, e)
             return None
+
+    @staticmethod
+    def _normalize_nws_zip(zip_code: str) -> str:
+        """Normalize to a 5-digit US ZIP, or empty if invalid."""
+        import re
+
+        compact = (zip_code or "").strip().replace(" ", "").replace("-", "")
+        match = re.fullmatch(r"(\d{5})(\d{4})?", compact)
+        if not match:
+            return ""
+        return match.group(1)
 
     def _wmo_weather_label(self, code: int | None) -> str:
         """Map WMO weather codes to short labels."""
@@ -3343,14 +3412,276 @@ class BotService:
             message = message.rstrip() + "..."
         return message
 
+    def _fetch_nws_alerts(
+        self, latitude: float, longitude: float
+    ) -> list[dict[str, Any]] | None:
+        """Fetch active NWS alerts for a lat/lon point. None = request failed."""
+        url = (
+            "https://api.weather.gov/alerts/active"
+            f"?point={latitude:.4f},{longitude:.4f}"
+        )
+        data = self._http_get_json(
+            url,
+            timeout=8.0,
+            headers={
+                "User-Agent": "MallaMeshBot/1.0 (https://github.com/RootPathFinder/malla)",
+                "Accept": "application/geo+json",
+            },
+        )
+        if data is None:
+            return None
+
+        severity_rank = {
+            "Extreme": 0,
+            "Severe": 1,
+            "Moderate": 2,
+            "Minor": 3,
+            "Unknown": 4,
+        }
+        alerts: list[dict[str, Any]] = []
+        for feature in data.get("features") or []:
+            props = feature.get("properties") or {}
+            status = str(props.get("status") or "Actual")
+            if status != "Actual":
+                continue
+            event = str(props.get("event") or "").strip()
+            if not event or "test" in event.lower():
+                continue
+            alert_id = str(props.get("id") or feature.get("id") or "").strip()
+            if not alert_id:
+                continue
+            alerts.append(
+                {
+                    "id": alert_id,
+                    "event": event,
+                    "severity": str(props.get("severity") or "Unknown"),
+                    "urgency": str(props.get("urgency") or ""),
+                    "certainty": str(props.get("certainty") or ""),
+                    "headline": str(props.get("headline") or ""),
+                    "area": str(props.get("areaDesc") or ""),
+                    "expires": str(props.get("expires") or ""),
+                    "ends": str(props.get("ends") or ""),
+                }
+            )
+
+        alerts.sort(
+            key=lambda a: (
+                severity_rank.get(a["severity"], 9),
+                a["event"],
+                a["id"],
+            )
+        )
+        return alerts
+
+    def _get_nws_alerts_for_zip(self, zip_code: str) -> list[dict[str, Any]] | None:
+        """Resolve ZIP and fetch NWS alerts. None on lookup/API failure."""
+        zip5 = self._normalize_nws_zip(zip_code)
+        if not zip5:
+            return []
+        place = self._lookup_zip_location(zip5)
+        if not place or place.get("latitude") is None or place.get("longitude") is None:
+            return None
+        country = str(place.get("country_code") or "").upper()
+        if country and country != "US":
+            return []
+        return self._fetch_nws_alerts(
+            float(place["latitude"]), float(place["longitude"])
+        )
+
+    @staticmethod
+    def _format_nws_expires(expires: str) -> str:
+        """Compact expiry time for LoRa (e.g. '8PM PDT' or 'Jul 22 8PM')."""
+        if not expires:
+            return ""
+        try:
+            from datetime import datetime
+
+            # NWS uses offset-aware ISO8601
+            dt = datetime.fromisoformat(expires)
+            hour12 = dt.strftime("%I").lstrip("0") or "12"
+            ampm = dt.strftime("%p")
+            tz = dt.tzname() or ""
+            # Same calendar day → time only; otherwise include month/day
+            now_local = datetime.now(dt.tzinfo) if dt.tzinfo else datetime.now()
+            if dt.date() == now_local.date():
+                stamp = f"{hour12}{ampm}"
+            else:
+                stamp = f"{dt.strftime('%b')} {dt.day} {hour12}{ampm}"
+            if tz:
+                stamp = f"{stamp} {tz}"
+            return stamp
+        except Exception:
+            return expires[:16]
+
+    def _format_nws_alert(self, zip_code: str, alert: dict[str, Any]) -> str:
+        """Format one NWS alert for a LoRa broadcast (≤220 bytes)."""
+        zip5 = self._normalize_nws_zip(zip_code) or zip_code
+        event = str(alert.get("event") or "Weather Alert")
+        if len(event) > 40:
+            event = event[:37] + "..."
+
+        until = self._format_nws_expires(
+            str(alert.get("ends") or alert.get("expires") or "")
+        )
+        area = str(alert.get("area") or "")
+        # First area segment only, truncated
+        if ";" in area:
+            area = area.split(";", 1)[0].strip()
+        if len(area) > 36:
+            area = area[:33] + "..."
+
+        lines = [f"⚠️ NWS {zip5}", event]
+        if until:
+            lines.append(f"Until {until}")
+        if area:
+            lines.append(area)
+
+        message = "\n".join(lines)
+        if len(message.encode("utf-8")) > 220:
+            message = message.encode("utf-8")[:217].decode("utf-8", errors="ignore")
+            message = message.rstrip() + "..."
+        return message
+
+    def _format_nws_alerts_summary(
+        self, zip_code: str, alerts: list[dict[str, Any]]
+    ) -> str:
+        """On-demand summary of active alerts for !wx alerts."""
+        zip5 = self._normalize_nws_zip(zip_code) or zip_code
+        if not alerts:
+            return f"⚠️ NWS {zip5}: no active alerts"
+
+        lines = [f"⚠️ NWS {zip5} ({len(alerts)}):"]
+        for alert in alerts[:4]:
+            event = str(alert.get("event") or "Alert")
+            until = self._format_nws_expires(
+                str(alert.get("ends") or alert.get("expires") or "")
+            )
+            entry = event if not until else f"{event} til {until}"
+            if len(entry) > 48:
+                entry = entry[:45] + "..."
+            candidate = "\n".join([*lines, entry])
+            if len(candidate.encode("utf-8")) > 220:
+                omitted = len(alerts) - (len(lines) - 1)
+                if omitted > 0:
+                    lines.append(f"+{omitted} more")
+                break
+            lines.append(entry)
+        else:
+            if len(alerts) > 4:
+                lines.append(f"+{len(alerts) - 4} more")
+
+        message = "\n".join(lines)
+        if len(message.encode("utf-8")) > 220:
+            message = message.encode("utf-8")[:217].decode("utf-8", errors="ignore")
+            message = message.rstrip() + "..."
+        return message
+
+    def _persist_nws_known_alert_ids(self) -> None:
+        """Persist known NWS alert IDs (capped) so restarts don't rebroadcast."""
+        # Keep most recent-ish ids; set is unordered so sort for stability.
+        ids = sorted(self._nws_known_alert_ids)[-80:]
+        self._nws_known_alert_ids = set(ids)
+        self._persist_setting("nws_known_alert_ids", ids)
+
+    def _reset_nws_alert_baseline(self) -> None:
+        """Clear known IDs so the next poll baselines without broadcasting."""
+        self._nws_known_alert_ids = set()
+        self._nws_alert_ids_seeded = False
+        self._persist_setting("nws_known_alert_ids", [])
+
+    def _maybe_send_nws_alerts(self) -> None:
+        """Poll NWS for new alerts at the configured ZIP and broadcast newcomers."""
+        if not self._nws_alert_enabled or not self._enabled:
+            return
+
+        zip5 = self._normalize_nws_zip(self._nws_alert_zip)
+        if not zip5:
+            return
+
+        now = time.time()
+        interval_seconds = max(5, int(self._nws_alert_interval_minutes)) * 60
+        if now - self._last_nws_alert_check < interval_seconds:
+            return
+
+        self._last_nws_alert_check = now
+        self._persist_setting("last_nws_alert_check", now)
+
+        alerts = self._get_nws_alerts_for_zip(zip5)
+        if alerts is None:
+            logger.debug("NWS alert poll failed for ZIP %s", zip5)
+            return
+
+        current_ids = {a["id"] for a in alerts}
+
+        if not self._nws_alert_ids_seeded:
+            # Baseline existing alerts — only broadcast ones that appear later.
+            self._nws_known_alert_ids = current_ids
+            self._nws_alert_ids_seeded = True
+            self._persist_nws_known_alert_ids()
+            logger.info(
+                "NWS alert baseline for ZIP %s: %d active (no broadcast)",
+                zip5,
+                len(current_ids),
+            )
+            return
+
+        new_alerts = [a for a in alerts if a["id"] not in self._nws_known_alert_ids]
+        # Drop expired; add anything we are about to announce.
+        self._nws_known_alert_ids = current_ids | {a["id"] for a in new_alerts}
+        self._persist_nws_known_alert_ids()
+
+        if not new_alerts:
+            return
+
+        # Cap broadcasts per poll to avoid flooding the mesh channel.
+        for alert in new_alerts[:2]:
+            message = self._format_nws_alert(zip5, alert)
+            self.queue_message(
+                text=message,
+                destination=0xFFFFFFFF,
+                channel_index=self._respond_channel_index,
+                priority=BotMessagePriority.NORMAL,
+            )
+            self._log_activity(
+                "nws_alert",
+                {
+                    "zip": zip5,
+                    "event": alert.get("event"),
+                    "id": alert.get("id"),
+                    "severity": alert.get("severity"),
+                },
+            )
+            logger.info(
+                "Queued NWS alert for ZIP %s: %s", zip5, alert.get("event")
+            )
+
     def _cmd_wx(self, ctx: CommandContext) -> str:
-        """Handle !wx <zip> — quick weather report, or !wx sensors for mesh env data."""
+        """Handle !wx <zip>, !wx alerts [zip], or !wx sensors."""
         try:
             if not ctx.args:
-                return f"Usage: {self._command_prefix}wx <zip>  (or sensors)"
+                return (
+                    f"Usage: {self._command_prefix}wx <zip>  "
+                    f"(or alerts [zip], sensors)"
+                )
 
-            if ctx.args[0].lower() == "sensors":
+            first = ctx.args[0].lower()
+            if first == "sensors":
                 return self._cmd_wx_sensors(ctx)
+
+            if first in ("alerts", "alert", "nws"):
+                zip_arg = " ".join(ctx.args[1:]).strip() if len(ctx.args) > 1 else ""
+                zip5 = self._normalize_nws_zip(zip_arg) if zip_arg else self._normalize_nws_zip(
+                    self._nws_alert_zip
+                )
+                if not zip5:
+                    return (
+                        f"Usage: {self._command_prefix}wx alerts <zip>  "
+                        "(or set NWS ZIP in Mesh Admin)"
+                    )
+                alerts = self._get_nws_alerts_for_zip(zip5)
+                if alerts is None:
+                    return "⚠️ NWS alerts unavailable"
+                return self._format_nws_alerts_summary(zip5, alerts)
 
             zip_code = " ".join(ctx.args).strip().upper()
             # Allow common postal formats: 90210, 90210-1234, M5V 2T6
@@ -3830,6 +4161,7 @@ class BotService:
                     self._persist_setting("last_broadcast_time", now)
 
                 self._maybe_send_daily_digest()
+                self._maybe_send_nws_alerts()
                 self._maybe_welcome_new_nodes()
 
                 # Check every minute so the daily digest hits near the hour

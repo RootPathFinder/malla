@@ -1954,6 +1954,31 @@
                                         Use <code>!net</code> anytime.
                                     </div>
                                     <hr class="my-2">
+                                    <div class="small fw-semibold mb-2">NWS Weather Alerts</div>
+                                    <div class="form-check form-switch mb-2">
+                                        <input class="form-check-input" type="checkbox" id="botNwsAlertEnabled">
+                                        <label class="form-check-label small" for="botNwsAlertEnabled">
+                                            Enable periodic alerts
+                                        </label>
+                                    </div>
+                                    <div class="mb-2">
+                                        <label class="form-label small mb-1" for="botNwsAlertZip">US ZIP code</label>
+                                        <input type="text" class="form-control form-control-sm"
+                                               id="botNwsAlertZip" maxlength="10" placeholder="90210"
+                                               inputmode="numeric" autocomplete="postal-code">
+                                    </div>
+                                    <div class="d-flex align-items-center gap-1 mb-2">
+                                        <label class="form-label small mb-0" for="botNwsAlertInterval">Poll every</label>
+                                        <input type="number" class="form-control form-control-sm"
+                                               id="botNwsAlertInterval" min="5" max="360" value="30"
+                                               style="width: 4.5rem;">
+                                        <span class="small text-muted">min</span>
+                                    </div>
+                                    <div class="text-muted small mb-2">
+                                        Broadcasts new NWS watches/warnings for this ZIP to the respond channel.
+                                        On-demand: <code>!wx alerts</code> or <code>!wx alerts 90210</code>.
+                                    </div>
+                                    <hr class="my-2">
                                     <div class="small fw-semibold mb-2">Channel Directory Broadcast</div>
                                     <div class="d-flex align-items-center justify-content-between gap-2 mb-2">
                                         <div class="form-check form-switch mb-0">
@@ -10351,6 +10376,8 @@
             setIfBlurred('botDailyDigestTimezone', data.daily_digest_timezone || 'UTC');
             setIfBlurred('botBroadcastIntervalHours', data.broadcast_interval_hours ?? 12);
             setIfBlurred('botTracerouteFormat', data.traceroute_format || 'names');
+            setIfBlurred('botNwsAlertZip', data.nws_alert_zip || '');
+            setIfBlurred('botNwsAlertInterval', data.nws_alert_interval_minutes ?? 30);
 
             const waitEl = document.getElementById('botWaitForJobs');
             if (waitEl && document.activeElement !== waitEl) {
@@ -10367,6 +10394,10 @@
             const welcomeEl = document.getElementById('botWelcomeNewNodes');
             if (welcomeEl && document.activeElement !== welcomeEl) {
                 welcomeEl.checked = data.welcome_new_nodes_enabled !== false;
+            }
+            const nwsEl = document.getElementById('botNwsAlertEnabled');
+            if (nwsEl && document.activeElement !== nwsEl) {
+                nwsEl.checked = !!data.nws_alert_enabled;
             }
 
         } catch (error) {
@@ -10644,6 +10675,9 @@
         const broadcastIntervalHours = parseFloat(document.getElementById('botBroadcastIntervalHours').value);
             const tracerouteFormat = document.getElementById('botTracerouteFormat').value || 'names';
         const welcomeNewNodes = document.getElementById('botWelcomeNewNodes').checked;
+        const nwsAlertEnabled = document.getElementById('botNwsAlertEnabled').checked;
+        const nwsAlertZip = (document.getElementById('botNwsAlertZip').value || '').trim();
+        const nwsAlertInterval = parseInt(document.getElementById('botNwsAlertInterval').value, 10);
 
         try {
             const response = await fetch('/api/bot/config', {
@@ -10661,7 +10695,10 @@
                     channel_broadcast_enabled: channelBroadcastEnabled,
                     broadcast_interval_hours: Number.isFinite(broadcastIntervalHours) ? broadcastIntervalHours : 12,
                     traceroute_format: tracerouteFormat,
-                    welcome_new_nodes_enabled: welcomeNewNodes
+                    welcome_new_nodes_enabled: welcomeNewNodes,
+                    nws_alert_enabled: nwsAlertEnabled,
+                    nws_alert_zip: nwsAlertZip,
+                    nws_alert_interval_minutes: Number.isFinite(nwsAlertInterval) ? nwsAlertInterval : 30
                 })
             });
             const data = await response.json();

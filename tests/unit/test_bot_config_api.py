@@ -26,6 +26,9 @@ class TestBotConfigDict:
         bot_service._min_send_interval = 3.5
         bot_service._traceroute_format = "hops"
         bot_service._welcome_new_nodes_enabled = False
+        bot_service._nws_alert_enabled = True
+        bot_service._nws_alert_zip = "98101"
+        bot_service._nws_alert_interval_minutes = 15
 
         config = _bot_config_dict(bot_service)
 
@@ -45,6 +48,9 @@ class TestBotConfigDict:
             "hops",
         ]
         assert config["welcome_new_nodes_enabled"] is False
+        assert config["nws_alert_enabled"] is True
+        assert config["nws_alert_zip"] == "98101"
+        assert config["nws_alert_interval_minutes"] == 15
         assert "listen_channels" in config
         assert "respond_channel_index" in config
         assert "wait_for_jobs" in config
