@@ -918,15 +918,17 @@ class NeighborService:
     @staticmethod
     def _apply_peer_distances(
         node_id: int, by_id: dict[int, dict[str, Any]]
-    ) -> None:
-        """Attach geographic distance when both nodes have known positions."""
-        if not by_id:
-            return
+    ) -> dict[str, float] | None:
+        """Attach lat/lon + geographic distance when positions are known.
+
+        Returns the subject node's ``{latitude, longitude}`` when available.
+        """
+        center: dict[str, float] | None = None
         try:
             from ..database.repositories import LocationRepository
             from ..utils.geo_utils import calculate_distance
 
-            node_ids = [node_id, *by_id.keys()]
+            node_ids = [node_id, *list(by_id.keys())]
             locations = LocationRepository.get_node_locations(
                 {"node_ids": node_ids}
             )
@@ -936,11 +938,20 @@ class NeighborService:
                 if loc.get("latitude") is not None and loc.get("longitude") is not None
             }
             self_loc = by_loc.get(node_id)
-            if not self_loc:
-                return
+            if self_loc:
+                center = {
+                    "latitude": float(self_loc["latitude"]),
+                    "longitude": float(self_loc["longitude"]),
+                }
             for peer_id, entry in by_id.items():
                 peer_loc = by_loc.get(peer_id)
                 if not peer_loc:
+                    entry.setdefault("latitude", None)
+                    entry.setdefault("longitude", None)
+                    continue
+                entry["latitude"] = float(peer_loc["latitude"])
+                entry["longitude"] = float(peer_loc["longitude"])
+                if not self_loc:
                     continue
                 dist_km = calculate_distance(
                     self_loc["latitude"],
@@ -955,6 +966,7 @@ class NeighborService:
                     entry["distance_display"] = f"{dist_km:.1f} km"
         except Exception as e:
             logger.debug("Distance enrichment failed for %s: %s", node_id, e)
+        return center
 
     @staticmethod
     def _source_label(sources: list[str]) -> str:
@@ -1146,12 +1158,14 @@ class NeighborService:
                     entry["node_name"] = named
             entry["hex_id"] = f"!{peer_id:08x}"
 
-        NeighborService._apply_peer_distances(node_id, by_id)
+        center = NeighborService._apply_peer_distances(node_id, by_id)
 
         neighbors = list(by_id.values())
         for n in neighbors:
             n["last_seen_relative"] = format_time_ago(n.get("last_seen"))
             n["source_label"] = NeighborService._source_label(n.get("sources") or [])
+            n.setdefault("latitude", None)
+            n.setdefault("longitude", None)
             # Prefer observed direction for Direct Receptions deep-link
             if n.get("heard_from"):
                 n["direct_receptions_direction"] = "received"
@@ -1171,6 +1185,37 @@ class NeighborService:
         if limit and len(neighbors) > limit:
             neighbors = neighbors[:limit]
 
+        both_ways = sum(
+            1
+            for n in neighbors
+            if n.get("confirmed_both_ways") or n.get("is_bidirectional")
+        )
+        with_location = sum(
+            1
+            for n in neighbors
+            if n.get("latitude") is not None and n.get("longitude") is not None
+        )
+        snr_vals = [
+            float(n["snr"]) for n in neighbors if n.get("snr") is not None
+        ]
+        dist_vals = [
+            float(n["distance_km"])
+            for n in neighbors
+            if n.get("distance_km") is not None
+        ]
+        summary = {
+            "neighbor_count": len(neighbors),
+            "both_ways": both_ways,
+            "one_way": max(0, len(neighbors) - both_ways),
+            "with_location": with_location,
+            "avg_snr": round(sum(snr_vals) / len(snr_vals), 1) if snr_vals else None,
+            "best_snr": round(max(snr_vals), 1) if snr_vals else None,
+            "avg_distance_km": (
+                round(sum(dist_vals) / len(dist_vals), 2) if dist_vals else None
+            ),
+            "max_distance_km": round(max(dist_vals), 2) if dist_vals else None,
+        }
+
         return {
             "node_id": node_id,
             "hex_id": f"!{node_id:08x}",
@@ -1179,5 +1224,7 @@ class NeighborService:
             "neighbor_count": len(neighbors),
             "last_neighborinfo_report": ni_last_report,
             "hours": window_hours,
+            "center": center,
+            "summary": summary,
             "neighbors": neighbors,
         }
