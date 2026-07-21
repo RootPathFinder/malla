@@ -1529,6 +1529,8 @@ class SerialPublisher:
         if self._interface is None:
             return None
 
+        target_node_id = int(target_node_id) & 0xFFFFFFFF
+
         try:
             # Create telemetry request
             telemetry = telemetry_pb2.Telemetry()

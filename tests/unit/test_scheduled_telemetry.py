@@ -288,8 +288,9 @@ class TestSolicitHardening:
         publisher.get_telemetry_stats.return_value = {}
         publisher.get_latest_node_telemetry.return_value = None
         publisher.send_telemetry_request.side_effect = [
-            None,  # power_metrics attempt 1
+            None,  # power_metrics attempt 1 (no-ACK)
             None,  # power_metrics attempt 2
+            None,  # power_metrics attempt 3
             {  # device_metrics fallback attempt 1
                 "telemetry": {"device_metrics": {"battery_level": 60, "voltage": 4.0}},
                 "timestamp": time.time(),

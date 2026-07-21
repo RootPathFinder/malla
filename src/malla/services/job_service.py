@@ -597,9 +597,13 @@ class JobService:
                 for packet in packets[:5]:  # Check last 5 traceroutes
                     if packet.get("raw_payload"):
                         route_data = parse_traceroute_payload(packet["raw_payload"])
-                        route_nodes = route_data.get("route_nodes", [])
+                        route_nodes = route_data.get("route_nodes") or []
+                        snr_towards = route_data.get("snr_towards") or []
                         if route_nodes:
                             hop_counts.append(len(route_nodes))
+                        elif snr_towards:
+                            # Direct RF path: no intermediate route nodes
+                            hop_counts.append(0)
 
                 if hop_counts:
                     # Use the median hop count for stability
@@ -625,9 +629,12 @@ class JobService:
                 for packet in packets[:5]:
                     if packet.get("raw_payload"):
                         route_data = parse_traceroute_payload(packet["raw_payload"])
-                        route_nodes = route_data.get("route_nodes", [])
+                        route_nodes = route_data.get("route_nodes") or []
+                        snr_towards = route_data.get("snr_towards") or []
                         if route_nodes:
                             hop_counts.append(len(route_nodes))
+                        elif snr_towards:
+                            hop_counts.append(0)
 
                 if hop_counts:
                     hop_counts.sort()

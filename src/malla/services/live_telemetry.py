@@ -60,16 +60,28 @@ def resolve_live_telemetry_hops(
     """
     Resolve hop distance for live telemetry budgeting.
 
-    Preference: traceroute estimate -> client hint -> recent packet avg -> 1.
+    Preference: min(traceroute, packets) when both exist, else either,
+    else client hint, else default 0 (assume local until proven otherwise —
+    far-path budgets still apply once hop estimates arrive).
     """
+    traceroute_hops: int | None = None
     try:
         from .job_service import JobService
 
         estimated = JobService()._estimate_hop_count(node_id_int)
         if estimated is not None:
-            return int(estimated), "traceroute"
+            traceroute_hops = int(estimated)
     except Exception as e:
         logger.debug(f"Traceroute hop estimate failed for !{node_id_int:08x}: {e}")
+
+    packet_hops = estimate_hops_from_recent_packets(node_id_int)
+
+    if traceroute_hops is not None and packet_hops is not None:
+        return min(traceroute_hops, packet_hops), "traceroute+packets"
+    if traceroute_hops is not None:
+        return traceroute_hops, "traceroute"
+    if packet_hops is not None:
+        return packet_hops, "packets"
 
     if client_hops is not None and client_hops != "":
         try:
@@ -77,11 +89,10 @@ def resolve_live_telemetry_hops(
         except (TypeError, ValueError):
             pass
 
-    packet_hops = estimate_hops_from_recent_packets(node_id_int)
-    if packet_hops is not None:
-        return packet_hops, "packets"
-
-    return 1, "default"
+    # Unknown path: budget like a local node (3 tries, no-ACK first). Mis-labeling
+    # a far node as local is safer than starving a local repeater with a short
+    # 2-try ACK-heavy budget that historically false-failed.
+    return 0, "default"
 
 
 def request_live_telemetry_with_retry(
@@ -93,12 +104,18 @@ def request_live_telemetry_with_retry(
     attempts: int = 2,
     hop_limit: int | None = None,
     want_ack: bool = False,
+    want_ack_sequence: list[bool] | None = None,
     retry_delay_s: float = 0.5,
 ) -> tuple[dict[str, Any] | None, int]:
     """Try live telemetry with hop-aware retries. Returns (result, attempts_used)."""
+    node_id_int = int(node_id_int) & 0xFFFFFFFF
     attempts_used = 0
     result = None
     attempt_timeouts = split_live_telemetry_attempts(timeout, attempts=attempts)
+    ack_sequence = list(want_ack_sequence or [])
+    while len(ack_sequence) < len(attempt_timeouts):
+        ack_sequence.append(bool(want_ack))
+
     for idx, attempt_timeout in enumerate(attempt_timeouts):
         attempts_used += 1
         result = publisher.send_telemetry_request(
@@ -106,7 +123,7 @@ def request_live_telemetry_with_retry(
             telemetry_type=telemetry_type,
             timeout=attempt_timeout,
             hop_limit=hop_limit,
-            want_ack=want_ack,
+            want_ack=bool(ack_sequence[idx]),
         )
         if result:
             if attempts_used > 1:
@@ -401,6 +418,7 @@ def solicit_node_telemetry(
     ``fresh`` is True only for live/late RF replies (not recycled last_known).
     Scheduled polls should require ``fresh`` + packet_history persistence.
     """
+    node_id_int = int(node_id_int) & 0xFFFFFFFF
     publisher, connection_type = get_connected_mesh_publisher()
     if publisher is None:
         if connection_type == "mqtt":
@@ -440,6 +458,7 @@ def solicit_node_telemetry(
                 attempts=budget["attempts"],
                 hop_limit=budget["hop_limit"],
                 want_ack=budget["want_ack"],
+                want_ack_sequence=budget.get("want_ack_sequence"),
                 retry_delay_s=budget["retry_delay_s"],
             )
             attempts += attempt_count
