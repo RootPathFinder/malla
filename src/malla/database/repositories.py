@@ -1945,6 +1945,9 @@ class NodeRepository:
             conn = get_db_connection()
             cursor = conn.cursor()
 
+            # Match solicited writes which always store unsigned 32-bit ids.
+            node_id_u = int(node_id) & 0xFFFFFFFF
+
             # Get multiple recent telemetry packets to combine device and environment metrics
             # Nodes often send these in separate packets
             query = """
@@ -1957,7 +1960,7 @@ class NodeRepository:
             LIMIT 10
             """
 
-            cursor.execute(query, (node_id,))
+            cursor.execute(query, (node_id_u,))
             results = cursor.fetchall()
 
             # Get power analysis info
@@ -1969,7 +1972,7 @@ class NodeRepository:
                            battery_health_score, COALESCE(power_type_locked, 0) as power_type_locked
                     FROM node_info WHERE node_id = ?
                     """,
-                    (node_id,),
+                    (node_id_u,),
                 )
                 power_info = cursor.fetchone()
             except Exception:
@@ -1981,14 +1984,14 @@ class NodeRepository:
                                battery_health_score
                         FROM node_info WHERE node_id = ?
                         """,
-                        (node_id,),
+                        (node_id_u,),
                     )
                     power_info = cursor.fetchone()
                 except Exception:
                     try:
                         cursor.execute(
                             "SELECT power_type, power_type_reason, power_analysis_timestamp FROM node_info WHERE node_id = ?",
-                            (node_id,),
+                            (node_id_u,),
                         )
                         power_info = cursor.fetchone()
                     except Exception:

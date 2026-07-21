@@ -1790,8 +1790,8 @@
                                                 <tr>
                                                     <th>Node</th>
                                                     <th>Interval</th>
-                                                    <th>Types</th>
-                                                    <th>Last</th>
+                                                    <th>Last run</th>
+                                                    <th>Status</th>
                                                     <th></th>
                                                 </tr>
                                             </thead>
@@ -11458,19 +11458,32 @@
 
     async function runTelemetryScheduleNow(nodeId) {
         try {
-            showAlert('info', 'Soliciting telemetry…');
+            showTelemetryScheduleFormAlert('info', `Soliciting telemetry for ${nodeId}…`);
             const resp = await fetch(`/api/admin/node/${encodeURIComponent(nodeId)}/telemetry/schedule/run`, {
                 method: 'POST',
             });
             const data = await resp.json();
+            const detail = data.detail || {};
             if (data.success) {
-                showAlert('success', `Telemetry received from ${data.hex_id || nodeId} (${data.telemetry_type || 'device_metrics'})`);
+                const hops = data.estimated_hops != null ? `${data.estimated_hops} hop` : '? hop';
+                const src = data.source || detail.source || 'live';
+                showTelemetryScheduleFormAlert(
+                    'success',
+                    `OK ${data.hex_id || nodeId}: fresh ${src} reply stored to node details `
+                    + `(${hops}, attempts ${data.attempts ?? detail.attempts ?? '?'})`
+                );
             } else {
-                showAlert('warning', data.error || 'No response');
+                const err = data.error || detail.error || 'No response';
+                const bits = [];
+                if (data.source || detail.source) bits.push(`source=${data.source || detail.source}`);
+                if (detail.persisted_packet_history === false) bits.push('packet_history not written');
+                if (detail.persisted_telemetry_data) bits.push('telemetry_data wrote (details age still stale)');
+                const suffix = bits.length ? ` [${bits.join('; ')}]` : '';
+                showTelemetryScheduleFormAlert('warning', `${err}${suffix}`);
             }
             await loadTelemetrySchedules();
         } catch (err) {
-            showAlert('danger', `Error: ${err.message}`);
+            showTelemetryScheduleFormAlert('danger', `Error: ${err.message}`);
         }
     }
 
@@ -11491,10 +11504,16 @@
             } else if (data.skipped_reason === 'mqtt_unsupported') {
                 showTelemetryScheduleFormAlert('warning', 'Scheduled telemetry requires TCP or Serial (not MQTT).');
             } else {
-                showTelemetryScheduleFormAlert(
-                    'success',
-                    `Due run: claimed ${data.claimed || 0}, ok ${data.succeeded || 0}, fail ${data.failed || 0}`
-                );
+                const fails = (data.results || []).filter((r) => !r.success);
+                let msg = `Due run: claimed ${data.claimed || 0}, ok ${data.succeeded || 0}, fail ${data.failed || 0}`;
+                if (fails.length) {
+                    msg += ' — ' + fails.slice(0, 3).map((r) => {
+                        const name = r.hex_id || r.node_id;
+                        return `${name}: ${r.error || 'failed'}`;
+                    }).join('; ');
+                    if (fails.length > 3) msg += ` (+${fails.length - 3} more)`;
+                }
+                showTelemetryScheduleFormAlert(fails.length ? 'warning' : 'success', msg);
             }
             await loadTelemetrySchedules();
         } catch (err) {
@@ -11505,6 +11524,46 @@
     function editTelemetrySchedule(nodeId) {
         const schedule = telemetrySchedulesCache[String(nodeId)];
         if (schedule) setTelemetryScheduleForm(schedule);
+    }
+
+    function formatScheduleRunStatus(s) {
+        const detail = s.last_run_detail || {};
+        const runAt = s.last_run_at || s.last_requested_at;
+        let when = runAt ? formatTimeAgo(runAt) : 'Never';
+        let badge;
+        if (s.last_run_ok === true) {
+            badge = '<span class="badge bg-success">OK</span>';
+        } else if (s.last_run_ok === false) {
+            badge = '<span class="badge bg-danger">Fail</span>';
+        } else if (s.last_success_at) {
+            badge = '<span class="badge bg-secondary">Prior OK</span>';
+        } else {
+            badge = '<span class="badge bg-secondary">—</span>';
+        }
+
+        const meta = [];
+        const source = detail.source;
+        if (source) meta.push(escapeHtml(String(source)));
+        if (detail.estimated_hops != null) meta.push(`${escapeHtml(String(detail.estimated_hops))} hop`);
+        if (detail.attempts != null) meta.push(`${escapeHtml(String(detail.attempts))} try`);
+        if (s.last_run_ok === true && detail.persisted_packet_history) {
+            meta.push('node details updated');
+        } else if (s.last_run_ok === false && detail.persisted_packet_history === false && detail.fresh) {
+            meta.push('reply not stored');
+        }
+
+        let html = `<div>${badge} <span class="text-muted">${escapeHtml(when)}</span></div>`;
+        if (meta.length) {
+            html += `<div class="small text-muted">${meta.join(' · ')}</div>`;
+        }
+        if (s.last_success_at && s.last_run_ok === false) {
+            html += `<div class="small text-muted">Last OK ${escapeHtml(formatTimeAgo(s.last_success_at))}</div>`;
+        }
+        const err = s.last_error || detail.error;
+        if (err) {
+            html += `<div class="text-danger small">${escapeHtml(err)}</div>`;
+        }
+        return html;
     }
 
     function renderTelemetrySchedules(schedules) {
@@ -11524,16 +11583,7 @@
             const enabledBadge = s.enabled
                 ? '<span class="badge bg-success">On</span>'
                 : '<span class="badge bg-secondary">Off</span>';
-            const types = escapeHtml((s.telemetry_types || []).join(', '));
-            let last = 'Never';
-            if (s.last_success_at) {
-                last = formatTimeAgo(s.last_success_at);
-            } else if (s.last_requested_at) {
-                last = `${formatTimeAgo(s.last_requested_at)} (no reply)`;
-            }
-            if (s.last_error) {
-                last += `<div class="text-danger small">${escapeHtml(s.last_error)}</div>`;
-            }
+            const statusHtml = formatScheduleRunStatus(s);
             const nodeKey = s.hex_id || s.node_id;
             return `
                 <tr>
@@ -11542,8 +11592,8 @@
                         <div class="small text-muted">${hex} ${enabledBadge}</div>
                     </td>
                     <td>${s.interval_minutes || Math.floor(s.interval_seconds / 60)}m</td>
-                    <td class="small">${types}</td>
-                    <td class="small">${last}</td>
+                    <td class="small">${s.last_run_at ? escapeHtml(formatTimeAgo(s.last_run_at)) : (s.last_requested_at ? escapeHtml(formatTimeAgo(s.last_requested_at)) + ' (requested)' : 'Never')}</td>
+                    <td class="small">${statusHtml}</td>
                     <td class="text-nowrap">
                         <button class="btn btn-outline-primary btn-sm" title="Edit"
                                 onclick="editTelemetrySchedule(${s.node_id})">
@@ -11579,9 +11629,19 @@
                 const conn = runner.publisher_connected
                     ? `connected (${runner.connection_type || '?'})`
                     : 'no TCP/Serial';
+                const last = runner.last_run || {};
+                let lastTxt = '';
+                if (last.last_tick_at) {
+                    lastTxt = ` · last tick ${formatTimeAgo(last.last_tick_at)}`;
+                    if (last.claimed) {
+                        lastTxt += ` (ok ${last.succeeded || 0}/fail ${last.failed || 0})`;
+                    } else if (last.skipped_reason) {
+                        lastTxt += ` (${last.skipped_reason})`;
+                    }
+                }
                 runnerEl.textContent = runner.running
-                    ? `Runner: active · ${conn}`
-                    : `Runner: stopped · ${conn}`;
+                    ? `Runner: active · ${conn}${lastTxt}`
+                    : `Runner: stopped · ${conn}${lastTxt}`;
             }
             renderTelemetrySchedules(data.schedules || []);
         } catch (err) {

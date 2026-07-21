@@ -38,6 +38,9 @@ def _ensure_table(cursor: sqlite3.Cursor) -> None:
             last_success_at REAL,
             last_error TEXT,
             last_telemetry_type TEXT,
+            last_run_at REAL,
+            last_run_ok INTEGER,
+            last_run_detail TEXT,
             created_at REAL NOT NULL,
             updated_at REAL NOT NULL,
             CHECK(interval_seconds >= 1800)
@@ -50,6 +53,31 @@ def _ensure_table(cursor: sqlite3.Cursor) -> None:
         ON scheduled_telemetry_requests(enabled, last_requested_at)
         """
     )
+    for column_name, column_type in (
+        ("last_run_at", "REAL"),
+        ("last_run_ok", "INTEGER"),
+        ("last_run_detail", "TEXT"),
+    ):
+        try:
+            cursor.execute(
+                f"ALTER TABLE scheduled_telemetry_requests "
+                f"ADD COLUMN {column_name} {column_type}"
+            )
+        except sqlite3.OperationalError as e:
+            if "duplicate column" not in str(e).lower():
+                raise
+
+
+def _parse_last_run_detail(raw: Any) -> dict[str, Any] | None:
+    if not raw:
+        return None
+    if isinstance(raw, dict):
+        return raw
+    try:
+        parsed = json.loads(raw)
+        return parsed if isinstance(parsed, dict) else None
+    except (TypeError, json.JSONDecodeError):
+        return None
 
 
 def init_scheduled_telemetry_tables() -> None:
@@ -116,6 +144,16 @@ def _row_to_dict(row: sqlite3.Row) -> dict[str, Any]:
         types = json.loads(types_raw) if types_raw else list(DEFAULT_TELEMETRY_TYPES)
     except (TypeError, json.JSONDecodeError):
         types = list(DEFAULT_TELEMETRY_TYPES)
+
+    keys = set(row.keys()) if hasattr(row, "keys") else set()
+    last_run_at = row["last_run_at"] if "last_run_at" in keys else None
+    last_run_ok = row["last_run_ok"] if "last_run_ok" in keys else None
+    last_run_detail = (
+        _parse_last_run_detail(row["last_run_detail"])
+        if "last_run_detail" in keys
+        else None
+    )
+
     return {
         "node_id": int(row["node_id"]),
         "hex_id": f"!{int(row['node_id']):08x}",
@@ -128,6 +166,9 @@ def _row_to_dict(row: sqlite3.Row) -> dict[str, Any]:
         "last_success_at": row["last_success_at"],
         "last_error": row["last_error"],
         "last_telemetry_type": row["last_telemetry_type"],
+        "last_run_at": last_run_at,
+        "last_run_ok": None if last_run_ok is None else bool(last_run_ok),
+        "last_run_detail": last_run_detail,
         "created_at": row["created_at"],
         "updated_at": row["updated_at"],
     }
@@ -355,8 +396,17 @@ class ScheduledTelemetryRepository:
         telemetry_type: str,
         error: str | None = None,
         advance_type_index: bool = True,
+        run_detail: dict[str, Any] | None = None,
     ) -> None:
         now = time.time()
+        detail = dict(run_detail or {})
+        detail.setdefault("ok", bool(success))
+        detail.setdefault("at", now)
+        detail.setdefault("telemetry_type", telemetry_type)
+        if error and not success:
+            detail.setdefault("error", error)
+        detail_json = json.dumps(detail, separators=(",", ":"), default=str)
+
         conn = get_db_connection()
         cursor = conn.cursor()
         _ensure_table(cursor)
@@ -368,6 +418,9 @@ class ScheduledTelemetryRepository:
                     last_error = ?,
                     last_telemetry_type = ?,
                     next_type_index = next_type_index + 1,
+                    last_run_at = ?,
+                    last_run_ok = ?,
+                    last_run_detail = ?,
                     updated_at = ?
                 WHERE node_id = ?
                 """,
@@ -376,6 +429,9 @@ class ScheduledTelemetryRepository:
                     now,
                     None if success else (error or "request failed"),
                     telemetry_type,
+                    now,
+                    1 if success else 0,
+                    detail_json,
                     now,
                     node_id,
                 ),
@@ -387,6 +443,9 @@ class ScheduledTelemetryRepository:
                 SET last_success_at = CASE WHEN ? THEN ? ELSE last_success_at END,
                     last_error = ?,
                     last_telemetry_type = ?,
+                    last_run_at = ?,
+                    last_run_ok = ?,
+                    last_run_detail = ?,
                     updated_at = ?
                 WHERE node_id = ?
                 """,
@@ -395,6 +454,9 @@ class ScheduledTelemetryRepository:
                     now,
                     None if success else (error or "request failed"),
                     telemetry_type,
+                    now,
+                    1 if success else 0,
+                    detail_json,
                     now,
                     node_id,
                 ),

@@ -228,7 +228,8 @@ def telemetry_dict_to_raw_payload(telemetry: dict[str, Any] | None) -> bytes | N
             return None
         msg = telemetry_pb2.Telemetry()
         ParseDict(cleaned, msg, ignore_unknown_fields=True)
-        return msg.SerializeToString()
+        payload = msg.SerializeToString()
+        return payload if payload else None
     except Exception:
         return None
 
