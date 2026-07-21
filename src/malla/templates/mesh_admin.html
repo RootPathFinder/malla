@@ -1718,10 +1718,9 @@
                     <div class="alert alert-info small mb-3">
                         <i class="bi bi-info-circle"></i>
                         Routers on recent firmware often broadcast telemetry at most every 12 hours.
-                        Schedule <strong>solicited</strong> polls here (minimum 30 minutes) so health
-                        and battery monitoring stay useful. Requires TCP or Serial admin connection.
-                        Keep <strong>Device / battery</strong> enabled — secondary types fall back to it
-                        when a router has no sensors.
+                        Schedule <strong>solicited</strong> device/battery polls here (minimum 30 minutes).
+                        Requires TCP or Serial. A run only counts as success when a fresh mesh reply is
+                        stored — that updates node “last telemetry” age, not just the schedule timestamp.
                     </div>
                     <div class="row">
                         <div class="col-lg-5 mb-4">
@@ -1749,43 +1748,15 @@
                                         <div class="form-text">Minimum 30 minutes. Default 60.</div>
                                     </div>
                                     <div class="mb-3">
-                                        <label class="form-label">Telemetry types (rotated each poll)</label>
-                                        <div class="row g-1" id="telemetryScheduleTypeChecks">
-                                            <div class="col-6">
-                                                <div class="form-check">
-                                                    <input class="form-check-input telemetry-schedule-type" type="checkbox"
-                                                           value="device_metrics" id="tsTypeDevice" checked>
-                                                    <label class="form-check-label small" for="tsTypeDevice">Device / battery</label>
-                                                </div>
-                                            </div>
-                                            <div class="col-6">
-                                                <div class="form-check">
-                                                    <input class="form-check-input telemetry-schedule-type" type="checkbox"
-                                                           value="environment_metrics" id="tsTypeEnv">
-                                                    <label class="form-check-label small" for="tsTypeEnv">Environment</label>
-                                                </div>
-                                            </div>
-                                            <div class="col-6">
-                                                <div class="form-check">
-                                                    <input class="form-check-input telemetry-schedule-type" type="checkbox"
-                                                           value="power_metrics" id="tsTypePower">
-                                                    <label class="form-check-label small" for="tsTypePower">Power</label>
-                                                </div>
-                                            </div>
-                                            <div class="col-6">
-                                                <div class="form-check">
-                                                    <input class="form-check-input telemetry-schedule-type" type="checkbox"
-                                                           value="local_stats" id="tsTypeLocal">
-                                                    <label class="form-check-label small" for="tsTypeLocal">Local stats</label>
-                                                </div>
-                                            </div>
-                                            <div class="col-6">
-                                                <div class="form-check">
-                                                    <input class="form-check-input telemetry-schedule-type" type="checkbox"
-                                                           value="air_quality_metrics" id="tsTypeAq">
-                                                    <label class="form-check-label small" for="tsTypeAq">Air quality</label>
-                                                </div>
-                                            </div>
+                                        <label class="form-label">Telemetry type</label>
+                                        <div class="text-muted small mb-1">
+                                            Schedules always solicit <strong>device / battery</strong> metrics
+                                            so node health and “last telemetry” stay in sync.
+                                        </div>
+                                        <div class="form-check">
+                                            <input class="form-check-input telemetry-schedule-type" type="checkbox"
+                                                   value="device_metrics" id="tsTypeDevice" checked disabled>
+                                            <label class="form-check-label small" for="tsTypeDevice">Device / battery</label>
                                         </div>
                                     </div>
                                     <div class="form-check form-switch mb-3">
@@ -11406,8 +11377,7 @@
     }
 
     function getSelectedTelemetryScheduleTypes() {
-        return Array.from(document.querySelectorAll('.telemetry-schedule-type:checked'))
-            .map((el) => el.value);
+        return ['device_metrics'];
     }
 
     function setTelemetryScheduleForm(schedule) {

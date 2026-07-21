@@ -149,14 +149,18 @@ def test_detect_battery_power_type(db_with_telemetry):
         (node_id, "!000003ea", "Battery Node"),
     )
 
-    # Create declining voltage pattern (battery discharge)
-    current_time = time.time()
+    # Midnight-aligned UTC base so loop hour == UTC hour. Using wall-clock
+    # relative timestamps can fake an AM→PM rise and misclassify as solar.
+    now = datetime.now(tz=UTC)
+    base = (now - timedelta(days=6)).replace(
+        hour=0, minute=0, second=0, microsecond=0
+    ).timestamp()
     for day in range(7):
         for hour in range(24):
-            timestamp = current_time - ((6 - day) * 24 * 3600) + (hour * 3600)
-            # Steadily declining voltage
+            timestamp = base + (day * 24 * 3600) + (hour * 3600)
+            # Steadily declining voltage/battery within each day (no recharge)
             voltage = 4.0 - (day * 0.08) - (hour * 0.002)
-            battery = max(10, 90 - (day * 10) - (hour * 0.3))
+            battery = max(10, 85 - (day * 10) - (hour * 0.4))
             cursor.execute(
                 """
                 INSERT INTO telemetry_data (timestamp, node_id, voltage, battery_level)
@@ -168,8 +172,10 @@ def test_detect_battery_power_type(db_with_telemetry):
     db_with_telemetry.commit()
 
     # Test detection
-    power_type, _ = detect_power_type(node_id, db_with_telemetry)
-    assert power_type == "battery", f"Expected 'battery' but got '{power_type}'"
+    power_type, reason = detect_power_type(node_id, db_with_telemetry)
+    assert power_type == "battery", (
+        f"Expected 'battery' but got '{power_type}' ({reason})"
+    )
 
 
 def test_detect_mains_power_type(db_with_telemetry):

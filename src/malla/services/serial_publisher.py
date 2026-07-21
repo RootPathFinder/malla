@@ -23,6 +23,7 @@ from ..utils.telemetry_request import (
     extract_from_node_id,
     extract_portnum,
     extract_request_id,
+    extract_telemetry_raw_payload,
     find_matching_telemetry_request,
     is_routing_no_response,
     telemetry_has_requested_metrics,
@@ -670,6 +671,7 @@ class SerialPublisher:
             return False
 
         telemetry_dict = telemetry_to_dict(decoded.get("telemetry", {}))
+        raw_payload = extract_telemetry_raw_payload(packet)
         if not telemetry_dict and from_node_id is None and request_id is None:
             return False
 
@@ -694,6 +696,7 @@ class SerialPublisher:
                 telemetry=telemetry_dict,
                 from_node_id=from_node_id if from_node_id is not None else node_id,
                 request_id=request_id,
+                raw_payload=raw_payload,
             )
             self._store_telemetry_caches(
                 from_node_id=from_node_id if from_node_id is not None else node_id,
@@ -701,6 +704,16 @@ class SerialPublisher:
                 telemetry_dict=telemetry_dict,
                 telemetry_type=pending.get("telemetry_type") or "device_metrics",
             )
+            if raw_payload is not None:
+                cache_node = from_node_id if from_node_id is not None else node_id
+                if request_id is not None and request_id in self._telemetry_late_by_request:
+                    self._telemetry_late_by_request[request_id]["raw_payload"] = (
+                        raw_payload
+                    )
+                if cache_node is not None and cache_node in self._telemetry_latest_by_node:
+                    self._telemetry_latest_by_node[cache_node]["raw_payload"] = (
+                        raw_payload
+                    )
             if completed:
                 logger.info(
                     "Telemetry response matched pending request for !%08x "
@@ -1620,6 +1633,8 @@ class SerialPublisher:
                                 "late_cache": True,
                             }
                         )
+                        if late.get("raw_payload") is not None:
+                            response_data["raw_payload"] = late["raw_payload"]
 
                 # App telemetry wins over routing NO_RESPONSE.
                 if response_data.get("telemetry"):
