@@ -251,6 +251,65 @@ def is_routing_no_response(packet: dict[str, Any]) -> bool:
     return reason.upper() == "NO_RESPONSE"
 
 
+# After the main wait ends, keep listening briefly for a late TELEMETRY_APP.
+TELEMETRY_REPLY_GRACE_S = 1.25
+# Accept publisher-cached replies that arrived during the wait but missed match.
+TELEMETRY_LATE_CACHE_S = 12.0
+
+
+def note_telemetry_routing_no_response(pending: dict[str, Any]) -> None:
+    """
+    Record mesh NO_RESPONSE without completing the pending wait.
+
+    Firmware often emits ROUTING_APP NO_RESPONSE while the TELEMETRY_APP reply
+    is still in flight (especially with wantAck+wantResponse). Waking the waiter
+    early aborts the attempt and drops the real metrics that arrive milliseconds
+    later — a common failure mode for nearby 0/1-hop nodes.
+    """
+    response_data = pending.setdefault("response_data", {})
+    response_data["routing_warning"] = "NO_RESPONSE"
+    # Intentionally do NOT set pending["event"] or mark completed.
+
+
+def wait_for_telemetry_reply(
+    response_event: Any,
+    response_data: dict[str, Any],
+    *,
+    timeout: float,
+    grace_s: float = TELEMETRY_REPLY_GRACE_S,
+) -> None:
+    """Wait for metrics (or full timeout), then a short late-RF grace."""
+    response_event.wait(timeout=max(0.0, float(timeout)))
+    if not response_data.get("telemetry"):
+        response_event.wait(timeout=max(0.0, float(grace_s)))
+
+
+def pickup_late_telemetry_cache(
+    *,
+    late_by_request: dict[int, dict[str, Any]],
+    latest_by_node: dict[int, dict[str, Any]],
+    request_id: int | None,
+    target_node_id: int,
+    max_age_s: float = TELEMETRY_LATE_CACHE_S,
+) -> dict[str, Any] | None:
+    """Return a recently cached telemetry payload suitable for late pickup."""
+    import time
+
+    late = None
+    if request_id is not None:
+        late = late_by_request.pop(request_id, None)
+    if (not late or not late.get("telemetry")) and target_node_id in latest_by_node:
+        cached = latest_by_node.get(target_node_id)
+        if cached and cached.get("telemetry"):
+            age = time.time() - float(cached.get("timestamp") or 0)
+            if age <= float(max_age_s):
+                late = cached
+    if late and late.get("telemetry"):
+        return late
+    return None
+
+
+
 def find_matching_telemetry_request(
     pending_by_node: dict[int, dict[str, Any]],
     *,
@@ -455,12 +514,17 @@ def split_live_telemetry_attempts(
 __all__ = [
     "TELEMETRY_TYPE_KEYS",
     "LIVE_TELEMETRY_MAX_BUDGET_S",
+    "TELEMETRY_REPLY_GRACE_S",
+    "TELEMETRY_LATE_CACHE_S",
     "normalize_mesh_node_id",
     "normalize_request_id",
     "extract_request_id",
     "extract_from_node_id",
     "extract_portnum",
     "is_routing_no_response",
+    "note_telemetry_routing_no_response",
+    "wait_for_telemetry_reply",
+    "pickup_late_telemetry_cache",
     "telemetry_to_dict",
     "telemetry_has_requested_metrics",
     "find_matching_telemetry_request",
@@ -468,4 +532,7 @@ __all__ = [
     "clamp_estimated_hops",
     "live_telemetry_budget",
     "split_live_telemetry_attempts",
+    "apply_telemetry_request_type",
+    "extract_telemetry_raw_payload",
+    "telemetry_dict_to_raw_payload",
 ]
