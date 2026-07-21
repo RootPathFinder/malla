@@ -133,8 +133,9 @@ class TestNodeRoutes:
         assert "Home" in response_text
         assert "Nodes" in response_text
 
-        # Zero-hop neighbors sidebar section
-        assert "Zero-Hop Neighbors" in response_text
+        # Reach map (direct RF neighbors) sidebar section
+        assert "Reach" in response_text
+        assert "reach-map" in response_text
 
     @pytest.mark.integration
     def test_node_detail_packet_data_display(self, client):

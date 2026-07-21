@@ -70,6 +70,10 @@ class TestZeroHopNeighbors:
 
         assert result["has_data"] is True
         assert result["neighbor_count"] == 2
+        assert result["summary"]["neighbor_count"] == 2
+        assert result["summary"]["both_ways"] == 1
+        assert result["summary"]["one_way"] == 1
+        assert result["summary"]["best_snr"] == 12.0
         by_id = {n["node_id"]: n for n in result["neighbors"]}
 
         alpha = by_id[0x11111111]
@@ -90,6 +94,32 @@ class TestZeroHopNeighbors:
         assert beta["direct_receptions_direction"] == "transmitted"
 
         assert result["neighbors"][0]["node_id"] == 0x11111111
+
+    @pytest.mark.unit
+    def test_apply_peer_distances_attaches_positions_and_center(self):
+        by_id = {
+            0x11111111: {
+                "node_id": 0x11111111,
+                "distance_km": None,
+                "distance_display": None,
+            }
+        }
+        locations = [
+            {"node_id": 0xABCDEF01, "latitude": 42.65, "longitude": -73.75},
+            {"node_id": 0x11111111, "latitude": 42.66, "longitude": -73.74},
+        ]
+        with patch(
+            "src.malla.database.repositories.LocationRepository.get_node_locations",
+            return_value=locations,
+        ):
+            center = NeighborService._apply_peer_distances(0xABCDEF01, by_id)
+
+        assert center == {"latitude": 42.65, "longitude": -73.75}
+        peer = by_id[0x11111111]
+        assert peer["latitude"] == 42.66
+        assert peer["longitude"] == -73.74
+        assert peer["distance_km"] is not None
+        assert peer["distance_display"]
 
     @pytest.mark.unit
     def test_traceroute_only_peer_labeled(self):

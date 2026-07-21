@@ -71,6 +71,17 @@ def node_detail(node_id):
             )
             node_details["zero_hop_neighbors"] = zero_hop.get("neighbors") or []
             node_details["zero_hop_hours"] = zh_hours
+            node_details["zero_hop_center"] = zero_hop.get("center")
+            node_details["zero_hop_summary"] = zero_hop.get("summary") or {
+                "neighbor_count": 0,
+                "both_ways": 0,
+                "one_way": 0,
+                "with_location": 0,
+                "avg_snr": None,
+                "best_snr": None,
+                "avg_distance_km": None,
+                "max_distance_km": None,
+            }
             node_details["zero_hop_meta"] = {
                 "neighbor_count": zero_hop.get("neighbor_count", 0),
                 "last_neighborinfo_report": zero_hop.get("last_neighborinfo_report"),
@@ -82,6 +93,17 @@ def node_detail(node_id):
             )
             node_details["zero_hop_neighbors"] = []
             node_details["zero_hop_hours"] = zh_hours
+            node_details["zero_hop_center"] = None
+            node_details["zero_hop_summary"] = {
+                "neighbor_count": 0,
+                "both_ways": 0,
+                "one_way": 0,
+                "with_location": 0,
+                "avg_snr": None,
+                "best_snr": None,
+                "avg_distance_km": None,
+                "max_distance_km": None,
+            }
             node_details["zero_hop_meta"] = {
                 "neighbor_count": 0,
                 "last_neighborinfo_report": None,
