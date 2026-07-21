@@ -415,8 +415,9 @@ def solicit_node_telemetry(
 
     Returns a result dict with success/error fields (does not raise for RF miss).
 
-    ``fresh`` is True only for live/late RF replies (not recycled last_known).
-    Scheduled polls should require ``fresh`` + packet_history persistence.
+    ``fresh`` is True for live/late RF replies. Age-gated ``last_known`` may still
+    be persisted when ``persist=True`` so schedules can store what live telemetry
+    just obtained.
     """
     node_id_int = int(node_id_int) & 0xFFFFFFFF
     publisher, connection_type = get_connected_mesh_publisher()
@@ -496,12 +497,19 @@ def solicit_node_telemetry(
         source = "late_cache" if result.get("late_cache") else "live"
         if result.get("last_known"):
             source = "last_known"
-        fresh = source in ("live", "late_cache")
+        # live / late_cache are mesh-fresh; last_known is age-gated publisher cache
+        mesh_fresh = source in ("live", "late_cache")
         telemetry = result.get("telemetry", {}) or {}
         persisted = False
         persisted_packet = False
         persisted_telemetry = False
-        if persist and fresh:
+        # Persist mesh-fresh replies always. Also persist age-gated last_known when
+        # asked — that is the same soft window the live UI uses, so a schedule can
+        # store telemetry live just obtained instead of reporting a false miss.
+        should_persist = bool(persist) and bool(telemetry) and (
+            mesh_fresh or source == "last_known"
+        )
+        if should_persist:
             persist_info = persist_solicited_telemetry(
                 node_id_int,
                 telemetry,
@@ -512,6 +520,9 @@ def solicit_node_telemetry(
             persisted_packet = bool(persist_info.get("packet_history"))
             persisted_telemetry = bool(persist_info.get("telemetry_data"))
             persisted = persisted_packet or persisted_telemetry
+        # After a successful persist, node-detail age is current even if source
+        # was an age-gated live cache hit.
+        fresh = mesh_fresh or persisted_packet
         return {
             "success": True,
             "fresh": fresh,
@@ -550,3 +561,32 @@ def solicit_node_telemetry(
         "telemetry_type": used_type,
         "requested_telemetry_type": requested_type,
     }
+
+
+# Defaults shared by Admin live polling and scheduled telemetry. Keep these
+# identical so schedules inherit the high-success live acquisition path.
+LIVE_TELEMETRY_ACCEPT_LAST_KNOWN_S = 20.0
+
+
+def request_live_node_telemetry(
+    node_id_int: int,
+    telemetry_type: str = "device_metrics",
+    *,
+    client_hops: Any = None,
+    persist: bool = False,
+) -> dict[str, Any]:
+    """
+    Canonical live telemetry acquisition.
+
+    Admin ``/telemetry/live`` and scheduled polls must both call this so RF
+    retries, hop budget, ACK sequence, lock, and last-known window stay in sync.
+    Schedules pass ``persist=True`` to write packet_history / telemetry_data.
+    """
+    return solicit_node_telemetry(
+        node_id_int,
+        telemetry_type,
+        client_hops=client_hops,
+        fallback_device_metrics=False,
+        accept_last_known_s=LIVE_TELEMETRY_ACCEPT_LAST_KNOWN_S,
+        persist=persist,
+    )
