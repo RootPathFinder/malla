@@ -637,3 +637,276 @@ class NeighborService:
         except Exception as e:
             logger.error(f"Error getting node neighbors: {e}", exc_info=True)
             raise
+
+    @staticmethod
+    def _classify_snr_quality(snr: float | None) -> str:
+        if snr is None:
+            return "unknown"
+        if snr >= 10:
+            return "excellent"
+        if snr >= 5:
+            return "good"
+        if snr >= 0:
+            return "fair"
+        return "poor"
+
+    @staticmethod
+    def _parse_gateway_node_id(gateway_id: Any) -> int | None:
+        if gateway_id is None:
+            return None
+        if isinstance(gateway_id, int):
+            return gateway_id & 0xFFFFFFFF
+        if isinstance(gateway_id, str) and gateway_id.startswith("!"):
+            try:
+                return int(gateway_id[1:], 16)
+            except ValueError:
+                return None
+        return None
+
+    @staticmethod
+    def _load_observed_zero_hop_peers(
+        node_id: int, *, limit: int = 50
+    ) -> dict[int, dict[str, Any]]:
+        """Load 0-hop packet peers (heard-by / heard-from) without per-packet series."""
+        peers: dict[int, dict[str, Any]] = {}
+        gateway_hex = f"!{node_id:08x}"
+
+        try:
+            conn = get_db_connection()
+            cursor = conn.cursor()
+
+            # Nodes this radio heard directly (as gateway).
+            cursor.execute(
+                """
+                SELECT
+                    p.from_node_id AS peer_id,
+                    COUNT(*) AS packet_count,
+                    AVG(CAST(p.rssi AS FLOAT)) AS rssi_avg,
+                    AVG(CAST(p.snr AS FLOAT)) AS snr_avg,
+                    MAX(p.timestamp) AS last_seen
+                FROM packet_history p
+                WHERE p.gateway_id = ?
+                  AND p.from_node_id IS NOT NULL
+                  AND p.from_node_id != ?
+                  AND p.hop_start IS NOT NULL
+                  AND p.hop_limit IS NOT NULL
+                  AND p.hop_start = p.hop_limit
+                GROUP BY p.from_node_id
+                ORDER BY packet_count DESC
+                LIMIT ?
+                """,
+                (gateway_hex, node_id, limit),
+            )
+            for row in cursor.fetchall():
+                peer_id = int(row["peer_id"])
+                peers[peer_id] = {
+                    "node_id": peer_id,
+                    "packet_count": int(row["packet_count"] or 0),
+                    "rssi_avg": round(row["rssi_avg"], 1)
+                    if row["rssi_avg"] is not None
+                    else None,
+                    "snr_avg": round(row["snr_avg"], 1)
+                    if row["snr_avg"] is not None
+                    else None,
+                    "last_seen": row["last_seen"],
+                    "heard_from": True,
+                    "heard_by": False,
+                }
+
+            # Gateways that heard this node directly.
+            cursor.execute(
+                """
+                SELECT
+                    p.gateway_id,
+                    COUNT(*) AS packet_count,
+                    AVG(CAST(p.rssi AS FLOAT)) AS rssi_avg,
+                    AVG(CAST(p.snr AS FLOAT)) AS snr_avg,
+                    MAX(p.timestamp) AS last_seen
+                FROM packet_history p
+                WHERE p.from_node_id = ?
+                  AND p.gateway_id IS NOT NULL
+                  AND p.gateway_id != ?
+                  AND p.hop_start IS NOT NULL
+                  AND p.hop_limit IS NOT NULL
+                  AND p.hop_start = p.hop_limit
+                GROUP BY p.gateway_id
+                ORDER BY packet_count DESC
+                LIMIT ?
+                """,
+                (node_id, gateway_hex, limit),
+            )
+            for row in cursor.fetchall():
+                peer_id = NeighborService._parse_gateway_node_id(row["gateway_id"])
+                if peer_id is None or peer_id == node_id:
+                    continue
+                existing = peers.get(peer_id)
+                if existing is None:
+                    peers[peer_id] = {
+                        "node_id": peer_id,
+                        "packet_count": int(row["packet_count"] or 0),
+                        "rssi_avg": round(row["rssi_avg"], 1)
+                        if row["rssi_avg"] is not None
+                        else None,
+                        "snr_avg": round(row["snr_avg"], 1)
+                        if row["snr_avg"] is not None
+                        else None,
+                        "last_seen": row["last_seen"],
+                        "heard_from": False,
+                        "heard_by": True,
+                    }
+                else:
+                    existing["heard_by"] = True
+                    existing["packet_count"] = int(existing["packet_count"] or 0) + int(
+                        row["packet_count"] or 0
+                    )
+                    # Prefer the stronger/more recent observation when merging.
+                    if row["last_seen"] and (
+                        existing["last_seen"] is None
+                        or row["last_seen"] > existing["last_seen"]
+                    ):
+                        existing["last_seen"] = row["last_seen"]
+                    if row["snr_avg"] is not None:
+                        snr = round(row["snr_avg"], 1)
+                        if existing["snr_avg"] is None or snr > existing["snr_avg"]:
+                            existing["snr_avg"] = snr
+                    if row["rssi_avg"] is not None:
+                        rssi = round(row["rssi_avg"], 1)
+                        if existing["rssi_avg"] is None or rssi > existing["rssi_avg"]:
+                            existing["rssi_avg"] = rssi
+
+            conn.close()
+        except Exception as e:
+            logger.warning(
+                "Failed loading observed zero-hop peers for %s: %s", node_id, e
+            )
+
+        return peers
+
+    @staticmethod
+    def get_zero_hop_neighbors(node_id: int, *, limit: int = 50) -> dict[str, Any]:
+        """Build a zero-hop neighbor list for node detail.
+
+        Merges:
+        - NeighborInfo reports (node-advertised RF neighbors)
+        - Observed 0-hop packet partners (``hop_start = hop_limit``)
+
+        Returns a dict with ``neighbors`` suitable for the node detail sidebar.
+        """
+        from ..utils.formatting import format_time_ago
+
+        node_id = int(node_id) & 0xFFFFFFFF
+        by_id: dict[int, dict[str, Any]] = {}
+
+        # --- NeighborInfo (authoritative when present) ---
+        ni_last_report: float | None = None
+        try:
+            ni = NeighborService.get_node_neighbors(node_id)
+            if ni.get("has_data"):
+                ni_last_report = ni.get("last_report")
+                for n in ni.get("neighbors") or []:
+                    nid = n.get("node_id")
+                    if nid is None:
+                        continue
+                    nid = int(nid)
+                    snr = n.get("snr")
+                    try:
+                        snr_f = float(snr) if snr is not None else None
+                    except (TypeError, ValueError):
+                        snr_f = None
+                    by_id[nid] = {
+                        "node_id": nid,
+                        "hex_id": f"!{nid:08x}",
+                        "node_name": n.get("node_name") or f"!{nid:08x}",
+                        "snr": snr_f,
+                        "rssi": None,
+                        "quality": NeighborService._classify_snr_quality(snr_f),
+                        "packet_count": None,
+                        "last_seen": n.get("last_rx_time") or ni_last_report,
+                        "sources": ["neighborinfo"],
+                        "heard_from": False,
+                        "heard_by": False,
+                        "is_bidirectional": False,
+                    }
+        except Exception as e:
+            logger.warning("NeighborInfo lookup failed for %s: %s", node_id, e)
+
+        # --- Observed 0-hop packet partners ---
+        observed = NeighborService._load_observed_zero_hop_peers(node_id, limit=limit)
+        name_ids = list(observed.keys()) + [node_id]
+        names = get_bulk_node_names(name_ids)
+
+        for peer_id, obs in observed.items():
+            snr_f = obs.get("snr_avg")
+            entry = by_id.get(peer_id)
+            if entry is None:
+                entry = {
+                    "node_id": peer_id,
+                    "hex_id": f"!{peer_id:08x}",
+                    "node_name": names.get(peer_id, f"!{peer_id:08x}"),
+                    "snr": snr_f,
+                    "rssi": obs.get("rssi_avg"),
+                    "quality": NeighborService._classify_snr_quality(snr_f),
+                    "packet_count": obs.get("packet_count"),
+                    "last_seen": obs.get("last_seen"),
+                    "sources": ["observed"],
+                    "heard_from": bool(obs.get("heard_from")),
+                    "heard_by": bool(obs.get("heard_by")),
+                    "is_bidirectional": bool(obs.get("heard_from") and obs.get("heard_by")),
+                }
+                by_id[peer_id] = entry
+            else:
+                if "observed" not in entry["sources"]:
+                    entry["sources"].append("observed")
+                entry["heard_from"] = bool(obs.get("heard_from"))
+                entry["heard_by"] = bool(obs.get("heard_by"))
+                entry["is_bidirectional"] = bool(
+                    entry["heard_from"] and entry["heard_by"]
+                )
+                entry["packet_count"] = obs.get("packet_count")
+                if obs.get("rssi_avg") is not None:
+                    entry["rssi"] = obs["rssi_avg"]
+                # Prefer stronger SNR when both sources report.
+                if snr_f is not None and (
+                    entry["snr"] is None or snr_f > entry["snr"]
+                ):
+                    entry["snr"] = snr_f
+                    entry["quality"] = NeighborService._classify_snr_quality(snr_f)
+                if obs.get("last_seen") and (
+                    entry["last_seen"] is None or obs["last_seen"] > entry["last_seen"]
+                ):
+                    entry["last_seen"] = obs["last_seen"]
+                if not entry.get("node_name"):
+                    entry["node_name"] = names.get(peer_id, f"!{peer_id:08x}")
+
+        neighbors = list(by_id.values())
+        for n in neighbors:
+            n["last_seen_relative"] = format_time_ago(n.get("last_seen"))
+            sources = n.get("sources") or []
+            if "neighborinfo" in sources and "observed" in sources:
+                n["source_label"] = "Reported + Observed"
+            elif "neighborinfo" in sources:
+                n["source_label"] = "NeighborInfo"
+            else:
+                n["source_label"] = "Observed"
+
+        # Best SNR first; fall back to packet count / name.
+        neighbors.sort(
+            key=lambda n: (
+                n.get("snr") is not None,
+                n.get("snr") if n.get("snr") is not None else -999,
+                n.get("packet_count") or 0,
+            ),
+            reverse=True,
+        )
+        if limit and len(neighbors) > limit:
+            neighbors = neighbors[:limit]
+
+        return {
+            "node_id": node_id,
+            "hex_id": f"!{node_id:08x}",
+            "node_name": names.get(node_id, f"!{node_id:08x}"),
+            "has_data": bool(neighbors),
+            "neighbor_count": len(neighbors),
+            "last_neighborinfo_report": ni_last_report,
+            "neighbors": neighbors,
+        }

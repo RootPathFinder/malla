@@ -1325,6 +1325,87 @@
 
         <!-- Neighbors & Analytics -->
         <div class="col-lg-4">
+            <!-- Zero-hop RF Neighbors -->
+            <div class="card mb-4">
+                <div class="card-header">
+                    <h5><i class="bi bi-broadcast-pin"></i> Zero-Hop Neighbors</h5>
+                    <small class="text-muted">
+                        Direct RF neighbors from NeighborInfo and 0-hop packet receptions
+                        {% if zero_hop_meta and zero_hop_meta.neighbor_count %}
+                            · {{ zero_hop_meta.neighbor_count }}
+                        {% endif %}
+                    </small>
+                </div>
+                <div class="card-body">
+                    {% if zero_hop_neighbors %}
+                        {% for neighbor in zero_hop_neighbors %}
+                        <div class="neighbor-card card mb-2">
+                            <div class="card-body p-2">
+                                <h6 class="card-title mb-1 d-flex flex-wrap align-items-center gap-1">
+                                    {{ node_link(neighbor.node_id, neighbor.node_name) }}
+                                    {% if neighbor.is_bidirectional %}
+                                        <span class="badge bg-success" title="Heard in both directions">Both ways</span>
+                                    {% elif neighbor.heard_from %}
+                                        <span class="badge bg-info text-dark" title="This node heard the neighbor">Heard</span>
+                                    {% elif neighbor.heard_by %}
+                                        <span class="badge bg-secondary" title="Neighbor heard this node">Heard by</span>
+                                    {% endif %}
+                                    {% if neighbor.quality and neighbor.quality != 'unknown' %}
+                                        <span class="badge
+                                            {% if neighbor.quality == 'excellent' %}bg-success
+                                            {% elif neighbor.quality == 'good' %}bg-primary
+                                            {% elif neighbor.quality == 'fair' %}bg-warning text-dark
+                                            {% else %}bg-danger
+                                            {% endif %}"
+                                            title="Link quality from SNR">
+                                            {{ neighbor.quality }}
+                                        </span>
+                                    {% endif %}
+                                </h6>
+                                <div class="row">
+                                    <div class="col-6">
+                                        {% if neighbor.snr is not none %}
+                                            <small><strong>SNR:</strong> {{ '%.1f'|format(neighbor.snr) }} dB</small>
+                                        {% else %}
+                                            <small class="text-muted">SNR: —</small>
+                                        {% endif %}
+                                    </div>
+                                    <div class="col-6">
+                                        {% if neighbor.rssi is not none %}
+                                            <small><strong>RSSI:</strong> {{ neighbor.rssi }} dBm</small>
+                                        {% elif neighbor.packet_count %}
+                                            <small><strong>Pkts:</strong> {{ neighbor.packet_count }}</small>
+                                        {% else %}
+                                            <small class="text-muted">{{ neighbor.source_label }}</small>
+                                        {% endif %}
+                                    </div>
+                                </div>
+                                <div class="row mt-1">
+                                    <div class="col-6">
+                                        <small><strong>Last:</strong> {{ neighbor.last_seen_relative or 'Unknown' }}</small>
+                                    </div>
+                                    <div class="col-6">
+                                        <small class="text-muted" title="Data source">{{ neighbor.source_label }}</small>
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+                        {% endfor %}
+                        <div class="mt-2">
+                            <a href="/mesh/topology" class="small">View mesh topology</a>
+                            ·
+                            <a href="/packets?from_node={{ node.node_id }}&hop_count=0" class="small">0-hop packets</a>
+                        </div>
+                    {% else %}
+                        <p class="text-muted mb-2 small">
+                            No direct RF neighbors found yet. Sources: latest NeighborInfo
+                            report and packets with hop count 0.
+                        </p>
+                        <a href="/mesh/topology" class="small">View mesh topology</a>
+                    {% endif %}
+                </div>
+            </div>
+
             <!-- Received Gateways -->
             {% if received_gateways %}
             <div class="card mb-4">
