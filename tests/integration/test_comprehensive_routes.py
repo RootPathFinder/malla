@@ -27,8 +27,6 @@ class TestMainRoutes:
         assert b"last24hHourlyChart" in response.data
         assert b"last24h-hourly-chart-wrap" in response.data
         assert b"Also notable" in response.data
-        # Farthest-node markup is present (value only shown when positions exist)
-        assert b"bi-geo-alt" in response.data or b"Farthest" in response.data or b"farthest_node" in response.data or b"Also notable" in response.data
 
     @pytest.mark.integration
     def test_map_route(self, client):
