@@ -38,6 +38,34 @@ class TestStatsEndpoint:
 
     @pytest.mark.integration
     @pytest.mark.api
+    def test_last_24h_summary_endpoint(self, client):
+        """Last-24h summary returns activity indicators used by the dashboard."""
+        response = client.get("/api/stats/last-24h")
+        assert response.status_code == 200
+        data = response.get_json()
+        for key in (
+            "packets_24h",
+            "packets_trend_pct",
+            "text_messages_24h",
+            "active_nodes_24h",
+            "active_nodes_delta",
+            "new_nodes_24h",
+            "new_node_names",
+            "avg_snr",
+            "direct_packets",
+            "relayed_packets",
+            "low_battery_nodes",
+            "top_talkers",
+            "hourly",
+            "timezone",
+        ):
+            assert key in data, key
+        assert data["timezone"] == "UTC"
+        assert len(data["hourly"]) == 24
+        assert isinstance(data["new_node_names"], list)
+
+    @pytest.mark.integration
+    @pytest.mark.api
     def test_stats_endpoint_with_gateway_filter(self, client):
         """Test stats endpoint with gateway filter."""
         response = client.get("/api/stats?gateway_id=!12345678")

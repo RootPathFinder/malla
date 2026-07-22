@@ -2636,31 +2636,35 @@ def api_packets_per_minute():
 
 @api_bp.route("/stats/new-nodes-24h")
 def api_new_nodes_24h():
-    """Get count of new nodes discovered in the last 24 hours."""
+    """Get count of new nodes first seen in the last 24 hours."""
     try:
         conn = get_db_connection()
         cursor = conn.cursor()
 
         twenty_four_hours_ago = time.time() - (24 * 3600)
 
-        # Get nodes that have last_updated in the last 24 hours but no activity before that
+        # New nodes = first_seen within 24h (not last_updated)
         cursor.execute(
             """
-            SELECT COUNT(DISTINCT node_id) as new_nodes
+            SELECT COUNT(*) as new_nodes
             FROM node_info
-            WHERE last_updated > ?
+            WHERE first_seen IS NOT NULL
+              AND first_seen > ?
               AND COALESCE(archived, 0) = 0
             """,
             (twenty_four_hours_ago,),
         )
         new_nodes = cursor.fetchone()["new_nodes"]
 
-        # Get total active nodes in last 24 hours for context
+        # Active known (non-archived) nodes in last 24 hours for context
         cursor.execute(
             """
-            SELECT COUNT(DISTINCT from_node_id) as active_nodes
-            FROM packet_history
-            WHERE timestamp > ?
+            SELECT COUNT(DISTINCT ph.from_node_id) as active_nodes
+            FROM packet_history ph
+            INNER JOIN node_info ni ON ni.node_id = ph.from_node_id
+            WHERE ph.timestamp > ?
+              AND ph.from_node_id IS NOT NULL
+              AND COALESCE(ni.archived, 0) = 0
             """,
             (twenty_four_hours_ago,),
         )
@@ -2682,6 +2686,20 @@ def api_new_nodes_24h():
         return jsonify({"error": str(e)}), 500
 
 
+@api_bp.route("/stats/last-24h")
+def api_last_24h_summary():
+    """Get last-24h mesh activity summary for the dashboard."""
+    try:
+        from ..database.repositories import DashboardRepository
+
+        gateway_id = request.args.get("gateway_id")
+        summary = DashboardRepository.get_last_24h_summary(gateway_id=gateway_id)
+        return jsonify(summary)
+    except Exception as e:
+        logger.error(f"Error in API last-24h summary: {e}")
+        return jsonify({"error": str(e)}), 500
+
+
 @api_bp.route("/stats/gateway-coverage")
 def api_gateway_coverage():
     """Get average gateway coverage and redundancy metrics."""
@@ -2700,11 +2718,13 @@ def api_gateway_coverage():
                 ROUND(AVG(gateway_count), 1) as avg_gateways_per_packet
             FROM (
                 SELECT
-                    packet_id,
+                    mesh_packet_id,
                     COUNT(DISTINCT gateway_id) as gateway_count
                 FROM packet_history
                 WHERE timestamp > ?
-                GROUP BY packet_id
+                  AND mesh_packet_id IS NOT NULL
+                  AND mesh_packet_id != 0
+                GROUP BY mesh_packet_id
             ) as packet_gateways
             """,
             (twenty_four_hours_ago,),

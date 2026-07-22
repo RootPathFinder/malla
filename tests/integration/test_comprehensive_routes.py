@@ -18,10 +18,13 @@ class TestMainRoutes:
         """Test the main dashboard route."""
         response = client.get("/")
         assert response.status_code == 200
-        assert b"Dashboard" in response.data
-        assert b"Total Messages" in response.data
+        assert b"Dashboard" in response.data or b"Mesh Metrics" in response.data
+        assert b"Packet Receptions" in response.data
         assert b"Total Nodes" in response.data
         assert b"Active Nodes" in response.data
+        assert b"Last 24 Hours" in response.data
+        assert b"Decode Success" in response.data
+        assert b"last24hHourlyChart" in response.data
 
     @pytest.mark.integration
     def test_map_route(self, client):
