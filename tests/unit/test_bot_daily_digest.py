@@ -51,7 +51,8 @@ class TestDailyDigestFormatting:
         assert "Off routers: 2" in message
         assert "Routers: HillTop, Bridge" in message
         assert "New: 7 (Newbie, Fresh, Rookie…)" in message
-        assert "Say hi! !channels" in message
+        assert "Say hi! !net" in message
+        assert "!channels" not in message
         assert "Long TR: 5 hops Alpha→Zulu" in message
         # Top talkers are optional and dropped first when the payload is tight
         assert len(message.encode("utf-8")) <= 220

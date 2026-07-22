@@ -40,7 +40,9 @@ class TestStarterHelp:
         text = bot_service._cmd_help(_ctx(is_dm=False))
         assert "Mesh bot" in text
         assert "!net" in text
-        assert "!channels" in text
+        assert "!mystats" in text
+        assert "!find" in text
+        assert "!channels" not in text
         assert "DM !help for all cmds" in text
         assert "Cmds:" not in text
 
@@ -188,7 +190,8 @@ class TestWelcomeAndDigestCta:
             when=when,
         )
         assert "New: 2 (Fox, Ada)" in message
-        assert "Say hi! !channels" in message
+        assert "Say hi! !net" in message
+        assert "!channels" not in message
 
     @pytest.mark.unit
     def test_welcome_new_node_queues_message(self, bot_service: BotService):

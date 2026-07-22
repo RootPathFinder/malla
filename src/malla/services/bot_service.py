@@ -119,14 +119,14 @@ class BotService:
         # Keep LongFast quieter by default; ops can re-enable in Mesh Bot UI
         self._disabled_commands: set[str] = {"uptime", "time"}
         self._command_prefix = "!"
-        self._starter_commands = ("net", "channels", "mystats", "find")
+        self._starter_commands = ("net", "mystats", "find")
 
         # Activity log (circular buffer)
         self._activity_log: list[dict[str, Any]] = []
         self._activity_log_max_size = 100  # Keep last 100 entries
         self._activity_lock = threading.Lock()
 
-        # Pending traceroutes: maps dest_node_id -> (requester_id, requester_name, channel_index, timestamp)
+        # Pending traceroutes: maps dest_node_id -> (requester_id, dest_name, channel_index, timestamp)
         self._pending_traceroutes: dict[int, tuple[int, str | None, int, float]] = {}
         self._traceroute_lock = threading.Lock()
         self._traceroute_unk_snr = -128  # Meshtastic unknown SNR marker (raw protobuf value)
@@ -138,8 +138,11 @@ class BotService:
         self._traceroute_window_seconds = 300.0  # 5 minute window
         self._traceroute_history: list[float] = []  # Timestamps of sent traceroutes
         self._last_traceroute_time = 0.0
-        # Queued traceroute requests: (sender_id, sender_name, channel_index, request_time)
-        self._queued_traceroutes: list[tuple[int, str | None, int, float]] = []
+        # Queued traceroute requests:
+        # (dest_id, dest_name, channel_index, request_time, requester_id)
+        self._queued_traceroutes: list[
+            tuple[int, str | None, int, float, int]
+        ] = []
         # Track last cooldown reminder time to avoid spamming
         self._last_cooldown_reminder_time = 0.0
         self._cooldown_reminder_interval = 30.0  # Only remind once per 30 seconds
@@ -435,7 +438,9 @@ class BotService:
         self.register_command("status", self._cmd_status, "Get mesh status summary")
         self.register_command("net", self._cmd_net, "Daily mesh network update")
         self.register_command(
-            "traceroute", self._cmd_traceroute, "Request traceroute to this node"
+            "traceroute",
+            self._cmd_traceroute,
+            "Traceroute to you or !traceroute <short>",
         )
         self.register_command("help", self._cmd_help, "Show available commands")
         self.register_command("start", self._cmd_start, "New user starter tips")
@@ -1160,12 +1165,12 @@ class BotService:
             if pending is None:
                 return
 
-            requester_id, requester_name, channel_index, _ = pending
+            _requester_id, dest_name, channel_index, _ = pending
             source_id = local_node_id or 0
             dest_id = matched_dest
             known_names: dict[int, str] = {}
-            if requester_name:
-                known_names[dest_id] = requester_name
+            if dest_name:
+                known_names[dest_id] = dest_name
 
             logger.info(
                 "Processing traceroute response for !%08x on channel %s "
@@ -1200,7 +1205,7 @@ class BotService:
                 "traceroute_result",
                 {
                     "target": f"!{dest_id:08x}",
-                    "target_name": requester_name,
+                    "target_name": dest_name,
                     "channel": channel_name or f"ch{channel_index}",
                     "hops_forward": len(route) + (1 if snr_towards else 0),
                     "hops_return": len(route_back) + (1 if snr_back else 0),
@@ -1977,8 +1982,62 @@ class BotService:
             logger.error(f"Error in status command: {e}")
             return "Status unavailable"
 
+    def _resolve_traceroute_destination(
+        self, ctx: CommandContext
+    ) -> tuple[int, str] | None:
+        """Resolve traceroute target: requester, or optional short name / hex id."""
+        if not ctx.args:
+            label = ctx.sender_name or f"!{ctx.sender_id:08x}"
+            return ctx.sender_id, label
+
+        target = " ".join(ctx.args).strip().lower().replace("!", "")
+        if not target:
+            label = ctx.sender_name or f"!{ctx.sender_id:08x}"
+            return ctx.sender_id, label
+
+        try:
+            from ..database.connection import get_db_connection
+
+            conn = get_db_connection()
+            cursor = conn.cursor()
+            try:
+                # Prefer exact short_name match (Meshtastic 4-char short names).
+                cursor.execute(
+                    """
+                    SELECT node_id, short_name, long_name FROM node_info
+                    WHERE LOWER(short_name) = ?
+                    ORDER BY last_updated DESC
+                    LIMIT 1
+                    """,
+                    (target,),
+                )
+                row = cursor.fetchone()
+                if row:
+                    label = self._neighbor_display_name(
+                        row["node_id"],
+                        row["short_name"],
+                        row["long_name"],
+                        max_len=18,
+                    )
+                    return int(row["node_id"]), label
+
+                subject = self._resolve_neighbors_subject(ctx, cursor)
+            finally:
+                conn.close()
+        except Exception as e:
+            logger.error("Traceroute destination lookup failed: %s", e, exc_info=True)
+            return None
+
+        if subject is None:
+            return None
+
+        dest_id, label = subject
+        if label == "you":
+            label = ctx.sender_name or f"!{ctx.sender_id:08x}"
+        return dest_id, label
+
     def _cmd_traceroute(self, ctx: CommandContext) -> str:
-        """Handle !traceroute command with rate limiting."""
+        """Handle !traceroute [short|hex] with rate limiting."""
         try:
             from .tcp_publisher import get_tcp_publisher
 
@@ -1986,6 +2045,14 @@ class BotService:
             if not publisher.is_connected or publisher._interface is None:
                 logger.warning("Traceroute failed: TCP publisher not connected")
                 return "Not connected"
+
+            resolved = self._resolve_traceroute_destination(ctx)
+            if resolved is None:
+                query = " ".join(ctx.args).strip() if ctx.args else ""
+                hint = f" '{query}'" if query else ""
+                return f"Node{hint} not found. Try !traceroute <short>"
+
+            dest_id, dest_name = resolved
 
             current_time = time.time()
 
@@ -2013,26 +2080,30 @@ class BotService:
                 # Queue this request
                 wait_time = int(self._traceroute_min_interval - time_since_last)
                 self._queue_traceroute(
-                    ctx.sender_id, ctx.sender_name, ctx.channel_index
+                    dest_id, dest_name, ctx.channel_index, ctx.sender_id
                 )
-                sender_name = ctx.sender_name or f"!{ctx.sender_id:08x}"
-                if len(sender_name) > 15:
-                    sender_name = sender_name[:12] + "..."
-                logger.info(f"Traceroute queued for {sender_name}, wait {wait_time}s")
+                display_name = dest_name
+                if len(display_name) > 15:
+                    display_name = display_name[:12] + "..."
+                logger.info(f"Traceroute queued for {display_name}, wait {wait_time}s")
 
                 # Only send reminder once per cooldown_reminder_interval
                 time_since_reminder = current_time - self._last_cooldown_reminder_time
                 if time_since_reminder >= self._cooldown_reminder_interval:
                     self._last_cooldown_reminder_time = current_time
-                    return f"⏳ TR to {sender_name} queued ({wait_time}s)"
+                    return f"⏳ TR to {display_name} queued ({wait_time}s)"
                 else:
                     # Silently queue without sending a message
                     return ""
 
             # Execute the traceroute immediately
-            logger.info(f"Executing traceroute to !{ctx.sender_id:08x}")
+            logger.info(
+                "Executing traceroute to !%08x (requested by !%08x)",
+                dest_id,
+                ctx.sender_id,
+            )
             return self._execute_traceroute(
-                ctx.sender_id, ctx.sender_name, ctx.channel_index, publisher
+                dest_id, dest_name, ctx.channel_index, publisher, ctx.sender_id
             )
 
         except Exception as e:
@@ -2040,23 +2111,27 @@ class BotService:
             return "Traceroute failed"
 
     def _queue_traceroute(
-        self, sender_id: int, sender_name: str | None, channel_index: int
+        self,
+        dest_id: int,
+        dest_name: str | None,
+        channel_index: int,
+        requester_id: int,
     ) -> None:
         """Queue a traceroute request to be processed after rate limit expires."""
-        # Don't queue duplicate requests for the same sender
+        # Don't queue duplicate requests for the same destination
         for queued in self._queued_traceroutes:
-            if queued[0] == sender_id:
+            if queued[0] == dest_id:
                 return  # Already queued
 
         self._queued_traceroutes.append(
-            (sender_id, sender_name, channel_index, time.time())
+            (dest_id, dest_name, channel_index, time.time(), requester_id)
         )
         channel_name = self._get_channel_name(channel_index)
         self._log_activity(
             "traceroute_queued",
             {
-                "target": f"!{sender_id:08x}",
-                "target_name": sender_name,
+                "target": f"!{dest_id:08x}",
+                "target_name": dest_name,
                 "channel": channel_name or f"ch{channel_index}",
                 "queue_size": len(self._queued_traceroutes),
                 "status": "queued (rate limit)",
@@ -2065,10 +2140,11 @@ class BotService:
 
     def _execute_traceroute(
         self,
-        sender_id: int,
-        sender_name: str | None,
+        dest_id: int,
+        dest_name: str | None,
         channel_index: int,
         publisher: Any = None,
+        requester_id: int | None = None,
     ) -> str:
         """Execute a traceroute and update rate limiting state."""
         try:
@@ -2080,6 +2156,7 @@ class BotService:
                     return "Not connected"
 
             current_time = time.time()
+            requester = requester_id if requester_id is not None else dest_id
 
             # Update rate limiting state
             self._last_traceroute_time = current_time
@@ -2087,9 +2164,9 @@ class BotService:
 
             # Register this as a pending traceroute so we can send results
             with self._traceroute_lock:
-                self._pending_traceroutes[sender_id] = (
-                    sender_id,
-                    sender_name,
+                self._pending_traceroutes[dest_id] = (
+                    requester,
+                    dest_name,
                     channel_index,
                     current_time,
                 )
@@ -2098,12 +2175,12 @@ class BotService:
             # waiting for responses, which would stall the pubsub receive callback.
             threading.Thread(
                 target=self._send_traceroute_packet,
-                args=(sender_id, publisher),
-                name=f"traceroute-{sender_id:08x}",
+                args=(dest_id, publisher),
+                name=f"traceroute-{dest_id:08x}",
                 daemon=True,
             ).start()
 
-            display_name = sender_name or f"!{sender_id:08x}"
+            display_name = dest_name or f"!{dest_id:08x}"
             # Truncate name to fit payload
             if len(display_name) > 20:
                 display_name = display_name[:17] + "..."
@@ -2112,7 +2189,7 @@ class BotService:
             self._log_activity(
                 "traceroute_sent",
                 {
-                    "target": f"!{sender_id:08x}",
+                    "target": f"!{dest_id:08x}",
                     "target_name": display_name,
                     "channel": channel_name or f"ch{channel_index}",
                     "status": "sent",
@@ -2124,20 +2201,20 @@ class BotService:
             logger.error(f"Error executing traceroute: {e}")
             return "Traceroute failed"
 
-    def _send_traceroute_packet(self, sender_id: int, publisher: Any) -> None:
+    def _send_traceroute_packet(self, dest_id: int, publisher: Any) -> None:
         """Send a traceroute request without blocking pubsub callbacks."""
         try:
             if publisher._interface is None:
                 return
 
             publisher._interface.sendTraceRoute(
-                dest=sender_id,
+                dest=dest_id,
                 hopLimit=7,
             )
         except Exception as e:
             logger.error(
                 "Traceroute send/wait failed for !%08x: %s",
-                sender_id,
+                dest_id,
                 e,
                 exc_info=True,
             )
@@ -2174,7 +2251,9 @@ class BotService:
             return
 
         # Process the oldest queued request
-        sender_id, sender_name, channel_index, _ = self._queued_traceroutes.pop(0)
+        dest_id, dest_name, channel_index, _, requester_id = (
+            self._queued_traceroutes.pop(0)
+        )
 
         try:
             from .tcp_publisher import get_tcp_publisher
@@ -2182,7 +2261,7 @@ class BotService:
             publisher = get_tcp_publisher()
             if publisher.is_connected and publisher._interface is not None:
                 result = self._execute_traceroute(
-                    sender_id, sender_name, channel_index, publisher
+                    dest_id, dest_name, channel_index, publisher, requester_id
                 )
                 # Queue the "traceroute started" message
                 self.queue_message(
@@ -2206,19 +2285,21 @@ class BotService:
         with self._traceroute_lock:
             for dest_id, (
                 requester_id,
-                requester_name,
+                dest_name,
                 channel_index,
                 start_time,
             ) in self._pending_traceroutes.items():
                 if current_time - start_time > self._traceroute_timeout:
-                    timed_out.append((dest_id, requester_id, requester_name, channel_index))
+                    timed_out.append(
+                        (dest_id, requester_id, dest_name, channel_index)
+                    )
 
         # Process timed-out traceroutes
-        for dest_id, requester_id, requester_name, channel_index in timed_out:
+        for dest_id, requester_id, dest_name, channel_index in timed_out:
             with self._traceroute_lock:
                 self._pending_traceroutes.pop(dest_id, None)
 
-            display_name = requester_name or f"!{requester_id:08x}"
+            display_name = dest_name or f"!{dest_id:08x}"
             if len(display_name) > 15:
                 display_name = display_name[:12] + "..."
 
@@ -2235,7 +2316,7 @@ class BotService:
                 "traceroute_timeout",
                 {
                     "target": f"!{dest_id:08x}",
-                    "target_name": requester_name,
+                    "target_name": dest_name,
                     "channel": channel_name or f"ch{channel_index}",
                     "status": "timed out",
                 },
@@ -2261,7 +2342,7 @@ class BotService:
             if name in self._commands and name not in self._disabled_commands
         ]
         if not starters:
-            starters = [f"{prefix}net", f"{prefix}channels"]
+            starters = [f"{prefix}net", f"{prefix}find"]
         return (
             f"👋 Mesh bot. Try: {' '.join(starters)}\n"
             f"DM {prefix}help for all cmds"
@@ -4523,7 +4604,7 @@ class BotService:
         # Social CTA when newcomers showed up today
         optional_cta = None
         if new_count > 0:
-            optional_cta = f"Say hi! {self._command_prefix}channels"
+            optional_cta = f"Say hi! {self._command_prefix}net"
 
         # Top talkers are nice-to-have; drop first if payload is tight
         optional_top = f"Top: {', '.join(top_names)}" if top_names else None
