@@ -3735,6 +3735,9 @@ document.addEventListener('temperatureUnitChanged', function() {
     loadTelemetryData();
     // Also update live telemetry display if active
     updateLiveTelemetryTemperature();
+    if (typeof renderLiveSparkline === 'function') {
+        renderLiveSparkline('temperature');
+    }
 });
 
 // Update live telemetry temperature when unit changes
@@ -3742,26 +3745,25 @@ function updateLiveTelemetryTemperature() {
     const tempEl = document.getElementById('live-temperature');
     if (!tempEl || tempEl.textContent === '--') return;
 
-    // Parse current value to get the raw celsius value
-    const currentText = tempEl.textContent;
-    let celsiusTemp;
-
-    if (currentText.includes('°F')) {
-        // Convert back from Fahrenheit to Celsius
-        const fahrenheit = parseFloat(currentText);
-        celsiusTemp = (fahrenheit - 32) * 5/9;
-    } else if (currentText.includes('°C')) {
-        celsiusTemp = parseFloat(currentText);
-    } else {
-        return; // No valid temperature
+    let celsiusTemp = parseFloat(tempEl.getAttribute('data-temperature-celsius'));
+    if (isNaN(celsiusTemp)) {
+        // Fallback for older tiles that only have formatted text
+        const currentText = tempEl.textContent || '';
+        if (currentText.includes('°F')) {
+            celsiusTemp = (parseFloat(currentText) - 32) * 5 / 9;
+        } else if (currentText.includes('°C')) {
+            celsiusTemp = parseFloat(currentText);
+        } else {
+            return;
+        }
     }
 
-    const tempUnit = localStorage.getItem('temperatureUnit') || 'celsius';
-    if (tempUnit === 'fahrenheit') {
-        tempEl.textContent = ((celsiusTemp * 9/5) + 32).toFixed(1) + '°F';
+    if (typeof TemperatureToggle !== 'undefined' && TemperatureToggle.formatTemperature) {
+        tempEl.textContent = TemperatureToggle.formatTemperature(celsiusTemp, 1);
     } else {
         tempEl.textContent = celsiusTemp.toFixed(1) + '°C';
     }
+    tempEl.setAttribute('data-temperature-celsius', String(celsiusTemp));
 }
 
 // ==================== LIVE TELEMETRY POLLING ====================
@@ -3912,9 +3914,8 @@ const LIVE_SPARK_SERIES = {
         el: 'live-spark-temperature',
         color: '#dc3545',
         format: (v) => {
-            const unit = localStorage.getItem('temperatureUnit') || 'celsius';
-            if (unit === 'fahrenheit') {
-                return ((Number(v) * 9 / 5) + 32).toFixed(1) + '°F';
+            if (typeof TemperatureToggle !== 'undefined' && TemperatureToggle.formatTemperature) {
+                return TemperatureToggle.formatTemperature(Number(v), 1);
             }
             return Number(v).toFixed(1) + '°C';
         }
@@ -4785,14 +4786,15 @@ function updateTelemetryDisplay(telemetryOrDm, maybeEnv) {
         setLiveTile('live-uptime-tile', 'live-uptime', formatUptime(uptimeSeconds), 'h5 mb-0');
     }
     if (temperature !== undefined) {
-        let tempText;
-        const tempUnit = localStorage.getItem('temperatureUnit') || 'celsius';
-        if (tempUnit === 'fahrenheit') {
-            tempText = ((temperature * 9/5) + 32).toFixed(1) + '°F';
-        } else {
-            tempText = temperature.toFixed(1) + '°C';
+        let tempText = temperature.toFixed(1) + '°C';
+        if (typeof TemperatureToggle !== 'undefined' && TemperatureToggle.formatTemperature) {
+            tempText = TemperatureToggle.formatTemperature(temperature, 1);
         }
         setLiveTile('live-temperature-tile', 'live-temperature', tempText, 'h5 mb-0');
+        const tempEl = document.getElementById('live-temperature');
+        if (tempEl) {
+            tempEl.setAttribute('data-temperature-celsius', String(temperature));
+        }
     }
     if (humidity !== undefined) {
         setLiveTile('live-humidity-tile', 'live-humidity', Number(humidity).toFixed(1) + '%', 'h5 mb-0');

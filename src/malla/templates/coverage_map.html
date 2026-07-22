@@ -422,7 +422,9 @@ function initializeNodePicker() {
 function updateCoverageRadiusOptions() {
     const select = document.getElementById('coverageRadius');
     const label = document.getElementById('coverageRadiusLabel');
-    const tempUnit = localStorage.getItem('malla-temperature-unit') || 'C';
+    const tempUnit = (typeof TemperatureToggle !== 'undefined' && TemperatureToggle.getUnit)
+        ? TemperatureToggle.getUnit()
+        : (localStorage.getItem('malla-temperature-unit') || 'C');
     const useImperial = (tempUnit === 'F');
 
     select.innerHTML = '';
