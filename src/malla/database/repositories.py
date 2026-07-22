@@ -504,14 +504,20 @@ class DashboardRepository:
 
             locations: dict[int, dict[str, Any]] = {}
             for row in cursor.fetchall():
-                raw_payload = row["raw_payload"]
-                if isinstance(raw_payload, memoryview):
-                    raw_payload = raw_payload.tobytes()
-                if not isinstance(raw_payload, (bytes, bytearray)) or not raw_payload:
+                raw = row["raw_payload"]
+                if isinstance(raw, memoryview):
+                    payload_bytes: bytes = raw.tobytes()
+                elif isinstance(raw, bytearray):
+                    payload_bytes = bytes(raw)
+                elif isinstance(raw, bytes):
+                    payload_bytes = raw
+                else:
+                    continue
+                if not payload_bytes:
                     continue
                 try:
                     position = mesh_pb2.Position()
-                    position.ParseFromString(raw_payload)
+                    position.ParseFromString(payload_bytes)
                     lat = position.latitude_i / 1e7 if position.latitude_i else None
                     lon = position.longitude_i / 1e7 if position.longitude_i else None
                     if lat in (None, 0) or lon in (None, 0):
