@@ -1,6 +1,7 @@
 """Unit tests for mesh bot traceroute parsing and formatting."""
 
 import time
+from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -16,6 +17,23 @@ def bot_service() -> BotService:
     service = BotService()
     service._enabled = True
     return service
+
+
+def _ctx(**overrides):
+    base = {
+        "command": "traceroute",
+        "args": [],
+        "raw_message": "!traceroute",
+        "sender_id": 0x12345678,
+        "sender_name": "Alpha",
+        "channel_index": 1,
+        "channel_name": "LongFast",
+        "received_at": time.time(),
+        "packet": {},
+        "is_dm": False,
+    }
+    base.update(overrides)
+    return SimpleNamespace(**base)
 
 
 def _build_route_discovery_payload(
@@ -365,3 +383,106 @@ class TestBotTracerouteFormatting:
         assert "TR to You (2 hops)" in response
         assert "Alpha → Hill(-5) → You(-8)" in response
         assert dest_id not in bot_service._pending_traceroutes
+
+
+class TestBotTracerouteDestination:
+    @pytest.mark.unit
+    def test_resolve_defaults_to_sender(self, bot_service: BotService):
+        dest_id, label = bot_service._resolve_traceroute_destination(_ctx())
+        assert dest_id == 0x12345678
+        assert label == "Alpha"
+
+    @pytest.mark.unit
+    def test_resolve_prefers_exact_short_name(self, bot_service: BotService):
+        cursor = MagicMock()
+        cursor.fetchone.return_value = {
+            "node_id": 0xA1B2C3D4,
+            "short_name": "Hill",
+            "long_name": "Hill Top",
+        }
+        conn = MagicMock()
+        conn.cursor.return_value = cursor
+
+        with patch(
+            "src.malla.database.connection.get_db_connection", return_value=conn
+        ):
+            dest_id, label = bot_service._resolve_traceroute_destination(
+                _ctx(args=["Hill"], raw_message="!traceroute Hill")
+            )
+
+        assert dest_id == 0xA1B2C3D4
+        assert "Hill" in label
+        cursor.execute.assert_called()
+        sql = cursor.execute.call_args.args[0]
+        assert "LOWER(short_name) = ?" in sql
+
+    @pytest.mark.unit
+    def test_resolve_unknown_short_name_returns_none(self, bot_service: BotService):
+        cursor = MagicMock()
+        # Exact short_name miss, then neighbors-style lookup miss
+        cursor.fetchone.side_effect = [None, None]
+        conn = MagicMock()
+        conn.cursor.return_value = cursor
+
+        with patch(
+            "src.malla.database.connection.get_db_connection", return_value=conn
+        ):
+            assert (
+                bot_service._resolve_traceroute_destination(
+                    _ctx(args=["ZZZZ"], raw_message="!traceroute ZZZZ")
+                )
+                is None
+            )
+
+    @pytest.mark.unit
+    def test_cmd_traceroute_uses_resolved_destination(self, bot_service: BotService):
+        publisher = MagicMock()
+        publisher.is_connected = True
+        publisher._interface = MagicMock()
+
+        with patch(
+            "src.malla.services.tcp_publisher.get_tcp_publisher",
+            return_value=publisher,
+        ):
+            with patch.object(
+                bot_service,
+                "_resolve_traceroute_destination",
+                return_value=(0xA1B2C3D4, "Hill"),
+            ):
+                with patch.object(
+                    bot_service,
+                    "_execute_traceroute",
+                    return_value="🔍 TR to Hill...",
+                ) as execute:
+                    result = bot_service._cmd_traceroute(
+                        _ctx(args=["Hill"], raw_message="!traceroute Hill")
+                    )
+
+        assert result == "🔍 TR to Hill..."
+        execute.assert_called_once()
+        assert execute.call_args.args[0] == 0xA1B2C3D4
+        assert execute.call_args.args[1] == "Hill"
+        assert execute.call_args.args[2] == 1
+        assert execute.call_args.args[4] == 0x12345678
+
+    @pytest.mark.unit
+    def test_cmd_traceroute_reports_unknown_node(self, bot_service: BotService):
+        publisher = MagicMock()
+        publisher.is_connected = True
+        publisher._interface = MagicMock()
+
+        with patch(
+            "src.malla.services.tcp_publisher.get_tcp_publisher",
+            return_value=publisher,
+        ):
+            with patch.object(
+                bot_service,
+                "_resolve_traceroute_destination",
+                return_value=None,
+            ):
+                result = bot_service._cmd_traceroute(
+                    _ctx(args=["Nope"], raw_message="!traceroute Nope")
+                )
+
+        assert "not found" in result
+        assert "Nope" in result
