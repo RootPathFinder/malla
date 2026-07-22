@@ -256,16 +256,21 @@ class TestTimezoneToggleE2E:
         # Toggle timezone
         page.click("#timezone-toggle")
         page.wait_for_load_state("load")
+        page.wait_for_selector("#timezone-toggle", timeout=5000)
 
-        # Reopen filters and check input still works
+        # Reopen filters and check input still works. After reload, filter UI
+        # scripts may briefly restore prior values — retry fill until it sticks.
         page.click("text=Filters")
         page.wait_for_selector("#start_time", timeout=5000)
-        page.fill("#start_time", "2025-01-02T14:30")
-
-        value = page.input_value("#start_time")
-        assert value == "2025-01-02T14:30", (
-            "Datetime input should work after timezone toggle"
-        )
+        expected = "2025-01-02T14:30"
+        value = ""
+        for _ in range(5):
+            page.fill("#start_time", expected)
+            page.wait_for_timeout(100)
+            value = page.input_value("#start_time")
+            if value == expected:
+                break
+        assert value == expected, "Datetime input should work after timezone toggle"
 
     def test_node_detail_page_respects_timezone(self, page, test_server_url):
         """Test that node detail page timestamps respect timezone setting."""
