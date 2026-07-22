@@ -26,6 +26,13 @@ class TestMainRoutes:
         assert b"Decode Success" in response.data
         assert b"last24hHourlyChart" in response.data
         assert b"last24h-hourly-chart-wrap" in response.data
+        # Compact layout: distributions are tabbed; health/insights share a sidebar
+        assert b"distributionTabs" in response.data
+        assert b"Health &amp; Insights" in response.data or b"Health & Insights" in response.data
+        assert b"Most Active Nodes" in response.data
+        assert b"dashboard-chart-wrap" in response.data
+        # Duplicate bottom summary cards removed
+        assert b"Network Information" not in response.data
 
     @pytest.mark.integration
     def test_map_route(self, client):
