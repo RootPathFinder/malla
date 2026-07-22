@@ -26,6 +26,7 @@ class TestMainRoutes:
         assert b"Decode Success" in response.data
         assert b"last24hHourlyChart" in response.data
         assert b"last24h-hourly-chart-wrap" in response.data
+        assert b"Also notable" in response.data
 
     @pytest.mark.integration
     def test_map_route(self, client):

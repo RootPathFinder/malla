@@ -4504,6 +4504,7 @@ class BotService:
             nodes_delta = self._get_active_nodes_delta()
             new_nodes = self._get_new_nodes_24h(name_limit=3)
             longest_tr = self._get_longest_traceroute_24h()
+            farthest_node = self._get_farthest_node_24h()
             when = self._digest_now().timetuple()
 
             return self._format_daily_digest(
@@ -4514,6 +4515,7 @@ class BotService:
                 top_names=top_names,
                 new_nodes=new_nodes,
                 longest_tr=longest_tr,
+                farthest_node=farthest_node,
                 when=when,
                 solar_at_risk_count=solar_at_risk_count,
                 solar_wx_poor_count=solar_wx_poor_count,
@@ -4531,6 +4533,7 @@ class BotService:
         top_names: list[str],
         new_nodes: dict[str, Any] | None = None,
         longest_tr: dict[str, Any] | None = None,
+        farthest_node: dict[str, Any] | None = None,
         when: time.struct_time | None = None,
         solar_at_risk_count: int = 0,
         solar_wx_poor_count: int = 0,
@@ -4588,22 +4591,18 @@ class BotService:
             to_name = longest_tr.get("to_name") or "?"
             lines.append(f"Long TR: {longest_tr['hops']} hops {from_name}→{to_name}")
 
-        # Social CTA when newcomers showed up today
-        optional_cta = None
-        if new_count > 0:
-            optional_cta = f"Say hi! {self._command_prefix}net"
-
-        # Top talkers are nice-to-have; drop first if payload is tight
+        # Optional lines added only when they still fit the LoRa budget
+        optional_far = self._format_farthest_node_line(farthest_node)
+        optional_cta = (
+            f"Say hi! {self._command_prefix}net" if new_count > 0 else None
+        )
         optional_top = f"Top: {', '.join(top_names)}" if top_names else None
+
         message = "\n".join(lines)
-
-        if optional_cta:
-            candidate = message + "\n" + optional_cta
-            if len(candidate.encode("utf-8")) <= 220:
-                message = candidate
-
-        if optional_top:
-            candidate = message + "\n" + optional_top
+        for optional in (optional_far, optional_cta, optional_top):
+            if not optional:
+                continue
+            candidate = message + "\n" + optional
             if len(candidate.encode("utf-8")) <= 220:
                 message = candidate
 
@@ -4711,10 +4710,11 @@ class BotService:
 
             names: list[str] = []
             for row in rows:
-                name = row["short_name"] or row["long_name"] or f"!{row['node_id']:08x}"
-                if len(name) > 10:
-                    name = name[:10]
-                names.append(name)
+                names.append(
+                    self._digest_node_label(
+                        row["node_id"], row["short_name"], row["long_name"], max_len=10
+                    )
+                )
             return names
         except Exception as e:
             logger.error(f"Error getting recently offline routers: {e}", exc_info=True)
@@ -4784,11 +4784,11 @@ class BotService:
         long_name: str | None = None,
         max_len: int = 10,
     ) -> str:
-        """Compact node label for digest lines."""
-        if short_name:
-            name = short_name
-        elif long_name:
+        """Compact node label for digest lines (prefer long names)."""
+        if long_name:
             name = long_name
+        elif short_name:
+            name = short_name
         elif node_id is not None:
             name = f"!{node_id:08x}"[-4:]
         else:
@@ -4796,6 +4796,45 @@ class BotService:
         if len(name) > max_len:
             name = name[:max_len]
         return name
+
+    def _format_farthest_node_line(
+        self, farthest_node: dict[str, Any] | None
+    ) -> str | None:
+        """Format farthest-node digest line with distance."""
+        if not farthest_node or not farthest_node.get("name"):
+            return None
+        name = str(farthest_node["name"])
+        if len(name) > 14:
+            name = name[:14]
+        try:
+            km = float(farthest_node.get("distance_km") or 0)
+        except (TypeError, ValueError):
+            return f"Far: {name}"
+        if km <= 0:
+            return f"Far: {name}"
+        if km < 1:
+            return f"Far: {name} ({km * 1000:.0f}m)"
+        return f"Far: {name} ({km:.1f}km)"
+
+    def _get_farthest_node_24h(self) -> dict[str, Any] | None:
+        """Return farthest active node from the primary gateway (last 24h)."""
+        try:
+            from ..database.repositories import DashboardRepository
+
+            farthest = DashboardRepository.get_farthest_node_24h()
+            if not farthest:
+                return None
+            name = str(farthest.get("name") or "?")
+            if len(name) > 14:
+                name = name[:14]
+            return {
+                "name": name,
+                "distance_km": farthest.get("distance_km"),
+                "from_name": farthest.get("from_name"),
+            }
+        except Exception as e:
+            logger.debug(f"Could not get farthest node for digest: {e}")
+            return None
 
     def _get_digest_top_names(self, limit: int = 3) -> list[str]:
         """Return short names of the most active nodes in the last 24 hours."""

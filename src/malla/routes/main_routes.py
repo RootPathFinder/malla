@@ -68,6 +68,7 @@ def dashboard():
             "relayed_packets": 0,
             "low_battery_nodes": 0,
             "top_talkers": [],
+            "farthest_node": None,
             "hourly": [{"hour": h, "packets": 0} for h in range(24)],
             "timezone": "UTC",
         }
