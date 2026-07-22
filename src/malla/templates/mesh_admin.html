@@ -1873,27 +1873,32 @@
                                         <div class="col-6">
                                             <label class="form-label small mb-1"><strong>Prefix</strong></label>
                                             <input type="text" class="form-control form-control-sm" id="botCommandPrefix"
-                                                   maxlength="3" value="!" placeholder="!">
+                                                   maxlength="3" value="!" placeholder="!"
+                                                   oninput="markBotConfigDirty('botCommandPrefix')">
                                         </div>
                                         <div class="col-6">
                                             <label class="form-label small mb-1"><strong>Send interval (s)</strong></label>
                                             <input type="number" class="form-control form-control-sm" id="botMinSendInterval"
-                                                   min="0.5" max="60" step="0.5" value="2">
+                                                   min="0.5" max="60" step="0.5" value="2"
+                                                   oninput="markBotConfigDirty('botMinSendInterval')">
                                         </div>
                                     </div>
                                     <div class="mb-2">
                                         <label class="form-label small mb-1"><strong>Listen Channels</strong></label>
                                         <input type="text" class="form-control form-control-sm" id="botListenChannels"
-                                               placeholder="e.g., LongFast">
+                                               placeholder="e.g., LongFast"
+                                               oninput="markBotConfigDirty('botListenChannels')">
                                     </div>
                                     <div class="mb-2">
                                         <label class="form-label small mb-1"><strong>Response Channel</strong></label>
                                         <input type="number" class="form-control form-control-sm" id="botRespondChannelIndex"
-                                               min="0" max="7" value="1">
+                                               min="0" max="7" value="1"
+                                               oninput="markBotConfigDirty('botRespondChannelIndex')">
                                     </div>
                                     <div class="mb-2">
                                         <div class="form-check form-switch">
-                                            <input class="form-check-input" type="checkbox" id="botWaitForJobs" checked>
+                                            <input class="form-check-input" type="checkbox" id="botWaitForJobs" checked
+                                                   onchange="markBotConfigDirty('botWaitForJobs')">
                                             <label class="form-check-label small" for="botWaitForJobs">
                                                 Wait for admin jobs
                                             </label>
@@ -1901,7 +1906,8 @@
                                     </div>
                                     <div class="mb-2">
                                         <label class="form-label small mb-1" for="botTracerouteFormat"><strong>Traceroute format</strong></label>
-                                        <select class="form-select form-select-sm" id="botTracerouteFormat">
+                                        <select class="form-select form-select-sm" id="botTracerouteFormat"
+                                                onchange="markBotConfigDirty('botTracerouteFormat')">
                                             <option value="names">Names — short names (default)</option>
                                             <option value="longnames">Long names — full node names</option>
                                             <option value="chain">Chain — compact named path</option>
@@ -1910,7 +1916,8 @@
                                     </div>
                                     <div class="mb-2">
                                         <div class="form-check form-switch">
-                                            <input class="form-check-input" type="checkbox" id="botWelcomeNewNodes" checked>
+                                            <input class="form-check-input" type="checkbox" id="botWelcomeNewNodes" checked
+                                                   onchange="markBotConfigDirty('botWelcomeNewNodes')">
                                             <label class="form-check-label small" for="botWelcomeNewNodes">
                                                 Welcome new nodes
                                             </label>
@@ -1921,7 +1928,8 @@
                                     <div class="small fw-semibold mb-2">Daily Net Update</div>
                                     <div class="d-flex align-items-center justify-content-between gap-2 mb-2">
                                         <div class="form-check form-switch mb-0">
-                                            <input class="form-check-input" type="checkbox" id="botDailyDigestEnabled" checked>
+                                            <input class="form-check-input" type="checkbox" id="botDailyDigestEnabled" checked
+                                                   onchange="markBotConfigDirty('botDailyDigestEnabled')">
                                             <label class="form-check-label small" for="botDailyDigestEnabled">
                                                 Enable broadcast
                                             </label>
@@ -1930,12 +1938,14 @@
                                             <label class="form-label small mb-0" for="botDailyDigestHour">Hour</label>
                                             <input type="number" class="form-control form-control-sm"
                                                    id="botDailyDigestHour" min="0" max="23" value="8"
-                                                   style="width: 4.5rem;">
+                                                   style="width: 4.5rem;"
+                                                   oninput="markBotConfigDirty('botDailyDigestHour')">
                                         </div>
                                     </div>
                                     <div class="mb-2">
                                         <label class="form-label small mb-1" for="botDailyDigestTimezone">Timezone</label>
-                                        <select class="form-select form-select-sm" id="botDailyDigestTimezone">
+                                        <select class="form-select form-select-sm" id="botDailyDigestTimezone"
+                                                onchange="markBotConfigDirty('botDailyDigestTimezone')">
                                             <option value="UTC">UTC</option>
                                             <option value="America/New_York">America/New_York (Eastern)</option>
                                             <option value="America/Chicago">America/Chicago (Central)</option>
@@ -1951,7 +1961,7 @@
                                     </div>
                                     <div class="text-muted small mb-2">
                                         Hour is in the timezone above (not server UTC unless you pick UTC).
-                                        Use <code>!net</code> anytime.
+                                        Use <code>net</code> or <code>!net</code> anytime.
                                     </div>
                                     <hr class="my-2">
                                     <div class="small fw-semibold mb-2">NWS Weather Alerts</div>
@@ -1985,7 +1995,8 @@
                                     <div class="small fw-semibold mb-2">Channel Directory Broadcast</div>
                                     <div class="d-flex align-items-center justify-content-between gap-2 mb-2">
                                         <div class="form-check form-switch mb-0">
-                                            <input class="form-check-input" type="checkbox" id="botChannelBroadcastEnabled" checked>
+                                            <input class="form-check-input" type="checkbox" id="botChannelBroadcastEnabled" checked
+                                                   onchange="markBotConfigDirty('botChannelBroadcastEnabled')">
                                             <label class="form-check-label small" for="botChannelBroadcastEnabled">
                                                 Enable broadcast
                                             </label>
@@ -1994,7 +2005,8 @@
                                             <label class="form-label small mb-0" for="botBroadcastIntervalHours">Every</label>
                                             <input type="number" class="form-control form-control-sm"
                                                    id="botBroadcastIntervalHours" min="1" max="168" value="12"
-                                                   style="width: 4.5rem;">
+                                                   style="width: 4.5rem;"
+                                                   oninput="markBotConfigDirty('botBroadcastIntervalHours')">
                                             <span class="small text-muted">h</span>
                                         </div>
                                     </div>
@@ -10383,6 +10395,14 @@
                     el.value = value;
                 }
             };
+            const setCheckedIfClean = (id, checked) => {
+                const el = document.getElementById(id);
+                if (!el) return;
+                if (botConfigDirty.has(id)) return;
+                if (document.activeElement !== el) {
+                    el.checked = !!checked;
+                }
+            };
             setIfBlurred('botCommandPrefix', data.command_prefix || '!');
             setIfBlurred('botMinSendInterval', data.min_send_interval ?? 2);
             setIfBlurred('botListenChannels', (data.listen_channels || []).join(', '));
@@ -10400,30 +10420,12 @@
                 setIfBlurred('botNwsAlertInterval', data.nws_alert_interval_minutes ?? 30);
             }
 
-            const waitEl = document.getElementById('botWaitForJobs');
-            if (waitEl && document.activeElement !== waitEl) {
-                waitEl.checked = data.wait_for_jobs !== false;
-            }
-            const digestEl = document.getElementById('botDailyDigestEnabled');
-            if (digestEl && document.activeElement !== digestEl) {
-                digestEl.checked = data.daily_digest_enabled !== false;
-            }
-            const channelBroadcastEl = document.getElementById('botChannelBroadcastEnabled');
-            if (channelBroadcastEl && document.activeElement !== channelBroadcastEl) {
-                channelBroadcastEl.checked = data.channel_broadcast_enabled !== false;
-            }
-            const welcomeEl = document.getElementById('botWelcomeNewNodes');
-            if (welcomeEl && document.activeElement !== welcomeEl) {
-                welcomeEl.checked = data.welcome_new_nodes_enabled !== false;
-            }
-            const nwsEl = document.getElementById('botNwsAlertEnabled');
-            if (
-                nwsEl &&
-                document.activeElement !== nwsEl &&
-                !botConfigDirty.has('botNwsAlertEnabled') &&
-                Object.prototype.hasOwnProperty.call(data, 'nws_alert_enabled')
-            ) {
-                nwsEl.checked = !!data.nws_alert_enabled;
+            setCheckedIfClean('botWaitForJobs', data.wait_for_jobs !== false);
+            setCheckedIfClean('botDailyDigestEnabled', data.daily_digest_enabled !== false);
+            setCheckedIfClean('botChannelBroadcastEnabled', data.channel_broadcast_enabled !== false);
+            setCheckedIfClean('botWelcomeNewNodes', data.welcome_new_nodes_enabled !== false);
+            if (Object.prototype.hasOwnProperty.call(data, 'nws_alert_enabled')) {
+                setCheckedIfClean('botNwsAlertEnabled', !!data.nws_alert_enabled);
             }
 
         } catch (error) {
@@ -10731,9 +10733,16 @@
 
             if (response.ok && data.success) {
                 clearBotConfigDirty();
-                // Apply saved NWS values immediately so a slow status poll
-                // cannot flash an empty ZIP.
+                // Apply saved values immediately so a slow status poll cannot
+                // flash stale traceroute/NWS fields before the next refresh.
                 if (data.config) {
+                    const fmtEl = document.getElementById('botTracerouteFormat');
+                    if (
+                        fmtEl &&
+                        Object.prototype.hasOwnProperty.call(data.config, 'traceroute_format')
+                    ) {
+                        fmtEl.value = data.config.traceroute_format || 'names';
+                    }
                     const zipEl = document.getElementById('botNwsAlertZip');
                     if (zipEl && Object.prototype.hasOwnProperty.call(data.config, 'nws_alert_zip')) {
                         zipEl.value = data.config.nws_alert_zip || '';

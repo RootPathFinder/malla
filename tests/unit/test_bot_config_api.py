@@ -1,5 +1,7 @@
 """Unit tests for mesh bot configuration serialization and updates."""
 
+from unittest.mock import patch
+
 import pytest
 
 from src.malla.routes.bot_routes import _bot_config_dict
@@ -9,7 +11,9 @@ from src.malla.services.bot_service import BotService
 @pytest.fixture
 def bot_service() -> BotService:
     BotService._instance = None
-    return BotService()
+    service = BotService()
+    yield service
+    BotService._instance = None
 
 
 class TestBotConfigDict:
@@ -54,3 +58,29 @@ class TestBotConfigDict:
         assert "listen_channels" in config
         assert "respond_channel_index" in config
         assert "wait_for_jobs" in config
+
+
+class TestBotConfigApiTracerouteFormat:
+    @pytest.mark.unit
+    def test_put_traceroute_format_persists_and_status_returns_it(
+        self, client, bot_service: BotService
+    ):
+        with patch(
+            "src.malla.routes.bot_routes.get_bot_service", return_value=bot_service
+        ):
+            with patch.object(bot_service, "_save_persisted_settings") as save:
+                put = client.put(
+                    "/api/bot/config",
+                    json={"traceroute_format": "longnames"},
+                )
+                assert put.status_code == 200
+                body = put.get_json()
+                assert body["success"] is True
+                assert body["config"]["traceroute_format"] == "longnames"
+                save.assert_called_once()
+
+            assert bot_service._traceroute_format == "longnames"
+
+            status = client.get("/api/bot/status")
+            assert status.status_code == 200
+            assert status.get_json()["traceroute_format"] == "longnames"

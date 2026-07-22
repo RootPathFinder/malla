@@ -707,10 +707,11 @@ class BotService:
 
         Accepts:
         - Prefixed commands: ``!ping``, ``!wx 90210`` (prefix from config)
-        - Bare single-word commands that exactly match a registered name: ``ping``, ``PING``
+        - Bare commands whose first word matches a registered name: ``ping``,
+          ``wx 90210``, ``traceroute ABCD``
 
-        Multi-word messages without the prefix are ignored so normal chat is not
-        treated as a command (e.g. ``wx 90210`` without ``!`` is not a command).
+        Messages whose first word is not a registered command are ignored so
+        normal chat is not treated as a command.
         """
         stripped = (text or "").strip()
         if not stripped:
@@ -723,13 +724,12 @@ class BotService:
                 return None
             return parts[0].lower(), parts[1:]
 
-        # Bare form: entire message must be exactly one word matching a command.
-        if " " in stripped or "\t" in stripped:
-            return None
-        command = stripped.lower()
+        # Bare form: first token must match a registered command name.
+        parts = stripped.split()
+        command = parts[0].lower()
         if command not in self._commands:
             return None
-        return command, []
+        return command, parts[1:]
 
     def _on_message_received(
         self, packet: dict[str, Any], interface: Any = None
