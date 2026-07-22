@@ -129,7 +129,9 @@ class BotService:
         # Pending traceroutes: maps dest_node_id -> (requester_id, dest_name, channel_index, timestamp)
         self._pending_traceroutes: dict[int, tuple[int, str | None, int, float]] = {}
         self._traceroute_lock = threading.Lock()
-        self._traceroute_unk_snr = -128  # Meshtastic unknown SNR marker (raw protobuf value)
+        self._traceroute_unk_snr = (
+            -128
+        )  # Meshtastic unknown SNR marker (raw protobuf value)
         self._traceroute_timeout = 60.0  # Seconds to wait for traceroute response
 
         # Traceroute rate limiting (hardware firmware limit)
@@ -140,9 +142,7 @@ class BotService:
         self._last_traceroute_time = 0.0
         # Queued traceroute requests:
         # (dest_id, dest_name, channel_index, request_time, requester_id)
-        self._queued_traceroutes: list[
-            tuple[int, str | None, int, float, int]
-        ] = []
+        self._queued_traceroutes: list[tuple[int, str | None, int, float, int]] = []
         # Track last cooldown reminder time to avoid spamming
         self._last_cooldown_reminder_time = 0.0
         self._cooldown_reminder_interval = 30.0  # Only remind once per 30 seconds
@@ -211,7 +211,9 @@ class BotService:
         # Welcome newly discovered nodes (rate-limited)
         self._welcome_new_nodes_enabled = True
         self._welcomed_node_ids: set[int] = set()
-        self._last_welcome_check = time.time()  # ignore nodes first_seen before bot start
+        self._last_welcome_check = (
+            time.time()
+        )  # ignore nodes first_seen before bot start
         self._last_welcome_broadcast_time = 0.0
         self._welcome_min_interval = 300.0  # seconds between welcome broadcasts
         self._welcome_lookback_seconds = 900.0  # only consider recent first_seen
@@ -598,9 +600,7 @@ class BotService:
         if cmd_name in self._commands:
             self._disabled_commands.discard(cmd_name)
             self._log_activity("command_enabled", {"command": cmd_name})
-            self._persist_setting(
-                "disabled_commands", sorted(self._disabled_commands)
-            )
+            self._persist_setting("disabled_commands", sorted(self._disabled_commands))
             return True
         return False
 
@@ -610,9 +610,7 @@ class BotService:
         if cmd_name in self._commands:
             self._disabled_commands.add(cmd_name)
             self._log_activity("command_disabled", {"command": cmd_name})
-            self._persist_setting(
-                "disabled_commands", sorted(self._disabled_commands)
-            )
+            self._persist_setting("disabled_commands", sorted(self._disabled_commands))
             return True
         return False
 
@@ -1112,7 +1110,9 @@ class BotService:
             if portnum != "TRACEROUTE_APP":
                 return
 
-            from_id = self._normalize_node_id(packet.get("fromId") or packet.get("from"))
+            from_id = self._normalize_node_id(
+                packet.get("fromId") or packet.get("from")
+            )
             to_id = self._normalize_node_id(packet.get("toId") or packet.get("to"))
             request_id = packet.get("requestId") or packet.get("request_id")
             local_node_id = self._get_local_node_id()
@@ -1129,8 +1129,8 @@ class BotService:
                 )
                 return
 
-            route, route_back, snr_towards, snr_back = self._parse_traceroute_route_data(
-                packet, decoded
+            route, route_back, snr_towards, snr_back = (
+                self._parse_traceroute_route_data(packet, decoded)
             )
 
             current_time = time.time()
@@ -1336,9 +1336,7 @@ class BotService:
 
         path_nodes = [start_id, *intermediates, end_id]
         parts = [
-            self._traceroute_label(
-                path_nodes[0], labels=labels, use_names=use_names
-            )
+            self._traceroute_label(path_nodes[0], labels=labels, use_names=use_names)
         ]
         for index in range(1, len(path_nodes)):
             label = self._traceroute_label(
@@ -1350,9 +1348,7 @@ class BotService:
             elif snr is None:
                 parts.append(f"{label}(?)")
             else:
-                parts.append(
-                    f"{label}({self._format_snr(snr, compact=compact_snr)})"
-                )
+                parts.append(f"{label}({self._format_snr(snr, compact=compact_snr)})")
         return separator.join(parts)
 
     def _format_traceroute_hops(
@@ -1537,8 +1533,8 @@ class BotService:
             snr_towards,
             labels=labels,
         )
-        forward_hops = len(hop_lines) if hop_lines else (
-            1 if source_id and dest_id else 0
+        forward_hops = (
+            len(hop_lines) if hop_lines else (1 if source_id and dest_id else 0)
         )
 
         dst_label = self._traceroute_label(dest_id, labels=labels)
@@ -1897,9 +1893,7 @@ class BotService:
         if snr is not None:
             try:
                 snr_f = float(snr)
-                snr_s = (
-                    f"{snr_f:.0f}" if float(snr_f).is_integer() else f"{snr_f:.1f}"
-                )
+                snr_s = f"{snr_f:.0f}" if float(snr_f).is_integer() else f"{snr_f:.1f}"
                 lines.append(f"snr: {snr_s} dB")
             except (TypeError, ValueError):
                 pass
@@ -2284,18 +2278,16 @@ class BotService:
         # Find timed-out traceroutes
         with self._traceroute_lock:
             for dest_id, (
-                requester_id,
+                _requester_id,
                 dest_name,
                 channel_index,
                 start_time,
             ) in self._pending_traceroutes.items():
                 if current_time - start_time > self._traceroute_timeout:
-                    timed_out.append(
-                        (dest_id, requester_id, dest_name, channel_index)
-                    )
+                    timed_out.append((dest_id, dest_name, channel_index))
 
         # Process timed-out traceroutes
-        for dest_id, requester_id, dest_name, channel_index in timed_out:
+        for dest_id, dest_name, channel_index in timed_out:
             with self._traceroute_lock:
                 self._pending_traceroutes.pop(dest_id, None)
 
@@ -2343,10 +2335,7 @@ class BotService:
         ]
         if not starters:
             starters = [f"{prefix}net", f"{prefix}find"]
-        return (
-            f"👋 Mesh bot. Try: {' '.join(starters)}\n"
-            f"DM {prefix}help for all cmds"
-        )
+        return f"👋 Mesh bot. Try: {' '.join(starters)}\nDM {prefix}help for all cmds"
 
     def _full_help_text(self) -> str:
         """Full enabled-command list (best sent via DM)."""
@@ -2747,7 +2736,9 @@ class BotService:
         if not data.get("has_data") or not data.get("neighbors"):
             return [], data.get("last_report")
 
-        neighbor_ids = [int(n["node_id"]) for n in data["neighbors"] if n.get("node_id")]
+        neighbor_ids = [
+            int(n["node_id"]) for n in data["neighbors"] if n.get("node_id")
+        ]
         meta = self._neighbor_node_meta(neighbor_ids)
         rows: list[dict[str, Any]] = []
         for n in data["neighbors"]:
@@ -3132,11 +3123,8 @@ class BotService:
                     if len(name) > 10:
                         name = name[:10]
                     tomorrow = (
-                        ((node.get("solar_weather") or {}).get("forecast") or {}).get(
-                            "tomorrow"
-                        )
-                        or {}
-                    )
+                        (node.get("solar_weather") or {}).get("forecast") or {}
+                    ).get("tomorrow") or {}
                     label = tomorrow.get("condition_label") or "Poor"
                     lines.append(f"{name}: {label}")
 
@@ -3462,7 +3450,9 @@ class BotService:
             "longitude": place.get("longitude"),
         }
 
-    def _fetch_wx_report(self, latitude: float, longitude: float) -> dict[str, Any] | None:
+    def _fetch_wx_report(
+        self, latitude: float, longitude: float
+    ) -> dict[str, Any] | None:
         """Fetch a compact current weather report from Open-Meteo."""
         url = (
             "https://api.open-meteo.com/v1/forecast"
@@ -3755,17 +3745,14 @@ class BotService:
                     "severity": alert.get("severity"),
                 },
             )
-            logger.info(
-                "Queued NWS alert for ZIP %s: %s", zip5, alert.get("event")
-            )
+            logger.info("Queued NWS alert for ZIP %s: %s", zip5, alert.get("event"))
 
     def _cmd_wx(self, ctx: CommandContext) -> str:
         """Handle !wx <zip>, !wx alerts [zip], or !wx sensors."""
         try:
             if not ctx.args:
                 return (
-                    f"Usage: {self._command_prefix}wx <zip>  "
-                    f"(or alerts [zip], sensors)"
+                    f"Usage: {self._command_prefix}wx <zip>  (or alerts [zip], sensors)"
                 )
 
             first = ctx.args[0].lower()
@@ -3774,8 +3761,10 @@ class BotService:
 
             if first in ("alerts", "alert", "nws"):
                 zip_arg = " ".join(ctx.args[1:]).strip() if len(ctx.args) > 1 else ""
-                zip5 = self._normalize_nws_zip(zip_arg) if zip_arg else self._normalize_nws_zip(
-                    self._nws_alert_zip
+                zip5 = (
+                    self._normalize_nws_zip(zip_arg)
+                    if zip_arg
+                    else self._normalize_nws_zip(self._nws_alert_zip)
                 )
                 if not zip5:
                     return (
@@ -3790,11 +3779,19 @@ class BotService:
             zip_code = " ".join(ctx.args).strip().upper()
             # Allow common postal formats: 90210, 90210-1234, M5V 2T6
             compact = zip_code.replace(" ", "").replace("-", "")
-            if len(compact) < 3 or len(compact) > 10 or not any(c.isalnum() for c in compact):
+            if (
+                len(compact) < 3
+                or len(compact) > 10
+                or not any(c.isalnum() for c in compact)
+            ):
                 return f"Usage: {self._command_prefix}wx <zip>"
 
             place = self._lookup_zip_location(zip_code)
-            if not place or place.get("latitude") is None or place.get("longitude") is None:
+            if (
+                not place
+                or place.get("latitude") is None
+                or place.get("longitude") is None
+            ):
                 return f"🌤️ Zip '{zip_code}' not found"
 
             current = self._fetch_wx_report(
@@ -4306,13 +4303,7 @@ class BotService:
             if len(message.encode("utf-8")) > 220:
                 kept: list[str] = []
                 for entry in names:
-                    candidate = (
-                        header
-                        + "\n"
-                        + " ".join([*kept, entry])
-                        + "\n"
-                        + footer
-                    )
+                    candidate = header + "\n" + " ".join([*kept, entry]) + "\n" + footer
                     if len(candidate.encode("utf-8")) > 220:
                         break
                     kept.append(entry)
@@ -4391,9 +4382,7 @@ class BotService:
             self._last_welcome_check = now
 
             newcomers = [
-                row
-                for row in rows
-                if row["node_id"] not in self._welcomed_node_ids
+                row for row in rows if row["node_id"] not in self._welcomed_node_ids
             ]
             if not newcomers:
                 return
@@ -4597,9 +4586,7 @@ class BotService:
         if longest_tr and longest_tr.get("hops", 0) > 0:
             from_name = longest_tr.get("from_name") or "?"
             to_name = longest_tr.get("to_name") or "?"
-            lines.append(
-                f"Long TR: {longest_tr['hops']} hops {from_name}→{to_name}"
-            )
+            lines.append(f"Long TR: {longest_tr['hops']} hops {from_name}→{to_name}")
 
         # Social CTA when newcomers showed up today
         optional_cta = None
@@ -4724,11 +4711,7 @@ class BotService:
 
             names: list[str] = []
             for row in rows:
-                name = (
-                    row["short_name"]
-                    or row["long_name"]
-                    or f"!{row['node_id']:08x}"
-                )
+                name = row["short_name"] or row["long_name"] or f"!{row['node_id']:08x}"
                 if len(name) > 10:
                     name = name[:10]
                 names.append(name)
@@ -4944,8 +4927,10 @@ class BotService:
                     snr_hops = len(route_data.get("snr_towards") or [])
                     route_hops = len(route_data.get("route_nodes") or [])
                     # SNR entries cover each RF hop including the final hop
-                    hops = snr_hops if snr_hops > 0 else (
-                        route_hops + 1 if route_hops > 0 else 0
+                    hops = (
+                        snr_hops
+                        if snr_hops > 0
+                        else (route_hops + 1 if route_hops > 0 else 0)
                     )
 
                 hop_start = row["hop_start"]

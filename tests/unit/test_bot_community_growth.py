@@ -96,9 +96,7 @@ class TestDmTipsAndNeighbors:
         ]
 
         with (
-            patch(
-                "src.malla.database.connection.get_db_connection", return_value=conn
-            ),
+            patch("src.malla.database.connection.get_db_connection", return_value=conn),
             patch.object(
                 bot_service,
                 "_load_neighborinfo_neighbors",
@@ -134,9 +132,7 @@ class TestDmTipsAndNeighbors:
         ]
 
         with (
-            patch(
-                "src.malla.database.connection.get_db_connection", return_value=conn
-            ),
+            patch("src.malla.database.connection.get_db_connection", return_value=conn),
             patch.object(
                 bot_service, "_load_neighborinfo_neighbors", return_value=([], None)
             ),

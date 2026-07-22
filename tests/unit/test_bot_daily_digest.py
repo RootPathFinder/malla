@@ -149,7 +149,10 @@ class TestDailyDigestFilters:
         oldest, newest = params[-2], params[-1]
         assert oldest < newest
         assert newest - oldest == pytest.approx(
-            (bot_service._digest_offline_max_hours - bot_service._digest_offline_min_hours)
+            (
+                bot_service._digest_offline_max_hours
+                - bot_service._digest_offline_min_hours
+            )
             * 3600,
             rel=0.01,
         )
@@ -284,7 +287,9 @@ class TestDailyDigestScheduling:
             bot_service, "_build_daily_digest", return_value="📡 Net 7/20\nNodes: 1"
         ):
             with patch.object(bot_service, "queue_message") as queue_message:
-                with patch.object(bot_service, "_digest_now", return_value=fixed_morning):
+                with patch.object(
+                    bot_service, "_digest_now", return_value=fixed_morning
+                ):
                     bot_service._maybe_send_daily_digest()
                     bot_service._maybe_send_daily_digest()
 
@@ -292,7 +297,9 @@ class TestDailyDigestScheduling:
         assert bot_service._last_daily_digest_date == "2026-07-20"
 
     @pytest.mark.unit
-    def test_digest_hour_uses_configured_timezone_not_utc(self, bot_service: BotService):
+    def test_digest_hour_uses_configured_timezone_not_utc(
+        self, bot_service: BotService
+    ):
         """Hour 8 in America/New_York must not fire at 08:00 UTC (04:00 EDT)."""
         from datetime import datetime
         from zoneinfo import ZoneInfo
