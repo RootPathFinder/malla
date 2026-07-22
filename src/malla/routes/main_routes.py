@@ -21,6 +21,7 @@ def dashboard():
     try:
         # Get basic dashboard stats
         stats = DashboardRepository.get_stats()
+        last_24h = DashboardRepository.get_last_24h_summary()
 
         # Get gateway statistics from the new cached service
         from ..services.gateway_service import GatewayService
@@ -31,6 +32,7 @@ def dashboard():
         return render_template(
             "dashboard.html",
             stats=stats,
+            last_24h=last_24h,
             gateway_count=gateway_count,
         )
     except Exception as e:
@@ -40,15 +42,39 @@ def dashboard():
             "total_nodes": 0,
             "active_nodes_24h": 0,
             "total_packets": 0,
+            "packets_24h": 0,
             "recent_packets": 0,
             "success_rate": 0.0,
             "avg_rssi": 0.0,
             "avg_snr": 0.0,
             "packet_types": [],
         }
+        fallback_24h = {
+            "packets_24h": 0,
+            "packets_prior_24h": 0,
+            "packets_trend_pct": 0.0,
+            "text_messages_24h": 0,
+            "active_nodes_24h": 0,
+            "active_nodes_prior_24h": 0,
+            "active_nodes_delta": 0,
+            "new_nodes_24h": 0,
+            "new_node_names": [],
+            "avg_snr": 0.0,
+            "avg_rssi": 0.0,
+            "decode_success_rate": 0.0,
+            "gateways_24h": 0,
+            "protocol_types_24h": 0,
+            "direct_packets": 0,
+            "relayed_packets": 0,
+            "low_battery_nodes": 0,
+            "top_talkers": [],
+            "hourly": [{"hour": h, "packets": 0} for h in range(24)],
+            "timezone": "UTC",
+        }
         return render_template(
             "dashboard.html",
             stats=fallback_stats,
+            last_24h=fallback_24h,
             gateway_count=0,
             error_message="Unable to load dashboard data. Please check if the database is properly initialized.",
         )

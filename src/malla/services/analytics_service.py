@@ -254,22 +254,22 @@ class AnalyticsService:
             f"""
             SELECT
                 AVG(CASE WHEN rssi IS NOT NULL AND rssi != 0 THEN rssi END) as avg_rssi,
-                AVG(CASE WHEN snr IS NOT NULL THEN snr END) as avg_snr,
+                AVG(CASE WHEN snr IS NOT NULL AND snr != 0 THEN snr END) as avg_snr,
                 COUNT(CASE WHEN rssi IS NOT NULL AND rssi != 0 THEN 1 END) as rssi_count,
-                COUNT(CASE WHEN snr IS NOT NULL THEN 1 END) as snr_count,
-                -- RSSI distribution
-                SUM(CASE WHEN rssi > -70 THEN 1 ELSE 0 END) as rssi_excellent,
-                SUM(CASE WHEN rssi > -80 AND rssi <= -70 THEN 1 ELSE 0 END) as rssi_good,
-                SUM(CASE WHEN rssi > -90 AND rssi <= -80 THEN 1 ELSE 0 END) as rssi_fair,
-                SUM(CASE WHEN rssi <= -90 THEN 1 ELSE 0 END) as rssi_poor,
-                -- SNR distribution
-                SUM(CASE WHEN snr > 10 THEN 1 ELSE 0 END) as snr_excellent,
-                SUM(CASE WHEN snr > 5 AND snr <= 10 THEN 1 ELSE 0 END) as snr_good,
-                SUM(CASE WHEN snr > 0 AND snr <= 5 THEN 1 ELSE 0 END) as snr_fair,
-                SUM(CASE WHEN snr <= 0 THEN 1 ELSE 0 END) as snr_poor
+                COUNT(CASE WHEN snr IS NOT NULL AND snr != 0 THEN 1 END) as snr_count,
+                -- RSSI distribution (exclude NULL/0 — those are missing measurements)
+                SUM(CASE WHEN rssi IS NOT NULL AND rssi != 0 AND rssi > -70 THEN 1 ELSE 0 END) as rssi_excellent,
+                SUM(CASE WHEN rssi IS NOT NULL AND rssi != 0 AND rssi > -80 AND rssi <= -70 THEN 1 ELSE 0 END) as rssi_good,
+                SUM(CASE WHEN rssi IS NOT NULL AND rssi != 0 AND rssi > -90 AND rssi <= -80 THEN 1 ELSE 0 END) as rssi_fair,
+                SUM(CASE WHEN rssi IS NOT NULL AND rssi != 0 AND rssi <= -90 THEN 1 ELSE 0 END) as rssi_poor,
+                -- SNR distribution (exclude NULL/0)
+                SUM(CASE WHEN snr IS NOT NULL AND snr != 0 AND snr > 10 THEN 1 ELSE 0 END) as snr_excellent,
+                SUM(CASE WHEN snr IS NOT NULL AND snr != 0 AND snr > 5 AND snr <= 10 THEN 1 ELSE 0 END) as snr_good,
+                SUM(CASE WHEN snr IS NOT NULL AND snr != 0 AND snr > 0 AND snr <= 5 THEN 1 ELSE 0 END) as snr_fair,
+                SUM(CASE WHEN snr IS NOT NULL AND snr != 0 AND snr < 0 THEN 1 ELSE 0 END) as snr_poor
             FROM packet_history
             WHERE {where_clause}
-        """,
+            """,
             params,
         )
 

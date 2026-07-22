@@ -81,8 +81,8 @@
             <div class="card h-100">
                 <div class="card-body card-metric">
                     <div class="metric-value">{{ "{:,}".format(stats.total_packets) }}</div>
-                    <div class="metric-label">Total Messages</div>
-                    <small class="text-muted">Network activity</small>
+                    <div class="metric-label">Packet Receptions</div>
+                    <small class="text-muted">All-time gateway hearings</small>
                 </div>
             </div>
         </div>
@@ -91,8 +91,116 @@
                 <div class="card-body card-metric">
                     {% set success_class = 'text-success' if stats.success_rate >= 95 else 'text-warning' if stats.success_rate >= 85 else 'text-danger' %}
                     <div class="metric-value {{ success_class }}">{{ stats.success_rate }}%</div>
-                    <div class="metric-label">Processing Success</div>
-                    <small class="text-muted">Message reliability</small>
+                    <div class="metric-label">Decode Success</div>
+                    <small class="text-muted">Capture parse rate (24h)</small>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Last 24 Hours Summary -->
+    {% set l24 = last_24h or {} %}
+    {% set pkt_trend = l24.packets_trend_pct|default(0) %}
+    {% set nodes_delta = l24.active_nodes_delta|default(0) %}
+    <div class="row mb-4">
+        <div class="col-12">
+            <div class="card">
+                <div class="card-header d-flex align-items-center justify-content-between flex-wrap gap-2">
+                    <h5 class="card-title mb-0">
+                        <i class="bi bi-clock-history"></i> Last 24 Hours
+                        <span class="badge bg-secondary-subtle text-secondary border ms-2">{{ l24.timezone|default('UTC') }}</span>
+                    </h5>
+                    <small class="text-muted">Observed mesh activity from gateway receptions</small>
+                </div>
+                <div class="card-body">
+                    <div class="row g-3 mb-3">
+                        <div class="col-6 col-md-3 col-xl-2">
+                            <div class="border rounded p-2 h-100">
+                                <div class="small text-muted">Packets</div>
+                                <div class="fs-5 fw-semibold">{{ "{:,}".format(l24.packets_24h|default(0)) }}</div>
+                                {% if pkt_trend > 0 %}
+                                <small class="text-success">↑ {{ pkt_trend }}% vs prior day</small>
+                                {% elif pkt_trend < 0 %}
+                                <small class="text-danger">↓ {{ pkt_trend|abs }}% vs prior day</small>
+                                {% else %}
+                                <small class="text-muted">→ flat vs prior day</small>
+                                {% endif %}
+                            </div>
+                        </div>
+                        <div class="col-6 col-md-3 col-xl-2">
+                            <div class="border rounded p-2 h-100">
+                                <div class="small text-muted">Text messages</div>
+                                <div class="fs-5 fw-semibold">{{ "{:,}".format(l24.text_messages_24h|default(0)) }}</div>
+                                <small class="text-muted">TEXT_MESSAGE_APP</small>
+                            </div>
+                        </div>
+                        <div class="col-6 col-md-3 col-xl-2">
+                            <div class="border rounded p-2 h-100">
+                                <div class="small text-muted">Active nodes</div>
+                                <div class="fs-5 fw-semibold text-success">{{ l24.active_nodes_24h|default(0) }}</div>
+                                {% if nodes_delta > 0 %}
+                                <small class="text-success">+{{ nodes_delta }} vs prior day</small>
+                                {% elif nodes_delta < 0 %}
+                                <small class="text-warning">{{ nodes_delta }} vs prior day</small>
+                                {% else %}
+                                <small class="text-muted">unchanged vs prior day</small>
+                                {% endif %}
+                            </div>
+                        </div>
+                        <div class="col-6 col-md-3 col-xl-2">
+                            <div class="border rounded p-2 h-100">
+                                <div class="small text-muted">New nodes</div>
+                                <div class="fs-5 fw-semibold text-info">{{ l24.new_nodes_24h|default(0) }}</div>
+                                {% if l24.new_node_names %}
+                                <small class="text-muted text-truncate d-block" title="{{ l24.new_node_names|join(', ') }}">{{ l24.new_node_names|join(', ') }}</small>
+                                {% else %}
+                                <small class="text-muted">first seen today</small>
+                                {% endif %}
+                            </div>
+                        </div>
+                        <div class="col-6 col-md-3 col-xl-2">
+                            <div class="border rounded p-2 h-100">
+                                <div class="small text-muted">Avg SNR</div>
+                                <div class="fs-5 fw-semibold">{{ l24.avg_snr|default(0) }} dB</div>
+                                <small class="text-muted">RSSI {{ l24.avg_rssi|default(0) }} dBm</small>
+                            </div>
+                        </div>
+                        <div class="col-6 col-md-3 col-xl-2">
+                            <div class="border rounded p-2 h-100">
+                                <div class="small text-muted">Routing mix</div>
+                                {% set hop_total = (l24.direct_packets|default(0)) + (l24.relayed_packets|default(0)) %}
+                                {% set direct_pct = ((l24.direct_packets|default(0)) / hop_total * 100)|int if hop_total > 0 else 0 %}
+                                <div class="fs-5 fw-semibold">{{ direct_pct }}% direct</div>
+                                <small class="text-muted">{{ "{:,}".format(l24.relayed_packets|default(0)) }} relayed</small>
+                            </div>
+                        </div>
+                    </div>
+                    <div class="row g-3 align-items-stretch">
+                        <div class="col-lg-8">
+                            <div class="d-flex justify-content-between align-items-center mb-1">
+                                <h6 class="mb-0 small fw-semibold">Hourly packet trend</h6>
+                                <small class="text-muted">UTC hours</small>
+                            </div>
+                            <canvas id="last24hHourlyChart" style="height: 140px;"></canvas>
+                        </div>
+                        <div class="col-lg-4">
+                            <h6 class="mb-2 small fw-semibold">Also notable</h6>
+                            <ul class="list-unstyled mb-0 small">
+                                <li class="mb-1"><i class="bi bi-router text-warning"></i> {{ l24.gateways_24h|default(0) }} gateways hearing traffic</li>
+                                <li class="mb-1"><i class="bi bi-diagram-3 text-info"></i> {{ l24.protocol_types_24h|default(0) }} protocol types</li>
+                                <li class="mb-1"><i class="bi bi-battery-half text-danger"></i> {{ l24.low_battery_nodes|default(0) }} nodes &lt;30% battery</li>
+                                <li class="mb-1"><i class="bi bi-check2-circle text-success"></i> {{ l24.decode_success_rate|default(0) }}% decode success</li>
+                            </ul>
+                            {% if l24.top_talkers %}
+                            <h6 class="mt-3 mb-1 small fw-semibold">Top talkers</h6>
+                            <ol class="small mb-0 ps-3">
+                                {% for t in l24.top_talkers[:5] %}
+                                <li>{{ t.name }} <span class="text-muted">({{ "{:,}".format(t.packets) }})</span></li>
+                                {% endfor %}
+                            </ol>
+                            {% endif %}
+                        </div>
+                    </div>
                 </div>
             </div>
         </div>
@@ -104,7 +212,7 @@
         <div class="col-md-8 mb-4">
             <div class="card h-100">
                 <div class="card-header d-flex align-items-center justify-content-between">
-                    <h5 class="card-title mb-0"><i class="bi bi-graph-up-arrow"></i> <span id="activityChartTitle">Network Activity (24h)</span></h5>
+                    <h5 class="card-title mb-0"><i class="bi bi-graph-up-arrow"></i> <span id="activityChartTitle">Network Activity (24h UTC)</span></h5>
                     <div class="btn-group btn-group-sm" role="group" aria-label="Time range">
                         <button type="button" class="btn btn-outline-secondary activity-range-btn active" data-days="1">24h</button>
                         <button type="button" class="btn btn-outline-secondary activity-range-btn" data-days="7">7d</button>
@@ -142,14 +250,14 @@
                     </div>
 
                     <div class="mb-3">
-                        <h6 style="font-family: var(--bs-font-sans-serif); font-weight: 600; margin-bottom: 0.5rem;">Message Success Rate</h6>
+                        <h6 style="font-family: var(--bs-font-sans-serif); font-weight: 600; margin-bottom: 0.5rem;">Decode Success Rate</h6>
                         <div class="progress mb-2">
                             {% set success_bar_class = 'bg-success' if stats.success_rate >= 95 else 'bg-warning' if stats.success_rate >= 85 else 'bg-danger' %}
                             <div class="progress-bar {{ success_bar_class }}" style="width: {{ stats.success_rate }}%;">
                                 {{ stats.success_rate }}%
                             </div>
                         </div>
-                        <small class="text-muted" style="font-family: var(--bs-font-sans-serif);">Packet processing reliability</small>
+                        <small class="text-muted" style="font-family: var(--bs-font-sans-serif);">Capture parse reliability (not RF delivery)</small>
                     </div>
 
                     <div class="mb-3">
@@ -294,7 +402,7 @@
         <div class="col-md-6 mb-4">
             <div class="card h-100">
                 <div class="card-header">
-                    <h5 class="card-title mb-0"><i class="bi bi-router"></i> Message Routing Patterns</h5>
+                    <h5 class="card-title mb-0"><i class="bi bi-router"></i> Hop Distribution (24h)</h5>
                 </div>
                 <div class="card-body">
                     <div id="hopDistributionChartLoading" class="loading-container">
@@ -410,7 +518,7 @@
                 <div class="card-body">
                     <div class="row">
                         <div class="col-6">
-                            <strong>Total Messages:</strong><br>
+                            <strong>Packet Receptions:</strong><br>
                             <span class="text-primary">{{ "{:,}".format(stats.total_packets) }}</span>
                         </div>
                         <div class="col-6">
@@ -470,6 +578,9 @@
 
 {% block extra_js %}
 <script>
+// Server-rendered last-24h summary for the hourly sparkline
+const last24hSummary = {{ (last_24h or {}) | tojson }};
+
 // Load analytics data asynchronously to improve initial page load time
 let analyticsData = null;
 let chartInstances = {}; // Store chart instances for theme updates
@@ -560,8 +671,9 @@ function updateChartsForTheme() {
         createNodeActivityChart(analyticsData.node_statistics);
         createGatewayActivityChart(analyticsData.gateway_distribution);
         createSignalDistributionChart(analyticsData.signal_quality);
-        createHopDistributionChart(analyticsData.temporal_patterns);
+        createHopDistributionChart();
         createPacketTypesChart(analyticsData.packet_types);
+        createLast24hHourlyChart();
     }
 }
 
@@ -569,6 +681,7 @@ function updateChartsForTheme() {
 document.addEventListener('DOMContentLoaded', function () {
     // Load analytics data asynchronously (default: 24h)
     loadAnalyticsData(1);
+    createLast24hHourlyChart();
 
     // Time-range toggle buttons
     document.querySelectorAll('.activity-range-btn').forEach(function(btn) {
@@ -576,7 +689,11 @@ document.addEventListener('DOMContentLoaded', function () {
             document.querySelectorAll('.activity-range-btn').forEach(b => b.classList.remove('active'));
             this.classList.add('active');
             const days = parseInt(this.dataset.days, 10);
-            const titles = {1: 'Network Activity (24h)', 7: 'Network Activity (7d)', 30: 'Network Activity (30d)'};
+            const titles = {
+                1: 'Network Activity (24h UTC)',
+                7: 'Network Activity (7d UTC)',
+                30: 'Network Activity (30d UTC)'
+            };
             document.getElementById('activityChartTitle').textContent = titles[days] || 'Network Activity';
             reloadActivityChart(days);
         });
@@ -603,7 +720,7 @@ async function loadAnalyticsData(days) {
         createNodeActivityChart(analyticsData.node_statistics);
         createGatewayActivityChart(analyticsData.gateway_distribution);
         createSignalDistributionChart(analyticsData.signal_quality);
-        createHopDistributionChart(analyticsData.temporal_patterns);
+        createHopDistributionChart();
         createPacketTypesChart(analyticsData.packet_types);
         populateTopNodesTable(analyticsData.top_nodes);
 
@@ -729,10 +846,9 @@ function createTimeSeriesChart(temporalData, days) {
         });
     } else {
         breakdown.forEach(item => {
+            // Buckets are UTC hours from SQLite unixepoch
             const hour24 = item.hour;
-            const hour12 = hour24 === 0 ? 12 : (hour24 > 12 ? hour24 - 12 : hour24);
-            const ampm = hour24 < 12 ? 'AM' : 'PM';
-            labels.push(`${hour12} ${ampm}`);
+            labels.push(String(hour24).padStart(2, '0') + 'z');
             data.push(item.total_packets);
         });
     }
@@ -740,14 +856,10 @@ function createTimeSeriesChart(temporalData, days) {
     const colors = getChartColors();
     const options = getDefaultChartOptions();
 
-    // For 24h view: draw a "Now" vertical line
+    // For 24h view: draw a "Now" vertical line at the current UTC hour
     let currentHourIndex = -1;
     if (!isDaily) {
-        const currentHour = new Date().getHours();
-        const currentHour12 = currentHour === 0 ? 12 : (currentHour > 12 ? currentHour - 12 : currentHour);
-        const currentAmpm = currentHour < 12 ? 'AM' : 'PM';
-        const currentTimeLabel = `${currentHour12} ${currentAmpm}`;
-        currentHourIndex = labels.indexOf(currentTimeLabel);
+        currentHourIndex = new Date().getUTCHours();
     }
 
     // Custom plugin to draw current time vertical line
@@ -916,34 +1028,108 @@ function createSignalDistributionChart(signalData) {
     });
 }
 
-function createHopDistributionChart(temporalData) {
-    // Create a simple hop distribution chart based on available data
+function createHopDistributionChart() {
+    // Real hop distribution from /api/hop-stats (not placeholder ratios)
     hideLoadingSpinner('hopDistributionChart');
     const ctx = document.getElementById('hopDistributionChart');
     if (!ctx) return;
 
-    const colors = getChartColors();
+    fetch('/api/hop-stats?hours=24')
+        .then(r => r.ok ? r.json() : Promise.reject(new Error('hop-stats failed')))
+        .then(data => {
+            const colors = getChartColors();
+            const hops = (data.hop_distribution || []).filter(h => h.hops != null && h.hops >= 0);
+            const labels = hops.length
+                ? hops.map(h => (h.hops === 0 ? 'Direct (0)' : h.hops + ' hop' + (h.hops === 1 ? '' : 's')))
+                : ['No hop data'];
+            const values = hops.length ? hops.map(h => h.count) : [1];
+            const palette = [colors.success, colors.warning, colors.info, colors.danger, colors.primary, colors.secondary];
 
-    // For now, create a chart showing message routing efficiency
-    // This could be enhanced with actual hop count data from the API
-    chartInstances.hopDistributionChart = new Chart(ctx, {
-        type: 'doughnut',
+            if (chartInstances.hopDistributionChart) {
+                chartInstances.hopDistributionChart.destroy();
+            }
+            chartInstances.hopDistributionChart = new Chart(ctx, {
+                type: 'doughnut',
+                data: {
+                    labels: labels,
+                    datasets: [{
+                        data: values,
+                        backgroundColor: palette.slice(0, values.length)
+                    }]
+                },
+                options: {
+                    responsive: true,
+                    maintainAspectRatio: false,
+                    plugins: {
+                        legend: {
+                            position: 'bottom',
+                            labels: { color: colors.textColor }
+                        },
+                        tooltip: {
+                            callbacks: {
+                                afterBody: function() {
+                                    const stats = data.statistics || {};
+                                    return [
+                                        'Direct: ' + (stats.direct_packets || 0),
+                                        'Relayed: ' + (stats.relayed_packets || 0),
+                                        'Avg hops: ' + (stats.avg_hops != null ? stats.avg_hops : '—')
+                                    ];
+                                }
+                            }
+                        }
+                    }
+                }
+            });
+        })
+        .catch(err => {
+            console.error('Hop distribution chart error:', err);
+            hideLoadingSpinner('hopDistributionChart');
+        });
+}
+
+function createLast24hHourlyChart() {
+    const ctx = document.getElementById('last24hHourlyChart');
+    if (!ctx || !last24hSummary || !Array.isArray(last24hSummary.hourly)) return;
+
+    const colors = getChartColors();
+    const labels = last24hSummary.hourly.map(h => String(h.hour).padStart(2, '0') + 'z');
+    const data = last24hSummary.hourly.map(h => h.packets || 0);
+    const nowHour = new Date().getUTCHours();
+
+    if (chartInstances.last24hHourlyChart) {
+        chartInstances.last24hHourlyChart.destroy();
+    }
+    chartInstances.last24hHourlyChart = new Chart(ctx, {
+        type: 'bar',
         data: {
-            labels: ['Direct Messages', 'Routed Messages', 'Multi-hop Messages'],
+            labels: labels,
             datasets: [{
-                data: [60, 30, 10], // Placeholder data - could be enhanced with real hop analysis
-                backgroundColor: [colors.success, colors.warning, colors.danger]
+                label: 'Packets / hour (UTC)',
+                data: data,
+                backgroundColor: data.map((_, i) => i === nowHour ? colors.danger : colors.info),
+                borderWidth: 0
             }]
         },
         options: {
             responsive: true,
             maintainAspectRatio: false,
             plugins: {
-                legend: {
-                    position: 'bottom',
-                    labels: {
-                        color: colors.textColor
-                    }
+                legend: { display: false }
+            },
+            scales: {
+                x: {
+                    ticks: {
+                        color: colors.mutedTextColor,
+                        maxRotation: 0,
+                        autoSkip: true,
+                        maxTicksLimit: 12
+                    },
+                    grid: { display: false }
+                },
+                y: {
+                    beginAtZero: true,
+                    ticks: { color: colors.mutedTextColor },
+                    grid: { color: colors.gridColor }
                 }
             }
         }

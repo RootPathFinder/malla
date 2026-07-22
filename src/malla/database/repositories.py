@@ -37,7 +37,7 @@ class DashboardRepository:
 
             # Build WHERE clause for gateway filtering
             gateway_filter = ""
-            gateway_params = []
+            gateway_params: list[Any] = []
             if gateway_id:
                 gateway_filter = " AND gateway_id = ?"
                 gateway_params = [gateway_id]
@@ -49,17 +49,16 @@ class DashboardRepository:
             )
             total_nodes = cursor.fetchone()["total_nodes"]
 
-            # Single optimized query for all packet statistics
+            # Packet reception stats for the last 24h (gateway-filtered)
             params = [one_hour_ago, twenty_four_hours_ago] + gateway_params
 
             cursor.execute(
                 f"""
                 SELECT
-                    COUNT(*) as total_packets,
-                    COUNT(DISTINCT CASE WHEN from_node_id IS NOT NULL THEN from_node_id END) as active_nodes_24h,
+                    COUNT(*) as packets_24h,
                     COUNT(CASE WHEN timestamp > ? THEN 1 END) as recent_packets,
                     AVG(CASE WHEN rssi IS NOT NULL AND rssi != 0 THEN rssi END) as avg_rssi,
-                    AVG(CASE WHEN snr IS NOT NULL THEN snr END) as avg_snr,
+                    AVG(CASE WHEN snr IS NOT NULL AND snr != 0 THEN snr END) as avg_snr,
                     SUM(CASE WHEN processed_successfully = 1 THEN 1 ELSE 0 END) as successful_packets,
                     CASE WHEN COUNT(*) > 0
                          THEN ROUND(SUM(CASE WHEN processed_successfully = 1 THEN 1 ELSE 0 END) * 100.0 / COUNT(*), 1)
@@ -71,6 +70,21 @@ class DashboardRepository:
             )
 
             stats_row = cursor.fetchone()
+
+            # Active nodes in 24h: only non-archived known nodes (aligned with Total Nodes)
+            cursor.execute(
+                f"""
+                SELECT COUNT(DISTINCT ph.from_node_id) as active_nodes_24h
+                FROM packet_history ph
+                INNER JOIN node_info ni ON ni.node_id = ph.from_node_id
+                WHERE ph.timestamp > ?
+                  AND ph.from_node_id IS NOT NULL
+                  AND COALESCE(ni.archived, 0) = 0
+                  {gateway_filter.replace("gateway_id", "ph.gateway_id") if gateway_filter else ""}
+                """,
+                [twenty_four_hours_ago] + gateway_params,
+            )
+            active_nodes_24h = cursor.fetchone()["active_nodes_24h"] or 0
 
             # Get total packet count (all time) separately
             cursor.execute(
@@ -97,8 +111,9 @@ class DashboardRepository:
 
             return {
                 "total_nodes": total_nodes,
-                "active_nodes_24h": stats_row["active_nodes_24h"] or 0,
+                "active_nodes_24h": active_nodes_24h,
                 "total_packets": total_packets_all_time or 0,
+                "packets_24h": stats_row["packets_24h"] or 0,
                 "recent_packets": stats_row["recent_packets"] or 0,
                 "avg_rssi": round(stats_row["avg_rssi"] or 0, 1),
                 "avg_snr": round(stats_row["avg_snr"] or 0, 1),
@@ -108,6 +123,258 @@ class DashboardRepository:
 
         except Exception as e:
             logger.error(f"Error getting dashboard stats: {e}")
+            raise
+
+    @staticmethod
+    def get_last_24h_summary(gateway_id: str | None = None) -> dict[str, Any]:
+        """Compose last-24h mesh activity indicators for the dashboard."""
+        try:
+            conn = get_db_connection()
+            cursor = conn.cursor()
+            now = time.time()
+            since = now - 24 * 3600
+            prior_start = now - 48 * 3600
+
+            gateway_filter = ""
+            gateway_params: list[Any] = []
+            if gateway_id:
+                gateway_filter = " AND gateway_id = ?"
+                gateway_params = [gateway_id]
+
+            # Current / prior windows for packet receptions
+            cursor.execute(
+                f"""
+                SELECT
+                    SUM(CASE WHEN timestamp > ? THEN 1 ELSE 0 END) as packets_24h,
+                    SUM(CASE WHEN timestamp > ? AND timestamp <= ? THEN 1 ELSE 0 END)
+                        as packets_prior_24h,
+                    SUM(CASE WHEN timestamp > ? AND portnum_name = 'TEXT_MESSAGE_APP'
+                        THEN 1 ELSE 0 END) as text_messages_24h,
+                    AVG(CASE WHEN timestamp > ? AND snr IS NOT NULL AND snr != 0
+                        THEN snr END) as avg_snr,
+                    AVG(CASE WHEN timestamp > ? AND rssi IS NOT NULL AND rssi != 0
+                        THEN rssi END) as avg_rssi,
+                    CASE WHEN SUM(CASE WHEN timestamp > ? THEN 1 ELSE 0 END) > 0
+                         THEN ROUND(
+                            SUM(CASE WHEN timestamp > ? AND processed_successfully = 1
+                                THEN 1 ELSE 0 END) * 100.0 /
+                            SUM(CASE WHEN timestamp > ? THEN 1 ELSE 0 END), 1)
+                         ELSE 0 END as decode_success_rate,
+                    COUNT(DISTINCT CASE WHEN timestamp > ? THEN gateway_id END)
+                        as gateways_24h,
+                    COUNT(DISTINCT CASE WHEN timestamp > ? AND portnum_name IS NOT NULL
+                        THEN portnum_name END) as protocol_types_24h
+                FROM packet_history
+                WHERE timestamp > ?{gateway_filter}
+                """,
+                [
+                    since,
+                    prior_start,
+                    since,
+                    since,
+                    since,
+                    since,
+                    since,
+                    since,
+                    since,
+                    since,
+                    since,
+                    prior_start,
+                ]
+                + gateway_params,
+            )
+            row = cursor.fetchone()
+
+            packets_24h = int(row["packets_24h"] or 0)
+            packets_prior = int(row["packets_prior_24h"] or 0)
+            if packets_prior > 0:
+                packets_trend_pct = round(
+                    ((packets_24h - packets_prior) / packets_prior) * 100.0, 1
+                )
+            else:
+                packets_trend_pct = 0.0 if packets_24h == 0 else 100.0
+
+            # Active nodes current vs prior day (non-archived)
+            ph_gw = (
+                gateway_filter.replace("gateway_id", "ph.gateway_id")
+                if gateway_filter
+                else ""
+            )
+            cursor.execute(
+                f"""
+                SELECT COUNT(DISTINCT ph.from_node_id) as cnt
+                FROM packet_history ph
+                INNER JOIN node_info ni ON ni.node_id = ph.from_node_id
+                WHERE ph.timestamp > ?
+                  AND ph.from_node_id IS NOT NULL
+                  AND COALESCE(ni.archived, 0) = 0
+                  {ph_gw}
+                """,
+                [since] + gateway_params,
+            )
+            active_nodes_24h = int(cursor.fetchone()["cnt"] or 0)
+
+            cursor.execute(
+                f"""
+                SELECT COUNT(DISTINCT ph.from_node_id) as cnt
+                FROM packet_history ph
+                INNER JOIN node_info ni ON ni.node_id = ph.from_node_id
+                WHERE ph.timestamp > ?
+                  AND ph.timestamp <= ?
+                  AND ph.from_node_id IS NOT NULL
+                  AND COALESCE(ni.archived, 0) = 0
+                  {ph_gw}
+                """,
+                [prior_start, since] + gateway_params,
+            )
+            active_nodes_prior = int(cursor.fetchone()["cnt"] or 0)
+            active_nodes_delta = active_nodes_24h - active_nodes_prior
+
+            # New nodes by first_seen
+            cursor.execute(
+                """
+                SELECT COUNT(*) as cnt
+                FROM node_info
+                WHERE COALESCE(archived, 0) = 0
+                  AND first_seen IS NOT NULL
+                  AND first_seen > ?
+                """,
+                (since,),
+            )
+            new_nodes_24h = int(cursor.fetchone()["cnt"] or 0)
+
+            cursor.execute(
+                """
+                SELECT node_id, short_name, long_name
+                FROM node_info
+                WHERE COALESCE(archived, 0) = 0
+                  AND first_seen IS NOT NULL
+                  AND first_seen > ?
+                ORDER BY first_seen DESC
+                LIMIT 5
+                """,
+                (since,),
+            )
+            new_node_names: list[str] = []
+            for n in cursor.fetchall():
+                name = (n["short_name"] or n["long_name"] or "").strip()
+                if not name:
+                    name = f"!{int(n['node_id']):08x}"[-4:]
+                new_node_names.append(name[:18])
+
+            # Top talkers (by receptions)
+            cursor.execute(
+                f"""
+                SELECT ph.from_node_id as node_id,
+                       ni.short_name, ni.long_name,
+                       COUNT(*) as cnt
+                FROM packet_history ph
+                LEFT JOIN node_info ni ON ni.node_id = ph.from_node_id
+                WHERE ph.timestamp > ?
+                  AND ph.from_node_id IS NOT NULL
+                  {ph_gw}
+                GROUP BY ph.from_node_id
+                ORDER BY cnt DESC
+                LIMIT 5
+                """,
+                [since] + gateway_params,
+            )
+            top_talkers = []
+            for t in cursor.fetchall():
+                label = (t["short_name"] or t["long_name"] or "").strip()
+                if not label:
+                    label = f"!{int(t['node_id']):08x}"[-4:]
+                top_talkers.append({"name": label[:18], "packets": int(t["cnt"])})
+
+            # Hourly breakdown (UTC)
+            cursor.execute(
+                f"""
+                SELECT CAST(strftime('%H', datetime(timestamp, 'unixepoch')) AS INTEGER) as hour,
+                       COUNT(*) as packets
+                FROM packet_history
+                WHERE timestamp > ?{gateway_filter}
+                GROUP BY hour
+                ORDER BY hour
+                """,
+                [since] + gateway_params,
+            )
+            by_hour = {int(r["hour"]): int(r["packets"]) for r in cursor.fetchall()}
+            hourly = [{"hour": h, "packets": by_hour.get(h, 0)} for h in range(24)]
+
+            # Hop mix (direct vs relayed)
+            cursor.execute(
+                f"""
+                SELECT
+                    SUM(CASE WHEN (hop_start - hop_limit) = 0 THEN 1 ELSE 0 END) as direct,
+                    SUM(CASE WHEN (hop_start - hop_limit) > 0 THEN 1 ELSE 0 END) as relayed
+                FROM packet_history
+                WHERE timestamp > ?
+                  AND hop_start IS NOT NULL
+                  AND hop_limit IS NOT NULL
+                  {gateway_filter}
+                """,
+                [since] + gateway_params,
+            )
+            hop_row = cursor.fetchone()
+            direct_packets = int(hop_row["direct"] or 0)
+            relayed_packets = int(hop_row["relayed"] or 0)
+
+            # Low battery from recent telemetry
+            from ..power_analysis import recent_telemetry_cutoff
+
+            telemetry_cutoff = recent_telemetry_cutoff(now)
+            cursor.execute(
+                """
+                SELECT COUNT(*) as cnt
+                FROM node_info n
+                INNER JOIN (
+                    SELECT t1.node_id, t1.battery_level
+                    FROM telemetry_data t1
+                    WHERE t1.battery_level > 0
+                      AND t1.battery_level < 101
+                      AND t1.timestamp > ?
+                      AND t1.timestamp = (
+                        SELECT MAX(t2.timestamp)
+                        FROM telemetry_data t2
+                        WHERE t2.node_id = t1.node_id
+                          AND t2.battery_level > 0
+                          AND t2.timestamp > ?
+                      )
+                ) latest ON n.node_id = latest.node_id
+                WHERE COALESCE(n.archived, 0) = 0
+                  AND latest.battery_level < 30
+                """,
+                (telemetry_cutoff, telemetry_cutoff),
+            )
+            low_battery_nodes = int(cursor.fetchone()["cnt"] or 0)
+
+            conn.close()
+
+            return {
+                "packets_24h": packets_24h,
+                "packets_prior_24h": packets_prior,
+                "packets_trend_pct": packets_trend_pct,
+                "text_messages_24h": int(row["text_messages_24h"] or 0),
+                "active_nodes_24h": active_nodes_24h,
+                "active_nodes_prior_24h": active_nodes_prior,
+                "active_nodes_delta": active_nodes_delta,
+                "new_nodes_24h": new_nodes_24h,
+                "new_node_names": new_node_names,
+                "avg_snr": round(float(row["avg_snr"] or 0), 1),
+                "avg_rssi": round(float(row["avg_rssi"] or 0), 1),
+                "decode_success_rate": float(row["decode_success_rate"] or 0),
+                "gateways_24h": int(row["gateways_24h"] or 0),
+                "protocol_types_24h": int(row["protocol_types_24h"] or 0),
+                "direct_packets": direct_packets,
+                "relayed_packets": relayed_packets,
+                "low_battery_nodes": low_battery_nodes,
+                "top_talkers": top_talkers,
+                "hourly": hourly,
+                "timezone": "UTC",
+                "generated_at": now,
+            }
+        except Exception as e:
+            logger.error(f"Error getting last-24h summary: {e}", exc_info=True)
             raise
 
 
@@ -2171,9 +2438,10 @@ class NodeRepository:
                 telemetry_dict["power_status"] = power_status
                 # Prefer live analysis for type/score when we have real samples;
                 # keep persisted power_analysis_timestamp as last DB write time.
-                if power_status.get("power_type") and power_status.get(
-                    "power_type"
-                ) != "unknown":
+                if (
+                    power_status.get("power_type")
+                    and power_status.get("power_type") != "unknown"
+                ):
                     telemetry_dict["power_type"] = power_status["power_type"]
                 if power_status.get("reason"):
                     telemetry_dict["power_type_reason"] = power_status["reason"]
@@ -4946,7 +5214,9 @@ class BatteryAnalyticsRepository:
                     (row["node_id"], cutoff),
                 )
                 latest_v = cursor.fetchone()
-                voltage = latest_v["voltage"] if latest_v else row["last_battery_voltage"]
+                voltage = (
+                    latest_v["voltage"] if latest_v else row["last_battery_voltage"]
+                )
                 if voltage is not None and voltage < 1:
                     voltage = voltage * 1000
 

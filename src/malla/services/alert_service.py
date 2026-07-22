@@ -1057,9 +1057,7 @@ class AlertService:
                     continue
                 issues = node.get("issues") or []
                 issue_text = (
-                    "; ".join(issues[:3])
-                    if issues
-                    else "Solar power needs attention"
+                    "; ".join(issues[:3]) if issues else "Solar power needs attention"
                 )
                 outlook = node.get("outlook") or ""
                 message = issue_text
@@ -2395,7 +2393,9 @@ class AlertService:
                     for entry in solar_conditions.get(bucket) or []:
                         solar_condition_by_id[entry["node_id"]] = entry
             except Exception as solar_err:
-                logger.debug(f"Solar conditions for health summary skipped: {solar_err}")
+                logger.debug(
+                    f"Solar conditions for health summary skipped: {solar_err}"
+                )
 
             healthy = 0
             warning = 0
@@ -2541,7 +2541,7 @@ class AlertService:
                 SELECT
                     COUNT(DISTINCT from_node_id) as active_nodes,
                     COUNT(*) as packets,
-                    AVG(snr) as avg_snr,
+                    AVG(CASE WHEN snr IS NOT NULL AND snr != 0 THEN snr END) as avg_snr,
                     CAST(SUM(CASE WHEN processed_successfully = 1 THEN 1 ELSE 0 END) AS FLOAT) /
                         NULLIF(COUNT(*), 0) * 100 as success_rate
                 FROM packet_history
@@ -2551,10 +2551,15 @@ class AlertService:
             )
             today = cursor.fetchone()
 
-            # Yesterday stats
+            # Yesterday stats (prior 24h window — like-for-like trends)
             cursor.execute(
                 """
-                SELECT COUNT(*) as packets
+                SELECT
+                    COUNT(DISTINCT from_node_id) as active_nodes,
+                    COUNT(*) as packets,
+                    AVG(CASE WHEN snr IS NOT NULL AND snr != 0 THEN snr END) as avg_snr,
+                    CAST(SUM(CASE WHEN processed_successfully = 1 THEN 1 ELSE 0 END) AS FLOAT) /
+                        NULLIF(COUNT(*), 0) * 100 as success_rate
                 FROM packet_history
                 WHERE timestamp BETWEEN ? AND ?
                 """,
@@ -2562,13 +2567,13 @@ class AlertService:
             )
             yesterday = cursor.fetchone()
 
-            # Last week stats (average per day)
+            # Last week stats (average per day) — kept for signal/success context
             cursor.execute(
                 """
                 SELECT
                     COUNT(DISTINCT from_node_id) as active_nodes,
                     COUNT(*) / 7.0 as packets_per_day,
-                    AVG(snr) as avg_snr,
+                    AVG(CASE WHEN snr IS NOT NULL AND snr != 0 THEN snr END) as avg_snr,
                     CAST(SUM(CASE WHEN processed_successfully = 1 THEN 1 ELSE 0 END) AS FLOAT) /
                         NULLIF(COUNT(*), 0) * 100 as success_rate
                 FROM packet_history
@@ -2662,19 +2667,27 @@ class AlertService:
                 calc_trend(today["packets"], yesterday["packets"]) if yesterday else 0
             )
             nodes_trend = (
-                calc_trend(today["active_nodes"], last_week["active_nodes"])
-                if last_week["active_nodes"]
+                calc_trend(today["active_nodes"], yesterday["active_nodes"])
+                if yesterday and yesterday["active_nodes"]
                 else 0
             )
             signal_trend = (
-                (today["avg_snr"] - last_week["avg_snr"])
-                if today["avg_snr"] and last_week["avg_snr"]
-                else 0
+                (today["avg_snr"] - yesterday["avg_snr"])
+                if today["avg_snr"] and yesterday and yesterday["avg_snr"]
+                else (
+                    (today["avg_snr"] - last_week["avg_snr"])
+                    if today["avg_snr"] and last_week["avg_snr"]
+                    else 0
+                )
             )
             success_trend = (
-                (today["success_rate"] - last_week["success_rate"])
-                if today["success_rate"] and last_week["success_rate"]
-                else 0
+                (today["success_rate"] - yesterday["success_rate"])
+                if today["success_rate"] and yesterday and yesterday["success_rate"]
+                else (
+                    (today["success_rate"] - last_week["success_rate"])
+                    if today["success_rate"] and last_week["success_rate"]
+                    else 0
+                )
             )
 
             return {
