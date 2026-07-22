@@ -12,10 +12,12 @@ import pytest
 from malla.power_analysis import (
     analyze_node_power,
     analyze_solar_degradation,
+    build_power_status,
     calculate_battery_health_score,
     check_battery_alerts,
     classify_power_source,
     detect_power_type,
+    infer_sunlight_from_temperature,
     normalize_voltage,
     predict_battery_runtime,
 )
@@ -152,9 +154,11 @@ def test_detect_battery_power_type(db_with_telemetry):
     # Midnight-aligned UTC base so loop hour == UTC hour. Using wall-clock
     # relative timestamps can fake an AM→PM rise and misclassify as solar.
     now = datetime.now(tz=UTC)
-    base = (now - timedelta(days=6)).replace(
-        hour=0, minute=0, second=0, microsecond=0
-    ).timestamp()
+    base = (
+        (now - timedelta(days=6))
+        .replace(hour=0, minute=0, second=0, microsecond=0)
+        .timestamp()
+    )
     for day in range(7):
         for hour in range(24):
             timestamp = base + (day * 24 * 3600) + (hour * 3600)
@@ -474,7 +478,9 @@ def test_solar_degradation_detects_no_full_charge_and_weak_days():
     assert solar["days_without_daytime_gain"] >= 2
     assert solar["condition"] in ("watching", "at_risk")
     assert solar["issues"]
-    assert any("full charge" in i.lower() or "daytime" in i.lower() for i in solar["issues"])
+    assert any(
+        "full charge" in i.lower() or "daytime" in i.lower() for i in solar["issues"]
+    )
 
 
 def test_analyze_node_power_returns_explained_status(db_with_telemetry):
@@ -545,9 +551,7 @@ def test_power_type_override_locks_auto_detect(db_with_telemetry):
             )
     db_with_telemetry.commit()
 
-    status = set_power_type_override(
-        node_id, "battery", db_with_telemetry, locked=True
-    )
+    status = set_power_type_override(node_id, "battery", db_with_telemetry, locked=True)
     assert status["power_type"] == "battery"
     assert status["power_type_locked"] is True
 
@@ -677,3 +681,144 @@ def test_get_solar_power_conditions_excludes_stale_telemetry(db_with_telemetry):
     assert fresh_id in ids
     assert stale_id not in ids
     assert conditions["total"] == 1
+
+
+def test_infer_sunlight_unavailable_without_temperature():
+    status = infer_sunlight_from_temperature([], [])
+    assert status["available"] is False
+    assert status["state"] == "unknown"
+
+
+def test_infer_sunlight_in_sun_from_daytime_warming():
+    # Anchor around a known midday UTC instant for stable day/night classification,
+    # and pass it as `now` so sample age stays fresh.
+    now = datetime(2026, 7, 22, 14, 0, tzinfo=UTC).timestamp()
+    timestamps = [now - 7200, now - 3600, now - 1800, now]
+    temperatures = [18.0, 20.5, 23.0, 25.5]
+
+    status = infer_sunlight_from_temperature(
+        timestamps,
+        temperatures,
+        charge_state="charging",
+        now=now,
+    )
+    assert status["available"] is True
+    assert status["state"] == "in_sun"
+    assert status["confidence"] >= 0.7
+    assert status["temperature_c"] == 25.5
+    assert (
+        "rising" in status["reason"].lower() or "charging" in status["reason"].lower()
+    )
+
+
+def test_infer_sunlight_night_when_cool_overnight():
+    now = datetime(2026, 7, 22, 2, 0, tzinfo=UTC).timestamp()
+    timestamps = [now - 7200, now - 3600, now]
+    temperatures = [16.0, 15.5, 15.0]
+
+    status = infer_sunlight_from_temperature(
+        timestamps, temperatures, charge_state="discharging", now=now
+    )
+    assert status["available"] is True
+    assert status["state"] == "night"
+
+
+def test_build_power_status_includes_charge_and_sunlight(monkeypatch):
+    day_anchor = datetime(2026, 7, 22, 15, 0, tzinfo=UTC).timestamp()
+    monkeypatch.setattr(time, "time", lambda: day_anchor)
+
+    # Rising battery over last hours => charging
+    timestamps = [day_anchor - i * 1800 for i in range(8, -1, -1)]
+    batteries = [60 + i * 2 for i in range(9)]
+    voltages = [3.7 + i * 0.02 for i in range(9)]
+    temp_ts = [day_anchor - 7200, day_anchor - 3600, day_anchor]
+    temps = [19.0, 22.0, 25.0]
+
+    status = build_power_status(
+        timestamps,
+        voltages,
+        batteries,
+        stored_power_type="solar",
+        force_power_type=True,
+        temperature_timestamps=temp_ts,
+        temperatures=temps,
+    )
+    assert status["charge"]["state"] == "charging"
+    assert status["charge"]["active"] is True
+    assert status["charge"]["mode_label"] == "Active charge"
+    assert status["sunlight"]["available"] is True
+    assert status["sunlight"]["state"] in ("in_sun", "warming")
+    assert status["state_label"] == "Charging"
+
+
+def test_analyze_node_power_sunlight_from_packet_history(
+    db_with_telemetry, monkeypatch
+):
+    """Temperature packets in packet_history feed sunlight inference."""
+    from meshtastic import telemetry_pb2
+
+    cursor = db_with_telemetry.cursor()
+    cursor.execute(
+        """
+        CREATE TABLE IF NOT EXISTS packet_history (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            timestamp REAL,
+            topic TEXT,
+            from_node_id INTEGER,
+            to_node_id INTEGER,
+            portnum INTEGER,
+            portnum_name TEXT,
+            gateway_id TEXT,
+            processed_successfully INTEGER,
+            raw_payload BLOB,
+            payload_length INTEGER
+        )
+        """
+    )
+    node_id = 9001
+    cursor.execute(
+        "INSERT INTO node_info (node_id, hex_id, long_name, power_type) VALUES (?, ?, ?, ?)",
+        (node_id, "!00002329", "Sun Node", "solar"),
+    )
+
+    day_anchor = datetime(2026, 7, 22, 15, 0, tzinfo=UTC).timestamp()
+    monkeypatch.setattr(time, "time", lambda: day_anchor)
+
+    for i in range(6):
+        cursor.execute(
+            """
+            INSERT INTO telemetry_data (timestamp, node_id, voltage, battery_level)
+            VALUES (?, ?, ?, ?)
+            """,
+            (day_anchor - (5 - i) * 1800, node_id, 3.8 + i * 0.05, 70 + i * 3),
+        )
+        tel = telemetry_pb2.Telemetry()
+        tel.environment_metrics.temperature = 18.0 + i * 1.5
+        payload = tel.SerializeToString()
+        cursor.execute(
+            """
+            INSERT INTO packet_history
+            (timestamp, topic, from_node_id, to_node_id, portnum, portnum_name,
+             gateway_id, processed_successfully, raw_payload, payload_length)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                day_anchor - (5 - i) * 1800,
+                "test/topic",
+                node_id,
+                node_id,
+                3,
+                "TELEMETRY_APP",
+                "!00002329",
+                1,
+                payload,
+                len(payload),
+            ),
+        )
+    db_with_telemetry.commit()
+
+    status = analyze_node_power(node_id, db_with_telemetry)
+    assert "charge" in status
+    assert status["sunlight"]["available"] is True
+    assert status["sunlight"]["temperature_c"] is not None
+    assert status["sunlight"]["state"] in ("in_sun", "warming", "shade", "cooling")

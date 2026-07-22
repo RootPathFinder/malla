@@ -27,6 +27,30 @@ NEAR_FULL_BATTERY_PCT = 95
 DAY_HOURS = range(6, 18)
 MORNING_HOURS = range(6, 11)
 AFTERNOON_HOURS = range(14, 19)
+NIGHT_HOURS = set(range(0, 6)) | set(range(21, 24))
+
+CHARGE_STATE_LABELS = {
+    "charging": "Charging",
+    "discharging": "Discharging",
+    "stable": "Stable",
+    "powered": "Powered",
+    "unknown": "Unknown",
+}
+CHARGE_MODE_LABELS = {
+    "charging": "Active charge",
+    "discharging": "Discharging",
+    "stable": "Idle / float",
+    "powered": "Externally powered",
+    "unknown": "Unknown",
+}
+SUNLIGHT_STATE_LABELS = {
+    "in_sun": "Likely in sunlight",
+    "warming": "Warming (possible sun)",
+    "cooling": "Cooling",
+    "shade": "Likely shade / covered",
+    "night": "Night / cool",
+    "unknown": "Unknown",
+}
 
 # Health/monitoring only includes nodes with telemetry newer than this.
 # 48h excludes abandoned/stale nodes while still covering sparse solar reporters.
@@ -39,9 +63,7 @@ def recent_telemetry_cutoff(now: float | None = None) -> float:
     return (now if now is not None else time.time()) - RECENT_TELEMETRY_MAX_AGE_SECONDS
 
 
-def get_latest_telemetry_timestamp(
-    db_connection: Any, node_id: int
-) -> float | None:
+def get_latest_telemetry_timestamp(db_connection: Any, node_id: int) -> float | None:
     """Return the newest battery/voltage telemetry timestamp for a node, if any."""
     cursor = db_connection.cursor()
     cursor.execute(
@@ -244,7 +266,9 @@ def classify_power_source(
                 continue
             hourly_v.setdefault(_utc_hour(ts), []).append(voltage)
         if len(hourly_v) >= 8:
-            day = [sum(hourly_v[h]) / len(hourly_v[h]) for h in DAY_HOURS if h in hourly_v]
+            day = [
+                sum(hourly_v[h]) / len(hourly_v[h]) for h in DAY_HOURS if h in hourly_v
+            ]
             night = [
                 sum(hourly_v[h]) / len(hourly_v[h])
                 for h in list(range(0, 6)) + list(range(18, 24))
@@ -432,6 +456,220 @@ def _infer_charge_state(
     return "unknown"
 
 
+def _charge_info(state: str) -> dict[str, Any]:
+    """UI-friendly charge-mode summary derived from inferred charge state."""
+    return {
+        "state": state,
+        "state_label": CHARGE_STATE_LABELS.get(state, state),
+        "mode_label": CHARGE_MODE_LABELS.get(state, state),
+        "active": state == "charging",
+    }
+
+
+def infer_sunlight_from_temperature(
+    timestamps: list[float],
+    temperatures: list[float | None],
+    *,
+    charge_state: str | None = None,
+    now: float | None = None,
+) -> dict[str, Any]:
+    """Infer whether a node is likely in sunlight from environment temperature.
+
+    This is a heuristic from temp trends (and optional charge state), not a
+    certainty. Returns ``available=False`` when there is not enough data.
+    """
+    now_ts = now if now is not None else time.time()
+    samples: list[tuple[float, float]] = []
+    for ts, temp in zip(timestamps, temperatures, strict=False):
+        if temp is None:
+            continue
+        try:
+            value = float(temp)
+        except (TypeError, ValueError):
+            continue
+        if value < -40.0 or value > 85.0:
+            continue
+        samples.append((float(ts), value))
+
+    empty = {
+        "available": False,
+        "state": "unknown",
+        "state_label": SUNLIGHT_STATE_LABELS["unknown"],
+        "confidence": 0.0,
+        "reason": "No temperature telemetry available",
+        "temperature_c": None,
+        "delta_c_per_hour": None,
+        "sample_count": 0,
+        "age_seconds": None,
+    }
+    if len(samples) < 2:
+        empty["sample_count"] = len(samples)
+        if samples:
+            empty["temperature_c"] = round(samples[-1][1], 1)
+            empty["age_seconds"] = round(max(0.0, now_ts - samples[-1][0]), 1)
+            empty["reason"] = "Need more temperature samples to infer sunlight"
+        return empty
+
+    samples.sort(key=lambda item: item[0])
+    # Prefer recent window (48h) so old seasons do not skew baseline.
+    recent_cutoff = now_ts - 48 * 3600
+    recent = [s for s in samples if s[0] >= recent_cutoff] or samples
+    if len(recent) < 2:
+        empty["sample_count"] = len(recent)
+        empty["temperature_c"] = round(recent[-1][1], 1) if recent else None
+        empty["reason"] = "Need more recent temperature samples"
+        return empty
+
+    latest_ts, latest_temp = recent[-1]
+    age_seconds = max(0.0, now_ts - latest_ts)
+
+    # Trend over last ~3 hours (fall back to full recent span).
+    trend_cutoff = latest_ts - 3 * 3600
+    trend_pairs = [s for s in recent if s[0] >= trend_cutoff]
+    if len(trend_pairs) < 2:
+        trend_pairs = recent[-min(6, len(recent)) :]
+    span_h = (trend_pairs[-1][0] - trend_pairs[0][0]) / 3600.0
+    delta_per_hour: float | None = None
+    if span_h >= 0.25:
+        delta_per_hour = (trend_pairs[-1][1] - trend_pairs[0][1]) / span_h
+
+    # Baseline: median of night/cool samples, else older half of the window.
+    night_vals = [
+        temp
+        for ts, temp in recent
+        if datetime.fromtimestamp(ts, tz=UTC).hour in NIGHT_HOURS
+    ]
+    if len(night_vals) >= 2:
+        baseline = sorted(night_vals)[len(night_vals) // 2]
+    else:
+        older = recent[: max(1, len(recent) // 2)]
+        baseline = sorted(t for _, t in older)[len(older) // 2]
+    delta_from_baseline = latest_temp - baseline
+
+    hour = datetime.fromtimestamp(latest_ts, tz=UTC).hour
+    is_night = hour in NIGHT_HOURS
+    charging = charge_state == "charging"
+
+    state = "unknown"
+    confidence = 0.35
+    reason_parts: list[str] = []
+
+    if age_seconds > 6 * 3600:
+        state = "unknown"
+        confidence = 0.2
+        reason_parts.append(f"Temperature sample is {age_seconds / 3600:.1f}h old")
+    elif is_night:
+        if delta_per_hour is not None and delta_per_hour >= 1.0 and charging:
+            state = "warming"
+            confidence = 0.55
+            reason_parts.append("Unusual night warming while charging")
+        else:
+            state = "night"
+            confidence = 0.7
+            reason_parts.append("Cool overnight period (UTC)")
+    elif delta_per_hour is not None and (
+        delta_per_hour >= 0.8 or (delta_per_hour >= 0.3 and delta_from_baseline >= 2.0)
+    ):
+        state = "in_sun"
+        confidence = 0.7 if delta_per_hour >= 0.8 else 0.6
+        reason_parts.append(f"Temp rising {delta_per_hour:+.1f}°C/h vs cool baseline")
+        if charging:
+            confidence = min(0.95, confidence + 0.15)
+            reason_parts.append("also actively charging")
+    elif delta_per_hour is not None and delta_per_hour >= 0.3:
+        state = "warming"
+        confidence = 0.55
+        reason_parts.append(f"Gentle warming ({delta_per_hour:+.1f}°C/h)")
+        if charging:
+            confidence = min(0.85, confidence + 0.15)
+            reason_parts.append("charge rising too")
+    elif delta_per_hour is not None and delta_per_hour <= -0.5:
+        state = "cooling" if delta_from_baseline > -1.0 else "shade"
+        confidence = 0.55
+        reason_parts.append(f"Temp falling ({delta_per_hour:+.1f}°C/h)")
+    elif delta_from_baseline <= -1.5:
+        state = "shade"
+        confidence = 0.5
+        reason_parts.append(f"{delta_from_baseline:+.1f}°C vs recent cool baseline")
+    elif delta_from_baseline >= 2.0:
+        state = "in_sun" if charging else "warming"
+        confidence = 0.6 if charging else 0.5
+        reason_parts.append(f"{delta_from_baseline:+.1f}°C above cool baseline")
+        if charging:
+            reason_parts.append("while charging")
+    else:
+        state = "shade"
+        confidence = 0.4
+        reason_parts.append("No strong daytime warming signal")
+
+    if not reason_parts:
+        reason_parts.append("Insufficient temperature trend")
+
+    return {
+        "available": True,
+        "state": state,
+        "state_label": SUNLIGHT_STATE_LABELS.get(state, state),
+        "confidence": round(confidence, 2),
+        "reason": "; ".join(reason_parts),
+        "temperature_c": round(latest_temp, 1),
+        "delta_c_per_hour": (
+            round(delta_per_hour, 2) if delta_per_hour is not None else None
+        ),
+        "sample_count": len(recent),
+        "age_seconds": round(age_seconds, 1),
+    }
+
+
+def _fetch_temperature_series(
+    db_connection: Any, node_id: int, hours: int = 48
+) -> tuple[list[float], list[float | None]]:
+    """Load environment temperature samples from TELEMETRY_APP packets."""
+    timestamps: list[float] = []
+    temperatures: list[float | None] = []
+    try:
+        from meshtastic import telemetry_pb2
+
+        cursor = db_connection.cursor()
+        cutoff = time.time() - (hours * 3600)
+        cursor.execute(
+            """
+            SELECT raw_payload, timestamp
+            FROM packet_history
+            WHERE from_node_id = ?
+              AND portnum_name = 'TELEMETRY_APP'
+              AND raw_payload IS NOT NULL
+              AND timestamp >= ?
+            ORDER BY timestamp ASC
+            """,
+            (node_id, cutoff),
+        )
+        rows = cursor.fetchall()
+    except Exception as e:
+        logger.debug("Temperature series unavailable for node %s: %s", node_id, e)
+        return timestamps, temperatures
+
+    for row in rows:
+        try:
+            if hasattr(row, "keys"):
+                payload = row["raw_payload"]
+                ts = float(row["timestamp"])
+            else:
+                payload = row[0]
+                ts = float(row[1])
+            telemetry = telemetry_pb2.Telemetry()
+            telemetry.ParseFromString(payload)
+            if not telemetry.HasField("environment_metrics"):
+                continue
+            metrics = telemetry.environment_metrics
+            if not metrics.HasField("temperature"):
+                continue
+            timestamps.append(ts)
+            temperatures.append(float(metrics.temperature))
+        except Exception:
+            continue
+    return timestamps, temperatures
+
+
 def analyze_solar_degradation(
     timestamps: list[float],
     voltages: list[float | None],
@@ -538,9 +776,7 @@ def analyze_solar_degradation(
         f" ({bat_model.label})"
     )
     if days_since_full is not None and days_since_full >= 3:
-        issues.append(
-            f"No near-full charge ({full_desc}) in {days_since_full} day(s)"
-        )
+        issues.append(f"No near-full charge ({full_desc}) in {days_since_full} day(s)")
     if no_gain_streak >= 2:
         issues.append(
             f"Weak/no daytime charge gain for {no_gain_streak} consecutive day(s)"
@@ -641,6 +877,8 @@ def build_power_status(
     power_type_locked: bool = False,
     hw_model: Any = None,
     model: BatteryVoltageModel | None = None,
+    temperature_timestamps: list[float] | None = None,
+    temperatures: list[float | None] | None = None,
 ) -> dict[str, Any]:
     """Build explained power status for UI/API from prepared series."""
     bat_model = model or resolve_battery_model(hw_model)
@@ -648,9 +886,11 @@ def build_power_status(
         timestamps, voltages, battery_levels, model=bat_model
     )
     # Manual override / lock always wins over auto-detection
-    if (
-        force_power_type
-        and stored_power_type in ("solar", "battery", "mains", "unknown")
+    if force_power_type and stored_power_type in (
+        "solar",
+        "battery",
+        "mains",
+        "unknown",
     ):
         power_type = stored_power_type
         reason = "Manual power-type override"
@@ -666,6 +906,12 @@ def build_power_status(
         confidence = min(confidence, 0.5)
 
     state = _infer_charge_state(timestamps, voltages, battery_levels, power_type)
+    charge = _charge_info(state)
+    sunlight = infer_sunlight_from_temperature(
+        temperature_timestamps or [],
+        temperatures or [],
+        charge_state=state,
+    )
     hours_to_critical = None
     if power_type in ("solar", "battery") and state in ("discharging", "stable"):
         hours_to_critical = predict_hours_to_critical(
@@ -723,13 +969,6 @@ def build_power_status(
         "powered": "Powered",
         "unknown": "Unknown",
     }
-    state_labels = {
-        "charging": "Charging",
-        "discharging": "Discharging",
-        "stable": "Stable",
-        "powered": "Powered",
-        "unknown": "Unknown",
-    }
 
     return {
         "power_type": power_type,
@@ -737,7 +976,9 @@ def build_power_status(
         "power_type_locked": bool(power_type_locked or force_power_type),
         "confidence": round(confidence, 2),
         "state": state,
-        "state_label": state_labels.get(state, state),
+        "state_label": CHARGE_STATE_LABELS.get(state, state),
+        "charge": charge,
+        "sunlight": sunlight,
         "reason": reason,
         "health_score": health_score,
         "condition": condition,
@@ -787,9 +1028,7 @@ def _format_outlook(
     return "No active discharge trend detected"
 
 
-def _read_stored_power_meta(
-    db_connection: Any, node_id: int
-) -> dict[str, Any]:
+def _read_stored_power_meta(db_connection: Any, node_id: int) -> dict[str, Any]:
     """Return stored power metadata from node_info.
 
     Keys: power_type, locked, hw_model, battery_charge_full_voltage,
@@ -895,6 +1134,7 @@ def analyze_node_power(node_id: int, db_connection: Any) -> dict[str, Any]:
     )
 
     timestamps, voltages, batteries = _prepare_series(rows)
+    temp_ts, temps = _fetch_temperature_series(db_connection, node_id, hours=48)
     if not timestamps:
         labels = {
             "solar": "Solar",
@@ -903,13 +1143,16 @@ def analyze_node_power(node_id: int, db_connection: Any) -> dict[str, Any]:
             "unknown": "Unknown",
         }
         ptype = stored_type or "unknown"
+        sunlight = infer_sunlight_from_temperature(temp_ts, temps)
         return {
             "power_type": ptype,
             "power_type_label": labels.get(ptype, ptype),
             "power_type_locked": locked,
             "confidence": 0.0,
             "state": "unknown",
-            "state_label": "Unknown",
+            "state_label": CHARGE_STATE_LABELS["unknown"],
+            "charge": _charge_info("unknown"),
+            "sunlight": sunlight,
             "reason": "No telemetry samples available",
             "health_score": None,
             "condition": "unknown",
@@ -931,6 +1174,8 @@ def analyze_node_power(node_id: int, db_connection: Any) -> dict[str, Any]:
         power_type_locked=locked,
         hw_model=hw_model,
         model=bat_model,
+        temperature_timestamps=temp_ts,
+        temperatures=temps,
     )
 
 
@@ -1062,10 +1307,14 @@ def set_power_type_override(
     """
     allowed = {"solar", "battery", "mains", "unknown"}
     if power_type not in allowed:
-        raise ValueError(f"Invalid power_type '{power_type}'. Allowed: {sorted(allowed)}")
+        raise ValueError(
+            f"Invalid power_type '{power_type}'. Allowed: {sorted(allowed)}"
+        )
 
     cursor = db_connection.cursor()
-    reason = "Manual power-type override" if locked else "Manual power-type set (unlocked)"
+    reason = (
+        "Manual power-type override" if locked else "Manual power-type set (unlocked)"
+    )
     try:
         cursor.execute(
             """
@@ -1124,9 +1373,7 @@ def set_battery_voltage_override(
         except (TypeError, ValueError) as e:
             raise ValueError("charge_full_voltage must be a number") from e
         if not (3.0 <= charge_full_voltage <= 4.35):
-            raise ValueError(
-                "charge_full_voltage must be between 3.0 and 4.35 volts"
-            )
+            raise ValueError("charge_full_voltage must be between 3.0 and 4.35 volts")
 
     if update_pct and near_full_pct is not None:
         try:
@@ -1340,7 +1587,9 @@ def update_power_analysis_batch(
             (reanalysis_threshold,),
         )
 
-    node_ids = [row["node_id"] if hasattr(row, "keys") else row[0] for row in cursor.fetchall()]
+    node_ids = [
+        row["node_id"] if hasattr(row, "keys") else row[0] for row in cursor.fetchall()
+    ]
     counts = {"solar": 0, "battery": 0, "mains": 0, "unknown": 0, "updated": 0}
     for node_id in node_ids:
         status = update_power_analysis_for_node(node_id, db_connection)

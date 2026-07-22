@@ -2304,10 +2304,17 @@ function updateHeroVitals(telemetry) {
 
     // Honest signal badges derived only from known telemetry (no fake /100 score)
     const signals = [];
+    const ps = telemetry && telemetry.power_status;
     if (telemetry && telemetry.timestamp_unix) {
         const ageH = (Date.now() / 1000 - Number(telemetry.timestamp_unix)) / 3600;
         if (ageH > 24) signals.push(['danger', 'Stale telemetry']);
         else if (ageH > 6) signals.push(['warning', 'Telemetry aging']);
+    }
+    if (ps && (ps.state === 'charging' || (ps.charge && ps.charge.active))) {
+        signals.push(['success', 'Active charge']);
+    }
+    if (ps && ps.sunlight && ps.sunlight.available && ps.sunlight.state === 'in_sun') {
+        signals.push(['warning', 'Likely in sun']);
     }
     if (dm.battery_level !== undefined && dm.battery_level < 20) {
         signals.push(['danger', 'Low battery']);
@@ -2670,12 +2677,69 @@ async function loadTelemetryData() {
         if (powerType) {
             const icon = powerIcons[powerType] || '<i class="bi bi-lightning-charge"></i>';
             const label = (ps && ps.power_type_label) || powerLabels[powerType] || powerType;
-            const stateLabel = ps && ps.state_label ? ' · ' + ps.state_label : '';
             const reason = (ps && ps.reason) || telemetry.power_type_reason || '';
             const tooltip = reason ? ' title="' + String(reason).replace(/"/g, '&quot;') + '"' : '';
             html += '<tr>';
             html += '<td class="text-muted" style="width: 50%;">Power source</td>';
-            html += '<td class="text-end fw-bold"' + tooltip + ' data-bs-toggle="tooltip">' + icon + ' ' + label + stateLabel + '</td>';
+            html += '<td class="text-end fw-bold"' + tooltip + ' data-bs-toggle="tooltip">' + icon + ' ' + label + '</td>';
+            html += '</tr>';
+        }
+
+        // Charge mode (active charge / discharging / idle / powered)
+        if (ps && (ps.charge || ps.state_label)) {
+            const charge = ps.charge || {};
+            const modeLabel = charge.mode_label || ps.state_label || 'Unknown';
+            const chargeState = charge.state || ps.state || 'unknown';
+            const chargeClass = chargeState === 'charging'
+                ? 'text-success'
+                : chargeState === 'discharging'
+                    ? 'text-warning'
+                    : chargeState === 'powered'
+                        ? 'text-primary'
+                        : 'text-secondary';
+            const chargeIcon = chargeState === 'charging'
+                ? '<i class="bi bi-battery-charging"></i> '
+                : chargeState === 'discharging'
+                    ? '<i class="bi bi-battery-half"></i> '
+                    : chargeState === 'powered'
+                        ? '<i class="bi bi-plug"></i> '
+                        : '<i class="bi bi-battery"></i> ';
+            html += '<tr>';
+            html += '<td class="text-muted">Charge mode</td>';
+            html += '<td class="text-end"><span class="' + chargeClass + ' fw-bold">' + chargeIcon + modeLabel + '</span></td>';
+            html += '</tr>';
+        }
+
+        // Sunlight inferred from environment temperature (when available)
+        if (ps && ps.sunlight && ps.sunlight.available) {
+            const sun = ps.sunlight;
+            const sunState = sun.state || 'unknown';
+            const sunClass = sunState === 'in_sun'
+                ? 'text-warning'
+                : sunState === 'warming'
+                    ? 'text-warning'
+                    : sunState === 'night' || sunState === 'shade' || sunState === 'cooling'
+                        ? 'text-secondary'
+                        : 'text-muted';
+            const sunIcon = sunState === 'in_sun' || sunState === 'warming'
+                ? '<i class="bi bi-brightness-high"></i> '
+                : sunState === 'night'
+                    ? '<i class="bi bi-moon-stars"></i> '
+                    : '<i class="bi bi-cloud-sun"></i> ';
+            const sunTip = sun.reason
+                ? ' title="' + String(sun.reason).replace(/"/g, '&quot;') + '"'
+                : '';
+            let sunDetail = sun.state_label || sunState;
+            if (sun.temperature_c != null) {
+                let tempBit = sun.temperature_c.toFixed(1) + '°C';
+                if (typeof TemperatureToggle !== 'undefined' && TemperatureToggle.formatTemperature) {
+                    tempBit = TemperatureToggle.formatTemperature(sun.temperature_c, 1);
+                }
+                sunDetail += ' · ' + tempBit;
+            }
+            html += '<tr>';
+            html += '<td class="text-muted">Sunlight <span class="text-muted fw-normal">(inferred)</span></td>';
+            html += '<td class="text-end"' + sunTip + ' data-bs-toggle="tooltip"><span class="' + sunClass + ' fw-bold">' + sunIcon + sunDetail + '</span></td>';
             html += '</tr>';
         }
 
