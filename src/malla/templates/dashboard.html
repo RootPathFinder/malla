@@ -3,12 +3,13 @@
 {% block title %}Mesh Network Dashboard - {{ APP_NAME }}{% endblock %}
 
 {% block head_libs %}
-<!-- Chart.js for dashboard metrics -->
+<!-- Chart.js + Plotly for dashboard metrics -->
 <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js" integrity="sha384-e6nUZLBkQ86NJ6TVVKAeSaK8jWa3NhkYWZFomE39AvDbQWeie9PlQqM3pmYW5d1g" crossorigin="anonymous"></script>
+<script src="https://cdn.plot.ly/plotly-2.30.0.min.js" integrity="sha384-H7GB7Kme/VbPI/0S4LNq7OixFNVRgRGE8kyqTntBuiXle1KBm8KWLQh/Ah6bXCYW" crossorigin="anonymous"></script>
 {% endblock head_libs %}
 
 {% block content %}
-<div class="container-fluid">
+<div class="container-fluid dashboard-page">
     {# Display error message if data failed to load #}
     {% if error_message %}
     <div class="alert alert-warning alert-dismissible fade show" role="alert">
@@ -20,10 +21,10 @@
 
     {# Optional Markdown content defined in config.yaml #}
     {% if APP_CONFIG.home_markdown %}
-    <div class="row mb-4">
+    <div class="row mb-3">
         <div class="col">
             <div class="card">
-                <div class="card-body">
+                <div class="card-body py-3">
                     {{ APP_CONFIG.home_markdown | markdown | safe }}
                 </div>
             </div>
@@ -31,68 +32,67 @@
     </div>
     {% endif %}
 
-    <div class="row mb-4">
-        <div class="col">
-            <h1 class="h2">Mesh Metrics</h1>
-        </div>
+    <div class="d-flex align-items-baseline justify-content-between flex-wrap gap-2 mb-3">
+        <h1 class="h3 mb-0">Mesh Metrics</h1>
+        <small class="text-muted">Fleet overview · recent activity · distributions</small>
     </div>
 
-    <!-- Network Overview Cards - Redesigned for Heterogeneous Networks -->
-    <div class="row mb-4">
-        <div class="col-md-2">
-            <div class="card h-100">
-                <div class="card-body card-metric">
+    <!-- Compact fleet overview -->
+    {% set total_nodes_safe = stats.total_nodes if stats.total_nodes > 0 else 1 %}
+    {% set coverage_pct = (stats.active_nodes_24h / total_nodes_safe * 100)|int %}
+    {% set success_class = 'text-success' if stats.success_rate >= 95 else 'text-warning' if stats.success_rate >= 85 else 'text-danger' %}
+    <div class="row g-2 mb-3 fleet-overview">
+        <div class="col-6 col-md-4 col-xl-2">
+            <div class="card h-100 fleet-metric-card">
+                <div class="card-body">
                     <div class="metric-value">{{ stats.total_nodes }}</div>
                     <div class="metric-label">Total Nodes</div>
                     <small class="text-muted">Known mesh participants</small>
                 </div>
             </div>
         </div>
-        <div class="col-md-2">
-            <div class="card h-100">
-                <div class="card-body card-metric">
+        <div class="col-6 col-md-4 col-xl-2">
+            <div class="card h-100 fleet-metric-card">
+                <div class="card-body">
                     <div id="activeNodesMetricValue" class="metric-value text-success">{{ stats.active_nodes_24h }}</div>
                     <div id="activeNodesMetricLabel" class="metric-label">Active Nodes (24h)</div>
-                    {% set total_nodes_safe = stats.total_nodes if stats.total_nodes > 0 else 1 %}
-                    {% set coverage_pct = (stats.active_nodes_24h / total_nodes_safe * 100)|int %}
                     <small id="activeNodesMetricCoverage" class="text-muted">{{ coverage_pct }}% network coverage</small>
                 </div>
             </div>
         </div>
-        <div class="col-md-2">
-            <div class="card h-100">
-                <div class="card-body card-metric">
+        <div class="col-6 col-md-4 col-xl-2">
+            <div class="card h-100 fleet-metric-card">
+                <div class="card-body">
                     <div class="metric-value text-warning">{{ gateway_count }}</div>
                     <div class="metric-label">Gateway Diversity</div>
-                    <small class="text-muted">Data source reliability</small>
+                    <small class="text-muted">{{ stats.recent_packets }} packets / 1h</small>
                 </div>
             </div>
         </div>
-        <div class="col-md-2">
-            <div class="card h-100">
-                <div class="card-body card-metric">
+        <div class="col-6 col-md-4 col-xl-2">
+            <div class="card h-100 fleet-metric-card">
+                <div class="card-body">
                     <div class="metric-value text-info">{{ stats.packet_types|length }}</div>
                     <div class="metric-label">Protocol Diversity</div>
                     <small class="text-muted">Message types in use</small>
                 </div>
             </div>
         </div>
-        <div class="col-md-2">
-            <div class="card h-100">
-                <div class="card-body card-metric">
+        <div class="col-6 col-md-4 col-xl-2">
+            <div class="card h-100 fleet-metric-card">
+                <div class="card-body">
                     <div class="metric-value">{{ "{:,}".format(stats.total_packets) }}</div>
                     <div class="metric-label">Packet Receptions</div>
                     <small class="text-muted">All-time gateway hearings</small>
                 </div>
             </div>
         </div>
-        <div class="col-md-2">
-            <div class="card h-100">
-                <div class="card-body card-metric">
-                    {% set success_class = 'text-success' if stats.success_rate >= 95 else 'text-warning' if stats.success_rate >= 85 else 'text-danger' %}
+        <div class="col-6 col-md-4 col-xl-2">
+            <div class="card h-100 fleet-metric-card">
+                <div class="card-body">
                     <div class="metric-value {{ success_class }}">{{ stats.success_rate }}%</div>
                     <div class="metric-label">Decode Success</div>
-                    <small class="text-muted">Capture parse rate (24h)</small>
+                    <small class="text-muted">Avg SNR {{ stats.avg_snr|format_snr }}dB</small>
                 </div>
             </div>
         </div>
@@ -102,20 +102,20 @@
     {% set l24 = last_24h or {} %}
     {% set pkt_trend = l24.packets_trend_pct|default(0) %}
     {% set nodes_delta = l24.active_nodes_delta|default(0) %}
-    <div class="row mb-4">
+    <div class="row mb-3">
         <div class="col-12">
             <div class="card">
-                <div class="card-header d-flex align-items-center justify-content-between flex-wrap gap-2">
+                <div class="card-header d-flex align-items-center justify-content-between flex-wrap gap-2 py-2">
                     <h5 class="card-title mb-0">
                         <i class="bi bi-clock-history"></i> Last 24 Hours
                         <span class="badge bg-secondary-subtle text-secondary border ms-2">{{ l24.timezone|default('UTC') }}</span>
                     </h5>
                     <small class="text-muted">Observed mesh activity from gateway receptions</small>
                 </div>
-                <div class="card-body">
-                    <div class="row g-3 mb-3">
+                <div class="card-body py-3">
+                    <div class="row g-2 mb-3">
                         <div class="col-6 col-md-3 col-xl-2">
-                            <div class="border rounded p-2 h-100">
+                            <div class="last24h-kpi">
                                 <div class="small text-muted">Packets</div>
                                 <div class="fs-5 fw-semibold">{{ "{:,}".format(l24.packets_24h|default(0)) }}</div>
                                 {% if pkt_trend > 0 %}
@@ -128,14 +128,14 @@
                             </div>
                         </div>
                         <div class="col-6 col-md-3 col-xl-2">
-                            <div class="border rounded p-2 h-100">
+                            <div class="last24h-kpi">
                                 <div class="small text-muted">Text messages</div>
                                 <div class="fs-5 fw-semibold">{{ "{:,}".format(l24.text_messages_24h|default(0)) }}</div>
                                 <small class="text-muted">TEXT_MESSAGE_APP</small>
                             </div>
                         </div>
                         <div class="col-6 col-md-3 col-xl-2">
-                            <div class="border rounded p-2 h-100">
+                            <div class="last24h-kpi">
                                 <div class="small text-muted">Active nodes</div>
                                 <div class="fs-5 fw-semibold text-success">{{ l24.active_nodes_24h|default(0) }}</div>
                                 {% if nodes_delta > 0 %}
@@ -148,7 +148,7 @@
                             </div>
                         </div>
                         <div class="col-6 col-md-3 col-xl-2">
-                            <div class="border rounded p-2 h-100">
+                            <div class="last24h-kpi">
                                 <div class="small text-muted">New nodes</div>
                                 <div class="fs-5 fw-semibold text-info">{{ l24.new_nodes_24h|default(0) }}</div>
                                 {% if l24.new_node_names %}
@@ -159,14 +159,14 @@
                             </div>
                         </div>
                         <div class="col-6 col-md-3 col-xl-2">
-                            <div class="border rounded p-2 h-100">
+                            <div class="last24h-kpi">
                                 <div class="small text-muted">Avg SNR</div>
                                 <div class="fs-5 fw-semibold">{{ l24.avg_snr|default(0) }} dB</div>
                                 <small class="text-muted">RSSI {{ l24.avg_rssi|default(0) }} dBm</small>
                             </div>
                         </div>
                         <div class="col-6 col-md-3 col-xl-2">
-                            <div class="border rounded p-2 h-100">
+                            <div class="last24h-kpi">
                                 <div class="small text-muted">Routing mix</div>
                                 {% set hop_total = (l24.direct_packets|default(0)) + (l24.relayed_packets|default(0)) %}
                                 {% set direct_pct = ((l24.direct_packets|default(0)) / hop_total * 100)|int if hop_total > 0 else 0 %}
@@ -210,12 +210,11 @@
         </div>
     </div>
 
-    <!-- Network Health and Activity Row -->
-    <div class="row mb-4">
-        <!-- Network Activity Chart -->
-        <div class="col-md-8 mb-4">
+    <!-- Activity + health/insights (sidebar replaces tall duplicate health bars) -->
+    <div class="row g-3 mb-3">
+        <div class="col-lg-8">
             <div class="card h-100">
-                <div class="card-header d-flex align-items-center justify-content-between">
+                <div class="card-header d-flex align-items-center justify-content-between flex-wrap gap-2 py-2">
                     <h5 class="card-title mb-0"><i class="bi bi-graph-up-arrow"></i> <span id="activityChartTitle">Network Activity (24h UTC)</span></h5>
                     <div class="btn-group btn-group-sm" role="group" aria-label="Time range">
                         <button type="button" class="btn btn-outline-secondary activity-range-btn active" data-days="1">24h</button>
@@ -225,227 +224,137 @@
                 </div>
                 <div class="card-body">
                     <div id="timeSeriesChartLoading" class="loading-container">
-                        <!-- Skeleton loader for better UX -->
-                        <div class="skeleton skeleton-chart"></div>
+                        <div class="skeleton skeleton-chart dashboard-chart-skeleton"></div>
                     </div>
-                    <canvas id="timeSeriesChart" style="height: 300px; display: none;"></canvas>
+                    <div class="dashboard-chart-wrap" style="display: none;" id="timeSeriesChartWrap">
+                        <canvas id="timeSeriesChart"></canvas>
+                    </div>
                 </div>
             </div>
         </div>
 
-        <!-- Network Health Status -->
-        <div class="col-md-4 mb-4">
+        <div class="col-lg-4">
             <div class="card h-100">
-                <div class="card-header">
-                    <h5 class="card-title mb-0"><i class="bi bi-activity"></i> Network Health</h5>
+                <div class="card-header d-flex justify-content-between align-items-center py-2">
+                    <h5 class="card-title mb-0">
+                        <i class="bi bi-heart-pulse"></i> Health &amp; Insights
+                        <span class="badge bg-secondary ms-1" id="insightCountBadge" style="display: none;">0</span>
+                    </h5>
+                    <a href="{{ url_for('alerts.alerts_page') }}" class="btn btn-sm btn-outline-primary">View All</a>
                 </div>
-                <div class="card-body">
-                    <div class="mb-3">
-                        <h6 style="font-family: var(--bs-font-sans-serif); font-weight: 600; margin-bottom: 0.5rem;">Network Coverage</h6>
-                        <div class="progress mb-2">
-                            {% set total_nodes_safe = stats.total_nodes if stats.total_nodes > 0 else 1 %}
-                            {% set activity_percentage = (stats.active_nodes_24h / total_nodes_safe * 100)|int %}
-                            {% set coverage_class = 'bg-success' if activity_percentage >= 70 else 'bg-warning' if activity_percentage >= 40 else 'bg-danger' %}
-                            <div id="networkCoverageProgress" class="progress-bar {{ coverage_class }}" style="width: {{ activity_percentage }}%;">
-                                {{ activity_percentage }}%
-                            </div>
-                        </div>
-                        <small id="networkCoverageText" class="text-muted" style="font-family: var(--bs-font-sans-serif);">{{ stats.active_nodes_24h }} of {{ stats.total_nodes }} nodes active</small>
-                    </div>
-
-                    <div class="mb-3">
-                        <h6 style="font-family: var(--bs-font-sans-serif); font-weight: 600; margin-bottom: 0.5rem;">Decode Success Rate</h6>
-                        <div class="progress mb-2">
-                            {% set success_bar_class = 'bg-success' if stats.success_rate >= 95 else 'bg-warning' if stats.success_rate >= 85 else 'bg-danger' %}
-                            <div class="progress-bar {{ success_bar_class }}" style="width: {{ stats.success_rate }}%;">
-                                {{ stats.success_rate }}%
-                            </div>
-                        </div>
-                        <small class="text-muted" style="font-family: var(--bs-font-sans-serif);">Capture parse reliability (not RF delivery)</small>
-                    </div>
-
-                    <div class="mb-3">
-                        <h6 style="font-family: var(--bs-font-sans-serif); font-weight: 600; margin-bottom: 0.5rem;">Gateway Diversity</h6>
-                        <div class="progress mb-2">
-                            {% set gateway_diversity = (gateway_count / 10 * 100)|int if gateway_count <= 10 else 100 %}
-                            <div class="progress-bar bg-primary" style="width: {{ gateway_diversity }}%;">
-                                {{ gateway_count }} sources
-                            </div>
-                        </div>
-                        <small class="text-muted" style="font-family: var(--bs-font-sans-serif);">Multiple data sources improve reliability</small>
-                    </div>
-
-                    <div class="mb-3">
-                        <h6 style="font-family: var(--bs-font-sans-serif); font-weight: 600; margin-bottom: 0.5rem;">Node Health</h6>
-                        <div id="network-health-loading" class="text-center p-2">
+                <div class="card-body py-3">
+                    <div class="d-flex align-items-center gap-3 mb-2">
+                        <div id="dashboardHealthScore" class="text-center flex-shrink-0" style="min-width: 4.5rem;">
                             <div class="spinner-border spinner-border-sm text-primary" role="status">
                                 <span class="visually-hidden">Loading...</span>
                             </div>
                         </div>
-                        <div id="network-health-content" style="display: none;">
-                            <div id="node-health-chart" style="height: 180px; width: 100%;"></div>
-                            <div id="node-health-legend" class="small mt-2">
-                                <!-- Populated by JavaScript -->
-                            </div>
-                            <small class="text-muted" style="font-family: var(--bs-font-sans-serif);">
-                                <a href="{{ url_for('alerts.alerts_page') }}">View insights & alerts →</a>
-                            </small>
-                        </div>
-                    </div>
-
-                    <hr>
-
-                    <div class="row text-center">
-                        <div class="col-6">
-                            <div class="border-end">
-                                <div class="fw-bold text-primary">{{ stats.recent_packets }}</div>
-                                <small class="text-muted">Recent Activity</small>
-                            </div>
-                        </div>
-                        <div class="col-6">
-                            <div class="fw-bold text-success">{{ stats.packet_types|length }}</div>
-                            <small class="text-muted">Protocol Types</small>
-                        </div>
-                    </div>
-                </div>
-            </div>
-        </div>
-    </div>
-
-    <!-- Network Insights Summary Row -->
-    <div class="row mb-4">
-        <div class="col-12">
-            <div class="card">
-                <div class="card-header d-flex justify-content-between align-items-center">
-                    <h5 class="card-title mb-0">
-                        <i class="bi bi-lightbulb"></i> Network Insights
-                        <span class="badge bg-secondary ms-2" id="insightCountBadge" style="display: none;">0</span>
-                    </h5>
-                    <a href="{{ url_for('alerts.alerts_page') }}" class="btn btn-sm btn-outline-primary">
-                        View All <i class="bi bi-arrow-right"></i>
-                    </a>
-                </div>
-                <div class="card-body">
-                    <div class="row">
-                        <!-- Health Score -->
-                        <div class="col-md-2 text-center border-end">
-                            <div id="dashboardHealthScore" class="mb-2">
+                        <div class="flex-grow-1">
+                            <div id="network-health-loading" class="text-center py-2">
                                 <div class="spinner-border spinner-border-sm text-primary" role="status">
                                     <span class="visually-hidden">Loading...</span>
                                 </div>
                             </div>
-                        </div>
-                        <!-- Insights List -->
-                        <div class="col-md-10">
-                            <div id="dashboardInsightsList">
-                                <div class="text-center py-3">
-                                    <div class="spinner-border spinner-border-sm text-primary" role="status">
-                                        <span class="visually-hidden">Loading...</span>
-                                    </div>
-                                    <span class="ms-2 text-muted">Loading insights...</span>
-                                </div>
+                            <div id="network-health-content" style="display: none;">
+                                <div id="node-health-chart" class="node-health-chart"></div>
                             </div>
                         </div>
                     </div>
+                    <div id="node-health-legend" class="small mb-3"></div>
+                    <div id="dashboardInsightsList">
+                        <div class="text-center py-2">
+                            <div class="spinner-border spinner-border-sm text-primary" role="status">
+                                <span class="visually-hidden">Loading...</span>
+                            </div>
+                            <span class="ms-2 text-muted small">Loading insights...</span>
+                        </div>
+                    </div>
                 </div>
             </div>
         </div>
     </div>
 
-    <!-- Signal Quality and Activity Charts Row -->
-    <div class="row mb-4">
-        <!-- Active Nodes Distribution -->
-        <div class="col-md-4 mb-4">
+    <!-- Distributions (tabbed) + Most Active Nodes -->
+    <div class="row g-3 mb-3">
+        <div class="col-lg-7">
             <div class="card h-100">
-                <div class="card-header">
-                    <h5 class="card-title mb-0"><i class="bi bi-people"></i> Node Activity Distribution</h5>
+                <div class="card-header py-2">
+                    <ul class="nav nav-pills nav-pills-sm flex-wrap gap-1" id="distributionTabs" role="tablist">
+                        <li class="nav-item" role="presentation">
+                            <button class="nav-link active" id="tab-nodes" data-bs-toggle="tab" data-bs-target="#pane-nodes" type="button" role="tab" aria-controls="pane-nodes" aria-selected="true" data-chart-key="nodeActivityChart">Nodes</button>
+                        </li>
+                        <li class="nav-item" role="presentation">
+                            <button class="nav-link" id="tab-gateways" data-bs-toggle="tab" data-bs-target="#pane-gateways" type="button" role="tab" aria-controls="pane-gateways" aria-selected="false" data-chart-key="gatewayActivityChart">Gateways</button>
+                        </li>
+                        <li class="nav-item" role="presentation">
+                            <button class="nav-link" id="tab-signal" data-bs-toggle="tab" data-bs-target="#pane-signal" type="button" role="tab" aria-controls="pane-signal" aria-selected="false" data-chart-key="signalDistributionChart">Signal</button>
+                        </li>
+                        <li class="nav-item" role="presentation">
+                            <button class="nav-link" id="tab-hops" data-bs-toggle="tab" data-bs-target="#pane-hops" type="button" role="tab" aria-controls="pane-hops" aria-selected="false" data-chart-key="hopDistributionChart">Hops</button>
+                        </li>
+                        <li class="nav-item" role="presentation">
+                            <button class="nav-link" id="tab-protocols" data-bs-toggle="tab" data-bs-target="#pane-protocols" type="button" role="tab" aria-controls="pane-protocols" aria-selected="false" data-chart-key="packetTypesChart">Protocols</button>
+                        </li>
+                    </ul>
                 </div>
                 <div class="card-body">
-                    <div id="nodeActivityChartLoading" class="loading-container">
-                        <div class="skeleton skeleton-chart"></div>
+                    <div class="tab-content" id="distributionTabContent">
+                        <div class="tab-pane fade show active" id="pane-nodes" role="tabpanel" aria-labelledby="tab-nodes" tabindex="0">
+                            <div id="nodeActivityChartLoading" class="loading-container">
+                                <div class="skeleton skeleton-chart dashboard-chart-skeleton"></div>
+                            </div>
+                            <div class="dashboard-chart-wrap" style="display: none;" id="nodeActivityChartWrap">
+                                <canvas id="nodeActivityChart"></canvas>
+                            </div>
+                        </div>
+                        <div class="tab-pane fade" id="pane-gateways" role="tabpanel" aria-labelledby="tab-gateways" tabindex="0">
+                            <div id="gatewayActivityChartLoading" class="loading-container">
+                                <div class="skeleton skeleton-chart dashboard-chart-skeleton"></div>
+                            </div>
+                            <div class="dashboard-chart-wrap" style="display: none;" id="gatewayActivityChartWrap">
+                                <canvas id="gatewayActivityChart"></canvas>
+                            </div>
+                        </div>
+                        <div class="tab-pane fade" id="pane-signal" role="tabpanel" aria-labelledby="tab-signal" tabindex="0">
+                            <div id="signalDistributionChartLoading" class="loading-container">
+                                <div class="skeleton skeleton-chart dashboard-chart-skeleton"></div>
+                            </div>
+                            <div class="dashboard-chart-wrap" style="display: none;" id="signalDistributionChartWrap">
+                                <canvas id="signalDistributionChart"></canvas>
+                            </div>
+                        </div>
+                        <div class="tab-pane fade" id="pane-hops" role="tabpanel" aria-labelledby="tab-hops" tabindex="0">
+                            <div id="hopDistributionChartLoading" class="loading-container">
+                                <div class="skeleton skeleton-chart dashboard-chart-skeleton"></div>
+                            </div>
+                            <div class="dashboard-chart-wrap" style="display: none;" id="hopDistributionChartWrap">
+                                <canvas id="hopDistributionChart"></canvas>
+                            </div>
+                        </div>
+                        <div class="tab-pane fade" id="pane-protocols" role="tabpanel" aria-labelledby="tab-protocols" tabindex="0">
+                            {% if stats.packet_types %}
+                            <div id="packetTypesChartLoading" class="loading-container">
+                                <div class="skeleton skeleton-chart dashboard-chart-skeleton"></div>
+                            </div>
+                            <div class="dashboard-chart-wrap" style="display: none;" id="packetTypesChartWrap">
+                                <canvas id="packetTypesChart"></canvas>
+                            </div>
+                            {% else %}
+                            <div class="empty-state py-4">
+                                <div class="empty-state-icon"><i class="bi bi-inbox"></i></div>
+                                <div class="empty-state-title">No packet data available</div>
+                                <p class="empty-state-description mb-0">Start capturing packets to see protocol usage statistics</p>
+                            </div>
+                            {% endif %}
+                        </div>
                     </div>
-                    <canvas id="nodeActivityChart" style="height: 300px; display: none;"></canvas>
                 </div>
             </div>
         </div>
 
-        <!-- Active Gateways Distribution -->
-        <div class="col-md-4 mb-4">
+        <div class="col-lg-5">
             <div class="card h-100">
-                <div class="card-header">
-                    <h5 class="card-title mb-0"><i class="bi bi-router-fill"></i> Gateway Activity Distribution</h5>
-                </div>
-                <div class="card-body">
-                    <div id="gatewayActivityChartLoading" class="loading-container">
-                        <div class="skeleton skeleton-chart"></div>
-                    </div>
-                    <canvas id="gatewayActivityChart" style="height: 300px; display: none;"></canvas>
-                </div>
-            </div>
-        </div>
-
-        <!-- Signal Quality Distribution -->
-        <div class="col-md-4 mb-4">
-            <div class="card h-100">
-                <div class="card-header">
-                    <h5 class="card-title mb-0"><i class="bi bi-reception-4"></i> Signal Quality Distribution</h5>
-                </div>
-                <div class="card-body">
-                    <div id="signalDistributionChartLoading" class="loading-container">
-                        <div class="skeleton skeleton-chart"></div>
-                    </div>
-                    <canvas id="signalDistributionChart" style="height: 300px; display: none;"></canvas>
-                </div>
-            </div>
-        </div>
-    </div>
-
-    <!-- Message Routing and Protocol Usage Row -->
-    <div class="row mb-4">
-        <!-- Hop Count Distribution -->
-        <div class="col-md-6 mb-4">
-            <div class="card h-100">
-                <div class="card-header">
-                    <h5 class="card-title mb-0"><i class="bi bi-router"></i> Hop Distribution (24h)</h5>
-                </div>
-                <div class="card-body">
-                    <div id="hopDistributionChartLoading" class="loading-container">
-                        <div class="skeleton skeleton-chart"></div>
-                    </div>
-                    <canvas id="hopDistributionChart" style="height: 300px; display: none;"></canvas>
-                </div>
-            </div>
-        </div>
-
-        <!-- Protocol Usage -->
-        <div class="col-md-6 mb-4">
-            <div class="card h-100">
-                <div class="card-header">
-                    <h5 class="card-title mb-0"><i class="bi bi-pie-chart"></i> Protocol Usage (24h)</h5>
-                </div>
-                <div class="card-body">
-                    {% if stats.packet_types %}
-                    <div id="packetTypesChartLoading" class="loading-container">
-                        <div class="skeleton skeleton-chart"></div>
-                    </div>
-                    <canvas id="packetTypesChart" style="height: 300px; display: none;"></canvas>
-                    {% else %}
-                    <div class="empty-state">
-                        <div class="empty-state-icon"><i class="bi bi-inbox"></i></div>
-                        <div class="empty-state-title">No packet data available</div>
-                        <p class="empty-state-description">Start capturing packets to see protocol usage statistics</p>
-                    </div>
-                    {% endif %}
-                </div>
-            </div>
-        </div>
-    </div>
-
-    <!-- Top Active Nodes Row -->
-    <div class="row mb-4">
-        <div class="col-12">
-            <div class="card">
-                <div class="card-header">
+                <div class="card-header py-2">
                     <h5 class="card-title mb-0"><i class="bi bi-trophy"></i> Most Active Nodes</h5>
                 </div>
                 <div class="card-body">
@@ -456,8 +365,8 @@
                         <div class="skeleton skeleton-table-row"></div>
                         <div class="skeleton skeleton-table-row"></div>
                     </div>
-                    <div class="table-responsive" style="display: none;" id="topNodesTableContainer">
-                        <table class="table table-sm table-sortable" id="topNodesTable">
+                    <div class="table-responsive top-nodes-table-wrap" style="display: none;" id="topNodesTableContainer">
+                        <table class="table table-sm table-sortable mb-0" id="topNodesTable">
                             <thead>
                                 <tr>
                                     <th style="cursor: pointer; user-select: none;" data-sort="node" class="sortable-header">
@@ -480,120 +389,74 @@
             </div>
         </div>
     </div>
-
-    <!-- Network Information Cards -->
-    <div class="row mb-4">
-        <div class="col-md-4">
-            <div class="card">
-                <div class="card-header">
-                    <h6 class="card-title mb-0"><i class="bi bi-info-circle"></i> Network Information</h6>
-                </div>
-                <div class="card-body">
-                    <div class="row">
-                        <div class="col-6">
-                            <strong>Total Nodes:</strong><br>
-                            <span class="text-primary">{{ stats.total_nodes }}</span>
-                        </div>
-                        <div class="col-6">
-                            <strong>Active (24h):</strong><br>
-                            <span class="text-success">{{ stats.active_nodes_24h }}</span>
-                        </div>
-                    </div>
-                    <hr>
-                    <div class="row">
-                        <div class="col-6">
-                            <strong>Gateways:</strong><br>
-                            <span class="text-warning">{{ gateway_count }}</span>
-                        </div>
-                        <div class="col-6">
-                            <strong>Protocols:</strong><br>
-                            <span class="text-info">{{ stats.packet_types|length }}</span>
-                        </div>
-                    </div>
-                </div>
-            </div>
-        </div>
-
-        <div class="col-md-4">
-            <div class="card">
-                <div class="card-header">
-                    <h6 class="card-title mb-0"><i class="bi bi-activity"></i> Activity Summary</h6>
-                </div>
-                <div class="card-body">
-                    <div class="row">
-                        <div class="col-6">
-                            <strong>Packet Receptions:</strong><br>
-                            <span class="text-primary">{{ "{:,}".format(stats.total_packets) }}</span>
-                        </div>
-                        <div class="col-6">
-                            <strong>Recent (1h):</strong><br>
-                            <span class="text-success">{{ stats.recent_packets }}</span>
-                        </div>
-                    </div>
-                    <hr>
-                    <div class="row">
-                        <div class="col-12">
-                            <strong>Success Rate:</strong><br>
-                            {% set success_class = 'text-success' if stats.success_rate >= 95 else 'text-warning' if stats.success_rate >= 85 else 'text-danger' %}
-                            <span class="{{ success_class }}">{{ stats.success_rate }}%</span>
-                        </div>
-                    </div>
-                </div>
-            </div>
-        </div>
-
-        <div class="col-md-4">
-            <div class="card">
-                <div class="card-header">
-                    <h6 class="card-title mb-0"><i class="bi bi-reception-4"></i> Signal Quality</h6>
-                </div>
-                <div class="card-body">
-                    <div class="row">
-                        <div class="col-6">
-                            <strong>Avg RSSI:</strong><br>
-                            <span class="text-primary">{{ stats.avg_rssi|format_rssi }}dBm</span>
-                        </div>
-                        <div class="col-6">
-                            <strong>Avg SNR:</strong><br>
-                            <span class="text-success">{{ stats.avg_snr|format_snr }}dB</span>
-                        </div>
-                    </div>
-                    <hr>
-                    <div class="row">
-                        <div class="col-12">
-                            <strong>Network Health:</strong><br>
-                            {% set total_nodes_safe = stats.total_nodes if stats.total_nodes > 0 else 1 %}
-                            {% set activity_percentage = (stats.active_nodes_24h / total_nodes_safe * 100)|int %}
-                            {% if activity_percentage >= 70 %}
-                                <span class="text-success">Excellent</span>
-                            {% elif activity_percentage >= 40 %}
-                                <span class="text-warning">Good</span>
-                            {% else %}
-                                <span class="text-danger">Needs Attention</span>
-                            {% endif %}
-                        </div>
-                    </div>
-                </div>
-            </div>
-        </div>
-    </div>
 </div>
 {% endblock %}
 
 {% block extra_css %}
 <style>
-    /* Fixed-height Chart.js host — do not put height on the canvas itself */
-    .last24h-hourly-chart-wrap {
+    .dashboard-page .fleet-metric-card .card-body {
+        text-align: center;
+        padding: 0.75rem 0.5rem;
+    }
+    .dashboard-page .fleet-metric-card .metric-value {
+        font-size: 1.5rem;
+        line-height: 1.2;
+        margin-bottom: 0.15rem;
+    }
+    .dashboard-page .fleet-metric-card .metric-label {
+        font-size: 0.8rem;
+        margin-bottom: 0.1rem;
+    }
+    .dashboard-page .fleet-metric-card small {
+        font-size: 0.72rem;
+    }
+    .dashboard-page .last24h-kpi {
+        border: 1px solid var(--bs-border-color);
+        border-radius: 0.375rem;
+        padding: 0.5rem 0.65rem;
+        height: 100%;
+        background: var(--bs-body-bg);
+    }
+    .dashboard-page .nav-pills-sm .nav-link {
+        padding: 0.25rem 0.65rem;
+        font-size: 0.8rem;
+    }
+    .dashboard-page .node-health-chart {
+        height: 120px;
+        width: 100%;
+    }
+    .dashboard-page .top-nodes-table-wrap {
+        max-height: 280px;
+        overflow: auto;
+    }
+    .dashboard-page .dashboard-chart-skeleton {
+        height: 220px;
+    }
+    /* Fixed-height Chart.js hosts — do not put height on the canvas itself */
+    .last24h-hourly-chart-wrap,
+    .dashboard-chart-wrap {
         position: relative;
         width: 100%;
+    }
+    .last24h-hourly-chart-wrap {
         height: 140px;
         max-height: 140px;
     }
-    .last24h-hourly-chart-wrap canvas {
+    .dashboard-chart-wrap {
+        height: 220px;
+        max-height: 220px;
+    }
+    .last24h-hourly-chart-wrap canvas,
+    .dashboard-chart-wrap canvas {
         display: block;
         width: 100% !important;
         height: 100% !important;
+    }
+    .last24h-hourly-chart-wrap canvas {
         max-height: 140px;
+    }
+    .dashboard-chart-wrap canvas {
+        max-height: 220px;
     }
     @media (max-width: 767.98px) {
         .last24h-hourly-chart-wrap {
@@ -602,6 +465,14 @@
         }
         .last24h-hourly-chart-wrap canvas {
             max-height: 110px;
+        }
+        .dashboard-chart-wrap,
+        .dashboard-page .dashboard-chart-skeleton {
+            height: 180px;
+            max-height: 180px;
+        }
+        .dashboard-chart-wrap canvas {
+            max-height: 180px;
         }
     }
 </style>
@@ -730,6 +601,19 @@ document.addEventListener('DOMContentLoaded', function () {
         });
     });
 
+    // Resize Chart.js when distribution tabs become visible
+    document.querySelectorAll('#distributionTabs [data-bs-toggle="tab"]').forEach(function(tabBtn) {
+        tabBtn.addEventListener('shown.bs.tab', function(event) {
+            const chartKey = event.target.getAttribute('data-chart-key');
+            if (chartKey) {
+                // Defer so the pane has a measurable size
+                requestAnimationFrame(function() {
+                    resizeDashboardChart(chartKey);
+                });
+            }
+        });
+    });
+
     // Listen for theme changes and update charts
     window.addEventListener('themeChanged', function(event) {
         updateChartsForTheme();
@@ -765,9 +649,14 @@ async function loadAnalyticsData(days) {
 async function reloadActivityChart(days) {
     // Show skeleton while loading
     const canvas = document.getElementById('timeSeriesChart');
+    const wrap = document.getElementById('timeSeriesChartWrap');
     const loading = document.getElementById('timeSeriesChartLoading');
     if (canvas) canvas.style.display = 'none';
-    if (loading) { loading.innerHTML = '<div class="skeleton skeleton-chart"></div>'; loading.style.display = 'block'; }
+    if (wrap) wrap.style.display = 'none';
+    if (loading) {
+        loading.innerHTML = '<div class="skeleton skeleton-chart dashboard-chart-skeleton"></div>';
+        loading.style.display = 'block';
+    }
 
     try {
         const response = await fetch('/api/analytics?days=' + days);
@@ -840,9 +729,18 @@ function showErrorState(message) {
 
 function hideLoadingSpinner(chartId) {
     const loading = document.getElementById(chartId + 'Loading');
+    const wrap = document.getElementById(chartId + 'Wrap');
     const chart = document.getElementById(chartId);
     if (loading) loading.style.display = 'none';
+    if (wrap) wrap.style.display = 'block';
     if (chart) chart.style.display = 'block';
+}
+
+function resizeDashboardChart(chartKey) {
+    const chart = chartInstances[chartKey];
+    if (chart && typeof chart.resize === 'function') {
+        chart.resize();
+    }
 }
 
 function hideAllLoadingSpinners() {
@@ -1223,10 +1121,23 @@ let tableData = [];
 let currentSort = { column: 'messages', direction: 'desc' };
 
 function populateTopNodesTable(topNodes) {
-    if (!topNodes || topNodes.length === 0) return;
+    const loading = document.getElementById('topNodesLoading');
+    const container = document.getElementById('topNodesTableContainer');
+    if (loading) loading.style.display = 'none';
 
-    document.getElementById('topNodesLoading').style.display = 'none';
-    document.getElementById('topNodesTableContainer').style.display = 'block';
+    if (!topNodes || topNodes.length === 0) {
+        if (container) {
+            container.style.display = 'block';
+            container.innerHTML = `
+                <div class="text-muted small py-2">
+                    <i class="bi bi-inbox"></i> No active nodes in this time range.
+                </div>
+            `;
+        }
+        return;
+    }
+
+    if (container) container.style.display = 'block';
 
     // Store data for sorting
     tableData = topNodes.slice(0, 10).map(node => {
@@ -1534,8 +1445,8 @@ async function loadDashboardInsights() {
         const healthColor = healthScore >= 80 ? '#198754' : healthScore >= 60 ? '#ffc107' : healthScore >= 40 ? '#fd7e14' : '#dc3545';
 
         document.getElementById('dashboardHealthScore').innerHTML = `
-            <div style="font-size: 2.5rem; font-weight: 700; color: ${healthColor};">${healthScore}</div>
-            <div class="text-muted small">${healthLabel}</div>
+            <div style="font-size: 1.75rem; font-weight: 700; line-height: 1.1; color: ${healthColor};">${healthScore}</div>
+            <div class="text-muted" style="font-size: 0.75rem;">${healthLabel}</div>
         `;
 
         // Update insights list
@@ -1545,7 +1456,7 @@ async function loadDashboardInsights() {
         if (insights.length === 0) {
             insightCountBadge.style.display = 'none';
             document.getElementById('dashboardInsightsList').innerHTML = `
-                <div class="d-flex align-items-center text-success">
+                <div class="d-flex align-items-center text-success small">
                     <i class="bi bi-check-circle-fill me-2"></i>
                     <span>All systems healthy - no issues detected</span>
                 </div>
@@ -1553,40 +1464,37 @@ async function loadDashboardInsights() {
         } else {
             insightCountBadge.textContent = insights.length;
             insightCountBadge.style.display = 'inline-block';
-            insightCountBadge.className = 'badge ms-2 ' + (
+            insightCountBadge.className = 'badge ms-1 ' + (
                 insights.some(i => i.priority === 'high') ? 'bg-danger' :
                 insights.some(i => i.priority === 'medium') ? 'bg-warning' : 'bg-info'
             );
 
-            // Show top 3 insights
+            // Compact stacked list for the sidebar
             const topInsights = insights.slice(0, 3);
-            let html = '<div class="row g-2">';
+            let html = '<div class="d-flex flex-column gap-2">';
 
             topInsights.forEach(insight => {
                 const priorityClass = insight.priority === 'high' ? 'danger' :
                                      insight.priority === 'medium' ? 'warning' :
                                      insight.priority === 'good' ? 'success' : 'info';
                 const icon = insight.icon || 'info-circle';
+                const description = insight.description || '';
 
                 html += `
-                    <div class="col-md-4">
-                        <a href="${insight.link || '/alerts/insights'}" class="text-decoration-none">
-                            <div class="d-flex align-items-start p-2 rounded border-start border-3 border-${priorityClass}"
-                                 style="background: var(--bs-tertiary-bg); transition: transform 0.15s;"
-                                 onmouseover="this.style.transform='translateX(4px)'"
-                                 onmouseout="this.style.transform='none'">
-                                <div class="me-2">
-                                    <i class="bi bi-${icon} text-${priorityClass}"></i>
-                                </div>
-                                <div class="flex-grow-1 overflow-hidden">
-                                    <div class="fw-semibold text-body small text-truncate">${insight.title}</div>
-                                    <div class="text-muted" style="font-size: 0.75rem; line-height: 1.2;">
-                                        ${insight.description.length > 60 ? insight.description.substring(0, 60) + '...' : insight.description}
-                                    </div>
+                    <a href="${insight.link || '/alerts/insights'}" class="text-decoration-none">
+                        <div class="d-flex align-items-start p-2 rounded border-start border-3 border-${priorityClass}"
+                             style="background: var(--bs-tertiary-bg);">
+                            <div class="me-2">
+                                <i class="bi bi-${icon} text-${priorityClass}"></i>
+                            </div>
+                            <div class="flex-grow-1 overflow-hidden">
+                                <div class="fw-semibold text-body small text-truncate">${insight.title}</div>
+                                <div class="text-muted" style="font-size: 0.75rem; line-height: 1.25;">
+                                    ${description.length > 80 ? description.substring(0, 80) + '...' : description}
                                 </div>
                             </div>
-                        </a>
-                    </div>
+                        </div>
+                    </a>
                 `;
             });
 
@@ -1612,7 +1520,4 @@ loadDashboardInsights();
 // Refresh insights periodically (every 2 minutes)
 setInterval(loadDashboardInsights, 120000);
 </script>
-
-<!-- Chart.js for analytics charts -->
-<script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
 {% endblock %}
