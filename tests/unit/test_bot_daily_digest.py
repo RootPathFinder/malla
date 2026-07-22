@@ -40,6 +40,10 @@ class TestDailyDigestFormatting:
                 "from_name": "Alpha",
                 "to_name": "Zulu",
             },
+            farthest_node={
+                "name": "Ridge",
+                "distance_km": 12.4,
+            },
             when=when,
         )
 
@@ -51,6 +55,7 @@ class TestDailyDigestFormatting:
         assert "Off routers: 2" in message
         assert "Routers: HillTop, Bridge" in message
         assert "New: 7 (Newbie, Fresh, Rookie…)" in message
+        assert "Far: Ridge (12.4km)" in message
         assert "Say hi! !net" in message
         assert "!channels" not in message
         assert "Long TR: 5 hops Alpha→Zulu" in message
@@ -106,6 +111,7 @@ class TestDailyDigestFormatting:
         assert "Routers:" not in message
         assert "New:" not in message
         assert "Long TR:" not in message
+        assert "Far:" not in message
         assert "Top: Alpha" in message
 
     @pytest.mark.unit
@@ -116,6 +122,30 @@ class TestDailyDigestFormatting:
             bot_service._format_new_nodes_line(7, ["A", "B", "C"])
             == "New: 7 (A, B, C…)"
         )
+
+    @pytest.mark.unit
+    def test_format_farthest_node_line_variants(self, bot_service: BotService):
+        assert bot_service._format_farthest_node_line(None) is None
+        assert (
+            bot_service._format_farthest_node_line(
+                {"name": "Ridge Lookout", "distance_km": 12.4}
+            )
+            == "Far: Ridge Lookout (12.4km)"
+        )
+        assert (
+            bot_service._format_farthest_node_line(
+                {"name": "Near", "distance_km": 0.35}
+            )
+            == "Far: Near (350m)"
+        )
+
+    @pytest.mark.unit
+    def test_digest_node_label_prefers_long_name(self, bot_service: BotService):
+        assert (
+            bot_service._digest_node_label(1, short_name="AAA", long_name="Alpha Peak")
+            == "Alpha Peak"
+        )
+        assert bot_service._digest_node_label(1, short_name="AAA", long_name=None) == "AAA"
 
 
 class TestDailyDigestFilters:
@@ -140,7 +170,8 @@ class TestDailyDigestFilters:
         ):
             names = bot_service._get_recently_offline_routers()
 
-        assert names == ["HillTop"]
+        # Prefer long names when available (truncated for digest)
+        assert names == ["Hill Top R"]
         sql = cursor.execute.call_args[0][0]
         params = cursor.execute.call_args[0][1]
         assert "HAVING last_seen BETWEEN ? AND ?" in sql
@@ -201,7 +232,7 @@ class TestDailyDigestExtras:
         ):
             result = bot_service._get_new_nodes_24h(name_limit=3)
 
-        assert result == {"count": 7, "names": ["Newbie"]}
+        assert result == {"count": 7, "names": ["New Node"]}
         assert cursor.execute.call_count == 2
         count_sql = cursor.execute.call_args_list[0][0][0]
         names_sql = cursor.execute.call_args_list[1][0][0]

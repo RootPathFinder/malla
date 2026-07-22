@@ -36,13 +36,15 @@ def dashboard_db(monkeypatch):
             timestamp REAL,
             from_node_id INTEGER,
             gateway_id TEXT,
+            portnum INTEGER,
             portnum_name TEXT,
             rssi REAL,
             snr REAL,
             hop_start INTEGER,
             hop_limit INTEGER,
             processed_successfully INTEGER,
-            mesh_packet_id INTEGER
+            mesh_packet_id INTEGER,
+            raw_payload BLOB
         )
         """
     )
@@ -160,7 +162,8 @@ def test_last_24h_summary_new_nodes_and_trends(dashboard_db):
 
     summary = DashboardRepository.get_last_24h_summary()
     assert summary["new_nodes_24h"] == 1
-    assert "NEW" in summary["new_node_names"] or "Newbie" in summary["new_node_names"]
+    # Prefer long names when available
+    assert "Newbie" in summary["new_node_names"]
     assert summary["active_nodes_24h"] == 3
     assert summary["text_messages_24h"] >= 1
     assert summary["packets_24h"] > summary["packets_prior_24h"]
@@ -170,3 +173,82 @@ def test_last_24h_summary_new_nodes_and_trends(dashboard_db):
     assert summary["direct_packets"] + summary["relayed_packets"] > 0
     assert summary["low_battery_nodes"] == 1
     assert len(summary["top_talkers"]) >= 1
+    assert summary["top_talkers"][0]["name"] in {"Alpha", "Beta", "Newbie"}
+    assert "farthest_node" in summary
+    assert summary["farthest_node"] is None
+
+
+@pytest.mark.unit
+def test_last_24h_summary_farthest_node_uses_long_name(dashboard_db):
+    from meshtastic.protobuf import mesh_pb2
+
+    conn, _ = dashboard_db
+    now = _seed_basic(conn)
+    cursor = conn.cursor()
+
+    # Gateway node (!gw1 is not a valid hex node). Use a real gateway hex id.
+    gw_id = 0xAABBCC01
+    far_id = 0xAABBCC99
+    cursor.execute(
+        "INSERT INTO node_info VALUES (?, 'GW1', 'Gateway One', ?, ?, 0)",
+        (gw_id, now - 10 * 86400, now),
+    )
+    cursor.execute(
+        "INSERT INTO node_info VALUES (?, 'FAR', 'Farthest Peak', ?, ?, 0)",
+        (far_id, now - 10 * 86400, now),
+    )
+
+    def _pos(lat: float, lon: float) -> bytes:
+        p = mesh_pb2.Position()
+        p.latitude_i = int(lat * 1e7)
+        p.longitude_i = int(lon * 1e7)
+        return p.SerializeToString()
+
+    # Gateway near SF; far node ~111km north
+    cursor.execute(
+        """
+        INSERT INTO packet_history
+        (timestamp, from_node_id, gateway_id, portnum, portnum_name, rssi, snr,
+         hop_start, hop_limit, processed_successfully, mesh_packet_id, raw_payload)
+        VALUES (?, ?, ?, 3, 'POSITION_APP', -70, 8.0, 3, 3, 1, 9001, ?)
+        """,
+        (now - 100, gw_id, f"!{gw_id:08x}", _pos(37.77, -122.42)),
+    )
+    cursor.execute(
+        """
+        INSERT INTO packet_history
+        (timestamp, from_node_id, gateway_id, portnum, portnum_name, rssi, snr,
+         hop_start, hop_limit, processed_successfully, mesh_packet_id, raw_payload)
+        VALUES (?, ?, ?, 3, 'POSITION_APP', -90, 2.0, 3, 2, 1, 9002, ?)
+        """,
+        (now - 90, far_id, f"!{gw_id:08x}", _pos(38.77, -122.42)),
+    )
+    # Activity from far node heard by gateway
+    cursor.execute(
+        """
+        INSERT INTO packet_history
+        (timestamp, from_node_id, gateway_id, portnum, portnum_name, rssi, snr,
+         hop_start, hop_limit, processed_successfully, mesh_packet_id)
+        VALUES (?, ?, ?, 1, 'TEXT_MESSAGE_APP', -95, 1.0, 3, 1, 1, 9003)
+        """,
+        (now - 50, far_id, f"!{gw_id:08x}"),
+    )
+    # Also give the gateway some traffic so it is the busiest gateway
+    for i in range(3):
+        cursor.execute(
+            """
+            INSERT INTO packet_history
+            (timestamp, from_node_id, gateway_id, portnum, portnum_name, rssi, snr,
+             hop_start, hop_limit, processed_successfully, mesh_packet_id)
+            VALUES (?, ?, ?, 1, 'TELEMETRY_APP', -70, 8.0, 3, 3, 1, ?)
+            """,
+            (now - i * 10, gw_id, f"!{gw_id:08x}", 9100 + i),
+        )
+    conn.commit()
+
+    summary = DashboardRepository.get_last_24h_summary()
+    farthest = summary["farthest_node"]
+    assert farthest is not None
+    assert farthest["name"] == "Farthest Peak"
+    assert farthest["distance_km"] > 100
+    assert farthest["from_name"] == "Gateway One"

@@ -13,10 +13,43 @@ from typing import Any
 from meshtastic import mesh_pb2
 
 from ..utils.formatting import format_time_ago
+from ..utils.geo_utils import calculate_distance
 from ..utils.node_utils import get_bulk_node_short_names
 from .connection import get_db_connection
 
 logger = logging.getLogger(__name__)
+
+
+def _prefer_long_node_label(
+    node_id: int | None,
+    short_name: str | None = None,
+    long_name: str | None = None,
+    max_len: int = 24,
+) -> str:
+    """Display label preferring long_name, then short_name, then hex suffix."""
+    name = (long_name or short_name or "").strip()
+    if not name and node_id is not None:
+        name = f"!{int(node_id):08x}"[-4:]
+    if not name:
+        name = "?"
+    if len(name) > max_len:
+        name = name[:max_len]
+    return name
+
+
+def _parse_gateway_node_id(gateway_id: str | None) -> int | None:
+    """Parse a gateway_id token like '!aabbccdd' into a node id."""
+    if not gateway_id:
+        return None
+    token = str(gateway_id).strip()
+    if token.startswith("!"):
+        token = token[1:]
+    try:
+        if token.isdigit():
+            return int(token)
+        return int(token, 16)
+    except ValueError:
+        return None
 
 
 class DashboardRepository:
@@ -257,10 +290,11 @@ class DashboardRepository:
             )
             new_node_names: list[str] = []
             for n in cursor.fetchall():
-                name = (n["short_name"] or n["long_name"] or "").strip()
-                if not name:
-                    name = f"!{int(n['node_id']):08x}"[-4:]
-                new_node_names.append(name[:18])
+                new_node_names.append(
+                    _prefer_long_node_label(
+                        n["node_id"], n["short_name"], n["long_name"], max_len=18
+                    )
+                )
 
             # Top talkers (by receptions)
             cursor.execute(
@@ -281,10 +315,17 @@ class DashboardRepository:
             )
             top_talkers = []
             for t in cursor.fetchall():
-                label = (t["short_name"] or t["long_name"] or "").strip()
-                if not label:
-                    label = f"!{int(t['node_id']):08x}"[-4:]
-                top_talkers.append({"name": label[:18], "packets": int(t["cnt"])})
+                top_talkers.append(
+                    {
+                        "name": _prefer_long_node_label(
+                            t["node_id"],
+                            t["short_name"],
+                            t["long_name"],
+                            max_len=18,
+                        ),
+                        "packets": int(t["cnt"]),
+                    }
+                )
 
             # Hourly breakdown (UTC)
             cursor.execute(
@@ -348,6 +389,13 @@ class DashboardRepository:
             )
             low_battery_nodes = int(cursor.fetchone()["cnt"] or 0)
 
+            farthest_node = DashboardRepository._compute_farthest_node_24h(
+                cursor,
+                since=since,
+                gateway_filter=gateway_filter,
+                gateway_params=gateway_params,
+            )
+
             conn.close()
 
             return {
@@ -369,6 +417,7 @@ class DashboardRepository:
                 "relayed_packets": relayed_packets,
                 "low_battery_nodes": low_battery_nodes,
                 "top_talkers": top_talkers,
+                "farthest_node": farthest_node,
                 "hourly": hourly,
                 "timezone": "UTC",
                 "generated_at": now,
@@ -376,6 +425,202 @@ class DashboardRepository:
         except Exception as e:
             logger.error(f"Error getting last-24h summary: {e}", exc_info=True)
             raise
+
+    @staticmethod
+    def _compute_farthest_node_24h(
+        cursor: Any,
+        *,
+        since: float,
+        gateway_filter: str = "",
+        gateway_params: list[Any] | None = None,
+    ) -> dict[str, Any] | None:
+        """Find the active node farthest from the busiest positioned gateway."""
+        gateway_params = gateway_params or []
+        try:
+            cursor.execute(
+                f"""
+                SELECT DISTINCT from_node_id as node_id
+                FROM packet_history
+                WHERE timestamp > ?
+                  AND from_node_id IS NOT NULL
+                  {gateway_filter}
+                """,
+                [since] + gateway_params,
+            )
+            active_ids = {
+                int(r["node_id"]) for r in cursor.fetchall() if r["node_id"] is not None
+            }
+            if len(active_ids) < 1:
+                return None
+
+            cursor.execute(
+                f"""
+                SELECT gateway_id, COUNT(*) as cnt
+                FROM packet_history
+                WHERE timestamp > ?
+                  AND gateway_id IS NOT NULL
+                  AND gateway_id != ''
+                  {gateway_filter}
+                GROUP BY gateway_id
+                ORDER BY cnt DESC
+                LIMIT 20
+                """,
+                [since] + gateway_params,
+            )
+            gateway_rows = cursor.fetchall()
+            gateway_node_ids: list[int] = []
+            for gw in gateway_rows:
+                parsed = _parse_gateway_node_id(gw["gateway_id"])
+                if parsed is not None:
+                    gateway_node_ids.append(parsed)
+
+            candidate_ids = sorted(active_ids.union(gateway_node_ids))
+            if len(candidate_ids) < 2:
+                return None
+
+            placeholders = ",".join("?" * len(candidate_ids))
+            # Latest POSITION_APP packet per candidate node
+            cursor.execute(
+                f"""
+                SELECT ph.from_node_id as node_id, ph.raw_payload,
+                       ni.short_name, ni.long_name
+                FROM packet_history ph
+                INNER JOIN (
+                    SELECT from_node_id, MAX(timestamp) as max_ts
+                    FROM packet_history
+                    WHERE portnum = 3
+                      AND raw_payload IS NOT NULL
+                      AND from_node_id IN ({placeholders})
+                    GROUP BY from_node_id
+                ) latest
+                  ON ph.from_node_id = latest.from_node_id
+                 AND ph.timestamp = latest.max_ts
+                LEFT JOIN node_info ni ON ni.node_id = ph.from_node_id
+                WHERE ph.portnum = 3
+                  AND ph.raw_payload IS NOT NULL
+                """,
+                candidate_ids,
+            )
+
+            locations: dict[int, dict[str, Any]] = {}
+            for row in cursor.fetchall():
+                raw_payload = row["raw_payload"]
+                if isinstance(raw_payload, memoryview):
+                    raw_payload = raw_payload.tobytes()
+                if not isinstance(raw_payload, (bytes, bytearray)) or not raw_payload:
+                    continue
+                try:
+                    position = mesh_pb2.Position()
+                    position.ParseFromString(raw_payload)
+                    lat = position.latitude_i / 1e7 if position.latitude_i else None
+                    lon = position.longitude_i / 1e7 if position.longitude_i else None
+                    if lat in (None, 0) or lon in (None, 0):
+                        continue
+                    node_id = int(row["node_id"])
+                    locations[node_id] = {
+                        "node_id": node_id,
+                        "latitude": float(lat),
+                        "longitude": float(lon),
+                        "short_name": row["short_name"],
+                        "long_name": row["long_name"],
+                    }
+                except Exception:
+                    continue
+
+            if len(locations) < 2:
+                return None
+
+            # Prefer busiest gateway that has a known position as the reference
+            ref = None
+            for gw_id in gateway_node_ids:
+                if gw_id in locations:
+                    ref = locations[gw_id]
+                    break
+            if ref is None:
+                # Fallback: busiest active node with a position
+                cursor.execute(
+                    f"""
+                    SELECT from_node_id as node_id, COUNT(*) as cnt
+                    FROM packet_history
+                    WHERE timestamp > ?
+                      AND from_node_id IS NOT NULL
+                      {gateway_filter}
+                    GROUP BY from_node_id
+                    ORDER BY cnt DESC
+                    LIMIT 50
+                    """,
+                    [since] + gateway_params,
+                )
+                for row in cursor.fetchall():
+                    nid = int(row["node_id"])
+                    if nid in locations:
+                        ref = locations[nid]
+                        break
+            if ref is None:
+                return None
+
+            farthest: dict[str, Any] | None = None
+            max_km = -1.0
+            for node_id, loc in locations.items():
+                if node_id == ref["node_id"]:
+                    continue
+                # Only score nodes heard as transmitters in the window
+                if node_id not in active_ids:
+                    continue
+                km = calculate_distance(
+                    ref["latitude"],
+                    ref["longitude"],
+                    loc["latitude"],
+                    loc["longitude"],
+                )
+                if km > max_km:
+                    max_km = km
+                    farthest = {
+                        "node_id": node_id,
+                        "name": _prefer_long_node_label(
+                            node_id,
+                            loc.get("short_name"),
+                            loc.get("long_name"),
+                            max_len=24,
+                        ),
+                        "distance_km": round(km, 2),
+                        "from_node_id": ref["node_id"],
+                        "from_name": _prefer_long_node_label(
+                            ref["node_id"],
+                            ref.get("short_name"),
+                            ref.get("long_name"),
+                            max_len=24,
+                        ),
+                    }
+
+            return farthest
+        except Exception as e:
+            logger.debug(f"Could not compute farthest node for last-24h: {e}")
+            return None
+
+    @staticmethod
+    def get_farthest_node_24h(gateway_id: str | None = None) -> dict[str, Any] | None:
+        """Public helper used by the bot digest and API consumers."""
+        try:
+            conn = get_db_connection()
+            cursor = conn.cursor()
+            since = time.time() - 24 * 3600
+            gateway_filter = ""
+            gateway_params: list[Any] = []
+            if gateway_id:
+                gateway_filter = " AND gateway_id = ?"
+                gateway_params = [gateway_id]
+            result = DashboardRepository._compute_farthest_node_24h(
+                cursor,
+                since=since,
+                gateway_filter=gateway_filter,
+                gateway_params=gateway_params,
+            )
+            conn.close()
+            return result
+        except Exception as e:
+            logger.error(f"Error getting farthest node (24h): {e}", exc_info=True)
+            return None
 
 
 class PacketRepository:

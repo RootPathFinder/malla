@@ -56,6 +56,7 @@ class TestStatsEndpoint:
             "relayed_packets",
             "low_battery_nodes",
             "top_talkers",
+            "farthest_node",
             "hourly",
             "timezone",
         ):
@@ -63,6 +64,7 @@ class TestStatsEndpoint:
         assert data["timezone"] == "UTC"
         assert len(data["hourly"]) == 24
         assert isinstance(data["new_node_names"], list)
+        assert data["farthest_node"] is None or isinstance(data["farthest_node"], dict)
 
     @pytest.mark.integration
     @pytest.mark.api

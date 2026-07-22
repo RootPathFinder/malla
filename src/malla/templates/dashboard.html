@@ -194,6 +194,22 @@
                                 <li class="mb-1"><i class="bi bi-diagram-3 text-info"></i> {{ l24.protocol_types_24h|default(0) }} protocol types</li>
                                 <li class="mb-1"><i class="bi bi-battery-half text-danger"></i> {{ l24.low_battery_nodes|default(0) }} nodes &lt;30% battery</li>
                                 <li class="mb-1"><i class="bi bi-check2-circle text-success"></i> {{ l24.decode_success_rate|default(0) }}% decode success</li>
+                                {% set far = l24.farthest_node %}
+                                {% if far and far.name %}
+                                <li class="mb-1">
+                                    <i class="bi bi-geo-alt text-primary"></i>
+                                    Farthest:
+                                    {% if far.node_id %}
+                                    <a href="{{ url_for('node.node_detail', node_id=far.node_id) }}" class="text-decoration-none">{{ far.name }}</a>
+                                    {% else %}
+                                    {{ far.name }}
+                                    {% endif %}
+                                    <span class="text-muted">
+                                        ({% if far.distance_km < 1 %}{{ (far.distance_km * 1000)|int }} m{% else %}{{ '%.1f'|format(far.distance_km) }} km{% endif %}
+                                        {% if far.from_name %} from {{ far.from_name }}{% endif %})
+                                    </span>
+                                </li>
+                                {% endif %}
                             </ul>
                             {% if l24.top_talkers %}
                             <h6 class="mt-3 mb-1 small fw-semibold">Top talkers</h6>
