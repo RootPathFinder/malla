@@ -181,7 +181,11 @@
                                 <h6 class="mb-0 small fw-semibold">Hourly packet trend</h6>
                                 <small class="text-muted">UTC hours</small>
                             </div>
-                            <canvas id="last24hHourlyChart" style="height: 140px;"></canvas>
+                            {# Chart.js needs a sized parent when maintainAspectRatio is false;
+                               height on the canvas alone blows up on mobile. #}
+                            <div class="last24h-hourly-chart-wrap">
+                                <canvas id="last24hHourlyChart"></canvas>
+                            </div>
                         </div>
                         <div class="col-lg-4">
                             <h6 class="mb-2 small fw-semibold">Also notable</h6>
@@ -574,6 +578,33 @@
         </div>
     </div>
 </div>
+{% endblock %}
+
+{% block extra_css %}
+<style>
+    /* Fixed-height Chart.js host — do not put height on the canvas itself */
+    .last24h-hourly-chart-wrap {
+        position: relative;
+        width: 100%;
+        height: 140px;
+        max-height: 140px;
+    }
+    .last24h-hourly-chart-wrap canvas {
+        display: block;
+        width: 100% !important;
+        height: 100% !important;
+        max-height: 140px;
+    }
+    @media (max-width: 767.98px) {
+        .last24h-hourly-chart-wrap {
+            height: 110px;
+            max-height: 110px;
+        }
+        .last24h-hourly-chart-wrap canvas {
+            max-height: 110px;
+        }
+    }
+</style>
 {% endblock %}
 
 {% block extra_js %}
@@ -1095,6 +1126,7 @@ function createLast24hHourlyChart() {
     const labels = last24hSummary.hourly.map(h => String(h.hour).padStart(2, '0') + 'z');
     const data = last24hSummary.hourly.map(h => h.packets || 0);
     const nowHour = new Date().getUTCHours();
+    const isNarrow = window.matchMedia('(max-width: 767.98px)').matches;
 
     if (chartInstances.last24hHourlyChart) {
         chartInstances.last24hHourlyChart.destroy();
@@ -1107,12 +1139,17 @@ function createLast24hHourlyChart() {
                 label: 'Packets / hour (UTC)',
                 data: data,
                 backgroundColor: data.map((_, i) => i === nowHour ? colors.danger : colors.info),
-                borderWidth: 0
+                borderWidth: 0,
+                barPercentage: isNarrow ? 0.9 : 0.8,
+                categoryPercentage: isNarrow ? 0.9 : 0.8
             }]
         },
         options: {
             responsive: true,
             maintainAspectRatio: false,
+            layout: {
+                padding: { top: 4, right: 4, bottom: 0, left: 0 }
+            },
             plugins: {
                 legend: { display: false }
             },
@@ -1122,13 +1159,18 @@ function createLast24hHourlyChart() {
                         color: colors.mutedTextColor,
                         maxRotation: 0,
                         autoSkip: true,
-                        maxTicksLimit: 12
+                        maxTicksLimit: isNarrow ? 6 : 12,
+                        font: { size: isNarrow ? 9 : 11 }
                     },
                     grid: { display: false }
                 },
                 y: {
                     beginAtZero: true,
-                    ticks: { color: colors.mutedTextColor },
+                    ticks: {
+                        color: colors.mutedTextColor,
+                        maxTicksLimit: isNarrow ? 4 : 6,
+                        font: { size: isNarrow ? 9 : 11 }
+                    },
                     grid: { color: colors.gridColor }
                 }
             }
