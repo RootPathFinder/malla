@@ -1,4 +1,4 @@
-"""Tests for mesh bot command text parsing (prefix and bare single-word)."""
+"""Tests for mesh bot command text parsing (prefix and bare commands)."""
 
 import pytest
 
@@ -36,13 +36,18 @@ class TestParseCommandText:
         assert bot_service._parse_command_text("PING") == ("ping", [])
         assert bot_service._parse_command_text("  help  ") == ("help", [])
 
-    def test_bare_multi_word_rejected(self, bot_service: BotService):
-        assert bot_service._parse_command_text("wx 90210") is None
-        assert bot_service._parse_command_text("ping please") is None
+    def test_bare_command_with_args(self, bot_service: BotService):
+        assert bot_service._parse_command_text("wx 90210") == ("wx", ["90210"])
+        assert bot_service._parse_command_text("traceroute ABCD") == (
+            "traceroute",
+            ["ABCD"],
+        )
+        assert bot_service._parse_command_text("find Alice") == ("find", ["Alice"])
 
     def test_bare_unknown_word_rejected(self, bot_service: BotService):
         assert bot_service._parse_command_text("hello") is None
         assert bot_service._parse_command_text("notacommand") is None
+        assert bot_service._parse_command_text("hello world") is None
 
     def test_empty_and_prefix_only_rejected(self, bot_service: BotService):
         assert bot_service._parse_command_text("") is None
@@ -56,6 +61,7 @@ class TestParseCommandText:
         assert bot_service._parse_command_text("!ping") is None
         # Bare form still works regardless of prefix
         assert bot_service._parse_command_text("ping") == ("ping", [])
+        assert bot_service._parse_command_text("wx 90210") == ("wx", ["90210"])
 
     def test_bare_matches_registered_even_if_disabled(self, bot_service: BotService):
         # Parsing succeeds; disable check happens later in the receive handler.
