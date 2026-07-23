@@ -3305,11 +3305,11 @@ class BotService:
             c = 2 * math.asin(math.sqrt(a))
             km = 6371 * c
 
+            from ..utils.geo_utils import format_distance_for_unit
+
             name = target_name or f"!{target_id:08x}"
-            if km < 1:
-                return f"📍 {name}: {km * 1000:.0f}m"
-            else:
-                return f"📍 {name}: {km:.1f}km"
+            # Mesh replies stay metric; web UI maps C/F → km/mi
+            return f"📍 {name}: {format_distance_for_unit(km, 'C')}"
 
         except Exception as e:
             logger.error(f"Error in distance: {e}", exc_info=True)
@@ -4800,9 +4800,15 @@ class BotService:
     def _format_farthest_node_line(
         self, farthest_node: dict[str, Any] | None
     ) -> str | None:
-        """Format farthest-node digest line with distance."""
+        """Format farthest-node digest line with distance.
+
+        Mesh bot replies stay metric (km/m); the web UI follows the C/F
+        temperature preference for km vs miles.
+        """
         if not farthest_node or not farthest_node.get("name"):
             return None
+        from ..utils.geo_utils import format_distance_for_unit
+
         name = str(farthest_node["name"])
         if len(name) > 14:
             name = name[:14]
@@ -4812,9 +4818,7 @@ class BotService:
             return f"Far: {name}"
         if km <= 0:
             return f"Far: {name}"
-        if km < 1:
-            return f"Far: {name} ({km * 1000:.0f}m)"
-        return f"Far: {name} ({km:.1f}km)"
+        return f"Far: {name} ({format_distance_for_unit(km, 'C')})"
 
     def _get_farthest_node_24h(self) -> dict[str, Any] | None:
         """Return farthest active node from the primary gateway (last 24h)."""

@@ -69,3 +69,36 @@ def calculate_bearing(lat1: float, lon1: float, lat2: float, lon2: float) -> flo
 
     # Normalize to 0-360 degrees
     return (bearing_deg + 360) % 360
+
+
+def format_distance_for_unit(
+    distance_km: float | None,
+    unit: str = "C",
+    *,
+    decimals: int = 1,
+) -> str:
+    """Format a kilometer distance using C→metric / F→imperial preference.
+
+    The web UI temperature toggle stores ``C`` or ``F``. Metric (C) uses
+    kilometers/meters; imperial (F) uses miles/feet.
+    """
+    if distance_km is None:
+        return "N/A"
+    try:
+        km = float(distance_km)
+    except (TypeError, ValueError):
+        return "N/A"
+    if math.isnan(km) or math.isinf(km) or km < 0:
+        return "N/A"
+
+    preferred = (unit or "C").upper()
+    if preferred == "F":
+        miles = km * 0.621371192237334
+        if miles < 1:
+            feet = int(round(km * 1000 * 3.280839895))
+            return f"{feet} ft"
+        return f"{miles:.{decimals}f} mi"
+
+    if km < 1:
+        return f"{int(round(km * 1000))} m"
+    return f"{km:.{decimals}f} km"

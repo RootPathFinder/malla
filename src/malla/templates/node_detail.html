@@ -1372,11 +1372,7 @@
                             {% if zh_summary.avg_distance_km is not none %}
                                 <span class="text-muted me-2">·</span>
                                 <span>
-                                    {% if zh_summary.avg_distance_km < 1 %}
-                                        avg <strong>{{ (zh_summary.avg_distance_km * 1000)|int }}</strong> m
-                                    {% else %}
-                                        avg <strong>{{ '%.1f'|format(zh_summary.avg_distance_km) }}</strong> km
-                                    {% endif %}
+                                    avg <strong class="distance-display" data-distance-km="{{ zh_summary.avg_distance_km }}">{% if zh_summary.avg_distance_km < 1 %}{{ (zh_summary.avg_distance_km * 1000)|int }} m{% else %}{{ '%.1f'|format(zh_summary.avg_distance_km) }} km{% endif %}</strong>
                                 </span>
                             {% elif zh_summary.with_location is not none %}
                                 <span class="text-muted me-2">·</span>
@@ -1408,7 +1404,11 @@
                                         </div>
                                         <div class="small text-muted">
                                             {% if neighbor.snr is not none %}{{ '%.1f'|format(neighbor.snr) }} dB{% else %}SNR —{% endif %}
-                                            {% if neighbor.distance_display %} · {{ neighbor.distance_display }}{% endif %}
+                                            {% if neighbor.distance_km is not none %}
+                                             · <span class="distance-display" data-distance-km="{{ neighbor.distance_km }}">{{ neighbor.distance_display or ('%.1f'|format(neighbor.distance_km) ~ ' km') }}</span>
+                                            {% elif neighbor.distance_display %}
+                                             · {{ neighbor.distance_display }}
+                                            {% endif %}
                                             {% if neighbor.last_seen_relative %} · {{ neighbor.last_seen_relative }}{% endif %}
                                         </div>
                                     </div>
@@ -1724,7 +1724,12 @@ function loadReachMap() {
         }).addTo(map);
 
         const snrText = peer.snr != null ? `${Number(peer.snr).toFixed(1)} dB` : 'SNR —';
-        const distText = peer.distance_display || '';
+        let distText = '';
+        if (peer.distance_km != null && typeof TemperatureToggle !== 'undefined' && TemperatureToggle.formatDistance) {
+            distText = TemperatureToggle.formatDistance(peer.distance_km, 1);
+        } else if (peer.distance_display) {
+            distText = peer.distance_display;
+        }
         marker.bindPopup(
             `<strong><a href="/node/${peer.node_id}">${escapeHtml(peer.node_name || peer.hex_id || '')}</a></strong><br>` +
             `${snrText}${distText ? ' · ' + escapeHtml(distText) : ''}`

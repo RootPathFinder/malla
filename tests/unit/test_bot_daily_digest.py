@@ -55,7 +55,7 @@ class TestDailyDigestFormatting:
         assert "Off routers: 2" in message
         assert "Routers: HillTop, Bridge" in message
         assert "New: 7 (Newbie, Fresh, Rookie…)" in message
-        assert "Far: Ridge (12.4km)" in message
+        assert "Far: Ridge (12.4 km)" in message
         assert "Say hi! !net" in message
         assert "!channels" not in message
         assert "Long TR: 5 hops Alpha→Zulu" in message
@@ -130,13 +130,13 @@ class TestDailyDigestFormatting:
             bot_service._format_farthest_node_line(
                 {"name": "Ridge Lookout", "distance_km": 12.4}
             )
-            == "Far: Ridge Lookout (12.4km)"
+            == "Far: Ridge Lookout (12.4 km)"
         )
         assert (
             bot_service._format_farthest_node_line(
                 {"name": "Near", "distance_km": 0.35}
             )
-            == "Far: Near (350m)"
+            == "Far: Near (350 m)"
         )
 
     @pytest.mark.unit
