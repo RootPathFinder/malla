@@ -69,6 +69,21 @@ class TemperatureToggle {
                 el.textContent = TemperatureToggle.formatTemperature(celsius, 1);
             }
         });
+        this.updateAllDistances();
+    }
+
+    /**
+     * Update all distance displays that follow the C/F unit preference.
+     * C → km/m, F → mi/ft. Elements use data-distance-km (kilometers).
+     */
+    updateAllDistances() {
+        const elements = document.querySelectorAll('[data-distance-km]');
+        elements.forEach(el => {
+            const km = parseFloat(el.getAttribute('data-distance-km'));
+            if (!isNaN(km)) {
+                el.textContent = TemperatureToggle.formatDistance(km, 1);
+            }
+        });
     }
 
     /**
@@ -186,6 +201,37 @@ class TemperatureToggle {
 
         return parseFloat(temp.toFixed(decimals));
     }
+
+    /**
+     * Format distance using the temperature unit preference as a metric/imperial switch.
+     * C → kilometers / meters, F → miles / feet.
+     * @param {number} km - Distance in kilometers
+     * @param {number} decimals - Decimal places for km/mi (default: 1)
+     * @returns {string} Formatted distance string
+     */
+    static formatDistance(km, decimals = 1) {
+        if (km === null || km === undefined || Number.isNaN(Number(km))) return 'N/A';
+
+        if (!temperatureToggleInstance) {
+            temperatureToggleInstance = new TemperatureToggle();
+        }
+        const unit = temperatureToggleInstance.getUnit();
+        const value = Number(km);
+
+        if (unit === 'F') {
+            const miles = value * 0.621371192237334;
+            if (miles < 1) {
+                const feet = Math.round(value * 1000 * 3.280839895);
+                return `${feet} ft`;
+            }
+            return `${miles.toFixed(decimals)} mi`;
+        }
+
+        if (value < 1) {
+            return `${Math.round(value * 1000)} m`;
+        }
+        return `${value.toFixed(decimals)} km`;
+    }
 }
 
 // Global instance for easy access
@@ -196,7 +242,7 @@ document.addEventListener('DOMContentLoaded', () => {
     if (!temperatureToggleInstance) {
         temperatureToggleInstance = new TemperatureToggle();
     }
-    // Update all temperatures on initial page load
+    // Update all temperatures / distances on initial page load
     temperatureToggleInstance.updateAllTemperatures();
 
     // Listen for temperature unit changes to update displays

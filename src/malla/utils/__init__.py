@@ -16,7 +16,7 @@ from .formatting import (
     format_route_display,
     format_time_ago,
 )
-from .geo_utils import calculate_bearing, calculate_distance
+from .geo_utils import calculate_bearing, calculate_distance, format_distance_for_unit
 from .node_utils import convert_node_id, get_bulk_node_names, get_node_display_name
 from .serialization_utils import convert_bytes_to_base64
 from .traceroute_utils import parse_traceroute_payload
@@ -36,6 +36,7 @@ __all__ = [
     "convert_bytes_to_base64",
     "calculate_distance",
     "calculate_bearing",
+    "format_distance_for_unit",
     "deep_compare_config",
     "configs_are_equal",
     "get_config_diff_summary",

@@ -205,8 +205,7 @@
                                     {{ far.name }}
                                     {% endif %}
                                     <span class="text-muted">
-                                        ({% if far.distance_km < 1 %}{{ (far.distance_km * 1000)|int }} m{% else %}{{ '%.1f'|format(far.distance_km) }} km{% endif %}
-                                        {% if far.from_name %} from {{ far.from_name }}{% endif %})
+                                        (<span class="distance-display" data-distance-km="{{ far.distance_km }}">{% if far.distance_km < 1 %}{{ (far.distance_km * 1000)|int }} m{% else %}{{ '%.1f'|format(far.distance_km) }} km{% endif %}</span>{% if far.from_name %} from {{ far.from_name }}{% endif %})
                                     </span>
                                 </li>
                                 {% endif %}
