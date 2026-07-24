@@ -34,6 +34,22 @@ class TestCustomDashboardPage:
         assert b"dashboard-toolbar" in response.data
         assert b"widget-grid" in response.data
 
+    @pytest.mark.integration
+    def test_custom_dashboard_js_includes_ops_slice(self, client):
+        """Ops slice: system widgets, presets, and expanded metrics are shipped."""
+        response = client.get("/static/js/custom-dashboard.js")
+        assert response.status_code == 200
+        js = response.data
+        assert b"network_health" in js
+        assert b"active_alerts" in js
+        assert b"createPresetDashboard" in js
+        assert b"Environment Ops" in js
+        assert b"timeHours" in js
+        assert b"pm25_standard" in js
+        assert b"environment_voltage" in js
+        assert b"chunkArray" in js
+        assert b"malla_custom_dashboard_active_v1" in js
+
 
 class TestBatchNodeTelemetry:
     """Test the batch node telemetry API endpoint."""
