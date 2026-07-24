@@ -31,7 +31,9 @@ def test_network_graph_3d_exposes_mesh_controls_api():
     assert "applyOrbitalLayout" not in source
     assert "orbitTier" not in source
     assert "seedForcePositions" in source
-    assert "d3AlphaTarget" in source
+    assert "cooldownTicks" in source
+    # ForceGraph3D 1.73 does not expose d3AlphaTarget — must not call it
+    assert "d3AlphaTarget" not in source
 
 
 @pytest.mark.unit

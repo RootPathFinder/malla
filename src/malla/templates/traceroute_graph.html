@@ -1004,16 +1004,20 @@ function renderActiveGraph(data) {
             container.innerHTML = '';
         }
         NetworkGraph3D.render(data);
-        const rotateToggle = document.getElementById('graphAutoRotate');
-        NetworkGraph3D.setAutoRotate(!!(rotateToggle && rotateToggle.checked));
-        const driftToggle = document.getElementById('graphLetEmDrift');
-        NetworkGraph3D.setLetEmDrift(!driftToggle || driftToggle.checked);
-        const labelsToggle = document.getElementById('graphShowLabels');
-        NetworkGraph3D.setShowLabels(!labelsToggle || labelsToggle.checked);
-        const repulsionSlider = document.getElementById('graphRepulsion');
-        if (repulsionSlider) NetworkGraph3D.setRepulsion(Number(repulsionSlider.value));
-        const speedSlider = document.getElementById('graphPacketSpeed');
-        if (speedSlider) NetworkGraph3D.setParticleSpeed(Number(speedSlider.value));
+        try {
+            const rotateToggle = document.getElementById('graphAutoRotate');
+            NetworkGraph3D.setAutoRotate(!!(rotateToggle && rotateToggle.checked));
+            const driftToggle = document.getElementById('graphLetEmDrift');
+            NetworkGraph3D.setLetEmDrift(!driftToggle || driftToggle.checked);
+            const labelsToggle = document.getElementById('graphShowLabels');
+            NetworkGraph3D.setShowLabels(!labelsToggle || labelsToggle.checked);
+            const repulsionSlider = document.getElementById('graphRepulsion');
+            if (repulsionSlider) NetworkGraph3D.setRepulsion(Number(repulsionSlider.value));
+            const speedSlider = document.getElementById('graphPacketSpeed');
+            if (speedSlider) NetworkGraph3D.setParticleSpeed(Number(speedSlider.value));
+        } catch (err) {
+            console.warn('3D graph control sync failed:', err);
+        }
         syncMeshVizChrome();
         return;
     }
@@ -1054,25 +1058,29 @@ function loadGraph() {
             currentGraph = data;
             window.currentGraph = data; // Also set global reference
 
+            const finish = () => {
+                try {
+                    renderActiveGraph(data);
+                    updateStats(data.stats);
+                } catch (err) {
+                    console.error('Error rendering graph:', err);
+                    showError('Failed to render graph: ' + (err && err.message ? err.message : err));
+                    return;
+                }
+                hideLoading();
+            };
+
             // Ensure container is ready before rendering
             const container = document.getElementById('networkGraph');
             if (container) {
                 const containerRect = container.getBoundingClientRect();
                 if (containerRect.width === 0 || containerRect.height === 0) {
-                    setTimeout(() => {
-                        renderActiveGraph(data);
-                        updateStats(data.stats);
-                        hideLoading();
-                    }, 100);
+                    setTimeout(finish, 100);
                 } else {
-                    renderActiveGraph(data);
-                    updateStats(data.stats);
-                    hideLoading();
+                    finish();
                 }
             } else {
-                renderActiveGraph(data);
-                updateStats(data.stats);
-                hideLoading();
+                finish();
             }
         })
         .catch(error => {
