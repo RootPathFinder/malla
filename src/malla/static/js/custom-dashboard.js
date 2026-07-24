@@ -9,6 +9,7 @@
     'use strict';
 
     const STORAGE_KEY = 'malla_custom_dashboards_v1';
+    const ACTIVE_STORAGE_KEY = 'malla_custom_dashboard_active_v1';
     const REFRESH_INTERVAL_MS = 30000; // 30 seconds
     const MAX_DASHBOARDS = 20;
     const MAX_WIDGETS = 50;
@@ -20,6 +21,7 @@
             icon: 'bi-cpu',
             metrics: {
                 battery_level: { label: 'Battery Level', unit: '%', icon: 'bi-battery-half', thresholds: { danger: 20, warning: 50 } },
+                battery_health_score: { label: 'Battery Health', unit: '%', icon: 'bi-heart-pulse', thresholds: { danger: 40, warning: 70 }, thresholdDir: 'below' },
                 voltage: { label: 'Voltage', unit: 'V', icon: 'bi-lightning-charge', thresholds: { danger: 3.3, warning: 3.6 }, thresholdDir: 'below' },
                 channel_utilization: { label: 'Channel Util', unit: '%', icon: 'bi-broadcast', thresholds: { warning: 50, danger: 75 } },
                 air_util_tx: { label: 'Air Util TX', unit: '%', icon: 'bi-send', thresholds: { warning: 10, danger: 25 } },
@@ -34,6 +36,17 @@
                 relative_humidity: { label: 'Humidity', unit: '%', icon: 'bi-droplet', thresholds: { warning: 80, danger: 95 } },
                 barometric_pressure: { label: 'Pressure', unit: 'hPa', icon: 'bi-speedometer2' },
                 gas_resistance: { label: 'Gas Resistance', unit: 'Ω', icon: 'bi-wind' },
+                environment_voltage: { label: 'Env Voltage', unit: 'V', icon: 'bi-lightning-charge' },
+                environment_current: { label: 'Env Current', unit: 'mA', icon: 'bi-lightning' },
+            }
+        },
+        air_quality: {
+            label: 'Air Quality',
+            icon: 'bi-cloud-haze2',
+            metrics: {
+                pm10_standard: { label: 'PM1.0', unit: 'µg/m³', icon: 'bi-cloud-haze' },
+                pm25_standard: { label: 'PM2.5', unit: 'µg/m³', icon: 'bi-cloud-haze' },
+                pm100_standard: { label: 'PM10', unit: 'µg/m³', icon: 'bi-cloud-haze' },
             }
         },
         power: {
@@ -56,6 +69,8 @@
         multi_metric_chart: { label: 'Metric Chart', icon: 'bi-graph-up', desc: 'Time-series graph of metrics', multiNode: false, multiMetric: true, hasDisplayMode: true, isChart: true, hidden: true },
         node_status: { label: 'Node Status', icon: 'bi-card-checklist', desc: 'Overview status card for a node', multiNode: false, multiMetric: false, autoMetrics: true, hasDisplayMode: true },
         multi_node_compare: { label: 'Multi-Node Compare', icon: 'bi-people', desc: 'Compare one metric across nodes', multiNode: true, multiMetric: false, hasDisplayMode: true },
+        network_health: { label: 'Network Health', icon: 'bi-heart-pulse', desc: 'Health score, vitals, node health mix', system: true, multiNode: false, multiMetric: false, hasDisplayMode: false, autoMetrics: true },
+        active_alerts: { label: 'Active Alerts', icon: 'bi-exclamation-triangle', desc: 'Current alerts needing attention', system: true, multiNode: false, multiMetric: false, hasDisplayMode: false, autoMetrics: true },
     };
 
     // ── State ───────────────────────────────────────────────────
@@ -74,6 +89,8 @@
         multi_metric_chart: { w: 6, h: 4 },
         node_status:        { w: 4, h: 3 },
         multi_node_compare: { w: 6, h: 3 },
+        network_health:     { w: 4, h: 3 },
+        active_alerts:      { w: 8, h: 3 },
     };
     // Per-widget-type minimum sizes to prevent content from being cut off
     // These are enforced during resize to ensure widgets remain usable
@@ -83,6 +100,8 @@
         multi_metric_chart: { w: 5, h: 4 },
         node_status:        { w: 3, h: 3 },
         multi_node_compare: { w: 4, h: 3 },
+        network_health:     { w: 3, h: 3 },
+        active_alerts:      { w: 4, h: 3 },
     };
     const MIN_W = 2;  // Fallback minimum width
     const MIN_H = 2;  // Fallback minimum height
@@ -172,9 +191,29 @@
         }
     }
 
+    function loadActiveDashboardIdFromLocalStorage() {
+        try {
+            return localStorage.getItem(ACTIVE_STORAGE_KEY);
+        } catch (e) {
+            console.warn('CustomDashboard: Failed to load active dashboard from localStorage:', e);
+            return null;
+        }
+    }
+
+    function persistActiveDashboardId() {
+        try {
+            if (activeDashboardId) {
+                localStorage.setItem(ACTIVE_STORAGE_KEY, activeDashboardId);
+            }
+        } catch (e) {
+            console.warn('CustomDashboard: Failed to save active dashboard to localStorage:', e);
+        }
+    }
+
     function loadDashboards() {
         // Always start by loading from localStorage as fast fallback
         loadDashboardsFromLocalStorage();
+        activeDashboardId = loadActiveDashboardIdFromLocalStorage();
 
         // Ensure at least one dashboard exists
         if (dashboards.length === 0) {
@@ -202,10 +241,14 @@
             const data = await resp.json();
             if (data.dashboards && Array.isArray(data.dashboards) && data.dashboards.length > 0) {
                 dashboards = data.dashboards;
-                activeDashboardId = data.active_dashboard_id || dashboards[0].id;
+                const storedActiveId = loadActiveDashboardIdFromLocalStorage();
+                activeDashboardId = dashboards.find(d => d.id === storedActiveId)
+                    ? storedActiveId
+                    : (data.active_dashboard_id || dashboards[0].id);
 
                 // Mirror to localStorage as offline cache
                 saveToLocalStorage();
+                persistActiveDashboardId();
 
                 return true;
             }
@@ -243,6 +286,7 @@
     }
 
     function saveDashboards() {
+        persistActiveDashboardId();
         saveToLocalStorage();
         saveDashboardsToServer();
     }
@@ -251,6 +295,7 @@
         return {
             id: 'db_' + Date.now() + '_' + Math.random().toString(36).substr(2, 6),
             name: name || 'Untitled Dashboard',
+            timeHours: 24,
             widgets: [],
             createdAt: Date.now(),
             updatedAt: Date.now(),
@@ -285,6 +330,7 @@
         if (!toolbar) return;
 
         const db = getActiveDashboard();
+        const timeHours = parseInt(db.timeHours || 24, 10);
 
         toolbar.innerHTML = `
             <div class="btn-group" role="group">
@@ -309,8 +355,37 @@
                 </ul>
             </div>
 
+            <div class="btn-group" role="group">
+                <button class="btn btn-sm btn-outline-secondary dropdown-toggle" data-bs-toggle="dropdown" aria-expanded="false" title="Dashboard presets">
+                    <i class="bi bi-layout-wtf"></i> Presets
+                </button>
+                <ul class="dropdown-menu">
+                    <li>
+                        <a class="dropdown-item" href="#" data-action="create-preset" data-preset="environment_ops">
+                            <i class="bi bi-thermometer-sun"></i> Environment Ops
+                        </a>
+                    </li>
+                    <li>
+                        <a class="dropdown-item" href="#" data-action="create-preset" data-preset="power_watch">
+                            <i class="bi bi-battery-charging"></i> Power Watch
+                        </a>
+                    </li>
+                </ul>
+            </div>
+
             <span class="dashboard-name-display" id="dashboard-name-display" title="Click to rename">${escapeHtml(db.name)}</span>
             <input type="text" class="form-control form-control-sm dashboard-name-input d-none" id="dashboard-name-input" value="${escapeHtml(db.name)}">
+
+            <div class="dashboard-time-range d-flex align-items-center gap-1">
+                <label class="text-muted small mb-0" for="dashboard-time-hours">Range</label>
+                <select class="form-select form-select-sm" id="dashboard-time-hours" style="width: auto;">
+                    <option value="6" ${timeHours === 6 ? 'selected' : ''}>6h</option>
+                    <option value="12" ${timeHours === 12 ? 'selected' : ''}>12h</option>
+                    <option value="24" ${timeHours === 24 ? 'selected' : ''}>24h</option>
+                    <option value="48" ${timeHours === 48 ? 'selected' : ''}>48h</option>
+                    <option value="168" ${timeHours === 168 ? 'selected' : ''}>7d</option>
+                </select>
+            </div>
 
             <div class="refresh-indicator" id="refresh-indicator">
                 <span class="text-muted">Auto-refresh: 30s</span>
@@ -353,6 +428,13 @@
                 finishRename();
             }
         });
+
+        document.getElementById('dashboard-time-hours')?.addEventListener('change', (e) => {
+            db.timeHours = parseInt(e.target.value, 10) || 24;
+            db.updatedAt = Date.now();
+            saveDashboards();
+            refreshAllWidgets();
+        });
     }
 
     function finishRename() {
@@ -391,6 +473,9 @@
             case 'switch-dashboard':
                 switchDashboard(e.currentTarget.dataset.id);
                 break;
+            case 'create-preset':
+                createPresetDashboard(e.currentTarget.dataset.preset);
+                break;
         }
     }
 
@@ -411,6 +496,39 @@
         renderWidgets();
     }
 
+    function createPresetDashboard(presetKey) {
+        if (dashboards.length >= MAX_DASHBOARDS) {
+            alert(`Maximum of ${MAX_DASHBOARDS} dashboards allowed.`);
+            return;
+        }
+
+        const presetName = presetKey === 'power_watch' ? 'Power Watch' : 'Environment Ops';
+        const now = Date.now();
+        const db = createDashboard(presetName);
+        db.widgets = [
+            createSystemPresetWidget('network_health', { col: 1, row: 1, w: 4, h: 3 }, now),
+            createSystemPresetWidget('active_alerts', { col: 5, row: 1, w: 8, h: 3 }, now),
+        ];
+        db.updatedAt = now;
+
+        dashboards.push(db);
+        switchDashboard(db.id);
+    }
+
+    function createSystemPresetWidget(type, layout, timestamp) {
+        return {
+            id: 'w_' + timestamp + '_' + Math.random().toString(36).substr(2, 4),
+            type: type,
+            title: generateWidgetTitle(type, [], [], 'data_points'),
+            nodes: [],
+            nodeNames: [],
+            metrics: [],
+            layout: layout,
+            createdAt: timestamp,
+            updatedAt: timestamp,
+        };
+    }
+
     function deleteDashboard() {
         if (dashboards.length <= 1) return;
         const db = getActiveDashboard();
@@ -426,6 +544,7 @@
 
     function switchDashboard(id) {
         activeDashboardId = id;
+        saveDashboards();
         renderToolbar();
         renderWidgets();
         refreshAllWidgets();
@@ -443,7 +562,7 @@
                 <div class="widget-grid-empty">
                     <i class="bi bi-grid-1x2"></i>
                     <h5>No widgets yet</h5>
-                    <p>Add widgets to monitor your nodes. Choose from battery levels, temperature, signal quality, and more.</p>
+                    <p>Add widgets to monitor your nodes, or start from a Presets template such as Environment Ops or Power Watch.</p>
                     <button class="btn btn-primary" data-action="add-widget-empty">
                         <i class="bi bi-plus-lg"></i> Add Your First Widget
                     </button>
@@ -465,9 +584,11 @@
 
     function renderWidgetCard(widget, index) {
         const typeInfo = WIDGET_TYPES[widget.type] || {};
-        const nodeLabel = widget.nodes?.length > 1
-            ? `${widget.nodes.length} nodes`
-            : (widget.nodeNames?.[0] || widget.nodes?.[0] || 'No node');
+        const nodeLabel = typeInfo.system
+            ? (widget.type === 'active_alerts' ? 'Alerts' : 'Network')
+            : (widget.nodes?.length > 1
+                ? `${widget.nodes.length} nodes`
+                : (widget.nodeNames?.[0] || widget.nodes?.[0] || 'No node'));
 
         const layout = widget.layout || { col: 1, row: 1, w: 4, h: 3 };
         const gridStyle = `grid-column: ${layout.col} / span ${layout.w}; grid-row: ${layout.row} / span ${layout.h};`;
@@ -503,11 +624,16 @@
     function renderWidgetContent(widget, index, telemetryData) {
         const body = document.getElementById(`widget-body-${index}`);
         if (!body) return;
+        const typeInfo = WIDGET_TYPES[widget.type] || {};
 
         // Wire up action buttons
         const card = body.closest('.widget-card');
         card.querySelector('[data-action="edit-widget"]')?.addEventListener('click', () => showEditWidgetModal(index));
         card.querySelector('[data-action="delete-widget"]')?.addEventListener('click', () => deleteWidget(index));
+
+        if (typeInfo.system) {
+            return renderSystemWidgetContent(body, widget);
+        }
 
         if (!telemetryData || Object.keys(telemetryData).length === 0) {
             body.innerHTML = '<div class="widget-no-data"><i class="bi bi-inbox"></i><span>No data available</span></div>';
@@ -539,6 +665,138 @@
                 break;
             default:
                 body.innerHTML = '<div class="widget-error">Unknown widget type</div>';
+        }
+    }
+
+    function renderSystemWidgetContent(body, widget) {
+        switch (widget.type) {
+            case 'network_health':
+                return renderNetworkHealth(body);
+            case 'active_alerts':
+                return renderActiveAlerts(body);
+            default:
+                body.innerHTML = '<div class="widget-error">Unknown system widget type</div>';
+                return Promise.resolve();
+        }
+    }
+
+    async function renderNetworkHealth(body) {
+        body.innerHTML = '<div class="widget-loading"><div class="spinner-border spinner-border-sm text-secondary" role="status"></div></div>';
+
+        try {
+            const [insightsData, healthData, vitalsData] = await Promise.all([
+                fetchJson('/alerts/api/insights'),
+                fetchJson('/alerts/api/node-health'),
+                fetchJson('/alerts/api/network-vitals'),
+            ]);
+
+            const score = Number(insightsData.health_score ?? 0);
+            const scoreClass = score >= 75 ? 'text-success' : score >= 40 ? 'text-warning' : 'text-danger';
+            const healthCounts = [
+                { label: 'Healthy', value: healthData.healthy || 0, cls: 'text-success' },
+                { label: 'Warning', value: healthData.warning || 0, cls: 'text-warning' },
+                { label: 'Critical', value: healthData.critical || 0, cls: 'text-danger' },
+                { label: 'Offline', value: healthData.offline || 0, cls: 'text-secondary' },
+            ];
+            const vitals = [
+                { label: 'Active nodes', value: firstDefined(vitalsData.active_nodes_24h, vitalsData.active_nodes), suffix: '' },
+                { label: 'Packets', value: firstDefined(vitalsData.packets_24h, vitalsData.packets_today, vitalsData.packets), suffix: '' },
+                { label: 'Avg SNR', value: firstDefined(vitalsData.avg_snr, vitalsData.average_snr), suffix: ' dB', decimals: 1 },
+            ].filter(v => v.value !== null && v.value !== undefined);
+            const insights = Array.isArray(insightsData.insights) ? insightsData.insights.slice(0, 2) : [];
+
+            body.innerHTML = `
+                <div class="widget-system-network">
+                    <div class="d-flex align-items-center justify-content-between mb-2">
+                        <div>
+                            <div class="text-muted small">Network health</div>
+                            <div class="h2 mb-0 ${scoreClass}">${Number.isFinite(score) ? Math.round(score) : 0}<small class="fs-6">%</small></div>
+                        </div>
+                        <a href="/alerts/" class="btn btn-sm btn-outline-primary">Open Alerts</a>
+                    </div>
+                    ${vitals.length ? `
+                        <div class="d-flex flex-wrap gap-2 mb-2">
+                            ${vitals.map(v => `
+                                <div class="mini-metric flex-fill">
+                                    <div class="mini-value">${formatSystemNumber(v.value, v.decimals)}<small>${escapeHtml(v.suffix)}</small></div>
+                                    <div class="mini-label">${escapeHtml(v.label)}</div>
+                                </div>
+                            `).join('')}
+                        </div>
+                    ` : ''}
+                    <div class="widget-node-status mb-2">
+                        ${healthCounts.map(item => `
+                            <div class="status-row">
+                                <span class="status-label">${escapeHtml(item.label)}</span>
+                                <span class="status-value ${item.cls}">${formatSystemNumber(item.value)}</span>
+                            </div>
+                        `).join('')}
+                    </div>
+                    ${insights.length ? `
+                        <div class="border-top pt-2">
+                            ${insights.map(insight => `
+                                <div class="small text-truncate">
+                                    <i class="bi bi-lightbulb text-warning"></i>
+                                    ${escapeHtml(insight.title || insight.description || 'Network insight')}
+                                </div>
+                            `).join('')}
+                        </div>
+                    ` : '<div class="small text-success"><i class="bi bi-check-circle"></i> No top insights</div>'}
+                </div>
+            `;
+        } catch (err) {
+            console.error('CustomDashboard: Network health widget failed:', err);
+            body.innerHTML = '<div class="widget-error"><i class="bi bi-exclamation-triangle"></i> Failed to load network health</div>';
+        }
+    }
+
+    async function renderActiveAlerts(body) {
+        body.innerHTML = '<div class="widget-loading"><div class="spinner-border spinner-border-sm text-secondary" role="status"></div></div>';
+
+        try {
+            const data = await fetchJson('/alerts/api/list?limit=8');
+            const alerts = Array.isArray(data.alerts) ? data.alerts : [];
+
+            if (alerts.length === 0) {
+                body.innerHTML = `
+                    <div class="widget-no-data">
+                        <i class="bi bi-check-circle text-success"></i>
+                        <span>No active alerts</span>
+                        <a href="/alerts/" class="btn btn-sm btn-outline-primary mt-2">Open Alerts</a>
+                    </div>
+                `;
+                return;
+            }
+
+            body.innerHTML = `
+                <div class="widget-active-alerts">
+                    <div class="widget-node-status">
+                        ${alerts.map(alert => {
+                            const severity = normalizeSeverity(alert.severity);
+                            const severityClass = getSeverityTextClass(severity);
+                            const title = alert.title || alert.alert_type || 'Alert';
+                            const message = alert.message || '';
+                            const nodeName = alert.node_name || alert.node_id_hex || alert.node_id || '';
+                            return `
+                                <div class="status-row align-items-start" style="border-left: 3px solid var(${getSeverityBorderVar(severity)}); padding-left: 0.5rem;">
+                                    <span class="status-label">
+                                        <span class="${severityClass} fw-semibold text-uppercase">${escapeHtml(severity)}</span>
+                                        <span class="d-block">${escapeHtml(title)}</span>
+                                        ${message ? `<small class="text-muted d-block">${escapeHtml(message)}</small>` : ''}
+                                    </span>
+                                    ${nodeName ? `<span class="status-value small text-muted">${escapeHtml(String(nodeName))}</span>` : ''}
+                                </div>
+                            `;
+                        }).join('')}
+                    </div>
+                    <div class="text-end mt-2">
+                        <a href="/alerts/" class="btn btn-sm btn-outline-primary">View all alerts</a>
+                    </div>
+                </div>
+            `;
+        } catch (err) {
+            console.error('CustomDashboard: Active alerts widget failed:', err);
+            body.innerHTML = '<div class="widget-error"><i class="bi bi-exclamation-triangle"></i> Failed to load alerts</div>';
         }
     }
 
@@ -616,7 +874,7 @@
         }
 
         // Show current values summary + chart container
-        const hours = widget.chartHours || 24;
+        const hours = getWidgetChartHours(widget);
         const chartId = 'chart-' + widget.id;
         const chartMetrics = getChartMetrics(widget);
 
@@ -822,9 +1080,9 @@
         const rows = [];
 
         // Always show basic info
-        if (info.hw_model) rows.push({ label: 'Hardware', value: info.hw_model });
-        if (info.role) rows.push({ label: 'Role', value: info.role });
-        if (info.firmware_version) rows.push({ label: 'Firmware', value: info.firmware_version });
+        if (info.hw_model) rows.push({ label: 'Hardware', value: escapeHtml(info.hw_model) });
+        if (info.role) rows.push({ label: 'Role', value: escapeHtml(info.role) });
+        if (info.firmware_version) rows.push({ label: 'Firmware', value: escapeHtml(info.firmware_version) });
 
         // Device metrics
         if (deviceMetrics.battery_level !== undefined && deviceMetrics.battery_level !== null) {
@@ -855,7 +1113,7 @@
 
         // Power type
         if (info.power_type && info.power_type !== 'unknown') {
-            rows.push({ label: 'Power Type', value: capitalize(info.power_type) });
+            rows.push({ label: 'Power Type', value: escapeHtml(capitalize(info.power_type)) });
         }
 
         // Last seen
@@ -913,7 +1171,7 @@
     function renderMultiNodeChart(body, widget, telemetryData) {
         const metricKey = widget.metrics[0];
         const metricDef = findMetricDef(metricKey);
-        const hours = widget.chartHours || 24;
+        const hours = getWidgetChartHours(widget);
         const chartId = 'chart-' + widget.id;
 
         // Build summary row with current values per node
@@ -966,35 +1224,58 @@
         isRefreshing = true;
         updateRefreshIndicator(true);
 
-        // Collect all unique node IDs
-        const allNodeIds = [...new Set(db.widgets.flatMap(w => w.nodes || []))];
+        const systemWidgets = [];
+        const nodeWidgets = [];
+        db.widgets.forEach((widget, index) => {
+            if (WIDGET_TYPES[widget.type]?.system) {
+                systemWidgets.push({ widget, index });
+            } else {
+                nodeWidgets.push({ widget, index });
+            }
+        });
+
+        const systemRefreshes = systemWidgets.map(({ widget, index }) =>
+            Promise.resolve(renderWidgetContent(widget, index, {}))
+        );
+
+        // Collect all unique node IDs for non-system widgets only.
+        const allNodeIds = [...new Set(nodeWidgets.flatMap(({ widget }) => widget.nodes || []))];
 
         if (allNodeIds.length === 0) {
-            isRefreshing = false;
-            updateRefreshIndicator(false);
+            Promise.all(systemRefreshes).finally(() => {
+                isRefreshing = false;
+                updateRefreshIndicator(false);
+            });
             return;
         }
 
-        fetch('/api/custom-dashboard/nodes/telemetry', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ node_ids: allNodeIds })
-        })
-            .then(r => r.json())
-            .then(data => {
-                if (data.nodes) {
-                    db.widgets.forEach((widget, index) => {
-                        const widgetData = {};
-                        (widget.nodes || []).forEach(nid => {
-                            if (data.nodes[nid]) widgetData[nid] = data.nodes[nid];
-                        });
-                        renderWidgetContent(widget, index, widgetData);
+        const telemetryFetches = chunkArray(allNodeIds, 50).map(nodeIds =>
+            fetch('/api/custom-dashboard/nodes/telemetry', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ node_ids: nodeIds })
+            })
+                .then(r => r.json())
+        );
+
+        Promise.all([Promise.all(systemRefreshes), Promise.all(telemetryFetches)])
+            .then(([, telemetryResults]) => {
+                const mergedNodes = {};
+                telemetryResults.forEach(data => {
+                    if (data.nodes) Object.assign(mergedNodes, data.nodes);
+                });
+
+                nodeWidgets.forEach(({ widget, index }) => {
+                    const widgetData = {};
+                    (widget.nodes || []).forEach(nid => {
+                        if (mergedNodes[nid]) widgetData[nid] = mergedNodes[nid];
                     });
-                }
+                    renderWidgetContent(widget, index, widgetData);
+                });
             })
             .catch(err => {
                 console.error('CustomDashboard: Refresh failed:', err);
-                db.widgets.forEach((widget, index) => {
+                nodeWidgets.forEach(({ index }) => {
                     const body = document.getElementById(`widget-body-${index}`);
                     if (body) {
                         body.innerHTML = '<div class="widget-error"><i class="bi bi-exclamation-triangle"></i> Failed to load data</div>';
@@ -1157,6 +1438,7 @@
         const typeOptions = modal.querySelectorAll('.widget-type-option:not(.display-mode-option)');
         const metricGroup = modal.querySelector('#metric-selection-group');
         const displayModeGroup = modal.querySelector('#display-mode-group');
+        const nodeGroup = modal.querySelector('#node-selection-group');
         const nodeSearch = modal.querySelector('#widget-node-search');
         const nodeResults = modal.querySelector('#widget-node-results');
         const nodesTagContainer = modal.querySelector('#selected-nodes-tags');
@@ -1184,23 +1466,7 @@
                 const typeInfo = WIDGET_TYPES[selectedType];
                 allowMultiNode = typeInfo?.multiNode || false;
                 allowMultiMetric = typeInfo?.multiMetric || false;
-
-                // Show/hide display mode toggle for multi-metric types
-                if (typeInfo?.hasDisplayMode) {
-                    displayModeGroup.style.display = 'block';
-                } else {
-                    displayModeGroup.style.display = 'none';
-                    selectedDisplayMode = 'data_points';
-                }
-
-                // Show/hide metric selection based on type
-                if (typeInfo?.autoMetrics) {
-                    metricGroup.style.display = 'none';
-                } else {
-                    metricGroup.style.display = 'block';
-                    // Update checkbox vs radio based on multiMetric
-                    updateMetricInputTypes(modal, allowMultiMetric);
-                }
+                updateWidgetFormVisibility(typeInfo);
 
                 // If single node and we have many, trim to first
                 if (!allowMultiNode && selectedNodes.length > 1) {
@@ -1224,15 +1490,7 @@
             const typeInfo = WIDGET_TYPES[selectedType];
             allowMultiNode = typeInfo?.multiNode || false;
             allowMultiMetric = typeInfo?.multiMetric || false;
-
-            if (typeInfo?.hasDisplayMode) {
-                displayModeGroup.style.display = 'block';
-            }
-
-            if (typeInfo && !typeInfo.autoMetrics) {
-                metricGroup.style.display = 'block';
-                updateMetricInputTypes(modal, allowMultiMetric);
-            }
+            updateWidgetFormVisibility(typeInfo);
 
             // Attach event listeners to existing node tags (if editing)
             if (selectedNodes.length > 0) {
@@ -1255,6 +1513,8 @@
             const q = nodeSearch.value.trim();
             if (q) {
                 searchNodes(q, nodeResults, selectedNodes, addNode);
+            } else {
+                searchNodes('', nodeResults, selectedNodes, addNode);
             }
         });
 
@@ -1291,6 +1551,34 @@
             nodesTagContainer.querySelectorAll('.tag-remove').forEach(el => {
                 el.addEventListener('click', () => removeNode(el.dataset.nodeId));
             });
+        }
+
+        function updateWidgetFormVisibility(typeInfo) {
+            if (typeInfo?.system) {
+                nodeGroup.style.display = 'none';
+                metricGroup.style.display = 'none';
+                displayModeGroup.style.display = 'none';
+                selectedDisplayMode = 'data_points';
+                return;
+            }
+
+            nodeGroup.style.display = 'block';
+
+            // Show/hide display mode toggle for supported types
+            if (typeInfo?.hasDisplayMode) {
+                displayModeGroup.style.display = 'block';
+            } else {
+                displayModeGroup.style.display = 'none';
+                selectedDisplayMode = 'data_points';
+            }
+
+            // Show/hide metric selection based on type
+            if (typeInfo?.autoMetrics) {
+                metricGroup.style.display = 'none';
+            } else {
+                metricGroup.style.display = 'block';
+                updateMetricInputTypes(modal, allowMultiMetric);
+            }
         }
 
         // Metric selection
@@ -1353,13 +1641,15 @@
                 alert('Please select a widget type.');
                 return;
             }
-            if (selectedNodes.length === 0) {
+
+            const typeInfo = WIDGET_TYPES[selectedType];
+            const isSystemWidget = typeInfo?.system || false;
+            if (!isSystemWidget && selectedNodes.length === 0) {
                 alert('Please select at least one node.');
                 return;
             }
 
-            const typeInfo = WIDGET_TYPES[selectedType];
-            if (!typeInfo.autoMetrics && selectedMetrics.length === 0) {
+            if (!isSystemWidget && !typeInfo.autoMetrics && selectedMetrics.length === 0) {
                 alert('Please select at least one metric.');
                 return;
             }
@@ -1371,9 +1661,9 @@
                 type: selectedType,
                 displayMode: selectedDisplayMode === 'chart' ? 'chart' : undefined,
                 title: title || generateWidgetTitle(selectedType, selectedNodes, selectedMetrics, selectedDisplayMode),
-                nodes: selectedNodes.map(n => n.id),
-                nodeNames: selectedNodes.map(n => n.name),
-                metrics: typeInfo.autoMetrics ? [] : selectedMetrics,
+                nodes: isSystemWidget ? [] : selectedNodes.map(n => n.id),
+                nodeNames: isSystemWidget ? [] : selectedNodes.map(n => n.name),
+                metrics: (isSystemWidget || typeInfo.autoMetrics) ? [] : selectedMetrics,
                 chartHours: existingWidget?.chartHours,
                 layout: existingWidget?.layout || undefined, // will be auto-assigned by ensureWidgetLayouts
                 createdAt: existingWidget?.createdAt || Date.now(),
@@ -1663,6 +1953,56 @@
     }
 
     // ── Helpers ──────────────────────────────────────────────────
+    function fetchJson(url) {
+        return fetch(url).then(resp => {
+            if (!resp.ok) throw new Error(`Request failed: ${resp.status}`);
+            return resp.json();
+        }).then(data => {
+            if (data?.error) throw new Error(data.error);
+            return data;
+        });
+    }
+
+    function firstDefined(...values) {
+        return values.find(v => v !== undefined && v !== null);
+    }
+
+    function formatSystemNumber(value, decimals) {
+        const num = Number(value);
+        if (!Number.isFinite(num)) return escapeHtml(String(value ?? '—'));
+        if (decimals !== undefined) return num.toFixed(decimals);
+        return num >= 1000 ? Math.round(num).toLocaleString() : String(Math.round(num));
+    }
+
+    function normalizeSeverity(severity) {
+        const normalized = String(severity || 'info').toLowerCase();
+        return ['critical', 'warning', 'info'].includes(normalized) ? normalized : 'info';
+    }
+
+    function getSeverityTextClass(severity) {
+        if (severity === 'critical') return 'text-danger';
+        if (severity === 'warning') return 'text-warning';
+        return 'text-info';
+    }
+
+    function getSeverityBorderVar(severity) {
+        if (severity === 'critical') return '--bs-danger';
+        if (severity === 'warning') return '--bs-warning';
+        return '--bs-info';
+    }
+
+    function chunkArray(items, size) {
+        const chunks = [];
+        for (let i = 0; i < items.length; i += size) {
+            chunks.push(items.slice(i, i + size));
+        }
+        return chunks;
+    }
+
+    function getWidgetChartHours(widget) {
+        return parseInt(widget.chartHours || getActiveDashboard()?.timeHours || 24, 10) || 24;
+    }
+
     function findMetricDef(metricKey) {
         for (const cat of Object.values(METRIC_CATEGORIES)) {
             if (cat.metrics[metricKey]) return cat.metrics[metricKey];
@@ -1671,6 +2011,19 @@
     }
 
     function extractMetricValue(telemetry, metricKey) {
+        const aliases = {
+            environment_voltage: ['environment_metrics', 'voltage'],
+            environment_current: ['environment_metrics', 'current'],
+        };
+        const alias = aliases[metricKey];
+        if (alias && telemetry[alias[0]] && telemetry[alias[0]][alias[1]] !== undefined) {
+            return telemetry[alias[0]][alias[1]];
+        }
+
+        if (metricKey === 'battery_health_score' && telemetry.battery_health_score !== undefined) {
+            return telemetry.battery_health_score;
+        }
+
         // Search in device_metrics, environment_metrics, power_metrics
         const sections = ['device_metrics', 'environment_metrics', 'power_metrics', 'air_quality_metrics'];
         for (const section of sections) {
@@ -1742,6 +2095,8 @@
 
     function generateWidgetTitle(type, nodes, metrics, displayMode) {
         const typeLabel = WIDGET_TYPES[type]?.label || 'Widget';
+        if (WIDGET_TYPES[type]?.system) return typeLabel;
+
         const nodeName = nodes[0]?.name || 'Node';
         const chartSuffix = displayMode === 'chart' ? ' Chart' : '';
 
