@@ -1,34 +1,83 @@
 /**
- * Orbital 3D Network Graph for Malla.
+ * Mesh-style 3D Network Graph for Malla.
  *
- * Nodes are arranged on role-based orbital rings with always-visible
- * name + role labels. Camera uses OrbitControls (drag to orbit).
+ * Inspired by Remote-Terminal-for-MeshCore's PacketVisualizer3D:
+ * force-directed layout, continuous drift, and colored particles
+ * traveling along links for live packet traffic.
  */
 (function (global) {
   "use strict";
 
   let graph = null;
   let containerEl = null;
-  let autoRotate = true;
+  let autoRotate = false;
   let showLabels = true;
+  let letEmDrift = true;
+  let chargeStrength = 200;
+  let particleSpeedMultiplier = 2;
   let rotateHandle = null;
   let linkIndex = new Map();
   let nodeById = new Map();
   let lastGraphData = null;
-  let labelObjects = new Map(); // nodeId -> sprite
+  let labelObjects = new Map();
+  let stretchTimer = null;
+  let baseCharge = 200;
 
+  // Meshtastic role colors (kept for role recognition)
   const ROLE_COLORS = {
-    ROUTER: "#f59e0b",
-    ROUTER_CLIENT: "#fb923c",
-    REPEATER: "#ef4444",
-    CLIENT: "#38bdf8",
-    CLIENT_MUTE: "#818cf8",
+    ROUTER: "#3b82f6",
+    ROUTER_CLIENT: "#60a5fa",
+    REPEATER: "#2563eb",
+    CLIENT: "#f8fafc",
+    CLIENT_MUTE: "#cbd5e1",
     SENSOR: "#34d399",
     TRACKER: "#a78bfa",
     TAK: "#f472b6",
     TAK_TRACKER: "#e879f9",
-    UNKNOWN: "#94a3b8",
+    UNKNOWN: "#9ca3af",
   };
+
+  // Packet-type particle colors (MeshCore-inspired palette, Meshtastic portnums)
+  const PACKET_COLORS = {
+    NODEINFO_APP: "#f59e0b",
+    POSITION_APP: "#f59e0b",
+    TEXT_MESSAGE_APP: "#06b6d4",
+    TEXT_MESSAGE_COMPRESSED_APP: "#06b6d4",
+    ROUTING_APP: "#22c55e",
+    TRACEROUTE_APP: "#f97316",
+    TELEMETRY_APP: "#14b8a6",
+    NEIGHBORINFO_APP: "#8b5cf6",
+    STORE_FORWARD_APP: "#8b5cf6",
+    ADMIN_APP: "#ec4899",
+    RANGE_TEST_APP: "#ec4899",
+    DETECTION_SENSOR_APP: "#34d399",
+    PAXCOUNTER_APP: "#a78bfa",
+    MAP_REPORT_APP: "#f59e0b",
+    REMOTE_HARDWARE_APP: "#ec4899",
+    UNKNOWN: "#6b7280",
+  };
+
+  const PACKET_LEGEND = [
+    { key: "NODEINFO_APP", label: "INFO", color: PACKET_COLORS.NODEINFO_APP, description: "Node info / position" },
+    { key: "TEXT_MESSAGE_APP", label: "TXT", color: PACKET_COLORS.TEXT_MESSAGE_APP, description: "Text message" },
+    { key: "ROUTING_APP", label: "ACK", color: PACKET_COLORS.ROUTING_APP, description: "Routing / ACK" },
+    { key: "TRACEROUTE_APP", label: "TR", color: PACKET_COLORS.TRACEROUTE_APP, description: "Traceroute" },
+    { key: "TELEMETRY_APP", label: "TEL", color: PACKET_COLORS.TELEMETRY_APP, description: "Telemetry" },
+    { key: "NEIGHBORINFO_APP", label: "NBR", color: PACKET_COLORS.NEIGHBORINFO_APP, description: "Neighbor / store-forward" },
+    { key: "ADMIN_APP", label: "ADM", color: PACKET_COLORS.ADMIN_APP, description: "Admin / request" },
+    { key: "UNKNOWN", label: "?", color: PACKET_COLORS.UNKNOWN, description: "Other" },
+  ];
+
+  const NODE_LEGEND = [
+    { color: "#3b82f6", label: "Router / Repeater", size: 12 },
+    { color: "#f8fafc", label: "Client", size: 10 },
+    { color: "#34d399", label: "Sensor", size: 10 },
+    { color: "#9ca3af", label: "Unknown", size: 10 },
+  ];
+
+  const BASE_PARTICLE_SPEED = 0.006;
+  const HOP_DELAY_MS = 160;
+  const LINK_DISTANCE = 120;
 
   function getTHREE() {
     return global.THREE || null;
@@ -83,6 +132,11 @@
     return "UNKNOWN";
   }
 
+  function isInfrastructure(role) {
+    const r = normalizeRole(role);
+    return r === "ROUTER" || r === "REPEATER" || r === "ROUTER_CLIENT";
+  }
+
   function roleAbbrev(role) {
     const map = {
       ROUTER: "RTR",
@@ -107,80 +161,57 @@
     return `${name}\n${roleAbbrev(node.role)}`;
   }
 
+  function packetColor(portnumName) {
+    const key = String(portnumName || "UNKNOWN").toUpperCase();
+    return PACKET_COLORS[key] || PACKET_COLORS.UNKNOWN;
+  }
+
   function nodeColor(node) {
     if (node.__flashUntil && Date.now() < node.__flashUntil) {
-      return "#ffc107";
+      return "#ffd700";
     }
+    if (node.__pinned) return "#ffd700";
     return ROLE_COLORS[normalizeRole(node.role)] || ROLE_COLORS.UNKNOWN;
   }
 
   function linkColor(link) {
     if (link.__flashUntil && Date.now() < link.__flashUntil) {
-      return "#ffc107";
+      return link.__particleColor || "#fde68a";
     }
-    if (link.type === "indirect") return "rgba(255,152,0,0.28)";
+    if (link.type === "indirect") return "rgba(255,152,0,0.22)";
     const snr = link.avg_snr;
-    if (snr == null) return "rgba(148,163,184,0.4)";
-    if (snr >= 0) return "rgba(52,211,153,0.7)";
-    if (snr >= -10) return "rgba(56,189,248,0.65)";
-    return "rgba(248,113,113,0.6)";
+    if (snr == null) return "rgba(75,85,99,0.55)";
+    if (snr >= 0) return "rgba(52,211,153,0.55)";
+    if (snr >= -10) return "rgba(96,165,250,0.5)";
+    return "rgba(248,113,113,0.45)";
   }
 
-  function orbitTier(nodes) {
-    const tiers = [[], [], [], []];
-    nodes.forEach((n) => {
-      const role = normalizeRole(n.role);
-      const connections = Number(n.connections) || 0;
-      if (role === "ROUTER" || role === "REPEATER") {
-        tiers[0].push(n);
-      } else if (role === "ROUTER_CLIENT" || connections >= 6) {
-        tiers[1].push(n);
-      } else if (
-        role === "CLIENT" ||
-        role === "CLIENT_MUTE" ||
-        connections >= 2
-      ) {
-        tiers[2].push(n);
-      } else {
-        tiers[3].push(n);
-      }
-    });
-    // Avoid empty inner rings looking sparse: promote if needed
-    if (tiers[0].length === 0 && tiers[1].length) {
-      tiers[0] = tiers[1].splice(0, Math.max(1, Math.ceil(tiers[1].length / 4)));
-    }
-    return tiers;
+  function randomSpherePosition(radiusMin, radiusMax) {
+    const theta = Math.random() * Math.PI * 2;
+    const phi = Math.acos(2 * Math.random() - 1);
+    const r = radiusMin + Math.random() * (radiusMax - radiusMin);
+    return {
+      x: r * Math.sin(phi) * Math.cos(theta),
+      y: r * Math.sin(phi) * Math.sin(theta),
+      z: r * Math.cos(phi),
+    };
   }
 
-  function applyOrbitalLayout(nodes) {
-    const tiers = orbitTier(nodes);
-    const baseRadii = [36, 78, 126, 178];
-    const count = Math.max(nodes.length, 1);
-    // Scale orbits slightly with mesh size
-    const scale = Math.min(2.2, Math.max(0.85, Math.sqrt(count) / 5));
-
-    tiers.forEach((tierNodes, tierIdx) => {
-      const n = tierNodes.length;
-      if (!n) return;
-      const radius = baseRadii[tierIdx] * scale;
-      // Sort for stable positions across refreshes
-      tierNodes.sort((a, b) => {
-        const an = (a.short_name || a.name || "").toLowerCase();
-        const bn = (b.short_name || b.name || "").toLowerCase();
-        return an.localeCompare(bn) || Number(a.id) - Number(b.id);
-      });
-      tierNodes.forEach((node, i) => {
-        const angle = (2 * Math.PI * i) / n + tierIdx * 0.35;
-        const elev =
-          Math.sin(angle * 2 + tierIdx) * (10 + tierIdx * 4) * scale * 0.35;
-        node.x = radius * Math.cos(angle);
-        node.y = elev;
-        node.z = radius * Math.sin(angle);
-        node.fx = node.x;
-        node.fy = node.y;
-        node.fz = node.z;
-        node.__orbit = tierIdx;
-      });
+  function seedForcePositions(nodes) {
+    // Place hubs nearer the center, clients farther out — then let forces settle.
+    nodes.forEach((node) => {
+      const hub = isInfrastructure(node.role) || (Number(node.connections) || 0) >= 6;
+      const pos = randomSpherePosition(hub ? 40 : 90, hub ? 110 : 220);
+      node.x = pos.x;
+      node.y = pos.y;
+      node.z = pos.z;
+      node.vx = 0;
+      node.vy = 0;
+      node.vz = 0;
+      // Free positions — MeshCore-style force layout
+      delete node.fx;
+      delete node.fy;
+      delete node.fz;
     });
   }
 
@@ -191,25 +222,24 @@
     const canvas = document.createElement("canvas");
     const ctx = canvas.getContext("2d");
     const lines = String(text).split("\n");
-    const fontMain = "600 28px Inter, Segoe UI, sans-serif";
-    const fontSub = "600 20px Inter, Segoe UI, sans-serif";
+    const fontMain = "600 26px 'Segoe UI', system-ui, sans-serif";
+    const fontSub = "600 18px 'Segoe UI', system-ui, sans-serif";
     ctx.font = fontMain;
     let maxW = 0;
     lines.forEach((line, idx) => {
       ctx.font = idx === 0 ? fontMain : fontSub;
       maxW = Math.max(maxW, ctx.measureText(line).width);
     });
-    const padX = 18;
-    const padY = 12;
-    const lineH = 30;
+    const padX = 16;
+    const padY = 10;
+    const lineH = 28;
     canvas.width = Math.ceil(maxW + padX * 2);
     canvas.height = Math.ceil(lines.length * lineH + padY * 2);
 
-    // Pill background
-    const r = 14;
-    ctx.fillStyle = "rgba(15, 23, 42, 0.82)";
+    const r = 12;
+    ctx.fillStyle = "rgba(10, 10, 14, 0.78)";
     ctx.strokeStyle = color || "#94a3b8";
-    ctx.lineWidth = 3;
+    ctx.lineWidth = 2;
     roundRect(ctx, 2, 2, canvas.width - 4, canvas.height - 4, r);
     ctx.fill();
     ctx.stroke();
@@ -219,11 +249,7 @@
       ctx.fillStyle = idx === 0 ? "#f8fafc" : color || "#cbd5e1";
       ctx.textAlign = "center";
       ctx.textBaseline = "middle";
-      ctx.fillText(
-        line,
-        canvas.width / 2,
-        padY + lineH * idx + lineH / 2
-      );
+      ctx.fillText(line, canvas.width / 2, padY + lineH * idx + lineH / 2);
     });
 
     const texture = new THREE.CanvasTexture(canvas);
@@ -237,7 +263,7 @@
     });
     const sprite = new THREE.Sprite(material);
     const aspect = canvas.width / canvas.height;
-    const height = 9.5;
+    const height = 8.5;
     sprite.scale.set(height * aspect, height, 1);
     sprite.center.set(0.5, 0);
     return sprite;
@@ -260,27 +286,29 @@
 
     const group = new THREE.Group();
     const color = nodeColor(node);
-    const radius = Math.max(1.6, Math.min(5.5, (Number(node.size) || 5) * 0.45));
+    const hub = isInfrastructure(node.role);
+    const radius = Math.max(
+      hub ? 2.8 : 1.8,
+      Math.min(hub ? 6.5 : 4.5, (Number(node.size) || 5) * (hub ? 0.55 : 0.4))
+    );
 
     const sphere = new THREE.Mesh(
-      new THREE.SphereGeometry(radius, 18, 18),
+      new THREE.SphereGeometry(radius, 20, 20),
       new THREE.MeshLambertMaterial({
         color,
         transparent: true,
-        opacity: 0.95,
+        opacity: normalizeRole(node.role) === "CLIENT" ? 0.92 : 0.96,
       })
     );
     group.add(sphere);
 
-    // Soft halo for hubs / routers
-    const role = normalizeRole(node.role);
-    if (role === "ROUTER" || role === "REPEATER" || role === "ROUTER_CLIENT") {
+    if (hub) {
       const halo = new THREE.Mesh(
         new THREE.SphereGeometry(radius * 1.55, 16, 16),
         new THREE.MeshBasicMaterial({
           color,
           transparent: true,
-          opacity: 0.18,
+          opacity: 0.16,
           depthWrite: false,
         })
       );
@@ -290,7 +318,7 @@
     if (showLabels) {
       const sprite = makeLabelSprite(displayLabel(node), color);
       if (sprite) {
-        sprite.position.y = radius + 2.2;
+        sprite.position.y = radius + 2.0;
         group.add(sprite);
         labelObjects.set(Number(node.id), sprite);
       }
@@ -317,7 +345,7 @@
     const controls = graph.controls();
     if (!controls) return;
     controls.autoRotate = true;
-    controls.autoRotateSpeed = 0.55;
+    controls.autoRotateSpeed = 0.4;
     const tick = () => {
       if (!graph || !autoRotate) return;
       if (typeof controls.update === "function") controls.update();
@@ -326,22 +354,58 @@
     rotateHandle = requestAnimationFrame(tick);
   }
 
-  function configureOrbitalCamera(g, nodes) {
+  function applyForceSettings() {
+    if (!graph) return;
+    try {
+      const linkForce = graph.d3Force("link");
+      if (linkForce) {
+        linkForce.distance(LINK_DISTANCE).strength(0.35);
+      }
+
+      const charge = graph.d3Force("charge");
+      if (charge && typeof charge.strength === "function") {
+        charge.strength(-Math.abs(chargeStrength));
+        if (typeof charge.distanceMax === "function") {
+          charge.distanceMax(800);
+        }
+      }
+
+      const center = graph.d3Force("center");
+      if (center && typeof center.strength === "function") {
+        center.strength(0.05);
+      }
+
+      graph.d3AlphaDecay(0.02);
+      graph.d3VelocityDecay(0.45);
+      graph.d3AlphaTarget(letEmDrift ? 0.05 : 0);
+      graph.d3ReheatSimulation();
+    } catch (err) {
+      console.debug("applyForceSettings:", err);
+    }
+  }
+
+  function configureCamera(g, nodes) {
     const controls = g.controls();
     if (controls) {
       controls.enableDamping = true;
       controls.dampingFactor = 0.08;
       controls.rotateSpeed = 0.7;
-      controls.minDistance = 40;
-      controls.maxDistance = 900;
+      controls.minDistance = 30;
+      controls.maxDistance = 1200;
       controls.enablePan = true;
     }
 
-    // Frame the orbital rings
     const count = Math.max((nodes || []).length, 1);
-    const scale = Math.min(2.2, Math.max(0.85, Math.sqrt(count) / 5));
-    const dist = 220 * scale;
-    g.cameraPosition({ x: dist * 0.75, y: dist * 0.45, z: dist * 0.85 }, { x: 0, y: 0, z: 0 }, 0);
+    const dist = Math.min(520, Math.max(180, 90 + Math.sqrt(count) * 38));
+    g.cameraPosition(
+      { x: dist * 0.7, y: dist * 0.4, z: dist * 0.85 },
+      { x: 0, y: 0, z: 0 },
+      0
+    );
+  }
+
+  function particleSpeed() {
+    return BASE_PARTICLE_SPEED * Math.max(0.5, Math.min(5, particleSpeedMultiplier));
   }
 
   function ensureGraph() {
@@ -356,12 +420,8 @@
     const THREE = getTHREE();
     containerEl.innerHTML = "";
 
-    const bg =
-      getComputedStyle(document.body).getPropertyValue("--bs-body-bg") ||
-      "#0b1220";
-
     graph = ForceGraph3D()(containerEl)
-      .backgroundColor(bg.trim() || "#0b1220")
+      .backgroundColor("#0a0a0a")
       .showNavInfo(false)
       .nodeId("id")
       .nodeLabel((n) => {
@@ -382,27 +442,27 @@
       .linkColor(linkColor)
       .linkWidth((l) =>
         l.__flashUntil && Date.now() < l.__flashUntil
-          ? 2.6
-          : Math.max(0.45, Math.min(2.2, (l.strength || 1) * 0.7))
+          ? 2.4
+          : Math.max(0.4, Math.min(2.0, (l.strength || 1) * 0.65))
       )
-      .linkOpacity(0.75)
+      .linkOpacity(0.7)
       .linkDirectionalParticles(0)
-      .linkDirectionalParticleWidth(3.2)
-      .linkDirectionalParticleSpeed(0.009)
-      .linkDirectionalParticleColor(() => "#fde68a")
-      .warmupTicks(0)
-      .cooldownTicks(0)
-      .enableNodeDrag(false)
+      .linkDirectionalParticleWidth(3.4)
+      .linkDirectionalParticleSpeed(particleSpeed)
+      .linkDirectionalParticleColor((l) => l.__particleColor || "#fde68a")
+      .warmupTicks(40)
+      .cooldownTicks(120)
+      .enableNodeDrag(true)
       .onNodeClick((node) => {
         if (typeof global.selectGraphNode === "function") {
           global.selectGraphNode(node);
         }
-        const dist = 70;
+        const dist = 80;
         graph.cameraPosition(
           {
-            x: node.x + dist * 0.6,
-            y: node.y + dist * 0.4,
-            z: node.z + dist * 0.7,
+            x: node.x + dist * 0.55,
+            y: node.y + dist * 0.35,
+            z: node.z + dist * 0.65,
           },
           node,
           700
@@ -422,19 +482,32 @@
         }
       });
 
-    // Soften link forces; positions are pinned on orbital rings
+    // Force layout: link + charge + center (MeshCore-like)
     try {
       const linkForce = graph.d3Force("link");
-      if (linkForce) linkForce.distance(28).strength(0.02);
-      graph.d3Force("charge", null);
-      graph.d3Force("center", null);
+      if (linkForce) linkForce.distance(LINK_DISTANCE).strength(0.35);
+
+      // Use ForceGraph3D's existing charge force when present
+      let charge = graph.d3Force("charge");
+      if (charge && typeof charge.strength === "function") {
+        charge.strength(-Math.abs(chargeStrength)).distanceMax(800);
+      }
+
+      // Gentle centering
+      if (graph.d3Force("center")) {
+        const c = graph.d3Force("center");
+        if (typeof c.strength === "function") c.strength(0.05);
+      }
+
+      graph.d3AlphaDecay(0.02);
+      graph.d3VelocityDecay(0.45);
+      graph.d3AlphaTarget(letEmDrift ? 0.05 : 0);
     } catch (_) {
       /* ignore */
     }
 
     if (THREE && graph.scene()) {
-      // Subtle ambient + directional light for sphere shading
-      const ambient = new THREE.AmbientLight(0xffffff, 0.75);
+      const ambient = new THREE.AmbientLight(0xffffff, 0.7);
       const dir = new THREE.DirectionalLight(0xffffff, 0.55);
       dir.position.set(80, 120, 60);
       graph.scene().add(ambient);
@@ -444,7 +517,6 @@
     const controls = graph.controls();
     if (controls) {
       controls.addEventListener("start", () => {
-        // Pause auto-orbit while user is interacting, resume after
         stopAutoRotate();
       });
       controls.addEventListener("end", () => {
@@ -467,7 +539,7 @@
 
     labelObjects = new Map();
     const nodes = (data.nodes || []).map((n) => ({ ...n, id: Number(n.id) }));
-    applyOrbitalLayout(nodes);
+    seedForcePositions(nodes);
 
     const direct = normalizeLinks(data.links || []);
     const indirect = normalizeLinks(data.indirect_connections || []).map((l) => ({
@@ -484,20 +556,85 @@
     g.width(containerEl.clientWidth);
     g.height(containerEl.clientHeight);
     g.graphData({ nodes, links });
-    configureOrbitalCamera(g, nodes);
+    applyForceSettings();
+    configureCamera(g, nodes);
 
     autoRotate = document.getElementById("graphAutoRotate")
       ? document.getElementById("graphAutoRotate").checked
       : autoRotate;
-    startAutoRotate();
+    if (autoRotate) startAutoRotate();
+    else stopAutoRotate();
+
+    // Soft zoom-to-fit after initial settle
+    setTimeout(() => {
+      if (graph) {
+        try {
+          graph.zoomToFit(600, 80);
+        } catch (_) {
+          /* ignore */
+        }
+      }
+    }, 900);
   }
 
   function updateData(data) {
-    render(data);
+    if (!graph || !data) {
+      render(data);
+      return;
+    }
+
+    // Preserve positions of existing nodes across refresh
+    const prevPos = new Map();
+    (lastGraphData && lastGraphData.nodes ? lastGraphData.nodes : []).forEach((n) => {
+      prevPos.set(Number(n.id), { x: n.x, y: n.y, z: n.z, vx: n.vx, vy: n.vy, vz: n.vz });
+    });
+
+    labelObjects = new Map();
+    const nodes = (data.nodes || []).map((n) => {
+      const id = Number(n.id);
+      const prev = prevPos.get(id);
+      const next = { ...n, id };
+      if (prev && prev.x != null) {
+        next.x = prev.x;
+        next.y = prev.y;
+        next.z = prev.z;
+        next.vx = prev.vx || 0;
+        next.vy = prev.vy || 0;
+        next.vz = prev.vz || 0;
+      } else {
+        const pos = randomSpherePosition(100, 200);
+        next.x = pos.x;
+        next.y = pos.y;
+        next.z = pos.z;
+      }
+      delete next.fx;
+      delete next.fy;
+      delete next.fz;
+      return next;
+    });
+
+    const direct = normalizeLinks(data.links || []);
+    const indirect = normalizeLinks(data.indirect_connections || []).map((l) => ({
+      ...l,
+      type: "indirect",
+    }));
+    const links = [...direct, ...indirect];
+
+    lastGraphData = { nodes, links };
+    rebuildIndexes(lastGraphData);
+    global.__graph3dNodeCount = nodes.length;
+    global.__graph3dLinkCount = links.length;
+
+    graph.graphData({ nodes, links });
+    applyForceSettings();
   }
 
   function destroy() {
     stopAutoRotate();
+    if (stretchTimer) {
+      clearTimeout(stretchTimer);
+      stretchTimer = null;
+    }
     labelObjects = new Map();
     if (graph) {
       try {
@@ -516,12 +653,18 @@
     return linkIndex.get(linkKey(fromId, toId)) || null;
   }
 
-  function emitPacket(fromId, toId) {
+  function emitPacket(fromId, toId, options) {
     if (!graph) return false;
     const link = findLink(fromId, toId);
     if (!link) return false;
+    const opts = options || {};
+    const color = packetColor(opts.portnum);
+    link.__particleColor = color;
     link.__flashUntil = Date.now() + 1800;
     try {
+      graph
+        .linkDirectionalParticleColor((l) => l.__particleColor || "#fde68a")
+        .linkDirectionalParticleSpeed(particleSpeed);
       graph.emitParticle(link);
     } catch (err) {
       console.debug("emitParticle failed", err);
@@ -530,18 +673,23 @@
     return true;
   }
 
-  function emitPath(pathNodes) {
+  function emitPath(pathNodes, options) {
     if (!Array.isArray(pathNodes) || pathNodes.length < 2) return 0;
+    const opts = options || {};
     for (let i = 0; i < pathNodes.length - 1; i++) {
-      const delay = i * 180;
+      const delay = i * HOP_DELAY_MS;
       const a = pathNodes[i];
       const b = pathNodes[i + 1];
       setTimeout(() => {
-        emitPacket(a, b);
+        emitPacket(a, b, opts);
         const node = nodeById.get(Number(a));
         if (node) node.__flashUntil = Date.now() + 1200;
         const nodeB = nodeById.get(Number(b));
         if (nodeB) nodeB.__flashUntil = Date.now() + 1200;
+        // Refresh node materials for flash
+        if (graph) {
+          graph.nodeThreeObject((node) => buildNodeObject(node));
+        }
       }, delay);
     }
     return pathNodes.length - 1;
@@ -549,11 +697,11 @@
 
   function flashNodes(nodeIds) {
     if (!graph || !nodeIds) return;
-    nodeIds.forEach((id) => {
+    const ids = nodeIds instanceof Set ? Array.from(nodeIds) : nodeIds;
+    ids.forEach((id) => {
       const node = nodeById.get(Number(id));
       if (node) node.__flashUntil = Date.now() + 1000;
     });
-    // Rebuild objects so sphere color updates for flash
     graph.nodeThreeObject((node) => buildNodeObject(node));
   }
 
@@ -565,13 +713,83 @@
 
   function setShowLabels(enabled) {
     showLabels = !!enabled;
-    if (lastGraphData) render(lastGraphData);
+    if (lastGraphData) {
+      // Re-render objects without reseeding positions
+      if (graph) {
+        labelObjects = new Map();
+        graph.nodeThreeObject((node) => buildNodeObject(node));
+      }
+    }
+  }
+
+  function setLetEmDrift(enabled) {
+    letEmDrift = !!enabled;
+    if (!graph) return;
+    graph.d3AlphaTarget(letEmDrift ? 0.05 : 0);
+    if (letEmDrift) graph.d3ReheatSimulation();
+  }
+
+  function setRepulsion(value) {
+    const n = Number(value);
+    if (!Number.isFinite(n)) return;
+    chargeStrength = Math.max(50, Math.min(2500, n));
+    baseCharge = chargeStrength;
+    applyForceSettings();
+  }
+
+  function setParticleSpeed(multiplier) {
+    const n = Number(multiplier);
+    if (!Number.isFinite(n)) return;
+    particleSpeedMultiplier = Math.max(0.5, Math.min(5, n));
+    if (graph) {
+      graph.linkDirectionalParticleSpeed(particleSpeed);
+    }
+  }
+
+  function shuffleLayout() {
+    if (!graph || !lastGraphData) return;
+    lastGraphData.nodes.forEach((node) => {
+      const pos = randomSpherePosition(40, 220);
+      node.x = pos.x;
+      node.y = pos.y;
+      node.z = pos.z;
+      node.vx = (Math.random() - 0.5) * 4;
+      node.vy = (Math.random() - 0.5) * 4;
+      node.vz = (Math.random() - 0.5) * 4;
+      delete node.fx;
+      delete node.fy;
+      delete node.fz;
+    });
+    graph.graphData({ nodes: lastGraphData.nodes, links: lastGraphData.links });
+    graph.d3AlphaTarget(letEmDrift ? 0.05 : 0);
+    graph.d3ReheatSimulation();
+  }
+
+  function expandContract() {
+    if (!graph) return;
+    if (stretchTimer) {
+      clearTimeout(stretchTimer);
+      stretchTimer = null;
+    }
+    // Temporarily crank repulsion ("Oooh Big Stretch!")
+    const peak = Math.max(chargeStrength * 4, 800);
+    chargeStrength = peak;
+    applyForceSettings();
+    graph.d3AlphaTarget(0.3);
+    graph.d3ReheatSimulation();
+
+    stretchTimer = setTimeout(() => {
+      chargeStrength = baseCharge;
+      applyForceSettings();
+      graph.d3AlphaTarget(letEmDrift ? 0.05 : 0);
+      stretchTimer = null;
+    }, 1400);
   }
 
   function center() {
     if (!graph || !lastGraphData) return;
-    configureOrbitalCamera(graph, lastGraphData.nodes);
-    graph.zoomToFit(700, 60);
+    configureCamera(graph, lastGraphData.nodes);
+    graph.zoomToFit(700, 70);
   }
 
   function isActive() {
@@ -587,9 +805,18 @@
     flashNodes,
     setAutoRotate,
     setShowLabels,
+    setLetEmDrift,
+    setRepulsion,
+    setParticleSpeed,
+    shuffleLayout,
+    expandContract,
     center,
     isActive,
     getGraph: () => graph,
+    packetColor,
     ROLE_COLORS,
+    PACKET_COLORS,
+    PACKET_LEGEND,
+    NODE_LEGEND,
   };
 })(window);

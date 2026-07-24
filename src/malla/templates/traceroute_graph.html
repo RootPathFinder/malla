@@ -67,12 +67,18 @@
             <h6><i class="bi bi-badge-3d"></i> View Mode</h6>
             <div class="btn-group w-100 mb-2" role="group" aria-label="Graph view mode">
                 <input type="radio" class="btn-check" name="graphViewMode" id="graphView3d" value="3d" autocomplete="off" checked>
-                <label class="btn btn-outline-primary btn-sm" for="graphView3d">3D Orbital</label>
+                <label class="btn btn-outline-primary btn-sm" for="graphView3d">3D Mesh</label>
                 <input type="radio" class="btn-check" name="graphViewMode" id="graphView2d" value="2d" autocomplete="off">
                 <label class="btn btn-outline-primary btn-sm" for="graphView2d">2D</label>
             </div>
             <div class="form-check form-switch mb-1">
-                <input class="form-check-input" type="checkbox" id="graphAutoRotate" checked>
+                <input class="form-check-input" type="checkbox" id="graphLetEmDrift" checked>
+                <label class="form-check-label" for="graphLetEmDrift" title="Keep the force layout gently reorganizing">
+                    Let 'em drift
+                </label>
+            </div>
+            <div class="form-check form-switch mb-1">
+                <input class="form-check-input" type="checkbox" id="graphAutoRotate">
                 <label class="form-check-label" for="graphAutoRotate">
                     Orbit camera
                 </label>
@@ -83,13 +89,31 @@
                     Node &amp; role labels
                 </label>
             </div>
-            <div class="form-check form-switch">
+            <div class="form-check form-switch mb-2">
                 <input class="form-check-input" type="checkbox" id="livePacketPaths" checked>
                 <label class="form-check-label" for="livePacketPaths">
                     Live packet paths
                 </label>
             </div>
-            <small class="text-muted d-block mt-1">Drag to orbit · scroll to zoom · routers sit on inner rings</small>
+            <div class="mb-2" id="meshVizControls">
+                <label for="graphRepulsion" class="form-label mb-0 small">
+                    Repulsion <span id="graphRepulsionValue" class="text-muted">200</span>
+                </label>
+                <input type="range" class="form-range" id="graphRepulsion" min="50" max="1200" step="25" value="200">
+                <label for="graphPacketSpeed" class="form-label mb-0 small mt-1">
+                    Packet speed <span id="graphPacketSpeedValue" class="text-muted">2×</span>
+                </label>
+                <input type="range" class="form-range" id="graphPacketSpeed" min="1" max="5" step="0.5" value="2">
+                <div class="d-grid gap-1 mt-2">
+                    <button type="button" class="btn btn-outline-secondary btn-sm" id="graphShuffleLayout" title="Randomize node positions and reheat the layout">
+                        <i class="bi bi-shuffle"></i> Shuffle layout
+                    </button>
+                    <button type="button" class="btn btn-outline-secondary btn-sm" id="graphExpandContract" title="Temporarily increase repulsion to untangle the mesh">
+                        <i class="bi bi-arrows-fullscreen"></i> Big stretch
+                    </button>
+                </div>
+            </div>
+            <small class="text-muted d-block mt-1">Drag nodes · orbit · scroll to zoom · particles = live packets</small>
         </div>
 
         <!-- Auto-Refresh Control -->
@@ -218,22 +242,46 @@
         </div>
 
         {% set legend_items = [
-            {"type": "icon", "class": "bi bi-circle-fill", "style": "color:#f59e0b", "text": "Router"},
-            {"type": "icon", "class": "bi bi-circle-fill", "style": "color:#ef4444", "text": "Repeater"},
-            {"type": "icon", "class": "bi bi-circle-fill", "style": "color:#38bdf8", "text": "Client"},
+            {"type": "icon", "class": "bi bi-circle-fill", "style": "color:#3b82f6", "text": "Router / Repeater"},
+            {"type": "icon", "class": "bi bi-circle-fill", "style": "color:#f8fafc", "text": "Client"},
             {"type": "icon", "class": "bi bi-circle-fill", "style": "color:#34d399", "text": "Sensor"},
+            {"type": "icon", "class": "bi bi-circle-fill", "style": "color:#9ca3af", "text": "Unknown"},
             {"type": "line", "class": "direct", "text": "Direct RF links"},
             {"type": "line", "class": "indirect", "text": "Multi-hop paths"}
         ] %}
         {% call legend_section(legend_items) %}
             <div class="legend-item mt-2">
                 <small class="text-muted">
-                    3D: orbital rings by role (routers inward)<br>
-                    Labels show name + role · size ≈ traffic
+                    3D: force-directed mesh (MeshCore-style)<br>
+                    Colored particles = live packet types
                 </small>
             </div>
         {% endcall %}
     {% endcall %}
+</div>
+
+<!-- Floating mesh visualizer legend (3D only) -->
+<div id="meshVizLegend" class="mesh-viz-legend" aria-hidden="false">
+    <div class="mesh-viz-legend-cols">
+        <div>
+            <div class="mesh-viz-legend-title">Packets</div>
+            <div class="mesh-viz-legend-row"><span class="mesh-pkt" style="background:#f59e0b">INFO</span> Node info / position</div>
+            <div class="mesh-viz-legend-row"><span class="mesh-pkt" style="background:#06b6d4">TXT</span> Text message</div>
+            <div class="mesh-viz-legend-row"><span class="mesh-pkt" style="background:#22c55e">ACK</span> Routing / ACK</div>
+            <div class="mesh-viz-legend-row"><span class="mesh-pkt" style="background:#f97316">TR</span> Traceroute</div>
+            <div class="mesh-viz-legend-row"><span class="mesh-pkt" style="background:#14b8a6">TEL</span> Telemetry</div>
+            <div class="mesh-viz-legend-row"><span class="mesh-pkt" style="background:#8b5cf6">NBR</span> Neighbor</div>
+            <div class="mesh-viz-legend-row"><span class="mesh-pkt" style="background:#ec4899">ADM</span> Admin</div>
+            <div class="mesh-viz-legend-row"><span class="mesh-pkt" style="background:#6b7280">?</span> Other</div>
+        </div>
+        <div>
+            <div class="mesh-viz-legend-title">Nodes</div>
+            <div class="mesh-viz-legend-row"><span class="mesh-node" style="background:#3b82f6;width:12px;height:12px"></span> Router / Repeater</div>
+            <div class="mesh-viz-legend-row"><span class="mesh-node" style="background:#f8fafc;width:10px;height:10px"></span> Client</div>
+            <div class="mesh-viz-legend-row"><span class="mesh-node" style="background:#34d399;width:10px;height:10px"></span> Sensor</div>
+            <div class="mesh-viz-legend-row"><span class="mesh-node" style="background:#9ca3af;width:10px;height:10px"></span> Unknown</div>
+        </div>
+    </div>
 </div>
 
 <!-- Hide the footer for this page -->
@@ -269,6 +317,82 @@
     display: block;
     width: 100% !important;
     height: 100% !important;
+}
+
+.mesh-viz-legend {
+    position: fixed;
+    left: 16px;
+    bottom: 16px;
+    z-index: 30;
+    background: rgba(10, 10, 14, 0.82);
+    backdrop-filter: blur(8px);
+    border: 1px solid rgba(148, 163, 184, 0.25);
+    border-radius: 10px;
+    padding: 10px 14px;
+    color: #e2e8f0;
+    font-size: 11px;
+    line-height: 1.35;
+    max-width: min(420px, calc(100vw - 360px));
+    pointer-events: none;
+}
+
+.mesh-viz-legend.hidden,
+body.graph-view-2d .mesh-viz-legend {
+    display: none;
+}
+
+.mesh-viz-legend-cols {
+    display: flex;
+    gap: 1.5rem;
+}
+
+.mesh-viz-legend-title {
+    font-weight: 600;
+    color: #94a3b8;
+    margin-bottom: 4px;
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+    font-size: 10px;
+}
+
+.mesh-viz-legend-row {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    margin: 3px 0;
+    white-space: nowrap;
+}
+
+.mesh-pkt {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 28px;
+    height: 16px;
+    border-radius: 999px;
+    font-size: 8px;
+    font-weight: 700;
+    color: #fff;
+    flex-shrink: 0;
+}
+
+.mesh-node {
+    display: inline-block;
+    border-radius: 50%;
+    flex-shrink: 0;
+    border: 1px solid rgba(255,255,255,0.25);
+}
+
+@media (max-width: 768px) {
+    .mesh-viz-legend {
+        left: 8px;
+        bottom: 8px;
+        max-width: calc(100vw - 16px);
+        padding: 8px 10px;
+    }
+    .mesh-viz-legend-cols {
+        gap: 0.9rem;
+    }
 }
 
 .graph-view-badge {
@@ -609,6 +733,51 @@ function initializeInterface() {
             livePacketPathsEnabled = livePathsToggle.checked;
         });
     }
+    const driftToggle = document.getElementById('graphLetEmDrift');
+    if (driftToggle) {
+        driftToggle.addEventListener('change', () => {
+            if (window.NetworkGraph3D) {
+                NetworkGraph3D.setLetEmDrift(driftToggle.checked);
+            }
+        });
+    }
+    const repulsionSlider = document.getElementById('graphRepulsion');
+    const repulsionValue = document.getElementById('graphRepulsionValue');
+    if (repulsionSlider) {
+        repulsionSlider.addEventListener('input', () => {
+            if (repulsionValue) repulsionValue.textContent = repulsionSlider.value;
+            if (window.NetworkGraph3D) {
+                NetworkGraph3D.setRepulsion(Number(repulsionSlider.value));
+            }
+        });
+    }
+    const speedSlider = document.getElementById('graphPacketSpeed');
+    const speedValue = document.getElementById('graphPacketSpeedValue');
+    if (speedSlider) {
+        speedSlider.addEventListener('input', () => {
+            if (speedValue) speedValue.textContent = `${speedSlider.value}×`;
+            if (window.NetworkGraph3D) {
+                NetworkGraph3D.setParticleSpeed(Number(speedSlider.value));
+            }
+        });
+    }
+    const shuffleBtn = document.getElementById('graphShuffleLayout');
+    if (shuffleBtn) {
+        shuffleBtn.addEventListener('click', () => {
+            if (window.NetworkGraph3D && NetworkGraph3D.isActive()) {
+                NetworkGraph3D.shuffleLayout();
+            }
+        });
+    }
+    const stretchBtn = document.getElementById('graphExpandContract');
+    if (stretchBtn) {
+        stretchBtn.addEventListener('click', () => {
+            if (window.NetworkGraph3D && NetworkGraph3D.isActive()) {
+                NetworkGraph3D.expandContract();
+            }
+        });
+    }
+    syncMeshVizChrome();
 
     // Start real-time activity polling
     startActivityPolling();
@@ -776,16 +945,36 @@ function initializeInterface() {
     loadPrimaryChannels();
 }
 
+function syncMeshVizChrome() {
+    const is3d = graphViewMode === '3d';
+    document.body.classList.toggle('graph-view-2d', !is3d);
+    const legend = document.getElementById('meshVizLegend');
+    if (legend) {
+        legend.classList.toggle('hidden', !is3d);
+        legend.setAttribute('aria-hidden', is3d ? 'false' : 'true');
+    }
+    const meshControls = document.getElementById('meshVizControls');
+    if (meshControls) {
+        meshControls.style.display = is3d ? '' : 'none';
+    }
+    const driftRow = document.getElementById('graphLetEmDrift');
+    if (driftRow && driftRow.closest('.form-check')) {
+        driftRow.closest('.form-check').style.display = is3d ? '' : 'none';
+    }
+}
+
 function setGraphViewMode(mode) {
     const next = mode === '2d' ? '2d' : '3d';
     if (next === graphViewMode && (
         (next === '3d' && window.NetworkGraph3D && NetworkGraph3D.isActive()) ||
         (next === '2d' && document.querySelector('#networkGraph svg'))
     )) {
+        syncMeshVizChrome();
         return;
     }
     graphViewMode = next;
     try { localStorage.setItem('malla.graphViewMode', graphViewMode); } catch (_) { /* ignore */ }
+    syncMeshVizChrome();
 
     // Tear down the inactive renderer
     if (graphViewMode === '3d') {
@@ -816,7 +1005,16 @@ function renderActiveGraph(data) {
         }
         NetworkGraph3D.render(data);
         const rotateToggle = document.getElementById('graphAutoRotate');
-        NetworkGraph3D.setAutoRotate(!rotateToggle || rotateToggle.checked);
+        NetworkGraph3D.setAutoRotate(!!(rotateToggle && rotateToggle.checked));
+        const driftToggle = document.getElementById('graphLetEmDrift');
+        NetworkGraph3D.setLetEmDrift(!driftToggle || driftToggle.checked);
+        const labelsToggle = document.getElementById('graphShowLabels');
+        NetworkGraph3D.setShowLabels(!labelsToggle || labelsToggle.checked);
+        const repulsionSlider = document.getElementById('graphRepulsion');
+        if (repulsionSlider) NetworkGraph3D.setRepulsion(Number(repulsionSlider.value));
+        const speedSlider = document.getElementById('graphPacketSpeed');
+        if (speedSlider) NetworkGraph3D.setParticleSpeed(Number(speedSlider.value));
+        syncMeshVizChrome();
         return;
     }
     // Fall back to classic D3 2D renderer
@@ -827,6 +1025,7 @@ function renderActiveGraph(data) {
     if (window.NetworkGraph3D && NetworkGraph3D.isActive()) {
         NetworkGraph3D.destroy();
     }
+    syncMeshVizChrome();
     renderGraph(data);
 }
 
@@ -2593,24 +2792,31 @@ function animatePacketTravel(activity) {
             : null);
     if (!pathNodes) return;
 
+    const packetOpts = {
+        portnum: activity.portnum_name || activity.packet_type || 'UNKNOWN',
+    };
+
     if (graphViewMode === '3d' && window.NetworkGraph3D && NetworkGraph3D.isActive()) {
-        NetworkGraph3D.emitPath(pathNodes);
+        NetworkGraph3D.emitPath(pathNodes, packetOpts);
         NetworkGraph3D.flashNodes(pathNodes);
         return;
     }
 
     // 2D: highlight each hop and fly a particle along matching SVG links
+    const color = (window.NetworkGraph3D && NetworkGraph3D.packetColor)
+        ? NetworkGraph3D.packetColor(packetOpts.portnum)
+        : '#ffc107';
     for (let i = 0; i < pathNodes.length - 1; i++) {
         const fromId = pathNodes[i];
         const toId = pathNodes[i + 1];
         setTimeout(() => {
             highlightLink(fromId, toId);
-            animatePacketParticle2D(fromId, toId);
+            animatePacketParticle2D(fromId, toId, color);
         }, i * 160);
     }
 }
 
-function animatePacketParticle2D(fromId, toId) {
+function animatePacketParticle2D(fromId, toId, color) {
     if (!window.graphG || !window.graphNodes) return;
 
     let fromNode = null;
@@ -2625,7 +2831,7 @@ function animatePacketParticle2D(fromId, toId) {
     const particle = window.graphG.append('circle')
         .attr('class', 'packet-particle')
         .attr('r', 4)
-        .attr('fill', '#ffc107')
+        .attr('fill', color || '#ffc107')
         .attr('stroke', '#fff')
         .attr('stroke-width', 1)
         .attr('cx', fromNode.x)
