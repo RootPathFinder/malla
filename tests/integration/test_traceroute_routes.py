@@ -154,6 +154,11 @@ class TestTracerouteRoutes:
         assert "Network Graph" in response_text
         assert "networkGraph" in response_text
         assert "d3.v7.min.js" in response_text
+        assert "network-graph-3d.js" in response_text
+        assert "3D Mesh" in response_text
+        assert 'id="graphLetEmDrift"' in response_text
+        assert 'id="meshVizLegend"' in response_text
+        assert "3D Orbital" not in response_text
 
     @pytest.mark.integration
     def test_traceroute_graph_with_parameters(self, client):

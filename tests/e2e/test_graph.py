@@ -20,6 +20,37 @@ class TestGraphBasicFunctionality:
         # Check that the graph container is present
         expect(page.locator("#networkGraph")).to_be_visible()
 
+    def test_3d_mesh_view_loads(self, page: Page, traceroute_graph_url: str):
+        """Test MeshCore-style 3D mesh view renders with canvas and controls."""
+        mesh_url = traceroute_graph_url.replace("view=2d", "view=3d")
+        page.goto(mesh_url)
+
+        expect(page.locator("h5")).to_contain_text("Network Graph")
+        expect(page.locator("#graphView3d")).to_be_checked()
+        expect(page.locator("#graphLetEmDrift")).to_be_visible()
+        expect(page.locator("#graphRepulsion")).to_be_visible()
+        expect(page.locator("#graphShuffleLayout")).to_be_visible()
+        expect(page.locator("#graphExpandContract")).to_be_visible()
+        expect(page.locator("#meshVizLegend")).to_be_visible()
+
+        page.wait_for_function(
+            """() => window.NetworkGraph3D && NetworkGraph3D.isActive()""",
+            timeout=DEFAULT_TIMEOUT,
+        )
+        # ForceGraph3D canvas can report as "hidden" to Playwright; assert it exists.
+        canvas_count = page.locator("#networkGraph canvas").count()
+        assert canvas_count >= 1
+        node_count = page.evaluate("() => Number(window.__graph3dNodeCount || 0)")
+        assert node_count > 0
+
+        # Stretch / shuffle should remain callable without throwing
+        page.click("#graphShuffleLayout")
+        page.click("#graphExpandContract")
+        still_active = page.evaluate(
+            "() => !!(window.NetworkGraph3D && NetworkGraph3D.isActive())"
+        )
+        assert still_active
+
     def test_search_functionality(self, page: Page, traceroute_graph_url: str):
         """Test that the search functionality works."""
         page.goto(traceroute_graph_url)
