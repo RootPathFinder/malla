@@ -80,6 +80,19 @@
     padding: 2rem;
 }
 
+.widget-system-network .h2 {
+    line-height: 1.1;
+}
+
+.widget-active-alerts .status-row {
+    gap: 0.75rem;
+}
+
+.widget-active-alerts .status-label {
+    flex: 1;
+    min-width: 0;
+}
+
 .widget-grid-empty i {
     font-size: 3rem;
     margin-bottom: 1rem;

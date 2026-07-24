@@ -2773,7 +2773,7 @@ class NodeRepository:
             conn.close()
 
             # Initialize metric containers
-            metrics_history = {
+            metrics_history: dict[str, list[dict[str, Any]]] = {
                 "battery_level": [],
                 "voltage": [],
                 "channel_utilization": [],
@@ -2781,6 +2781,18 @@ class NodeRepository:
                 "temperature": [],
                 "relative_humidity": [],
                 "barometric_pressure": [],
+                "gas_resistance": [],
+                "environment_voltage": [],
+                "environment_current": [],
+                "ch1_voltage": [],
+                "ch1_current": [],
+                "ch2_voltage": [],
+                "ch2_current": [],
+                "ch3_voltage": [],
+                "ch3_current": [],
+                "pm10_standard": [],
+                "pm25_standard": [],
+                "pm100_standard": [],
             }
 
             # Process each telemetry packet
@@ -2829,6 +2841,62 @@ class NodeRepository:
                         if metrics.HasField("barometric_pressure"):
                             metrics_history["barometric_pressure"].append(
                                 {"x": ts, "y": metrics.barometric_pressure}
+                            )
+                        if metrics.HasField("gas_resistance"):
+                            metrics_history["gas_resistance"].append(
+                                {"x": ts, "y": metrics.gas_resistance}
+                            )
+                        if metrics.HasField("voltage"):
+                            metrics_history["environment_voltage"].append(
+                                {"x": ts, "y": metrics.voltage}
+                            )
+                        if metrics.HasField("current"):
+                            metrics_history["environment_current"].append(
+                                {"x": ts, "y": metrics.current}
+                            )
+
+                    # Extract power metrics
+                    if telemetry_data.HasField("power_metrics"):
+                        metrics = telemetry_data.power_metrics
+                        if metrics.HasField("ch1_voltage"):
+                            metrics_history["ch1_voltage"].append(
+                                {"x": ts, "y": metrics.ch1_voltage}
+                            )
+                        if metrics.HasField("ch1_current"):
+                            metrics_history["ch1_current"].append(
+                                {"x": ts, "y": metrics.ch1_current}
+                            )
+                        if metrics.HasField("ch2_voltage"):
+                            metrics_history["ch2_voltage"].append(
+                                {"x": ts, "y": metrics.ch2_voltage}
+                            )
+                        if metrics.HasField("ch2_current"):
+                            metrics_history["ch2_current"].append(
+                                {"x": ts, "y": metrics.ch2_current}
+                            )
+                        if metrics.HasField("ch3_voltage"):
+                            metrics_history["ch3_voltage"].append(
+                                {"x": ts, "y": metrics.ch3_voltage}
+                            )
+                        if metrics.HasField("ch3_current"):
+                            metrics_history["ch3_current"].append(
+                                {"x": ts, "y": metrics.ch3_current}
+                            )
+
+                    # Extract air quality metrics
+                    if telemetry_data.HasField("air_quality_metrics"):
+                        metrics = telemetry_data.air_quality_metrics
+                        if metrics.HasField("pm10_standard"):
+                            metrics_history["pm10_standard"].append(
+                                {"x": ts, "y": metrics.pm10_standard}
+                            )
+                        if metrics.HasField("pm25_standard"):
+                            metrics_history["pm25_standard"].append(
+                                {"x": ts, "y": metrics.pm25_standard}
+                            )
+                        if metrics.HasField("pm100_standard"):
+                            metrics_history["pm100_standard"].append(
+                                {"x": ts, "y": metrics.pm100_standard}
                             )
 
                 except Exception as e:
