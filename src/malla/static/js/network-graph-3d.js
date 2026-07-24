@@ -354,8 +354,20 @@
     rotateHandle = requestAnimationFrame(tick);
   }
 
-  function applyForceSettings() {
+  function applyDriftMode(reheat) {
     if (!graph) return;
+    // ForceGraph3D 1.73 exposes cooldownTicks / d3ReheatSimulation, not an alpha-target setter.
+    if (typeof graph.cooldownTicks === "function") {
+      graph.cooldownTicks(letEmDrift ? Infinity : 180);
+    }
+    if (reheat && typeof graph.d3ReheatSimulation === "function") {
+      graph.d3ReheatSimulation();
+    }
+  }
+
+  function applyForceSettings(options) {
+    if (!graph) return;
+    const opts = options || {};
     try {
       const linkForce = graph.d3Force("link");
       if (linkForce) {
@@ -375,10 +387,13 @@
         center.strength(0.05);
       }
 
-      graph.d3AlphaDecay(0.02);
-      graph.d3VelocityDecay(0.45);
-      graph.d3AlphaTarget(letEmDrift ? 0.05 : 0);
-      graph.d3ReheatSimulation();
+      if (typeof graph.d3AlphaDecay === "function") {
+        graph.d3AlphaDecay(0.02);
+      }
+      if (typeof graph.d3VelocityDecay === "function") {
+        graph.d3VelocityDecay(0.45);
+      }
+      applyDriftMode(opts.reheat !== false);
     } catch (err) {
       console.debug("applyForceSettings:", err);
     }
@@ -450,8 +465,8 @@
       .linkDirectionalParticleWidth(3.4)
       .linkDirectionalParticleSpeed(particleSpeed)
       .linkDirectionalParticleColor((l) => l.__particleColor || "#fde68a")
-      .warmupTicks(40)
-      .cooldownTicks(120)
+      .warmupTicks(0)
+      .cooldownTicks(letEmDrift ? Infinity : 180)
       .enableNodeDrag(true)
       .onNodeClick((node) => {
         if (typeof global.selectGraphNode === "function") {
@@ -501,7 +516,9 @@
 
       graph.d3AlphaDecay(0.02);
       graph.d3VelocityDecay(0.45);
-      graph.d3AlphaTarget(letEmDrift ? 0.05 : 0);
+      if (typeof graph.cooldownTicks === "function") {
+        graph.cooldownTicks(letEmDrift ? Infinity : 180);
+      }
     } catch (_) {
       /* ignore */
     }
@@ -725,8 +742,7 @@
   function setLetEmDrift(enabled) {
     letEmDrift = !!enabled;
     if (!graph) return;
-    graph.d3AlphaTarget(letEmDrift ? 0.05 : 0);
-    if (letEmDrift) graph.d3ReheatSimulation();
+    applyDriftMode(true);
   }
 
   function setRepulsion(value) {
@@ -734,7 +750,7 @@
     if (!Number.isFinite(n)) return;
     chargeStrength = Math.max(50, Math.min(2500, n));
     baseCharge = chargeStrength;
-    applyForceSettings();
+    applyForceSettings({ reheat: true });
   }
 
   function setParticleSpeed(multiplier) {
@@ -761,8 +777,7 @@
       delete node.fz;
     });
     graph.graphData({ nodes: lastGraphData.nodes, links: lastGraphData.links });
-    graph.d3AlphaTarget(letEmDrift ? 0.05 : 0);
-    graph.d3ReheatSimulation();
+    applyDriftMode(true);
   }
 
   function expandContract() {
@@ -774,14 +789,11 @@
     // Temporarily crank repulsion ("Oooh Big Stretch!")
     const peak = Math.max(chargeStrength * 4, 800);
     chargeStrength = peak;
-    applyForceSettings();
-    graph.d3AlphaTarget(0.3);
-    graph.d3ReheatSimulation();
+    applyForceSettings({ reheat: true });
 
     stretchTimer = setTimeout(() => {
       chargeStrength = baseCharge;
-      applyForceSettings();
-      graph.d3AlphaTarget(letEmDrift ? 0.05 : 0);
+      applyForceSettings({ reheat: true });
       stretchTimer = null;
     }, 1400);
   }
