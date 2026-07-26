@@ -47,6 +47,9 @@ class TestGraphBasicFunctionality:
             }""",
             timeout=DEFAULT_TIMEOUT,
         )
+        # Force engine must keep ticking (regression: layout.tick crash froze the scene)
+        page.wait_for_timeout(1500)
+        assert not any("tick" in e.lower() for e in page_errors), page_errors
         # ForceGraph3D canvas can report as "hidden" to Playwright; assert it exists.
         canvas_count = page.locator("#networkGraph canvas").count()
         assert canvas_count >= 1
