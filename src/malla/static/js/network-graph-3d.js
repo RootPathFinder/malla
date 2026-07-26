@@ -22,6 +22,11 @@
   let labelObjects = new Map();
   let stretchTimer = null;
   let baseCharge = 200;
+  let nodeMeshes = new Map(); // nodeId -> { sphere, halo }
+  let flashPaintHandle = null;
+  let hasLayout = false;
+  let driftTimer = null;
+  const DRIFT_REHEAT_MS = 4000;
 
   // Meshtastic role colors (kept for role recognition)
   const ROLE_COLORS = {
@@ -302,8 +307,9 @@
     );
     group.add(sphere);
 
+    let halo = null;
     if (hub) {
-      const halo = new THREE.Mesh(
+      halo = new THREE.Mesh(
         new THREE.SphereGeometry(radius * 1.55, 16, 16),
         new THREE.MeshBasicMaterial({
           color,
@@ -325,7 +331,39 @@
     }
 
     group.__nodeId = Number(node.id);
+    nodeMeshes.set(Number(node.id), { sphere, halo });
     return group;
+  }
+
+  function paintNodeColors() {
+    const THREE = getTHREE();
+    if (!THREE) return;
+    nodeMeshes.forEach((meshes, id) => {
+      const node = nodeById.get(Number(id));
+      if (!node || !meshes || !meshes.sphere) return;
+      const color = nodeColor(node);
+      if (meshes.sphere.material && meshes.sphere.material.color) {
+        meshes.sphere.material.color.set(color);
+      }
+      if (meshes.halo && meshes.halo.material && meshes.halo.material.color) {
+        meshes.halo.material.color.set(color);
+      }
+    });
+  }
+
+  function scheduleFlashPaint() {
+    if (flashPaintHandle) return;
+    flashPaintHandle = requestAnimationFrame(() => {
+      flashPaintHandle = null;
+      paintNodeColors();
+      // Keep refreshing while any node/link flash windows remain open
+      const now = Date.now();
+      let pending = false;
+      nodeById.forEach((n) => {
+        if (n.__flashUntil && n.__flashUntil > now) pending = true;
+      });
+      if (pending) scheduleFlashPaint();
+    });
   }
 
   function stopAutoRotate() {
@@ -354,15 +392,44 @@
     rotateHandle = requestAnimationFrame(tick);
   }
 
+  function safeReheat() {
+    if (!graph || !hasLayout) return;
+    try {
+      if (typeof graph.d3ReheatSimulation === "function") {
+        graph.d3ReheatSimulation();
+      }
+    } catch (err) {
+      console.debug("safeReheat:", err);
+    }
+  }
+
+  function stopDriftTimer() {
+    if (driftTimer) {
+      clearInterval(driftTimer);
+      driftTimer = null;
+    }
+  }
+
+  function syncDriftTimer() {
+    stopDriftTimer();
+    if (!graph || !letEmDrift || !hasLayout) return;
+    // Periodic reheat keeps the mesh alive without relying on the outer
+    // alpha-target API (not exposed by ForceGraph3D) or unbounded cooldown,
+    // which can race the first graphData digest and crash on layout.tick().
+    driftTimer = setInterval(safeReheat, DRIFT_REHEAT_MS);
+  }
+
   function applyDriftMode(reheat) {
     if (!graph) return;
-    // ForceGraph3D 1.73 exposes cooldownTicks / d3ReheatSimulation, not an alpha-target setter.
+    // Use long but finite cooldowns; continuous drift is done via syncDriftTimer.
     if (typeof graph.cooldownTicks === "function") {
-      graph.cooldownTicks(letEmDrift ? Infinity : 180);
+      graph.cooldownTicks(letEmDrift ? 300 : 180);
     }
-    if (reheat && typeof graph.d3ReheatSimulation === "function") {
-      graph.d3ReheatSimulation();
+    if (typeof graph.cooldownTime === "function") {
+      graph.cooldownTime(letEmDrift ? 20000 : 15000);
     }
+    if (reheat) safeReheat();
+    syncDriftTimer();
   }
 
   function applyForceSettings(options) {
@@ -388,12 +455,12 @@
       }
 
       if (typeof graph.d3AlphaDecay === "function") {
-        graph.d3AlphaDecay(0.02);
+        graph.d3AlphaDecay(0.0228);
       }
       if (typeof graph.d3VelocityDecay === "function") {
-        graph.d3VelocityDecay(0.45);
+        graph.d3VelocityDecay(0.4);
       }
-      applyDriftMode(opts.reheat !== false);
+      applyDriftMode(!!opts.reheat);
     } catch (err) {
       console.debug("applyForceSettings:", err);
     }
@@ -463,10 +530,11 @@
       .linkOpacity(0.7)
       .linkDirectionalParticles(0)
       .linkDirectionalParticleWidth(3.4)
-      .linkDirectionalParticleSpeed(particleSpeed)
+      .linkDirectionalParticleSpeed(() => particleSpeed())
       .linkDirectionalParticleColor((l) => l.__particleColor || "#fde68a")
       .warmupTicks(0)
-      .cooldownTicks(letEmDrift ? Infinity : 180)
+      .cooldownTicks(300)
+      .cooldownTime(20000)
       .enableNodeDrag(true)
       .onNodeClick((node) => {
         if (typeof global.selectGraphNode === "function") {
@@ -497,38 +565,37 @@
         }
       });
 
-    // Force layout: link + charge + center (MeshCore-like)
+    // Force layout tuning (no reheat here — graphData hasn't run yet)
     try {
       const linkForce = graph.d3Force("link");
       if (linkForce) linkForce.distance(LINK_DISTANCE).strength(0.35);
 
-      // Use ForceGraph3D's existing charge force when present
-      let charge = graph.d3Force("charge");
+      const charge = graph.d3Force("charge");
       if (charge && typeof charge.strength === "function") {
-        charge.strength(-Math.abs(chargeStrength)).distanceMax(800);
+        charge.strength(-Math.abs(chargeStrength));
+        if (typeof charge.distanceMax === "function") {
+          charge.distanceMax(800);
+        }
       }
 
-      // Gentle centering
-      if (graph.d3Force("center")) {
-        const c = graph.d3Force("center");
-        if (typeof c.strength === "function") c.strength(0.05);
-      }
-
-      graph.d3AlphaDecay(0.02);
-      graph.d3VelocityDecay(0.45);
-      if (typeof graph.cooldownTicks === "function") {
-        graph.cooldownTicks(letEmDrift ? Infinity : 180);
+      const center = graph.d3Force("center");
+      if (center && typeof center.strength === "function") {
+        center.strength(0.05);
       }
     } catch (_) {
       /* ignore */
     }
 
     if (THREE && graph.scene()) {
-      const ambient = new THREE.AmbientLight(0xffffff, 0.7);
-      const dir = new THREE.DirectionalLight(0xffffff, 0.55);
-      dir.position.set(80, 120, 60);
-      graph.scene().add(ambient);
-      graph.scene().add(dir);
+      try {
+        const ambient = new THREE.AmbientLight(0xffffff, 0.7);
+        const dir = new THREE.DirectionalLight(0xffffff, 0.55);
+        dir.position.set(80, 120, 60);
+        graph.scene().add(ambient);
+        graph.scene().add(dir);
+      } catch (_) {
+        /* ignore dual-three issues */
+      }
     }
 
     const controls = graph.controls();
@@ -555,6 +622,7 @@
     if (!g || !data) return;
 
     labelObjects = new Map();
+    nodeMeshes = new Map();
     const nodes = (data.nodes || []).map((n) => ({ ...n, id: Number(n.id) }));
     seedForcePositions(nodes);
 
@@ -570,10 +638,19 @@
     global.__graph3dNodeCount = nodes.length;
     global.__graph3dLinkCount = links.length;
 
+    // Configure forces BEFORE graphData so the update uses them; do not reheat yet.
+    applyForceSettings({ reheat: false });
+
     g.width(containerEl.clientWidth);
     g.height(containerEl.clientHeight);
     g.graphData({ nodes, links });
-    applyForceSettings();
+    // Mark layout ready after a turn so kapsule's graphData digest can finish.
+    // Never reheat synchronously here — that races engineRunning vs state.layout.
+    setTimeout(() => {
+      if (!graph) return;
+      hasLayout = true;
+      applyDriftMode(false);
+    }, 0);
     configureCamera(g, nodes);
 
     autoRotate = document.getElementById("graphAutoRotate")
@@ -607,6 +684,7 @@
     });
 
     labelObjects = new Map();
+    nodeMeshes = new Map();
     const nodes = (data.nodes || []).map((n) => {
       const id = Number(n.id);
       const prev = prevPos.get(id);
@@ -642,17 +720,29 @@
     global.__graph3dNodeCount = nodes.length;
     global.__graph3dLinkCount = links.length;
 
+    applyForceSettings({ reheat: false });
     graph.graphData({ nodes, links });
-    applyForceSettings();
+    setTimeout(() => {
+      if (!graph) return;
+      hasLayout = true;
+      applyDriftMode(false);
+    }, 0);
   }
 
   function destroy() {
     stopAutoRotate();
+    stopDriftTimer();
     if (stretchTimer) {
       clearTimeout(stretchTimer);
       stretchTimer = null;
     }
+    if (flashPaintHandle) {
+      cancelAnimationFrame(flashPaintHandle);
+      flashPaintHandle = null;
+    }
     labelObjects = new Map();
+    nodeMeshes = new Map();
+    hasLayout = false;
     if (graph) {
       try {
         graph._destructor && graph._destructor();
@@ -679,14 +769,10 @@
     link.__particleColor = color;
     link.__flashUntil = Date.now() + 1800;
     try {
-      graph
-        .linkDirectionalParticleColor((l) => l.__particleColor || "#fde68a")
-        .linkDirectionalParticleSpeed(particleSpeed);
       graph.emitParticle(link);
     } catch (err) {
       console.debug("emitParticle failed", err);
     }
-    graph.linkColor(linkColor);
     return true;
   }
 
@@ -698,15 +784,14 @@
       const a = pathNodes[i];
       const b = pathNodes[i + 1];
       setTimeout(() => {
+        if (!graph) return;
         emitPacket(a, b, opts);
         const node = nodeById.get(Number(a));
         if (node) node.__flashUntil = Date.now() + 1200;
         const nodeB = nodeById.get(Number(b));
         if (nodeB) nodeB.__flashUntil = Date.now() + 1200;
-        // Refresh node materials for flash
-        if (graph) {
-          graph.nodeThreeObject((node) => buildNodeObject(node));
-        }
+        // In-place color update — never rebuild nodeThreeObject during the force tick
+        scheduleFlashPaint();
       }, delay);
     }
     return pathNodes.length - 1;
@@ -719,7 +804,7 @@
       const node = nodeById.get(Number(id));
       if (node) node.__flashUntil = Date.now() + 1000;
     });
-    graph.nodeThreeObject((node) => buildNodeObject(node));
+    scheduleFlashPaint();
   }
 
   function setAutoRotate(enabled) {
@@ -729,37 +814,38 @@
   }
 
   function setShowLabels(enabled) {
-    showLabels = !!enabled;
-    if (lastGraphData) {
-      // Re-render objects without reseeding positions
-      if (graph) {
-        labelObjects = new Map();
-        graph.nodeThreeObject((node) => buildNodeObject(node));
-      }
+    const next = !!enabled;
+    if (next === showLabels) return;
+    showLabels = next;
+    if (lastGraphData && graph) {
+      // Full object rebuild only when the label toggle actually changes
+      labelObjects = new Map();
+      nodeMeshes = new Map();
+      graph.nodeThreeObject((node) => buildNodeObject(node));
     }
   }
 
   function setLetEmDrift(enabled) {
     letEmDrift = !!enabled;
     if (!graph) return;
-    applyDriftMode(true);
+    applyDriftMode(hasLayout);
   }
 
   function setRepulsion(value) {
     const n = Number(value);
     if (!Number.isFinite(n)) return;
-    chargeStrength = Math.max(50, Math.min(2500, n));
+    const next = Math.max(50, Math.min(2500, n));
+    const changed = next !== chargeStrength;
+    chargeStrength = next;
     baseCharge = chargeStrength;
-    applyForceSettings({ reheat: true });
+    // Only reheat when the user actually changes repulsion (not initial sync)
+    applyForceSettings({ reheat: changed && hasLayout });
   }
 
   function setParticleSpeed(multiplier) {
     const n = Number(multiplier);
     if (!Number.isFinite(n)) return;
     particleSpeedMultiplier = Math.max(0.5, Math.min(5, n));
-    if (graph) {
-      graph.linkDirectionalParticleSpeed(particleSpeed);
-    }
   }
 
   function shuffleLayout() {
@@ -777,6 +863,7 @@
       delete node.fz;
     });
     graph.graphData({ nodes: lastGraphData.nodes, links: lastGraphData.links });
+    hasLayout = true;
     applyDriftMode(true);
   }
 

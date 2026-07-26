@@ -32,8 +32,21 @@ def test_network_graph_3d_exposes_mesh_controls_api():
     assert "orbitTier" not in source
     assert "seedForcePositions" in source
     assert "cooldownTicks" in source
-    # ForceGraph3D 1.73 does not expose d3AlphaTarget — must not call it
-    assert "d3AlphaTarget" not in source
+    assert "cooldownTime" in source
+    assert "scheduleFlashPaint" in source
+    assert "hasLayout" in source
+    assert "syncDriftTimer" in source
+    # Live traffic must paint in-place, not rebuild node objects
+    assert "scheduleFlashPaint();" in source
+    flash_fn = source.split("function flashNodes", 1)[1].split("function setAutoRotate", 1)[0]
+    assert "graph.nodeThreeObject" not in flash_fn
+    emit_fn = source.split("function emitPath", 1)[1].split("function flashNodes", 1)[0]
+    assert "graph.nodeThreeObject" not in emit_fn
+    # ForceGraph3D outer API does not expose d3AlphaTarget — must not call it
+    assert "d3AlphaTarget(" not in source
+    # Avoid Infinity cooldown race on first digest
+    assert "cooldownTicks(Infinity)" not in source
+    assert "cooldownTime(Infinity)" not in source
 
 
 @pytest.mark.unit
