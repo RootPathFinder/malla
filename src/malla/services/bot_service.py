@@ -204,6 +204,14 @@ class BotService:
         # After enable/restart, first successful poll baselines IDs (no flood).
         self._nws_alert_ids_seeded = False
 
+        # Daily weather forecast broadcast (Open-Meteo daily → 1–2 LoRa msgs)
+        self._daily_wx_enabled = False
+        self._daily_wx_hour = 7  # Hour (0-23) in _daily_wx_timezone
+        self._daily_wx_timezone = "UTC"
+        self._daily_wx_zip = ""
+        self._last_daily_wx_date: str | None = None
+        self._daily_wx_days = 3  # today + next 2 days
+
         # Traceroute reply style: names (default) | longnames | chain | hops
         self._traceroute_format = "names"
         self._traceroute_formats = ("names", "longnames", "chain", "hops")
@@ -257,9 +265,14 @@ class BotService:
             "nws_alert_enabled": self._nws_alert_enabled,
             "nws_alert_zip": self._nws_alert_zip,
             "nws_alert_interval_minutes": self._nws_alert_interval_minutes,
+            "daily_wx_enabled": self._daily_wx_enabled,
+            "daily_wx_hour": self._daily_wx_hour,
+            "daily_wx_timezone": self._daily_wx_timezone,
+            "daily_wx_zip": self._daily_wx_zip,
             "disabled_commands": sorted(self._disabled_commands),
             "last_broadcast_time": self._last_broadcast_time,
             "last_daily_digest_date": self._last_daily_digest_date,
+            "last_daily_wx_date": self._last_daily_wx_date,
             "last_nws_alert_check": self._last_nws_alert_check,
             "nws_known_alert_ids": sorted(self._nws_known_alert_ids),
         }
@@ -368,6 +381,25 @@ class BotService:
             except (TypeError, ValueError):
                 pass
 
+        if "daily_wx_enabled" in stored:
+            self._daily_wx_enabled = bool(stored["daily_wx_enabled"])
+
+        if "daily_wx_hour" in stored:
+            try:
+                hour = int(stored["daily_wx_hour"])
+                if 0 <= hour <= 23:
+                    self._daily_wx_hour = hour
+            except (TypeError, ValueError):
+                pass
+
+        if "daily_wx_timezone" in stored and stored["daily_wx_timezone"]:
+            tz_name = str(stored["daily_wx_timezone"]).strip()
+            if self._is_valid_digest_timezone(tz_name):
+                self._daily_wx_timezone = tz_name
+
+        if "daily_wx_zip" in stored and stored["daily_wx_zip"] is not None:
+            self._daily_wx_zip = self._normalize_nws_zip(str(stored["daily_wx_zip"]))
+
         if "disabled_commands" in stored and isinstance(
             stored["disabled_commands"], list
         ):
@@ -399,6 +431,16 @@ class BotService:
             if digest_now.hour >= self._daily_digest_hour:
                 self._last_daily_digest_date = today
                 seed_updates["last_daily_digest_date"] = today
+
+        if "last_daily_wx_date" in stored:
+            date_val = stored["last_daily_wx_date"]
+            self._last_daily_wx_date = str(date_val) if date_val else None
+        else:
+            wx_now = self._daily_wx_now()
+            today_wx = wx_now.strftime("%Y-%m-%d")
+            if wx_now.hour >= self._daily_wx_hour:
+                self._last_daily_wx_date = today_wx
+                seed_updates["last_daily_wx_date"] = today_wx
 
         if "last_nws_alert_check" in stored:
             try:
@@ -439,6 +481,9 @@ class BotService:
         )
         self.register_command("status", self._cmd_status, "Get mesh status summary")
         self.register_command("net", self._cmd_net, "Daily mesh network update")
+        self.register_command(
+            "fcst", self._cmd_fcst, "Daily weather forecast (!fcst [zip])"
+        )
         self.register_command(
             "traceroute",
             self._cmd_traceroute,
@@ -3506,6 +3551,305 @@ class BotService:
             message = message.rstrip() + "..."
         return message
 
+    def _wmo_weather_label_short(self, code: int | None) -> str:
+        """Shorter WMO labels for multi-day forecast lines."""
+        if code is None:
+            return "?"
+        mapping = {
+            0: "Clear",
+            1: "Clear",
+            2: "PCloudy",
+            3: "Cloudy",
+            45: "Fog",
+            48: "Fog",
+            51: "Drizzle",
+            53: "Drizzle",
+            55: "Drizzle",
+            61: "Rain",
+            63: "Rain",
+            65: "HRain",
+            66: "FzRain",
+            67: "FzRain",
+            71: "Snow",
+            73: "Snow",
+            75: "HSnow",
+            77: "Snow",
+            80: "Showers",
+            81: "Showers",
+            82: "HShower",
+            85: "SnShwr",
+            86: "SnShwr",
+            95: "Thunder",
+            96: "Thunder",
+            99: "Thunder",
+        }
+        return mapping.get(int(code), "Wx")
+
+    def _fetch_wx_forecast(
+        self, latitude: float, longitude: float, days: int = 3
+    ) -> dict[str, Any] | None:
+        """Fetch a compact daily forecast from Open-Meteo."""
+        day_count = max(1, min(int(days), 7))
+        url = (
+            "https://api.open-meteo.com/v1/forecast"
+            f"?latitude={latitude}&longitude={longitude}"
+            "&daily=weather_code,temperature_2m_max,temperature_2m_min,"
+            "precipitation_sum,precipitation_probability_max"
+            f"&forecast_days={day_count}"
+            "&temperature_unit=fahrenheit&precipitation_unit=inch"
+            "&timezone=auto"
+        )
+        data = self._http_get_json(url)
+        if not data:
+            return None
+        daily = data.get("daily") or {}
+        times = daily.get("time") or []
+        if not times:
+            return None
+        return daily
+
+    def _format_wx_day_line(
+        self,
+        date_str: str,
+        weather_code: Any,
+        temp_max: Any,
+        temp_min: Any,
+        precip_sum: Any,
+        precip_prob: Any,
+        *,
+        today_label: str | None = None,
+    ) -> str:
+        """Format one compact forecast day line."""
+        from datetime import datetime
+
+        if today_label:
+            day = today_label
+        else:
+            try:
+                day = datetime.strptime(str(date_str)[:10], "%Y-%m-%d").strftime("%a")
+            except ValueError:
+                day = str(date_str)[:5]
+
+        cond = self._wmo_weather_label_short(
+            int(weather_code) if weather_code is not None else None
+        )
+        hi = f"{float(temp_max):.0f}" if temp_max is not None else "?"
+        lo = f"{float(temp_min):.0f}" if temp_min is not None else "?"
+        line = f"{day} {cond} {hi}/{lo}"
+
+        extras: list[str] = []
+        try:
+            if precip_prob is not None and float(precip_prob) >= 30:
+                extras.append(f"{float(precip_prob):.0f}%")
+        except (TypeError, ValueError):
+            pass
+        try:
+            if precip_sum is not None and float(precip_sum) >= 0.05:
+                extras.append(f"{float(precip_sum):.1f}\"")
+        except (TypeError, ValueError):
+            pass
+        if extras:
+            line += " " + " ".join(extras)
+        return line
+
+    def _format_wx_forecast_messages(
+        self,
+        zip_code: str,
+        place: dict[str, Any],
+        daily: dict[str, Any],
+        *,
+        max_days: int = 3,
+        max_bytes: int = 220,
+        max_messages: int = 2,
+    ) -> list[str]:
+        """Build 1–2 LoRa-sized forecast messages from Open-Meteo daily data."""
+        label = str(place.get("name") or zip_code)
+        if len(label) > 14:
+            label = label[:14]
+
+        times = list(daily.get("time") or [])[:max_days]
+        codes = list(daily.get("weather_code") or [])
+        highs = list(daily.get("temperature_2m_max") or [])
+        lows = list(daily.get("temperature_2m_min") or [])
+        precip = list(daily.get("precipitation_sum") or [])
+        probs = list(daily.get("precipitation_probability_max") or [])
+
+        day_lines: list[str] = []
+        for i, date_str in enumerate(times):
+            day_lines.append(
+                self._format_wx_day_line(
+                    date_str,
+                    codes[i] if i < len(codes) else None,
+                    highs[i] if i < len(highs) else None,
+                    lows[i] if i < len(lows) else None,
+                    precip[i] if i < len(precip) else None,
+                    probs[i] if i < len(probs) else None,
+                    today_label="Today" if i == 0 else None,
+                )
+            )
+
+        if not day_lines:
+            return []
+
+        header = f"🌤️ FCST {zip_code} {label}"
+        # Prefer a single message; spill remaining days into a 2nd if needed.
+        messages: list[str] = []
+        current_lines = [header]
+        for line in day_lines:
+            candidate = "\n".join([*current_lines, line])
+            if (
+                len(candidate.encode("utf-8")) > max_bytes
+                and len(current_lines) > 1
+                and len(messages) < max_messages - 1
+            ):
+                messages.append("\n".join(current_lines))
+                current_lines = [line]
+            elif len(candidate.encode("utf-8")) > max_bytes and len(current_lines) == 1:
+                # Header alone + this line still too big: truncate line.
+                budget = max_bytes - len((header + "\n").encode("utf-8"))
+                truncated = line.encode("utf-8")[: max(0, budget - 3)].decode(
+                    "utf-8", errors="ignore"
+                ).rstrip()
+                current_lines = [header, truncated + "..."]
+            else:
+                current_lines.append(line)
+        if current_lines:
+            msg = "\n".join(current_lines)
+            if len(msg.encode("utf-8")) > max_bytes:
+                msg = msg.encode("utf-8")[: max_bytes - 3].decode(
+                    "utf-8", errors="ignore"
+                ).rstrip() + "..."
+            messages.append(msg)
+        return messages[:max_messages]
+
+    def _resolve_daily_wx_zip(self, zip_arg: str = "") -> str:
+        """Resolve ZIP for forecast: arg → daily_wx_zip → nws_alert_zip."""
+        if zip_arg:
+            return self._normalize_nws_zip(zip_arg)
+        if self._daily_wx_zip:
+            return self._normalize_nws_zip(self._daily_wx_zip)
+        if self._nws_alert_zip:
+            return self._normalize_nws_zip(self._nws_alert_zip)
+        return ""
+
+    def _build_daily_wx_forecast(self, zip_code: str | None = None) -> list[str] | None:
+        """Build compact daily forecast message(s) for a ZIP."""
+        zip5 = self._resolve_daily_wx_zip(zip_code or "")
+        if not zip5:
+            return None
+        place = self._lookup_zip_location(zip5)
+        if (
+            not place
+            or place.get("latitude") is None
+            or place.get("longitude") is None
+        ):
+            return None
+        daily = self._fetch_wx_forecast(
+            float(place["latitude"]),
+            float(place["longitude"]),
+            days=self._daily_wx_days,
+        )
+        if not daily:
+            return None
+        messages = self._format_wx_forecast_messages(
+            zip5, place, daily, max_days=self._daily_wx_days
+        )
+        return messages or None
+
+    def _cmd_fcst(self, ctx: CommandContext) -> str:
+        """Handle !fcst - show the daily weather forecast on demand."""
+        try:
+            zip_arg = " ".join(ctx.args).strip() if ctx.args else ""
+            zip5 = self._resolve_daily_wx_zip(zip_arg)
+            if not zip5:
+                return (
+                    f"Usage: {self._command_prefix}fcst <zip>  "
+                    "(or set Daily WX ZIP in Mesh Admin)"
+                )
+            messages = self._build_daily_wx_forecast(zip5)
+            if not messages:
+                return "🌤️ Forecast unavailable"
+            # Command replies are a single string; join with blank line if 2 parts.
+            text = "\n".join(messages)
+            if len(text.encode("utf-8")) > 220 and len(messages) > 1:
+                # Prefer first message alone for on-demand reply budget.
+                text = messages[0]
+            if len(text.encode("utf-8")) > 220:
+                text = text.encode("utf-8")[:217].decode(
+                    "utf-8", errors="ignore"
+                ).rstrip() + "..."
+            return text
+        except Exception as e:
+            logger.error(f"Error in fcst command: {e}", exc_info=True)
+            return "🌤️ Forecast unavailable"
+
+    def _daily_wx_tz(self):
+        """Return the ZoneInfo used for daily weather forecast scheduling."""
+        from zoneinfo import ZoneInfo
+
+        try:
+            return ZoneInfo(self._daily_wx_timezone or "UTC")
+        except Exception:
+            logger.warning(
+                "Invalid daily wx timezone %r; falling back to UTC",
+                self._daily_wx_timezone,
+            )
+            return ZoneInfo("UTC")
+
+    def _daily_wx_now(self):
+        """Current datetime in the configured daily weather timezone."""
+        from datetime import datetime
+
+        return datetime.now(self._daily_wx_tz())
+
+    def _maybe_send_daily_wx(self) -> None:
+        """Send the daily weather forecast once per configured timezone-day."""
+        if not self._daily_wx_enabled or not self._enabled:
+            return
+
+        zip5 = self._resolve_daily_wx_zip()
+        if not zip5:
+            return
+
+        wx_now = self._daily_wx_now()
+        today = wx_now.strftime("%Y-%m-%d")
+        if self._last_daily_wx_date == today:
+            return
+        if wx_now.hour < self._daily_wx_hour:
+            return
+
+        messages = self._build_daily_wx_forecast(zip5)
+        if not messages:
+            return
+
+        self._last_daily_wx_date = today
+        self._persist_setting("last_daily_wx_date", today)
+        for text in messages[:2]:
+            self.queue_message(
+                text=text,
+                destination=0xFFFFFFFF,
+                channel_index=self._respond_channel_index,
+                priority=BotMessagePriority.LOW,
+            )
+        self._log_activity(
+            "daily_wx",
+            {
+                "date": today,
+                "hour": self._daily_wx_hour,
+                "timezone": self._daily_wx_timezone,
+                "zip": zip5,
+                "parts": len(messages[:2]),
+            },
+        )
+        logger.info(
+            "Queued daily weather forecast for %s %02d:00 %s ZIP %s (%d msg)",
+            today,
+            self._daily_wx_hour,
+            self._daily_wx_timezone,
+            zip5,
+            len(messages[:2]),
+        )
+
     def _fetch_nws_alerts(
         self, latitude: float, longitude: float
     ) -> list[dict[str, Any]] | None:
@@ -4262,6 +4606,7 @@ class BotService:
                     self._persist_setting("last_broadcast_time", now)
 
                 self._maybe_send_daily_digest()
+                self._maybe_send_daily_wx()
                 self._maybe_send_nws_alerts()
                 self._maybe_welcome_new_nodes()
 

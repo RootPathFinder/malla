@@ -1964,6 +1964,52 @@
                                         Use <code>net</code> or <code>!net</code> anytime.
                                     </div>
                                     <hr class="my-2">
+                                    <div class="small fw-semibold mb-2">Daily Weather Forecast</div>
+                                    <div class="d-flex align-items-center justify-content-between gap-2 mb-2">
+                                        <div class="form-check form-switch mb-0">
+                                            <input class="form-check-input" type="checkbox" id="botDailyWxEnabled"
+                                                   onchange="markBotConfigDirty('botDailyWxEnabled')">
+                                            <label class="form-check-label small" for="botDailyWxEnabled">
+                                                Enable broadcast
+                                            </label>
+                                        </div>
+                                        <div class="d-flex align-items-center gap-1">
+                                            <label class="form-label small mb-0" for="botDailyWxHour">Hour</label>
+                                            <input type="number" class="form-control form-control-sm"
+                                                   id="botDailyWxHour" min="0" max="23" value="7"
+                                                   style="width: 4.5rem;"
+                                                   oninput="markBotConfigDirty('botDailyWxHour')">
+                                        </div>
+                                    </div>
+                                    <div class="mb-2">
+                                        <label class="form-label small mb-1" for="botDailyWxTimezone">Timezone</label>
+                                        <select class="form-select form-select-sm" id="botDailyWxTimezone"
+                                                onchange="markBotConfigDirty('botDailyWxTimezone')">
+                                            <option value="UTC">UTC</option>
+                                            <option value="America/New_York">America/New_York (Eastern)</option>
+                                            <option value="America/Chicago">America/Chicago (Central)</option>
+                                            <option value="America/Denver">America/Denver (Mountain)</option>
+                                            <option value="America/Los_Angeles">America/Los_Angeles (Pacific)</option>
+                                            <option value="America/Phoenix">America/Phoenix</option>
+                                            <option value="America/Anchorage">America/Anchorage</option>
+                                            <option value="Pacific/Honolulu">Pacific/Honolulu</option>
+                                            <option value="Europe/London">Europe/London</option>
+                                            <option value="Europe/Berlin">Europe/Berlin</option>
+                                            <option value="Australia/Sydney">Australia/Sydney</option>
+                                        </select>
+                                    </div>
+                                    <div class="mb-2">
+                                        <label class="form-label small mb-1" for="botDailyWxZip">US ZIP code</label>
+                                        <input type="text" class="form-control form-control-sm"
+                                               id="botDailyWxZip" maxlength="10" placeholder="90210"
+                                               inputmode="numeric" autocomplete="postal-code"
+                                               oninput="markBotConfigDirty('botDailyWxZip')">
+                                    </div>
+                                    <div class="text-muted small mb-2">
+                                        Short 3-day forecast (fits in 1–2 mesh messages). Falls back to NWS ZIP if blank.
+                                        On-demand: <code>!fcst</code> or <code>!fcst 90210</code>.
+                                    </div>
+                                    <hr class="my-2">
                                     <div class="small fw-semibold mb-2">NWS Weather Alerts</div>
                                     <div class="form-check form-switch mb-2">
                                         <input class="form-check-input" type="checkbox" id="botNwsAlertEnabled"
@@ -10419,6 +10465,15 @@
             if (Object.prototype.hasOwnProperty.call(data, 'nws_alert_interval_minutes')) {
                 setIfBlurred('botNwsAlertInterval', data.nws_alert_interval_minutes ?? 30);
             }
+            if (Object.prototype.hasOwnProperty.call(data, 'daily_wx_hour')) {
+                setIfBlurred('botDailyWxHour', data.daily_wx_hour ?? 7);
+            }
+            if (Object.prototype.hasOwnProperty.call(data, 'daily_wx_timezone')) {
+                setIfBlurred('botDailyWxTimezone', data.daily_wx_timezone || 'UTC');
+            }
+            if (Object.prototype.hasOwnProperty.call(data, 'daily_wx_zip')) {
+                setIfBlurred('botDailyWxZip', data.daily_wx_zip || '');
+            }
 
             setCheckedIfClean('botWaitForJobs', data.wait_for_jobs !== false);
             setCheckedIfClean('botDailyDigestEnabled', data.daily_digest_enabled !== false);
@@ -10426,6 +10481,9 @@
             setCheckedIfClean('botWelcomeNewNodes', data.welcome_new_nodes_enabled !== false);
             if (Object.prototype.hasOwnProperty.call(data, 'nws_alert_enabled')) {
                 setCheckedIfClean('botNwsAlertEnabled', !!data.nws_alert_enabled);
+            }
+            if (Object.prototype.hasOwnProperty.call(data, 'daily_wx_enabled')) {
+                setCheckedIfClean('botDailyWxEnabled', !!data.daily_wx_enabled);
             }
 
         } catch (error) {
@@ -10699,6 +10757,10 @@
         const dailyDigestEnabled = document.getElementById('botDailyDigestEnabled').checked;
         const dailyDigestHour = parseInt(document.getElementById('botDailyDigestHour').value, 10);
         const dailyDigestTimezone = document.getElementById('botDailyDigestTimezone').value || 'UTC';
+        const dailyWxEnabled = document.getElementById('botDailyWxEnabled').checked;
+        const dailyWxHour = parseInt(document.getElementById('botDailyWxHour').value, 10);
+        const dailyWxTimezone = document.getElementById('botDailyWxTimezone').value || 'UTC';
+        const dailyWxZip = (document.getElementById('botDailyWxZip').value || '').trim();
         const channelBroadcastEnabled = document.getElementById('botChannelBroadcastEnabled').checked;
         const broadcastIntervalHours = parseFloat(document.getElementById('botBroadcastIntervalHours').value);
             const tracerouteFormat = document.getElementById('botTracerouteFormat').value || 'names';
@@ -10720,6 +10782,10 @@
                     daily_digest_enabled: dailyDigestEnabled,
                     daily_digest_hour: Number.isFinite(dailyDigestHour) ? dailyDigestHour : 8,
                     daily_digest_timezone: dailyDigestTimezone,
+                    daily_wx_enabled: dailyWxEnabled,
+                    daily_wx_hour: Number.isFinite(dailyWxHour) ? dailyWxHour : 7,
+                    daily_wx_timezone: dailyWxTimezone,
+                    daily_wx_zip: dailyWxZip,
                     channel_broadcast_enabled: channelBroadcastEnabled,
                     broadcast_interval_hours: Number.isFinite(broadcastIntervalHours) ? broadcastIntervalHours : 12,
                     traceroute_format: tracerouteFormat,
@@ -10760,6 +10826,22 @@
                         Object.prototype.hasOwnProperty.call(data.config, 'nws_alert_enabled')
                     ) {
                         nwsEl.checked = !!data.config.nws_alert_enabled;
+                    }
+                    const wxZipEl = document.getElementById('botDailyWxZip');
+                    if (wxZipEl && Object.prototype.hasOwnProperty.call(data.config, 'daily_wx_zip')) {
+                        wxZipEl.value = data.config.daily_wx_zip || '';
+                    }
+                    const wxHourEl = document.getElementById('botDailyWxHour');
+                    if (wxHourEl && Object.prototype.hasOwnProperty.call(data.config, 'daily_wx_hour')) {
+                        wxHourEl.value = data.config.daily_wx_hour ?? 7;
+                    }
+                    const wxTzEl = document.getElementById('botDailyWxTimezone');
+                    if (wxTzEl && Object.prototype.hasOwnProperty.call(data.config, 'daily_wx_timezone')) {
+                        wxTzEl.value = data.config.daily_wx_timezone || 'UTC';
+                    }
+                    const wxEnEl = document.getElementById('botDailyWxEnabled');
+                    if (wxEnEl && Object.prototype.hasOwnProperty.call(data.config, 'daily_wx_enabled')) {
+                        wxEnEl.checked = !!data.config.daily_wx_enabled;
                     }
                 }
                 showAlert('success', 'Bot configuration saved');
