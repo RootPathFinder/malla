@@ -67,6 +67,11 @@ class TestBotSettingsPersistence:
         bot_service._disabled_commands = {"uptime", "time", "busy"}
         bot_service._last_broadcast_time = 12345.0
         bot_service._last_daily_digest_date = "2026-07-19"
+        bot_service._daily_wx_enabled = True
+        bot_service._daily_wx_hour = 6
+        bot_service._daily_wx_timezone = "America/Denver"
+        bot_service._daily_wx_zip = "80202"
+        bot_service._last_daily_wx_date = "2026-07-19"
         bot_service._save_persisted_settings()
 
         BotService._instance = None
@@ -79,6 +84,11 @@ class TestBotSettingsPersistence:
         assert restored._disabled_commands == {"uptime", "time", "busy"}
         assert restored._last_broadcast_time == 12345.0
         assert restored._last_daily_digest_date == "2026-07-19"
+        assert restored._daily_wx_enabled is True
+        assert restored._daily_wx_hour == 6
+        assert restored._daily_wx_timezone == "America/Denver"
+        assert restored._daily_wx_zip == "80202"
+        assert restored._last_daily_wx_date == "2026-07-19"
 
     @pytest.mark.unit
     def test_fresh_boot_seeds_broadcast_timestamp(self, temp_db):

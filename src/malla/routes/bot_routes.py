@@ -36,6 +36,10 @@ def _bot_config_dict(bot: BotService) -> dict:
         "nws_alert_enabled": bot._nws_alert_enabled,
         "nws_alert_zip": bot._nws_alert_zip,
         "nws_alert_interval_minutes": bot._nws_alert_interval_minutes,
+        "daily_wx_enabled": bot._daily_wx_enabled,
+        "daily_wx_hour": bot._daily_wx_hour,
+        "daily_wx_timezone": bot._daily_wx_timezone,
+        "daily_wx_zip": bot._daily_wx_zip,
     }
 
 
@@ -280,6 +284,52 @@ def api_bot_update_config():
 
         if nws_zip_changed:
             bot._reset_nws_alert_baseline()
+
+        if "daily_wx_zip" in data:
+            raw_zip = str(data["daily_wx_zip"] or "").strip()
+            if raw_zip:
+                zip5 = bot._normalize_nws_zip(raw_zip)
+                if not zip5:
+                    return (
+                        jsonify(
+                            {
+                                "error": "daily_wx_zip must be a 5-digit US ZIP code"
+                            }
+                        ),
+                        400,
+                    )
+            else:
+                zip5 = ""
+            bot._daily_wx_zip = zip5
+
+        if "daily_wx_hour" in data:
+            hour = int(data["daily_wx_hour"])
+            if hour < 0 or hour > 23:
+                return jsonify({"error": "daily_wx_hour must be 0-23"}), 400
+            bot._daily_wx_hour = hour
+
+        if "daily_wx_timezone" in data:
+            tz_name = str(data["daily_wx_timezone"]).strip()
+            if not bot._is_valid_digest_timezone(tz_name):
+                return jsonify({"error": f"Invalid timezone: {tz_name}"}), 400
+            bot._daily_wx_timezone = tz_name
+
+        if "daily_wx_enabled" in data:
+            enabled = bool(data["daily_wx_enabled"])
+            resolved_zip = bot._resolve_daily_wx_zip()
+            if enabled and not resolved_zip:
+                return (
+                    jsonify(
+                        {
+                            "error": (
+                                "Set daily_wx_zip (or nws_alert_zip) before "
+                                "enabling daily weather forecast"
+                            )
+                        }
+                    ),
+                    400,
+                )
+            bot._daily_wx_enabled = enabled
 
         # Persist so settings survive bot/process restarts
         bot._save_persisted_settings()
