@@ -22,7 +22,7 @@ class TestBotConfigDict:
         self, bot_service: BotService
     ):
         bot_service._daily_digest_enabled = False
-        bot_service._daily_digest_hour = 7
+        bot_service._daily_digest_hours = [7]
         bot_service._daily_digest_timezone = "America/New_York"
         bot_service._channel_broadcast_enabled = False
         bot_service._broadcast_interval_hours = 6
@@ -34,13 +34,14 @@ class TestBotConfigDict:
         bot_service._nws_alert_zip = "98101"
         bot_service._nws_alert_interval_minutes = 15
         bot_service._daily_wx_enabled = True
-        bot_service._daily_wx_hour = 6
+        bot_service._daily_wx_hours = [6, 18]
         bot_service._daily_wx_timezone = "America/Chicago"
         bot_service._daily_wx_zip = "60601"
 
         config = _bot_config_dict(bot_service)
 
         assert config["daily_digest_enabled"] is False
+        assert config["daily_digest_hours"] == [7]
         assert config["daily_digest_hour"] == 7
         assert config["daily_digest_timezone"] == "America/New_York"
         assert "America/New_York" in config["daily_digest_timezones"]
@@ -60,6 +61,7 @@ class TestBotConfigDict:
         assert config["nws_alert_zip"] == "98101"
         assert config["nws_alert_interval_minutes"] == 15
         assert config["daily_wx_enabled"] is True
+        assert config["daily_wx_hours"] == [6, 18]
         assert config["daily_wx_hour"] == 6
         assert config["daily_wx_timezone"] == "America/Chicago"
         assert config["daily_wx_zip"] == "60601"
@@ -105,7 +107,7 @@ class TestBotConfigApiDailyWx:
                     "/api/bot/config",
                     json={
                         "daily_wx_zip": "90210",
-                        "daily_wx_hour": 6,
+                        "daily_wx_hours": "6,18",
                         "daily_wx_timezone": "America/Los_Angeles",
                         "daily_wx_enabled": True,
                     },
@@ -114,6 +116,7 @@ class TestBotConfigApiDailyWx:
                 body = put.get_json()
                 assert body["success"] is True
                 assert body["config"]["daily_wx_enabled"] is True
+                assert body["config"]["daily_wx_hours"] == [6, 18]
                 assert body["config"]["daily_wx_hour"] == 6
                 assert body["config"]["daily_wx_timezone"] == "America/Los_Angeles"
                 assert body["config"]["daily_wx_zip"] == "90210"
@@ -121,6 +124,7 @@ class TestBotConfigApiDailyWx:
 
             assert bot_service._daily_wx_enabled is True
             assert bot_service._daily_wx_zip == "90210"
+            assert bot_service._daily_wx_hours == [6, 18]
 
     @pytest.mark.unit
     def test_enable_daily_wx_without_zip_fails(self, client, bot_service: BotService):
@@ -137,3 +141,33 @@ class TestBotConfigApiDailyWx:
         assert put.status_code == 400
         assert "zip" in put.get_json()["error"].lower()
         assert bot_service._daily_wx_enabled is False
+
+    @pytest.mark.unit
+    def test_put_digest_hours_comma_separated(self, client, bot_service: BotService):
+        with patch(
+            "src.malla.routes.bot_routes.get_bot_service", return_value=bot_service
+        ):
+            with patch.object(bot_service, "_save_persisted_settings"):
+                put = client.put(
+                    "/api/bot/config",
+                    json={"daily_digest_hours": "8, 12, 20"},
+                )
+        assert put.status_code == 200
+        assert put.get_json()["config"]["daily_digest_hours"] == [8, 12, 20]
+        assert bot_service._daily_digest_hours == [8, 12, 20]
+
+    @pytest.mark.unit
+    def test_post_notice_endpoint(self, client, bot_service: BotService):
+        bot_service._running = True
+        with patch(
+            "src.malla.routes.bot_routes.get_bot_service", return_value=bot_service
+        ):
+            with patch.object(
+                bot_service,
+                "send_notice_now",
+                return_value={"success": True, "message": "queued"},
+            ) as send:
+                resp = client.post("/api/bot/notices/daily_digest")
+        assert resp.status_code == 200
+        assert resp.get_json()["success"] is True
+        send.assert_called_once_with("daily_digest")

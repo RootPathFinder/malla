@@ -61,34 +61,34 @@ class TestBotSettingsPersistence:
     @pytest.mark.unit
     def test_settings_survive_service_reinit(self, temp_db, bot_service: BotService):
         bot_service._command_prefix = "?"
-        bot_service._daily_digest_hour = 6
+        bot_service._daily_digest_hours = [6]
         bot_service._traceroute_format = "hops"
         bot_service._welcome_new_nodes_enabled = False
         bot_service._disabled_commands = {"uptime", "time", "busy"}
         bot_service._last_broadcast_time = 12345.0
-        bot_service._last_daily_digest_date = "2026-07-19"
+        bot_service._daily_digest_sent_slots = {"2026-07-19:06"}
         bot_service._daily_wx_enabled = True
-        bot_service._daily_wx_hour = 6
+        bot_service._daily_wx_hours = [6, 18]
         bot_service._daily_wx_timezone = "America/Denver"
         bot_service._daily_wx_zip = "80202"
-        bot_service._last_daily_wx_date = "2026-07-19"
+        bot_service._daily_wx_sent_slots = {"2026-07-19:06", "2026-07-19:18"}
         bot_service._save_persisted_settings()
 
         BotService._instance = None
         restored = BotService()
 
         assert restored._command_prefix == "?"
-        assert restored._daily_digest_hour == 6
+        assert restored._daily_digest_hours == [6]
         assert restored._traceroute_format == "hops"
         assert restored._welcome_new_nodes_enabled is False
         assert restored._disabled_commands == {"uptime", "time", "busy"}
         assert restored._last_broadcast_time == 12345.0
-        assert restored._last_daily_digest_date == "2026-07-19"
+        assert restored._daily_digest_sent_slots == {"2026-07-19:06"}
         assert restored._daily_wx_enabled is True
-        assert restored._daily_wx_hour == 6
+        assert restored._daily_wx_hours == [6, 18]
         assert restored._daily_wx_timezone == "America/Denver"
         assert restored._daily_wx_zip == "80202"
-        assert restored._last_daily_wx_date == "2026-07-19"
+        assert restored._daily_wx_sent_slots == {"2026-07-19:06", "2026-07-19:18"}
 
     @pytest.mark.unit
     def test_fresh_boot_seeds_broadcast_timestamp(self, temp_db):
@@ -108,6 +108,24 @@ class TestBotSettingsPersistence:
         restored = BotService()
         assert "busy" in restored._disabled_commands
         assert not restored.is_command_enabled("busy")
+
+
+    @pytest.mark.unit
+    def test_legacy_hour_and_date_migrate(self, temp_db):
+        BotSettingsRepository.set_many(
+            {
+                "daily_digest_hour": 9,
+                "last_daily_digest_date": "2026-07-20",
+                "daily_wx_hour": 7,
+                "last_daily_wx_date": "2026-07-20",
+            }
+        )
+        BotService._instance = None
+        service = BotService()
+        assert service._daily_digest_hours == [9]
+        assert "2026-07-20:09" in service._daily_digest_sent_slots
+        assert service._daily_wx_hours == [7]
+        assert "2026-07-20:07" in service._daily_wx_sent_slots
 
 
 class TestQuietChannelDirectory:

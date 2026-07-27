@@ -28,10 +28,10 @@ def test_bot_config_fields_mark_dirty_before_save():
         "botTracerouteFormat",
         "botWelcomeNewNodes",
         "botDailyDigestEnabled",
-        "botDailyDigestHour",
+        "botDailyDigestHours",
         "botDailyDigestTimezone",
         "botDailyWxEnabled",
-        "botDailyWxHour",
+        "botDailyWxHours",
         "botDailyWxTimezone",
         "botDailyWxZip",
         "botChannelBroadcastEnabled",
@@ -41,6 +41,22 @@ def test_bot_config_fields_mark_dirty_before_save():
         "botNwsAlertInterval",
     ):
         assert f"markBotConfigDirty('{field_id}')" in html, field_id
+
+
+@pytest.mark.unit
+def test_bot_config_uses_accordion_and_run_notices():
+    html = MESH_ADMIN.read_text(encoding="utf-8")
+    assert 'id="botConfigAccordion"' in html
+    assert "Run Notices Now" in html
+    assert "runBotNotice('daily_digest'" in html
+    assert "runBotNotice('daily_wx'" in html
+    assert "runBotNotice('channel_directory'" in html
+    assert "runBotNotice('nws_alerts'" in html
+    assert 'id="botDailyDigestHours"' in html
+    assert 'id="botDailyWxHours"' in html
+    assert "/api/bot/notices/" in html
+    assert "daily_digest_hours" in html
+    assert "daily_wx_hours" in html
 
 
 @pytest.mark.unit

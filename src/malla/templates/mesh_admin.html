@@ -1814,7 +1814,7 @@
                     <div class="row">
                         <!-- Bot Status Card -->
                         <div class="col-lg-4 mb-4">
-                            <div class="card">
+                            <div class="card h-100">
                                 <div class="card-header">
                                     <i class="bi bi-activity"></i> Bot Status
                                 </div>
@@ -1862,211 +1862,41 @@
                             </div>
                         </div>
 
-                        <!-- Bot Configuration Card -->
+                        <!-- Run Notices Card -->
                         <div class="col-lg-4 mb-4">
-                            <div class="card">
+                            <div class="card h-100">
                                 <div class="card-header">
-                                    <i class="bi bi-gear"></i> Configuration
+                                    <i class="bi bi-bell"></i> Run Notices Now
                                 </div>
                                 <div class="card-body">
-                                    <div class="row g-2 mb-2">
-                                        <div class="col-6">
-                                            <label class="form-label small mb-1"><strong>Prefix</strong></label>
-                                            <input type="text" class="form-control form-control-sm" id="botCommandPrefix"
-                                                   maxlength="3" value="!" placeholder="!"
-                                                   oninput="markBotConfigDirty('botCommandPrefix')">
-                                        </div>
-                                        <div class="col-6">
-                                            <label class="form-label small mb-1"><strong>Send interval (s)</strong></label>
-                                            <input type="number" class="form-control form-control-sm" id="botMinSendInterval"
-                                                   min="0.5" max="60" step="0.5" value="2"
-                                                   oninput="markBotConfigDirty('botMinSendInterval')">
-                                        </div>
+                                    <p class="small text-muted mb-3">
+                                        Queue a scheduled notice immediately (does not skip its next timed run).
+                                    </p>
+                                    <div class="d-grid gap-2">
+                                        <button class="btn btn-outline-primary btn-sm" type="button"
+                                                onclick="runBotNotice('daily_digest', this)">
+                                            <i class="bi bi-broadcast"></i> Net Update
+                                        </button>
+                                        <button class="btn btn-outline-primary btn-sm" type="button"
+                                                onclick="runBotNotice('daily_wx', this)">
+                                            <i class="bi bi-cloud-sun"></i> Weather Forecast
+                                        </button>
+                                        <button class="btn btn-outline-primary btn-sm" type="button"
+                                                onclick="runBotNotice('channel_directory', this)">
+                                            <i class="bi bi-list-ul"></i> Channel Directory
+                                        </button>
+                                        <button class="btn btn-outline-warning btn-sm" type="button"
+                                                onclick="runBotNotice('nws_alerts', this)">
+                                            <i class="bi bi-exclamation-triangle"></i> NWS Alert Summary
+                                        </button>
                                     </div>
-                                    <div class="mb-2">
-                                        <label class="form-label small mb-1"><strong>Listen Channels</strong></label>
-                                        <input type="text" class="form-control form-control-sm" id="botListenChannels"
-                                               placeholder="e.g., LongFast"
-                                               oninput="markBotConfigDirty('botListenChannels')">
-                                    </div>
-                                    <div class="mb-2">
-                                        <label class="form-label small mb-1"><strong>Response Channel</strong></label>
-                                        <input type="number" class="form-control form-control-sm" id="botRespondChannelIndex"
-                                               min="0" max="7" value="1"
-                                               oninput="markBotConfigDirty('botRespondChannelIndex')">
-                                    </div>
-                                    <div class="mb-2">
-                                        <div class="form-check form-switch">
-                                            <input class="form-check-input" type="checkbox" id="botWaitForJobs" checked
-                                                   onchange="markBotConfigDirty('botWaitForJobs')">
-                                            <label class="form-check-label small" for="botWaitForJobs">
-                                                Wait for admin jobs
-                                            </label>
-                                        </div>
-                                    </div>
-                                    <div class="mb-2">
-                                        <label class="form-label small mb-1" for="botTracerouteFormat"><strong>Traceroute format</strong></label>
-                                        <select class="form-select form-select-sm" id="botTracerouteFormat"
-                                                onchange="markBotConfigDirty('botTracerouteFormat')">
-                                            <option value="names">Names — short names (default)</option>
-                                            <option value="longnames">Long names — full node names</option>
-                                            <option value="chain">Chain — compact named path</option>
-                                            <option value="hops">Hops — numbered hop list with names</option>
-                                        </select>
-                                    </div>
-                                    <div class="mb-2">
-                                        <div class="form-check form-switch">
-                                            <input class="form-check-input" type="checkbox" id="botWelcomeNewNodes" checked
-                                                   onchange="markBotConfigDirty('botWelcomeNewNodes')">
-                                            <label class="form-check-label small" for="botWelcomeNewNodes">
-                                                Welcome new nodes
-                                            </label>
-                                        </div>
-                                        <div class="text-muted small">Rate-limited public hello when a node is first seen.</div>
-                                    </div>
-                                    <hr class="my-2">
-                                    <div class="small fw-semibold mb-2">Daily Net Update</div>
-                                    <div class="d-flex align-items-center justify-content-between gap-2 mb-2">
-                                        <div class="form-check form-switch mb-0">
-                                            <input class="form-check-input" type="checkbox" id="botDailyDigestEnabled" checked
-                                                   onchange="markBotConfigDirty('botDailyDigestEnabled')">
-                                            <label class="form-check-label small" for="botDailyDigestEnabled">
-                                                Enable broadcast
-                                            </label>
-                                        </div>
-                                        <div class="d-flex align-items-center gap-1">
-                                            <label class="form-label small mb-0" for="botDailyDigestHour">Hour</label>
-                                            <input type="number" class="form-control form-control-sm"
-                                                   id="botDailyDigestHour" min="0" max="23" value="8"
-                                                   style="width: 4.5rem;"
-                                                   oninput="markBotConfigDirty('botDailyDigestHour')">
-                                        </div>
-                                    </div>
-                                    <div class="mb-2">
-                                        <label class="form-label small mb-1" for="botDailyDigestTimezone">Timezone</label>
-                                        <select class="form-select form-select-sm" id="botDailyDigestTimezone"
-                                                onchange="markBotConfigDirty('botDailyDigestTimezone')">
-                                            <option value="UTC">UTC</option>
-                                            <option value="America/New_York">America/New_York (Eastern)</option>
-                                            <option value="America/Chicago">America/Chicago (Central)</option>
-                                            <option value="America/Denver">America/Denver (Mountain)</option>
-                                            <option value="America/Los_Angeles">America/Los_Angeles (Pacific)</option>
-                                            <option value="America/Phoenix">America/Phoenix</option>
-                                            <option value="America/Anchorage">America/Anchorage</option>
-                                            <option value="Pacific/Honolulu">Pacific/Honolulu</option>
-                                            <option value="Europe/London">Europe/London</option>
-                                            <option value="Europe/Berlin">Europe/Berlin</option>
-                                            <option value="Australia/Sydney">Australia/Sydney</option>
-                                        </select>
-                                    </div>
-                                    <div class="text-muted small mb-2">
-                                        Hour is in the timezone above (not server UTC unless you pick UTC).
-                                        Use <code>net</code> or <code>!net</code> anytime.
-                                    </div>
-                                    <hr class="my-2">
-                                    <div class="small fw-semibold mb-2">Daily Weather Forecast</div>
-                                    <div class="d-flex align-items-center justify-content-between gap-2 mb-2">
-                                        <div class="form-check form-switch mb-0">
-                                            <input class="form-check-input" type="checkbox" id="botDailyWxEnabled"
-                                                   onchange="markBotConfigDirty('botDailyWxEnabled')">
-                                            <label class="form-check-label small" for="botDailyWxEnabled">
-                                                Enable broadcast
-                                            </label>
-                                        </div>
-                                        <div class="d-flex align-items-center gap-1">
-                                            <label class="form-label small mb-0" for="botDailyWxHour">Hour</label>
-                                            <input type="number" class="form-control form-control-sm"
-                                                   id="botDailyWxHour" min="0" max="23" value="7"
-                                                   style="width: 4.5rem;"
-                                                   oninput="markBotConfigDirty('botDailyWxHour')">
-                                        </div>
-                                    </div>
-                                    <div class="mb-2">
-                                        <label class="form-label small mb-1" for="botDailyWxTimezone">Timezone</label>
-                                        <select class="form-select form-select-sm" id="botDailyWxTimezone"
-                                                onchange="markBotConfigDirty('botDailyWxTimezone')">
-                                            <option value="UTC">UTC</option>
-                                            <option value="America/New_York">America/New_York (Eastern)</option>
-                                            <option value="America/Chicago">America/Chicago (Central)</option>
-                                            <option value="America/Denver">America/Denver (Mountain)</option>
-                                            <option value="America/Los_Angeles">America/Los_Angeles (Pacific)</option>
-                                            <option value="America/Phoenix">America/Phoenix</option>
-                                            <option value="America/Anchorage">America/Anchorage</option>
-                                            <option value="Pacific/Honolulu">Pacific/Honolulu</option>
-                                            <option value="Europe/London">Europe/London</option>
-                                            <option value="Europe/Berlin">Europe/Berlin</option>
-                                            <option value="Australia/Sydney">Australia/Sydney</option>
-                                        </select>
-                                    </div>
-                                    <div class="mb-2">
-                                        <label class="form-label small mb-1" for="botDailyWxZip">US ZIP code</label>
-                                        <input type="text" class="form-control form-control-sm"
-                                               id="botDailyWxZip" maxlength="10" placeholder="90210"
-                                               inputmode="numeric" autocomplete="postal-code"
-                                               oninput="markBotConfigDirty('botDailyWxZip')">
-                                    </div>
-                                    <div class="text-muted small mb-2">
-                                        Short 3-day forecast (fits in 1–2 mesh messages). Falls back to NWS ZIP if blank.
-                                        On-demand: <code>!fcst</code> or <code>!fcst 90210</code>.
-                                    </div>
-                                    <hr class="my-2">
-                                    <div class="small fw-semibold mb-2">NWS Weather Alerts</div>
-                                    <div class="form-check form-switch mb-2">
-                                        <input class="form-check-input" type="checkbox" id="botNwsAlertEnabled"
-                                               onchange="markBotConfigDirty('botNwsAlertEnabled')">
-                                        <label class="form-check-label small" for="botNwsAlertEnabled">
-                                            Enable periodic alerts
-                                        </label>
-                                    </div>
-                                    <div class="mb-2">
-                                        <label class="form-label small mb-1" for="botNwsAlertZip">US ZIP code</label>
-                                        <input type="text" class="form-control form-control-sm"
-                                               id="botNwsAlertZip" maxlength="10" placeholder="90210"
-                                               inputmode="numeric" autocomplete="postal-code"
-                                               oninput="markBotConfigDirty('botNwsAlertZip')">
-                                    </div>
-                                    <div class="d-flex align-items-center gap-1 mb-2">
-                                        <label class="form-label small mb-0" for="botNwsAlertInterval">Poll every</label>
-                                        <input type="number" class="form-control form-control-sm"
-                                               id="botNwsAlertInterval" min="5" max="360" value="30"
-                                               style="width: 4.5rem;"
-                                               oninput="markBotConfigDirty('botNwsAlertInterval')">
-                                        <span class="small text-muted">min</span>
-                                    </div>
-                                    <div class="text-muted small mb-2">
-                                        Broadcasts new NWS watches/warnings for this ZIP to the respond channel.
-                                        On-demand: <code>!wx alerts</code> or <code>!wx alerts 90210</code>.
-                                    </div>
-                                    <hr class="my-2">
-                                    <div class="small fw-semibold mb-2">Channel Directory Broadcast</div>
-                                    <div class="d-flex align-items-center justify-content-between gap-2 mb-2">
-                                        <div class="form-check form-switch mb-0">
-                                            <input class="form-check-input" type="checkbox" id="botChannelBroadcastEnabled" checked
-                                                   onchange="markBotConfigDirty('botChannelBroadcastEnabled')">
-                                            <label class="form-check-label small" for="botChannelBroadcastEnabled">
-                                                Enable broadcast
-                                            </label>
-                                        </div>
-                                        <div class="d-flex align-items-center gap-1">
-                                            <label class="form-label small mb-0" for="botBroadcastIntervalHours">Every</label>
-                                            <input type="number" class="form-control form-control-sm"
-                                                   id="botBroadcastIntervalHours" min="1" max="168" value="12"
-                                                   style="width: 4.5rem;"
-                                                   oninput="markBotConfigDirty('botBroadcastIntervalHours')">
-                                            <span class="small text-muted">h</span>
-                                        </div>
-                                    </div>
-                                    <button class="btn btn-primary btn-sm w-100" onclick="saveBotConfig()">
-                                        <i class="bi bi-save"></i> Save Config
-                                    </button>
-                                    <div class="form-text small mt-1">Saved to the database — survives restarts.</div>
                                 </div>
                             </div>
                         </div>
 
                         <!-- Quick Actions Card -->
                         <div class="col-lg-4 mb-4">
-                            <div class="card">
+                            <div class="card h-100">
                                 <div class="card-header">
                                     <i class="bi bi-lightning"></i> Quick Actions
                                 </div>
@@ -2090,6 +1920,284 @@
                                     <button class="btn btn-outline-danger btn-sm w-100" onclick="clearBotQueue()">
                                         <i class="bi bi-trash"></i> Clear Queue
                                     </button>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- Bot Configuration (accordion) -->
+                    <div class="row">
+                        <div class="col-12 mb-4">
+                            <div class="card">
+                                <div class="card-header d-flex justify-content-between align-items-center">
+                                    <span><i class="bi bi-gear"></i> Configuration</span>
+                                    <button class="btn btn-primary btn-sm" onclick="saveBotConfig()">
+                                        <i class="bi bi-save"></i> Save Config
+                                    </button>
+                                </div>
+                                <div class="card-body p-0">
+                                    <div class="accordion accordion-flush" id="botConfigAccordion">
+                                        <div class="accordion-item">
+                                            <h2 class="accordion-header" id="botCfgGeneralHeading">
+                                                <button class="accordion-button" type="button" data-bs-toggle="collapse"
+                                                        data-bs-target="#botCfgGeneral" aria-expanded="true"
+                                                        aria-controls="botCfgGeneral">
+                                                    General
+                                                </button>
+                                            </h2>
+                                            <div id="botCfgGeneral" class="accordion-collapse collapse show"
+                                                 data-bs-parent="#botConfigAccordion">
+                                                <div class="accordion-body">
+                                                    <div class="row g-3">
+                                                        <div class="col-md-3">
+                                                            <label class="form-label small mb-1"><strong>Prefix</strong></label>
+                                                            <input type="text" class="form-control form-control-sm" id="botCommandPrefix"
+                                                                   maxlength="3" value="!" placeholder="!"
+                                                                   oninput="markBotConfigDirty('botCommandPrefix')">
+                                                        </div>
+                                                        <div class="col-md-3">
+                                                            <label class="form-label small mb-1"><strong>Send interval (s)</strong></label>
+                                                            <input type="number" class="form-control form-control-sm" id="botMinSendInterval"
+                                                                   min="0.5" max="60" step="0.5" value="2"
+                                                                   oninput="markBotConfigDirty('botMinSendInterval')">
+                                                        </div>
+                                                        <div class="col-md-3">
+                                                            <label class="form-label small mb-1"><strong>Listen Channels</strong></label>
+                                                            <input type="text" class="form-control form-control-sm" id="botListenChannels"
+                                                                   placeholder="e.g., LongFast"
+                                                                   oninput="markBotConfigDirty('botListenChannels')">
+                                                        </div>
+                                                        <div class="col-md-3">
+                                                            <label class="form-label small mb-1"><strong>Response Channel</strong></label>
+                                                            <input type="number" class="form-control form-control-sm" id="botRespondChannelIndex"
+                                                                   min="0" max="7" value="1"
+                                                                   oninput="markBotConfigDirty('botRespondChannelIndex')">
+                                                        </div>
+                                                        <div class="col-md-6">
+                                                            <label class="form-label small mb-1" for="botTracerouteFormat"><strong>Traceroute format</strong></label>
+                                                            <select class="form-select form-select-sm" id="botTracerouteFormat"
+                                                                    onchange="markBotConfigDirty('botTracerouteFormat')">
+                                                                <option value="names">Names — short names (default)</option>
+                                                                <option value="longnames">Long names — full node names</option>
+                                                                <option value="chain">Chain — compact named path</option>
+                                                                <option value="hops">Hops — numbered hop list with names</option>
+                                                            </select>
+                                                        </div>
+                                                        <div class="col-md-6">
+                                                            <div class="form-check form-switch mt-4">
+                                                                <input class="form-check-input" type="checkbox" id="botWaitForJobs" checked
+                                                                       onchange="markBotConfigDirty('botWaitForJobs')">
+                                                                <label class="form-check-label small" for="botWaitForJobs">
+                                                                    Wait for admin jobs
+                                                                </label>
+                                                            </div>
+                                                            <div class="form-check form-switch">
+                                                                <input class="form-check-input" type="checkbox" id="botWelcomeNewNodes" checked
+                                                                       onchange="markBotConfigDirty('botWelcomeNewNodes')">
+                                                                <label class="form-check-label small" for="botWelcomeNewNodes">
+                                                                    Welcome new nodes
+                                                                </label>
+                                                            </div>
+                                                            <div class="text-muted small">Rate-limited public hello when a node is first seen.</div>
+                                                        </div>
+                                                    </div>
+                                                </div>
+                                            </div>
+                                        </div>
+
+                                        <div class="accordion-item">
+                                            <h2 class="accordion-header" id="botCfgNetHeading">
+                                                <button class="accordion-button collapsed" type="button" data-bs-toggle="collapse"
+                                                        data-bs-target="#botCfgNet" aria-expanded="false"
+                                                        aria-controls="botCfgNet">
+                                                    Daily Net Update
+                                                </button>
+                                            </h2>
+                                            <div id="botCfgNet" class="accordion-collapse collapse"
+                                                 data-bs-parent="#botConfigAccordion">
+                                                <div class="accordion-body">
+                                                    <div class="row g-3 align-items-end">
+                                                        <div class="col-md-3">
+                                                            <div class="form-check form-switch">
+                                                                <input class="form-check-input" type="checkbox" id="botDailyDigestEnabled" checked
+                                                                       onchange="markBotConfigDirty('botDailyDigestEnabled')">
+                                                                <label class="form-check-label small" for="botDailyDigestEnabled">
+                                                                    Enable broadcast
+                                                                </label>
+                                                            </div>
+                                                        </div>
+                                                        <div class="col-md-4">
+                                                            <label class="form-label small mb-1" for="botDailyDigestHours">Hours (0–23)</label>
+                                                            <input type="text" class="form-control form-control-sm"
+                                                                   id="botDailyDigestHours" value="8"
+                                                                   placeholder="8 or 8,12,18"
+                                                                   oninput="markBotConfigDirty('botDailyDigestHours')">
+                                                        </div>
+                                                        <div class="col-md-5">
+                                                            <label class="form-label small mb-1" for="botDailyDigestTimezone">Timezone</label>
+                                                            <select class="form-select form-select-sm" id="botDailyDigestTimezone"
+                                                                    onchange="markBotConfigDirty('botDailyDigestTimezone')">
+                                                                <option value="UTC">UTC</option>
+                                                                <option value="America/New_York">America/New_York (Eastern)</option>
+                                                                <option value="America/Chicago">America/Chicago (Central)</option>
+                                                                <option value="America/Denver">America/Denver (Mountain)</option>
+                                                                <option value="America/Los_Angeles">America/Los_Angeles (Pacific)</option>
+                                                                <option value="America/Phoenix">America/Phoenix</option>
+                                                                <option value="America/Anchorage">America/Anchorage</option>
+                                                                <option value="Pacific/Honolulu">Pacific/Honolulu</option>
+                                                                <option value="Europe/London">Europe/London</option>
+                                                                <option value="Europe/Berlin">Europe/Berlin</option>
+                                                                <option value="Australia/Sydney">Australia/Sydney</option>
+                                                            </select>
+                                                        </div>
+                                                    </div>
+                                                    <div class="text-muted small mt-2">
+                                                        Comma-separate hours to send more than once per day (e.g. <code>8,18</code>).
+                                                        Hours use the timezone above. On-demand: <code>!net</code>.
+                                                    </div>
+                                                </div>
+                                            </div>
+                                        </div>
+
+                                        <div class="accordion-item">
+                                            <h2 class="accordion-header" id="botCfgWxHeading">
+                                                <button class="accordion-button collapsed" type="button" data-bs-toggle="collapse"
+                                                        data-bs-target="#botCfgWx" aria-expanded="false"
+                                                        aria-controls="botCfgWx">
+                                                    Daily Weather Forecast
+                                                </button>
+                                            </h2>
+                                            <div id="botCfgWx" class="accordion-collapse collapse"
+                                                 data-bs-parent="#botConfigAccordion">
+                                                <div class="accordion-body">
+                                                    <div class="row g-3 align-items-end">
+                                                        <div class="col-md-3">
+                                                            <div class="form-check form-switch">
+                                                                <input class="form-check-input" type="checkbox" id="botDailyWxEnabled"
+                                                                       onchange="markBotConfigDirty('botDailyWxEnabled')">
+                                                                <label class="form-check-label small" for="botDailyWxEnabled">
+                                                                    Enable broadcast
+                                                                </label>
+                                                            </div>
+                                                        </div>
+                                                        <div class="col-md-3">
+                                                            <label class="form-label small mb-1" for="botDailyWxHours">Hours (0–23)</label>
+                                                            <input type="text" class="form-control form-control-sm"
+                                                                   id="botDailyWxHours" value="7"
+                                                                   placeholder="7 or 7,12,18"
+                                                                   oninput="markBotConfigDirty('botDailyWxHours')">
+                                                        </div>
+                                                        <div class="col-md-3">
+                                                            <label class="form-label small mb-1" for="botDailyWxTimezone">Timezone</label>
+                                                            <select class="form-select form-select-sm" id="botDailyWxTimezone"
+                                                                    onchange="markBotConfigDirty('botDailyWxTimezone')">
+                                                                <option value="UTC">UTC</option>
+                                                                <option value="America/New_York">America/New_York (Eastern)</option>
+                                                                <option value="America/Chicago">America/Chicago (Central)</option>
+                                                                <option value="America/Denver">America/Denver (Mountain)</option>
+                                                                <option value="America/Los_Angeles">America/Los_Angeles (Pacific)</option>
+                                                                <option value="America/Phoenix">America/Phoenix</option>
+                                                                <option value="America/Anchorage">America/Anchorage</option>
+                                                                <option value="Pacific/Honolulu">Pacific/Honolulu</option>
+                                                                <option value="Europe/London">Europe/London</option>
+                                                                <option value="Europe/Berlin">Europe/Berlin</option>
+                                                                <option value="Australia/Sydney">Australia/Sydney</option>
+                                                            </select>
+                                                        </div>
+                                                        <div class="col-md-3">
+                                                            <label class="form-label small mb-1" for="botDailyWxZip">US ZIP code</label>
+                                                            <input type="text" class="form-control form-control-sm"
+                                                                   id="botDailyWxZip" maxlength="10" placeholder="90210"
+                                                                   inputmode="numeric" autocomplete="postal-code"
+                                                                   oninput="markBotConfigDirty('botDailyWxZip')">
+                                                        </div>
+                                                    </div>
+                                                    <div class="text-muted small mt-2">
+                                                        Short 3-day forecast (1–2 mesh messages). Falls back to NWS ZIP if blank.
+                                                        On-demand: <code>!fcst</code>.
+                                                    </div>
+                                                </div>
+                                            </div>
+                                        </div>
+
+                                        <div class="accordion-item">
+                                            <h2 class="accordion-header" id="botCfgChannelsHeading">
+                                                <button class="accordion-button collapsed" type="button" data-bs-toggle="collapse"
+                                                        data-bs-target="#botCfgChannels" aria-expanded="false"
+                                                        aria-controls="botCfgChannels">
+                                                    Channel Directory Broadcast
+                                                </button>
+                                            </h2>
+                                            <div id="botCfgChannels" class="accordion-collapse collapse"
+                                                 data-bs-parent="#botConfigAccordion">
+                                                <div class="accordion-body">
+                                                    <div class="d-flex flex-wrap align-items-center justify-content-between gap-3">
+                                                        <div class="form-check form-switch mb-0">
+                                                            <input class="form-check-input" type="checkbox" id="botChannelBroadcastEnabled" checked
+                                                                   onchange="markBotConfigDirty('botChannelBroadcastEnabled')">
+                                                            <label class="form-check-label small" for="botChannelBroadcastEnabled">
+                                                                Enable broadcast
+                                                            </label>
+                                                        </div>
+                                                        <div class="d-flex align-items-center gap-1">
+                                                            <label class="form-label small mb-0" for="botBroadcastIntervalHours">Every</label>
+                                                            <input type="number" class="form-control form-control-sm"
+                                                                   id="botBroadcastIntervalHours" min="1" max="168" value="12"
+                                                                   style="width: 4.5rem;"
+                                                                   oninput="markBotConfigDirty('botBroadcastIntervalHours')">
+                                                            <span class="small text-muted">hours</span>
+                                                        </div>
+                                                    </div>
+                                                </div>
+                                            </div>
+                                        </div>
+
+                                        <div class="accordion-item">
+                                            <h2 class="accordion-header" id="botCfgNwsHeading">
+                                                <button class="accordion-button collapsed" type="button" data-bs-toggle="collapse"
+                                                        data-bs-target="#botCfgNws" aria-expanded="false"
+                                                        aria-controls="botCfgNws">
+                                                    NWS Weather Alerts
+                                                </button>
+                                            </h2>
+                                            <div id="botCfgNws" class="accordion-collapse collapse"
+                                                 data-bs-parent="#botConfigAccordion">
+                                                <div class="accordion-body">
+                                                    <div class="row g-3 align-items-end">
+                                                        <div class="col-md-3">
+                                                            <div class="form-check form-switch">
+                                                                <input class="form-check-input" type="checkbox" id="botNwsAlertEnabled"
+                                                                       onchange="markBotConfigDirty('botNwsAlertEnabled')">
+                                                                <label class="form-check-label small" for="botNwsAlertEnabled">
+                                                                    Enable periodic alerts
+                                                                </label>
+                                                            </div>
+                                                        </div>
+                                                        <div class="col-md-4">
+                                                            <label class="form-label small mb-1" for="botNwsAlertZip">US ZIP code</label>
+                                                            <input type="text" class="form-control form-control-sm"
+                                                                   id="botNwsAlertZip" maxlength="10" placeholder="90210"
+                                                                   inputmode="numeric" autocomplete="postal-code"
+                                                                   oninput="markBotConfigDirty('botNwsAlertZip')">
+                                                        </div>
+                                                        <div class="col-md-5">
+                                                            <label class="form-label small mb-1" for="botNwsAlertInterval">Poll every (min)</label>
+                                                            <input type="number" class="form-control form-control-sm"
+                                                                   id="botNwsAlertInterval" min="5" max="360" value="30"
+                                                                   oninput="markBotConfigDirty('botNwsAlertInterval')">
+                                                        </div>
+                                                    </div>
+                                                    <div class="text-muted small mt-2">
+                                                        Broadcasts new NWS watches/warnings for this ZIP.
+                                                        On-demand: <code>!wx alerts</code>.
+                                                    </div>
+                                                </div>
+                                            </div>
+                                        </div>
+                                    </div>
+                                    <div class="px-3 py-2 border-top small text-muted">
+                                        Saved to the database — survives restarts.
+                                    </div>
                                 </div>
                             </div>
                         </div>
@@ -10339,6 +10447,62 @@
         botConfigDirty.clear();
     }
 
+    function formatBotHours(hoursList, legacyHour, fallback) {
+        if (Array.isArray(hoursList) && hoursList.length) {
+            return hoursList.join(',');
+        }
+        if (legacyHour !== undefined && legacyHour !== null && legacyHour !== '') {
+            return String(legacyHour);
+        }
+        return String(fallback);
+    }
+
+    function parseBotHoursInput(raw, fallback) {
+        const text = String(raw || '').trim();
+        if (!text) return [fallback];
+        const hours = [];
+        for (const part of text.split(/[,;]+/)) {
+            const token = part.trim();
+            if (!token) continue;
+            const hour = parseInt(token, 10);
+            if (!Number.isFinite(hour) || hour < 0 || hour > 23) {
+                throw new Error(`Invalid hour "${token}" (use 0-23, comma-separated)`);
+            }
+            if (!hours.includes(hour)) hours.push(hour);
+        }
+        hours.sort((a, b) => a - b);
+        if (!hours.length) hours.push(fallback);
+        return hours;
+    }
+
+    async function runBotNotice(notice, btn) {
+        const original = btn ? btn.innerHTML : '';
+        if (btn) {
+            btn.disabled = true;
+            btn.innerHTML = '<i class="bi bi-hourglass-split"></i> Queuing...';
+        }
+        try {
+            const response = await fetch(`/api/bot/notices/${encodeURIComponent(notice)}`, {
+                method: 'POST',
+            });
+            const data = await response.json().catch(() => ({}));
+            if (response.ok && data.success) {
+                showAlert('success', data.message || 'Notice queued');
+                refreshBotActivity();
+                refreshBotStatus();
+            } else {
+                showAlert('danger', data.error || data.message || 'Failed to queue notice');
+            }
+        } catch (error) {
+            showAlert('danger', `Error: ${error.message}`);
+        } finally {
+            if (btn) {
+                btn.disabled = false;
+                btn.innerHTML = original;
+            }
+        }
+    }
+
     // Initialize bot status when tab is shown
     document.getElementById('bot-tab')?.addEventListener('shown.bs.tab', function() {
         refreshBotStatus();
@@ -10453,7 +10617,10 @@
             setIfBlurred('botMinSendInterval', data.min_send_interval ?? 2);
             setIfBlurred('botListenChannels', (data.listen_channels || []).join(', '));
             setIfBlurred('botRespondChannelIndex', data.respond_channel_index ?? 1);
-            setIfBlurred('botDailyDigestHour', data.daily_digest_hour ?? 8);
+            setIfBlurred(
+                'botDailyDigestHours',
+                formatBotHours(data.daily_digest_hours, data.daily_digest_hour, 8)
+            );
             setIfBlurred('botDailyDigestTimezone', data.daily_digest_timezone || 'UTC');
             setIfBlurred('botBroadcastIntervalHours', data.broadcast_interval_hours ?? 12);
             setIfBlurred('botTracerouteFormat', data.traceroute_format || 'names');
@@ -10465,8 +10632,14 @@
             if (Object.prototype.hasOwnProperty.call(data, 'nws_alert_interval_minutes')) {
                 setIfBlurred('botNwsAlertInterval', data.nws_alert_interval_minutes ?? 30);
             }
-            if (Object.prototype.hasOwnProperty.call(data, 'daily_wx_hour')) {
-                setIfBlurred('botDailyWxHour', data.daily_wx_hour ?? 7);
+            if (
+                Object.prototype.hasOwnProperty.call(data, 'daily_wx_hours') ||
+                Object.prototype.hasOwnProperty.call(data, 'daily_wx_hour')
+            ) {
+                setIfBlurred(
+                    'botDailyWxHours',
+                    formatBotHours(data.daily_wx_hours, data.daily_wx_hour, 7)
+                );
             }
             if (Object.prototype.hasOwnProperty.call(data, 'daily_wx_timezone')) {
                 setIfBlurred('botDailyWxTimezone', data.daily_wx_timezone || 'UTC');
@@ -10755,19 +10928,33 @@
         const commandPrefix = (document.getElementById('botCommandPrefix').value || '!').trim();
         const minSendInterval = parseFloat(document.getElementById('botMinSendInterval').value);
         const dailyDigestEnabled = document.getElementById('botDailyDigestEnabled').checked;
-        const dailyDigestHour = parseInt(document.getElementById('botDailyDigestHour').value, 10);
         const dailyDigestTimezone = document.getElementById('botDailyDigestTimezone').value || 'UTC';
         const dailyWxEnabled = document.getElementById('botDailyWxEnabled').checked;
-        const dailyWxHour = parseInt(document.getElementById('botDailyWxHour').value, 10);
         const dailyWxTimezone = document.getElementById('botDailyWxTimezone').value || 'UTC';
         const dailyWxZip = (document.getElementById('botDailyWxZip').value || '').trim();
         const channelBroadcastEnabled = document.getElementById('botChannelBroadcastEnabled').checked;
         const broadcastIntervalHours = parseFloat(document.getElementById('botBroadcastIntervalHours').value);
-            const tracerouteFormat = document.getElementById('botTracerouteFormat').value || 'names';
+        const tracerouteFormat = document.getElementById('botTracerouteFormat').value || 'names';
         const welcomeNewNodes = document.getElementById('botWelcomeNewNodes').checked;
         const nwsAlertEnabled = document.getElementById('botNwsAlertEnabled').checked;
         const nwsAlertZip = (document.getElementById('botNwsAlertZip').value || '').trim();
         const nwsAlertInterval = parseInt(document.getElementById('botNwsAlertInterval').value, 10);
+
+        let dailyDigestHours;
+        let dailyWxHours;
+        try {
+            dailyDigestHours = parseBotHoursInput(
+                document.getElementById('botDailyDigestHours').value,
+                8
+            );
+            dailyWxHours = parseBotHoursInput(
+                document.getElementById('botDailyWxHours').value,
+                7
+            );
+        } catch (error) {
+            showAlert('danger', error.message || 'Invalid notice hours');
+            return;
+        }
 
         try {
             const response = await fetch('/api/bot/config', {
@@ -10780,10 +10967,10 @@
                     wait_for_jobs: waitForJobs,
                     min_send_interval: Number.isFinite(minSendInterval) ? minSendInterval : 2,
                     daily_digest_enabled: dailyDigestEnabled,
-                    daily_digest_hour: Number.isFinite(dailyDigestHour) ? dailyDigestHour : 8,
+                    daily_digest_hours: dailyDigestHours,
                     daily_digest_timezone: dailyDigestTimezone,
                     daily_wx_enabled: dailyWxEnabled,
-                    daily_wx_hour: Number.isFinite(dailyWxHour) ? dailyWxHour : 7,
+                    daily_wx_hours: dailyWxHours,
                     daily_wx_timezone: dailyWxTimezone,
                     daily_wx_zip: dailyWxZip,
                     channel_broadcast_enabled: channelBroadcastEnabled,
@@ -10831,9 +11018,21 @@
                     if (wxZipEl && Object.prototype.hasOwnProperty.call(data.config, 'daily_wx_zip')) {
                         wxZipEl.value = data.config.daily_wx_zip || '';
                     }
-                    const wxHourEl = document.getElementById('botDailyWxHour');
-                    if (wxHourEl && Object.prototype.hasOwnProperty.call(data.config, 'daily_wx_hour')) {
-                        wxHourEl.value = data.config.daily_wx_hour ?? 7;
+                    const digestHoursEl = document.getElementById('botDailyDigestHours');
+                    if (digestHoursEl) {
+                        digestHoursEl.value = formatBotHours(
+                            data.config.daily_digest_hours,
+                            data.config.daily_digest_hour,
+                            8
+                        );
+                    }
+                    const wxHoursEl = document.getElementById('botDailyWxHours');
+                    if (wxHoursEl) {
+                        wxHoursEl.value = formatBotHours(
+                            data.config.daily_wx_hours,
+                            data.config.daily_wx_hour,
+                            7
+                        );
                     }
                     const wxTzEl = document.getElementById('botDailyWxTimezone');
                     if (wxTzEl && Object.prototype.hasOwnProperty.call(data.config, 'daily_wx_timezone')) {

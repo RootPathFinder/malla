@@ -306,10 +306,10 @@ class TestDailyDigestScheduling:
         from datetime import datetime
         from zoneinfo import ZoneInfo
 
-        bot_service._daily_digest_hour = 8
+        bot_service._daily_digest_hours = [8]
         bot_service._daily_digest_timezone = "America/New_York"
         bot_service._enabled = True
-        bot_service._last_daily_digest_date = None
+        bot_service._daily_digest_sent_slots = set()
         fixed_morning = datetime(
             2026, 7, 20, 9, 0, 0, tzinfo=ZoneInfo("America/New_York")
         )
@@ -325,7 +325,7 @@ class TestDailyDigestScheduling:
                     bot_service._maybe_send_daily_digest()
 
         assert queue_message.call_count == 1
-        assert bot_service._last_daily_digest_date == "2026-07-20"
+        assert "2026-07-20:08" in bot_service._daily_digest_sent_slots
 
     @pytest.mark.unit
     def test_digest_hour_uses_configured_timezone_not_utc(
@@ -335,10 +335,10 @@ class TestDailyDigestScheduling:
         from datetime import datetime
         from zoneinfo import ZoneInfo
 
-        bot_service._daily_digest_hour = 8
+        bot_service._daily_digest_hours = [8]
         bot_service._daily_digest_timezone = "America/New_York"
         bot_service._enabled = True
-        bot_service._last_daily_digest_date = None
+        bot_service._daily_digest_sent_slots = set()
 
         # 08:00 UTC == 04:00 America/New_York in July — too early
         utc_morning = datetime(2026, 7, 20, 8, 0, 0, tzinfo=ZoneInfo("UTC"))
