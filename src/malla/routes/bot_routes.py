@@ -18,6 +18,8 @@ bot_bp = Blueprint("bot", __name__)
 
 def _bot_config_dict(bot: BotService) -> dict:
     """Serialize runtime bot configuration for API responses."""
+    digest_hours = list(bot._daily_digest_hours or [8])
+    wx_hours = list(bot._daily_wx_hours or [7])
     return {
         "command_prefix": bot._command_prefix,
         "listen_channels": list(bot._listen_channels),
@@ -25,7 +27,9 @@ def _bot_config_dict(bot: BotService) -> dict:
         "wait_for_jobs": bot._wait_for_jobs,
         "min_send_interval": bot._min_send_interval,
         "daily_digest_enabled": bot._daily_digest_enabled,
-        "daily_digest_hour": bot._daily_digest_hour,
+        "daily_digest_hours": digest_hours,
+        # Legacy singular field for older UI/clients
+        "daily_digest_hour": digest_hours[0] if digest_hours else 8,
         "daily_digest_timezone": bot._daily_digest_timezone,
         "daily_digest_timezones": list(bot._daily_digest_timezones),
         "channel_broadcast_enabled": bot._channel_broadcast_enabled,
@@ -37,7 +41,8 @@ def _bot_config_dict(bot: BotService) -> dict:
         "nws_alert_zip": bot._nws_alert_zip,
         "nws_alert_interval_minutes": bot._nws_alert_interval_minutes,
         "daily_wx_enabled": bot._daily_wx_enabled,
-        "daily_wx_hour": bot._daily_wx_hour,
+        "daily_wx_hours": wx_hours,
+        "daily_wx_hour": wx_hours[0] if wx_hours else 7,
         "daily_wx_timezone": bot._daily_wx_timezone,
         "daily_wx_zip": bot._daily_wx_zip,
     }
@@ -189,11 +194,25 @@ def api_bot_update_config():
         if "daily_digest_enabled" in data:
             bot._daily_digest_enabled = bool(data["daily_digest_enabled"])
 
-        if "daily_digest_hour" in data:
-            hour = int(data["daily_digest_hour"])
-            if hour < 0 or hour > 23:
-                return jsonify({"error": "daily_digest_hour must be 0-23"}), 400
-            bot._daily_digest_hour = hour
+        if "daily_digest_hours" in data or "daily_digest_hour" in data:
+            hours = bot._parse_hours(
+                data["daily_digest_hours"]
+                if "daily_digest_hours" in data
+                else data.get("daily_digest_hour")
+            )
+            if not hours:
+                return (
+                    jsonify(
+                        {
+                            "error": (
+                                "daily_digest_hours must be one or more "
+                                "hours 0-23 (e.g. 8 or 8,12,18)"
+                            )
+                        }
+                    ),
+                    400,
+                )
+            bot._daily_digest_hours = hours
 
         if "daily_digest_timezone" in data:
             tz_name = str(data["daily_digest_timezone"]).strip()
@@ -302,11 +321,25 @@ def api_bot_update_config():
                 zip5 = ""
             bot._daily_wx_zip = zip5
 
-        if "daily_wx_hour" in data:
-            hour = int(data["daily_wx_hour"])
-            if hour < 0 or hour > 23:
-                return jsonify({"error": "daily_wx_hour must be 0-23"}), 400
-            bot._daily_wx_hour = hour
+        if "daily_wx_hours" in data or "daily_wx_hour" in data:
+            hours = bot._parse_hours(
+                data["daily_wx_hours"]
+                if "daily_wx_hours" in data
+                else data.get("daily_wx_hour")
+            )
+            if not hours:
+                return (
+                    jsonify(
+                        {
+                            "error": (
+                                "daily_wx_hours must be one or more "
+                                "hours 0-23 (e.g. 7 or 7,12,18)"
+                            )
+                        }
+                    ),
+                    400,
+                )
+            bot._daily_wx_hours = hours
 
         if "daily_wx_timezone" in data:
             tz_name = str(data["daily_wx_timezone"]).strip()
@@ -760,10 +793,27 @@ def api_bot_broadcast_channels():
         if not bot.is_running:
             return jsonify({"error": "Bot is not running"}), 400
 
-        bot._broadcast_channel_directory()
-
-        return jsonify({"success": True, "message": "Channel broadcast queued"})
+        result = bot.send_notice_now("channel_directory")
+        if not result.get("success"):
+            return jsonify(result), 400
+        return jsonify(result)
 
     except Exception as e:
         logger.error(f"Error triggering broadcast: {e}")
+        return jsonify({"error": str(e)}), 500
+
+
+@bot_bp.route("/api/bot/notices/<notice>", methods=["POST"])
+def api_bot_send_notice(notice: str):
+    """Manually queue a timed notice (digest, forecast, channels, NWS)."""
+    try:
+        bot = get_bot_service()
+        if not bot.is_running:
+            return jsonify({"error": "Bot is not running"}), 400
+
+        result = bot.send_notice_now(notice)
+        status = 200 if result.get("success") else 400
+        return jsonify(result), status
+    except Exception as e:
+        logger.error(f"Error sending notice {notice}: {e}")
         return jsonify({"error": str(e)}), 500

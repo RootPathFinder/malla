@@ -84,10 +84,10 @@ class TestDailyWxScheduling:
         from zoneinfo import ZoneInfo
 
         bot_service._daily_wx_enabled = True
-        bot_service._daily_wx_hour = 7
+        bot_service._daily_wx_hours = [7]
         bot_service._daily_wx_timezone = "America/New_York"
         bot_service._daily_wx_zip = "90210"
-        bot_service._last_daily_wx_date = None
+        bot_service._daily_wx_sent_slots = set()
         fixed_morning = datetime(
             2026, 7, 24, 8, 0, 0, tzinfo=ZoneInfo("America/New_York")
         )
@@ -105,7 +105,7 @@ class TestDailyWxScheduling:
                     bot_service._maybe_send_daily_wx()
 
         assert queue_message.call_count == 1
-        assert bot_service._last_daily_wx_date == "2026-07-24"
+        assert "2026-07-24:07" in bot_service._daily_wx_sent_slots
 
     @pytest.mark.unit
     def test_wx_hour_uses_configured_timezone_not_utc(self, bot_service: BotService):
@@ -113,10 +113,10 @@ class TestDailyWxScheduling:
         from zoneinfo import ZoneInfo
 
         bot_service._daily_wx_enabled = True
-        bot_service._daily_wx_hour = 7
+        bot_service._daily_wx_hours = [7]
         bot_service._daily_wx_timezone = "America/New_York"
         bot_service._daily_wx_zip = "90210"
-        bot_service._last_daily_wx_date = None
+        bot_service._daily_wx_sent_slots = set()
 
         # 07:00 UTC == 03:00 America/New_York in July — too early
         utc_morning = datetime(2026, 7, 24, 7, 0, 0, tzinfo=ZoneInfo("UTC"))
@@ -173,10 +173,10 @@ class TestDailyWxScheduling:
         from zoneinfo import ZoneInfo
 
         bot_service._daily_wx_enabled = True
-        bot_service._daily_wx_hour = 7
+        bot_service._daily_wx_hours = [7]
         bot_service._daily_wx_timezone = "UTC"
         bot_service._daily_wx_zip = "90210"
-        bot_service._last_daily_wx_date = None
+        bot_service._daily_wx_sent_slots = set()
         fixed = datetime(2026, 7, 24, 8, 0, 0, tzinfo=ZoneInfo("UTC"))
 
         with patch.object(

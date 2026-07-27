@@ -175,7 +175,8 @@ class BotService:
 
         # Daily mesh network digest
         self._daily_digest_enabled = True
-        self._daily_digest_hour = 8  # Hour (0-23) in _daily_digest_timezone
+        # Hours (0-23) in _daily_digest_timezone; comma-separated in the UI.
+        self._daily_digest_hours: list[int] = [8]
         # Digests were previously scheduled with time.localtime() (= UTC on
         # most hosts). Keep UTC as the default, but make timezone explicit.
         self._daily_digest_timezone = "UTC"
@@ -192,7 +193,8 @@ class BotService:
             "Europe/Berlin",
             "Australia/Sydney",
         )
-        self._last_daily_digest_date: str | None = None
+        # Slots already sent today: "YYYY-MM-DD:HH"
+        self._daily_digest_sent_slots: set[str] = set()
         self._last_digest_text: str | None = None
 
         # Periodic NWS severe-weather alerts (US ZIP → api.weather.gov)
@@ -206,10 +208,10 @@ class BotService:
 
         # Daily weather forecast broadcast (Open-Meteo daily → 1–2 LoRa msgs)
         self._daily_wx_enabled = False
-        self._daily_wx_hour = 7  # Hour (0-23) in _daily_wx_timezone
+        self._daily_wx_hours: list[int] = [7]
         self._daily_wx_timezone = "UTC"
         self._daily_wx_zip = ""
-        self._last_daily_wx_date: str | None = None
+        self._daily_wx_sent_slots: set[str] = set()
         self._daily_wx_days = 3  # today + next 2 days
 
         # Traceroute reply style: names (default) | longnames | chain | hops
@@ -256,7 +258,7 @@ class BotService:
             "wait_for_jobs": self._wait_for_jobs,
             "min_send_interval": self._min_send_interval,
             "daily_digest_enabled": self._daily_digest_enabled,
-            "daily_digest_hour": self._daily_digest_hour,
+            "daily_digest_hours": list(self._daily_digest_hours),
             "daily_digest_timezone": self._daily_digest_timezone,
             "channel_broadcast_enabled": self._channel_broadcast_enabled,
             "broadcast_interval_hours": self._broadcast_interval_hours,
@@ -266,13 +268,13 @@ class BotService:
             "nws_alert_zip": self._nws_alert_zip,
             "nws_alert_interval_minutes": self._nws_alert_interval_minutes,
             "daily_wx_enabled": self._daily_wx_enabled,
-            "daily_wx_hour": self._daily_wx_hour,
+            "daily_wx_hours": list(self._daily_wx_hours),
             "daily_wx_timezone": self._daily_wx_timezone,
             "daily_wx_zip": self._daily_wx_zip,
             "disabled_commands": sorted(self._disabled_commands),
             "last_broadcast_time": self._last_broadcast_time,
-            "last_daily_digest_date": self._last_daily_digest_date,
-            "last_daily_wx_date": self._last_daily_wx_date,
+            "daily_digest_sent_slots": sorted(self._daily_digest_sent_slots),
+            "daily_wx_sent_slots": sorted(self._daily_wx_sent_slots),
             "last_nws_alert_check": self._last_nws_alert_check,
             "nws_known_alert_ids": sorted(self._nws_known_alert_ids),
         }
@@ -335,13 +337,13 @@ class BotService:
         if "daily_digest_enabled" in stored:
             self._daily_digest_enabled = bool(stored["daily_digest_enabled"])
 
-        if "daily_digest_hour" in stored:
-            try:
-                hour = int(stored["daily_digest_hour"])
-                if 0 <= hour <= 23:
-                    self._daily_digest_hour = hour
-            except (TypeError, ValueError):
-                pass
+        loaded_digest_hours = self._coerce_hours(
+            stored.get("daily_digest_hours"),
+            fallback=stored.get("daily_digest_hour"),
+            default=[8],
+        )
+        if loaded_digest_hours:
+            self._daily_digest_hours = loaded_digest_hours
 
         if "daily_digest_timezone" in stored and stored["daily_digest_timezone"]:
             tz_name = str(stored["daily_digest_timezone"]).strip()
@@ -384,13 +386,13 @@ class BotService:
         if "daily_wx_enabled" in stored:
             self._daily_wx_enabled = bool(stored["daily_wx_enabled"])
 
-        if "daily_wx_hour" in stored:
-            try:
-                hour = int(stored["daily_wx_hour"])
-                if 0 <= hour <= 23:
-                    self._daily_wx_hour = hour
-            except (TypeError, ValueError):
-                pass
+        loaded_wx_hours = self._coerce_hours(
+            stored.get("daily_wx_hours"),
+            fallback=stored.get("daily_wx_hour"),
+            default=[7],
+        )
+        if loaded_wx_hours:
+            self._daily_wx_hours = loaded_wx_hours
 
         if "daily_wx_timezone" in stored and stored["daily_wx_timezone"]:
             tz_name = str(stored["daily_wx_timezone"]).strip()
@@ -420,27 +422,57 @@ class BotService:
             self._last_broadcast_time = time.time()
             seed_updates["last_broadcast_time"] = self._last_broadcast_time
 
-        if "last_daily_digest_date" in stored:
-            date_val = stored["last_daily_digest_date"]
-            self._last_daily_digest_date = str(date_val) if date_val else None
+        digest_now = self._digest_now()
+        digest_today = digest_now.strftime("%Y-%m-%d")
+        if "daily_digest_sent_slots" in stored and isinstance(
+            stored["daily_digest_sent_slots"], list
+        ):
+            self._daily_digest_sent_slots = {
+                str(s) for s in stored["daily_digest_sent_slots"] if s
+            }
+        elif "last_daily_digest_date" in stored and stored["last_daily_digest_date"]:
+            # Migrate legacy once-per-day marker into per-hour slots.
+            legacy_date = str(stored["last_daily_digest_date"])
+            self._daily_digest_sent_slots = {
+                f"{legacy_date}:{h:02d}" for h in self._daily_digest_hours
+            }
+            seed_updates["daily_digest_sent_slots"] = sorted(
+                self._daily_digest_sent_slots
+            )
         else:
-            # If today's digest window already opened, mark today as sent so a
-            # deploy/restart does not immediately dump another digest.
-            digest_now = self._digest_now()
-            today = digest_now.strftime("%Y-%m-%d")
-            if digest_now.hour >= self._daily_digest_hour:
-                self._last_daily_digest_date = today
-                seed_updates["last_daily_digest_date"] = today
+            # Mark already-due hours as sent so a restart does not dump notices.
+            self._daily_digest_sent_slots = {
+                f"{digest_today}:{h:02d}"
+                for h in self._daily_digest_hours
+                if h <= digest_now.hour
+            }
+            if self._daily_digest_sent_slots:
+                seed_updates["daily_digest_sent_slots"] = sorted(
+                    self._daily_digest_sent_slots
+                )
 
-        if "last_daily_wx_date" in stored:
-            date_val = stored["last_daily_wx_date"]
-            self._last_daily_wx_date = str(date_val) if date_val else None
+        wx_now = self._daily_wx_now()
+        wx_today = wx_now.strftime("%Y-%m-%d")
+        if "daily_wx_sent_slots" in stored and isinstance(
+            stored["daily_wx_sent_slots"], list
+        ):
+            self._daily_wx_sent_slots = {
+                str(s) for s in stored["daily_wx_sent_slots"] if s
+            }
+        elif "last_daily_wx_date" in stored and stored["last_daily_wx_date"]:
+            legacy_date = str(stored["last_daily_wx_date"])
+            self._daily_wx_sent_slots = {
+                f"{legacy_date}:{h:02d}" for h in self._daily_wx_hours
+            }
+            seed_updates["daily_wx_sent_slots"] = sorted(self._daily_wx_sent_slots)
         else:
-            wx_now = self._daily_wx_now()
-            today_wx = wx_now.strftime("%Y-%m-%d")
-            if wx_now.hour >= self._daily_wx_hour:
-                self._last_daily_wx_date = today_wx
-                seed_updates["last_daily_wx_date"] = today_wx
+            self._daily_wx_sent_slots = {
+                f"{wx_today}:{h:02d}"
+                for h in self._daily_wx_hours
+                if h <= wx_now.hour
+            }
+            if self._daily_wx_sent_slots:
+                seed_updates["daily_wx_sent_slots"] = sorted(self._daily_wx_sent_slots)
 
         if "last_nws_alert_check" in stored:
             try:
@@ -3428,6 +3460,87 @@ class BotService:
             return ""
         return match.group(1)
 
+    @classmethod
+    def _parse_hours(cls, value: Any) -> list[int] | None:
+        """Parse hour config from int, list, or comma-separated string.
+
+        Returns sorted unique hours 0-23, empty list if value is blank, or
+        None if the value is present but invalid.
+        """
+        if value is None:
+            return None
+        if isinstance(value, bool):
+            return None
+        if isinstance(value, int):
+            return [value] if 0 <= value <= 23 else None
+        if isinstance(value, float) and value == int(value):
+            hour = int(value)
+            return [hour] if 0 <= hour <= 23 else None
+        if isinstance(value, (list, tuple)):
+            raw_parts = value
+        else:
+            text = str(value).strip()
+            if not text:
+                return []
+            raw_parts = text.replace(";", ",").split(",")
+
+        hours: list[int] = []
+        for part in raw_parts:
+            if part is None:
+                continue
+            token = str(part).strip()
+            if not token:
+                continue
+            try:
+                hour = int(token)
+            except (TypeError, ValueError):
+                return None
+            if hour < 0 or hour > 23:
+                return None
+            hours.append(hour)
+        # Preserve empty list (explicit clear) vs None (invalid)
+        return sorted(set(hours))
+
+    @classmethod
+    def _coerce_hours(
+        cls,
+        value: Any = None,
+        *,
+        fallback: Any = None,
+        default: list[int] | None = None,
+    ) -> list[int]:
+        """Coerce stored/API hour values with fallback and default."""
+        parsed = cls._parse_hours(value)
+        if parsed:
+            return parsed
+        if parsed is not None and value is not None and str(value).strip() == "":
+            # Explicit empty → use default rather than leaving unset.
+            return list(default or [0])
+        fallback_parsed = cls._parse_hours(fallback)
+        if fallback_parsed:
+            return fallback_parsed
+        return list(default or [0])
+
+    @staticmethod
+    def _slot_key(day: str, hour: int) -> str:
+        return f"{day}:{hour:02d}"
+
+    def _prune_sent_slots(self, slots: set[str], today: str) -> set[str]:
+        """Keep only today's slot markers."""
+        return {s for s in slots if isinstance(s, str) and s.startswith(f"{today}:")}
+
+    def _next_due_hour(
+        self, hours: list[int], now_hour: int, today: str, sent_slots: set[str]
+    ) -> int | None:
+        """Return the earliest configured hour that is due and not yet sent today."""
+        for hour in sorted(set(hours)):
+            if hour > now_hour:
+                continue
+            if self._slot_key(today, hour) in sent_slots:
+                continue
+            return hour
+        return None
+
     def _wmo_weather_label(self, code: int | None) -> str:
         """Map WMO weather codes to short labels."""
         if code is None:
@@ -3803,7 +3916,7 @@ class BotService:
         return datetime.now(self._daily_wx_tz())
 
     def _maybe_send_daily_wx(self) -> None:
-        """Send the daily weather forecast once per configured timezone-day."""
+        """Send weather forecast for each due hour slot (at most one per loop)."""
         if not self._daily_wx_enabled or not self._enabled:
             return
 
@@ -3813,17 +3926,27 @@ class BotService:
 
         wx_now = self._daily_wx_now()
         today = wx_now.strftime("%Y-%m-%d")
-        if self._last_daily_wx_date == today:
-            return
-        if wx_now.hour < self._daily_wx_hour:
+        self._daily_wx_sent_slots = self._prune_sent_slots(
+            self._daily_wx_sent_slots, today
+        )
+        due_hour = self._next_due_hour(
+            self._daily_wx_hours or [7],
+            wx_now.hour,
+            today,
+            self._daily_wx_sent_slots,
+        )
+        if due_hour is None:
             return
 
         messages = self._build_daily_wx_forecast(zip5)
         if not messages:
             return
 
-        self._last_daily_wx_date = today
-        self._persist_setting("last_daily_wx_date", today)
+        slot = self._slot_key(today, due_hour)
+        self._daily_wx_sent_slots.add(slot)
+        self._persist_setting(
+            "daily_wx_sent_slots", sorted(self._daily_wx_sent_slots)
+        )
         for text in messages[:2]:
             self.queue_message(
                 text=text,
@@ -3835,7 +3958,8 @@ class BotService:
             "daily_wx",
             {
                 "date": today,
-                "hour": self._daily_wx_hour,
+                "hour": due_hour,
+                "hours": list(self._daily_wx_hours),
                 "timezone": self._daily_wx_timezone,
                 "zip": zip5,
                 "parts": len(messages[:2]),
@@ -3844,11 +3968,39 @@ class BotService:
         logger.info(
             "Queued daily weather forecast for %s %02d:00 %s ZIP %s (%d msg)",
             today,
-            self._daily_wx_hour,
+            due_hour,
             self._daily_wx_timezone,
             zip5,
             len(messages[:2]),
         )
+
+    def send_daily_wx_now(self) -> dict[str, Any]:
+        """Manually queue the daily weather forecast (does not consume a schedule slot)."""
+        zip5 = self._resolve_daily_wx_zip()
+        if not zip5:
+            return {
+                "success": False,
+                "error": "Set daily_wx_zip (or nws_alert_zip) first",
+            }
+        messages = self._build_daily_wx_forecast(zip5)
+        if not messages:
+            return {"success": False, "error": "Forecast unavailable"}
+        for text in messages[:2]:
+            self.queue_message(
+                text=text,
+                destination=0xFFFFFFFF,
+                channel_index=self._respond_channel_index,
+                priority=BotMessagePriority.LOW,
+            )
+        self._log_activity(
+            "daily_wx_manual",
+            {"zip": zip5, "parts": len(messages[:2])},
+        )
+        return {
+            "success": True,
+            "message": f"Weather forecast queued ({len(messages[:2])} message(s))",
+            "parts": len(messages[:2]),
+        }
 
     def _fetch_nws_alerts(
         self, latitude: float, longitude: float
@@ -4796,24 +4948,34 @@ class BotService:
         return datetime.now(self._digest_tz())
 
     def _maybe_send_daily_digest(self) -> None:
-        """Send the daily digest once per configured timezone-day after the hour."""
+        """Send net digest for each due hour slot (at most one per loop)."""
         if not self._daily_digest_enabled or not self._enabled:
             return
 
         digest_now = self._digest_now()
         today = digest_now.strftime("%Y-%m-%d")
-        if self._last_daily_digest_date == today:
-            return
-        if digest_now.hour < self._daily_digest_hour:
+        self._daily_digest_sent_slots = self._prune_sent_slots(
+            self._daily_digest_sent_slots, today
+        )
+        due_hour = self._next_due_hour(
+            self._daily_digest_hours or [8],
+            digest_now.hour,
+            today,
+            self._daily_digest_sent_slots,
+        )
+        if due_hour is None:
             return
 
         digest = self._build_daily_digest()
         if not digest:
             return
 
+        slot = self._slot_key(today, due_hour)
         self._last_digest_text = digest
-        self._last_daily_digest_date = today
-        self._persist_setting("last_daily_digest_date", today)
+        self._daily_digest_sent_slots.add(slot)
+        self._persist_setting(
+            "daily_digest_sent_slots", sorted(self._daily_digest_sent_slots)
+        )
         self.queue_message(
             text=digest,
             destination=0xFFFFFFFF,
@@ -4824,16 +4986,80 @@ class BotService:
             "daily_digest",
             {
                 "date": today,
-                "hour": self._daily_digest_hour,
+                "hour": due_hour,
+                "hours": list(self._daily_digest_hours),
                 "timezone": self._daily_digest_timezone,
             },
         )
         logger.info(
             "Queued daily mesh network digest for %s %02d:00 %s",
             today,
-            self._daily_digest_hour,
+            due_hour,
             self._daily_digest_timezone,
         )
+
+    def send_daily_digest_now(self) -> dict[str, Any]:
+        """Manually queue the net digest (does not consume a schedule slot)."""
+        digest = self._build_daily_digest()
+        if not digest:
+            return {"success": False, "error": "Net update unavailable"}
+        self._last_digest_text = digest
+        self.queue_message(
+            text=digest,
+            destination=0xFFFFFFFF,
+            channel_index=self._respond_channel_index,
+            priority=BotMessagePriority.LOW,
+        )
+        self._log_activity("daily_digest_manual", {})
+        return {"success": True, "message": "Net update queued"}
+
+    def send_nws_alerts_now(self) -> dict[str, Any]:
+        """Manually queue a compact summary of currently active NWS alerts."""
+        zip5 = self._normalize_nws_zip(self._nws_alert_zip)
+        if not zip5:
+            return {"success": False, "error": "Set nws_alert_zip first"}
+        alerts = self._get_nws_alerts_for_zip(zip5)
+        if alerts is None:
+            return {"success": False, "error": "NWS alerts unavailable"}
+        message = self._format_nws_alerts_summary(zip5, alerts)
+        self.queue_message(
+            text=message,
+            destination=0xFFFFFFFF,
+            channel_index=self._respond_channel_index,
+            priority=BotMessagePriority.NORMAL,
+        )
+        self._log_activity(
+            "nws_alert_manual",
+            {"zip": zip5, "count": len(alerts)},
+        )
+        return {
+            "success": True,
+            "message": f"NWS alert summary queued ({len(alerts)} active)",
+            "count": len(alerts),
+        }
+
+    def send_notice_now(self, notice: str) -> dict[str, Any]:
+        """Manually trigger a timed notice by name."""
+        key = (notice or "").strip().lower().replace("-", "_")
+        if key in ("daily_digest", "digest", "net"):
+            return self.send_daily_digest_now()
+        if key in ("daily_wx", "wx", "forecast", "fcst"):
+            return self.send_daily_wx_now()
+        if key in ("channel_directory", "channels", "channel"):
+            try:
+                self._broadcast_channel_directory()
+                return {"success": True, "message": "Channel directory broadcast queued"}
+            except Exception as e:
+                return {"success": False, "error": str(e)}
+        if key in ("nws_alerts", "nws", "alerts"):
+            return self.send_nws_alerts_now()
+        return {
+            "success": False,
+            "error": (
+                "Unknown notice. Use daily_digest, daily_wx, "
+                "channel_directory, or nws_alerts"
+            ),
+        }
 
     def _build_daily_digest(self) -> str | None:
         """Build a compact daily mesh network update for LoRa payloads."""
