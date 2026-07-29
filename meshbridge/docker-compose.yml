@@ -1,0 +1,15 @@
+services:
+  meshbridge:
+    build: .
+    restart: unless-stopped
+    volumes:
+      - ./config.yaml:/config/config.yaml:ro
+      # Passthrough MeshCore companion USB device
+      - /dev/ttyACM0:/dev/ttyACM0
+    devices:
+      - /dev/ttyACM0:/dev/ttyACM0
+    group_add:
+      - dialout
+    network_mode: host
+    environment:
+      - MESHBRIDGE_CONFIG=/config/config.yaml

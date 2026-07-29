@@ -1,0 +1,45 @@
+# Meshtastic ↔ MeshCore channel bridge configuration
+# Copy to config.yaml and fill in local values.
+
+dry_run: true  # log would-send actions without transmitting
+log_level: INFO
+
+meshtastic:
+  mqtt_broker: "127.0.0.1"
+  mqtt_port: 1883
+  mqtt_username: ""
+  mqtt_password: ""
+  # Same topic pattern malla-capture uses (protobuf ServiceEnvelope)
+  mqtt_topic: "msh/+/+/+/+"
+  # Secondary channel name as shown in Meshtastic / MQTT channel_id
+  channel_name: "MeshCore"
+  # Base64 PSK for the MeshCore channel (from Meshtastic channel settings)
+  channel_key: "REPLACE_WITH_BASE64_PSK"
+  # Channel list index on the node used by Malla bot for TX (often 1)
+  channel_index: 1
+  malla_bot_url: "http://127.0.0.1:5008/api/bot/send"
+  # Optional: ignore echoes from the gateway Meshtastic node (!aabbccdd)
+  gateway_node_id: ""
+
+meshcore:
+  # USB companion for TX (and primary RX). Leave empty to disable companion.
+  companion_serial: "/dev/ttyACM0"
+  # Slot configured as #meshtastic on the companion
+  channel_index: 1
+  channel_name: "#meshtastic"
+  # Optional MQTT wide RX (Format 1 observer packets). Empty disables.
+  mqtt_broker: "127.0.0.1"
+  mqtt_port: 1883
+  mqtt_username: ""
+  mqtt_password: ""
+  mqtt_topic: "meshcore/+/+/packets"
+  # Optional: ignore echoes from companion pubkey (hex prefix or full)
+  companion_pubkey: ""
+
+bridge:
+  prefix_from_meshcore: "[MC]"
+  prefix_from_meshtastic: "[MT]"
+  min_send_interval_sec: 2.0
+  max_meshcore_chars: 133
+  max_meshtastic_chars: 228
+  fingerprint_ttl_sec: 120

@@ -1,0 +1,33 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "meshbridge"
+version = "0.1.0"
+description = "Bidirectional Meshtastic ↔ MeshCore channel text gateway"
+readme = "README.md"
+requires-python = ">=3.11"
+license = { text = "MIT" }
+authors = [{ name = "rootpathfinder" }]
+dependencies = [
+  "aiohttp>=3.9",
+  "cryptography>=41",
+  "meshtastic>=2.3",
+  "paho-mqtt>=2.0",
+  "PyYAML>=6.0",
+]
+
+[project.optional-dependencies]
+meshcore = ["meshcore>=2.3"]
+dev = ["pytest>=8.0", "pytest-asyncio>=0.23"]
+
+[project.scripts]
+meshbridge = "meshbridge.__main__:main"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+asyncio_mode = "auto"
