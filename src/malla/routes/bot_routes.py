@@ -653,18 +653,12 @@ def api_bot_channels():
         from ..database.channel_directory_repository import (
             ChannelDirectoryRepository,
         )
-        from ..utils.channel_url import generate_channel_url
 
         active_only = request.args.get("active_only", "true").lower() == "true"
         channels = ChannelDirectoryRepository.get_all_channels(active_only=active_only)
 
-        # Attach add-mode Meshtastic URLs (?add=true) so clients append
-        # the channel without replacing LongFast / existing channels.
-        for ch in channels:
-            ch["url"] = generate_channel_url(
-                ch["channel_name"], ch.get("psk", "AQ==")
-            )
-
+        # Name + PSK only — do not attach Meshtastic share links.
+        # Those links have wiped existing channels on some iOS clients.
         return jsonify({"channels": channels, "count": len(channels)})
 
     except Exception as e:
@@ -698,10 +692,6 @@ def api_bot_add_channel():
         )
 
         if result["success"]:
-            # Attach an add-mode Meshtastic URL to the new channel
-            from ..utils.channel_url import generate_channel_url
-
-            result["channel"]["url"] = generate_channel_url(channel_name, psk)
             return jsonify(result)
         else:
             return jsonify(result), 409
@@ -718,15 +708,11 @@ def api_bot_channel_info(channel_name: str):
         from ..database.channel_directory_repository import (
             ChannelDirectoryRepository,
         )
-        from ..utils.channel_url import generate_channel_url
 
         channel = ChannelDirectoryRepository.get_channel(channel_name)
         if not channel:
             return jsonify({"error": f"Channel '{channel_name}' not found"}), 404
 
-        channel["url"] = generate_channel_url(
-            channel["channel_name"], channel.get("psk", "AQ==")
-        )
         return jsonify(channel)
 
     except Exception as e:

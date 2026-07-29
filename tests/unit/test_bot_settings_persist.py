@@ -130,7 +130,7 @@ class TestBotSettingsPersistence:
 
 class TestQuietChannelDirectory:
     @pytest.mark.unit
-    def test_broadcast_omits_psks(self, bot_service: BotService):
+    def test_broadcast_includes_name_and_key_not_links(self, bot_service: BotService):
         channels = [
             {"channel_name": "Spaces", "psk": "secret1", "description": "chat"},
             {"channel_name": "Weather", "psk": "secret2", "description": ""},
@@ -146,14 +146,15 @@ class TestQuietChannelDirectory:
 
         bot_service.queue_message.assert_called_once()
         text = bot_service.queue_message.call_args.kwargs["text"]
-        assert "secret1" not in text
-        assert "secret2" not in text
         assert "Spaces" in text
         assert "Weather" in text
-        assert "chanurl" in text
+        assert "secret1" in text
+        assert "secret2" in text
+        assert "meshtastic.org" not in text
+        assert "Add manually" in text
 
     @pytest.mark.unit
-    def test_channelinfo_hides_key_on_public(self, bot_service: BotService):
+    def test_channelinfo_shows_key_without_link(self, bot_service: BotService):
         ch = {
             "channel_name": "Spaces",
             "psk": "supersecret",
@@ -181,6 +182,26 @@ class TestQuietChannelDirectory:
                 )
             )
 
-        assert "supersecret" not in public
-        assert "DM for key" in public
+        assert "Key: supersecret" in public
         assert "Key: supersecret" in private
+        assert "meshtastic.org" not in public
+        assert "Add manually" in public
+
+    @pytest.mark.unit
+    def test_chanurl_returns_name_and_key(self, bot_service: BotService):
+        channels = [
+            {"channel_name": "MeshCore", "psk": "AQ==", "description": "bridge"},
+        ]
+        with patch(
+            "src.malla.database.channel_directory_repository."
+            "ChannelDirectoryRepository.get_all_channels",
+            return_value=channels,
+        ):
+            text = bot_service._cmd_chanurl(
+                SimpleNamespace(args=["1"], is_dm=False, command="chanurl")
+            )
+
+        assert "MeshCore" in text
+        assert "Key: AQ==" in text
+        assert "meshtastic.org" not in text
+        assert "Add manually" in text
