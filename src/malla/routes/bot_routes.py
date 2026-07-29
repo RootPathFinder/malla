@@ -642,6 +642,62 @@ def api_bot_toggle_command(command_name: str):
 
 
 # ============================================================================
+# API Routes - Radio node channels (gateway slots)
+# ============================================================================
+
+
+@bot_bp.route("/api/bot/node-channels")
+def api_bot_node_channels():
+    """List Meshtastic radio channel slots from the connected bot node.
+
+    Returns name + index for each configured slot (0–7). Used by meshbridge
+    to resolve e.g. LongFast → channel_index without hard-coding slot 0.
+    Unauthenticated like ``/api/bot/send`` — keep Malla off the public internet.
+    """
+    try:
+        bot = get_bot_service()
+        publisher = bot._get_publisher()
+        channels: list[dict] = []
+        if (
+            publisher is not None
+            and publisher.is_connected
+            and publisher._interface is not None
+        ):
+            local_node = publisher._interface.localNode
+            node_channels = getattr(local_node, "channels", None) if local_node else None
+            if node_channels:
+                for channel in node_channels:
+                    if not channel or not hasattr(channel, "index"):
+                        continue
+                    try:
+                        idx = int(channel.index)
+                    except (TypeError, ValueError):
+                        continue
+                    if not 0 <= idx <= 7:
+                        continue
+                    name = "Primary" if idx == 0 else f"Channel {idx}"
+                    settings = getattr(channel, "settings", None)
+                    if settings is not None:
+                        raw = getattr(settings, "name", None) or ""
+                        if str(raw).strip():
+                            name = str(raw).strip()
+                    channels.append({"index": idx, "name": name})
+        channels.sort(key=lambda row: row["index"])
+        return jsonify(
+            {
+                "channels": channels,
+                "count": len(channels),
+                "connected": bool(channels) or (
+                    publisher is not None and publisher.is_connected
+                ),
+            }
+        )
+    except Exception as e:
+        logger.error(f"Error listing node channels: {e}")
+        return jsonify({"error": str(e), "channels": []}), 500
+
+
+# ============================================================================
 # API Routes - Channel Directory
 # ============================================================================
 
