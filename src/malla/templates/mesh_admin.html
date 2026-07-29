@@ -2261,6 +2261,58 @@
                         </div>
                     </div>
 
+                    <!-- LongFast Announcement -->
+                    <div class="row">
+                        <div class="col-12 mb-4">
+                            <div class="card border-primary">
+                                <div class="card-header bg-primary-subtle">
+                                    <i class="bi bi-megaphone"></i> Announce on LongFast
+                                </div>
+                                <div class="card-body">
+                                    <p class="small text-muted mb-3">
+                                        Broadcast a one-shot announcement on the bot
+                                        <strong>Response Channel</strong> (usually LongFast).
+                                        Keep it short — Meshtastic packets are ~230 characters.
+                                    </p>
+                                    <div class="mb-2 d-flex flex-wrap gap-2">
+                                        <button type="button" class="btn btn-outline-secondary btn-sm"
+                                                onclick="fillMeshCoreBridgeAnnounce()">
+                                            <i class="bi bi-lightning-charge"></i> MeshCore bridge preset
+                                        </button>
+                                        <button type="button" class="btn btn-outline-secondary btn-sm"
+                                                onclick="document.getElementById('botAnnounceText').value=''; updateAnnounceCharCount();">
+                                            Clear
+                                        </button>
+                                    </div>
+                                    <div class="mb-2">
+                                        <label class="form-label" for="botAnnounceText">Announcement</label>
+                                        <textarea class="form-control" id="botAnnounceText" rows="3"
+                                                  maxlength="230"
+                                                  placeholder="Write an announcement for LongFast…"
+                                                  oninput="updateAnnounceCharCount()"></textarea>
+                                        <div class="form-text d-flex justify-content-between">
+                                            <span>Uses channel index from Response Channel unless overridden below.</span>
+                                            <span><span id="botAnnounceCharCount">0</span>/230</span>
+                                        </div>
+                                    </div>
+                                    <div class="row g-2 align-items-end">
+                                        <div class="col-md-3">
+                                            <label class="form-label small mb-1" for="botAnnounceChannelIndex">Channel index</label>
+                                            <input type="number" class="form-control form-control-sm"
+                                                   id="botAnnounceChannelIndex" min="0" max="7"
+                                                   placeholder="Response channel">
+                                        </div>
+                                        <div class="col-md-9 d-flex gap-2 justify-content-md-end">
+                                            <button type="button" class="btn btn-primary" onclick="sendLongFastAnnounce()">
+                                                <i class="bi bi-megaphone"></i> Announce
+                                            </button>
+                                        </div>
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+
                     <!-- Manual Message Sending (collapsed by default) -->
                     <div class="row">
                         <div class="col-12 mb-4">
@@ -10617,6 +10669,7 @@
             setIfBlurred('botMinSendInterval', data.min_send_interval ?? 2);
             setIfBlurred('botListenChannels', (data.listen_channels || []).join(', '));
             setIfBlurred('botRespondChannelIndex', data.respond_channel_index ?? 1);
+            syncAnnounceChannelPlaceholder();
             setIfBlurred(
                 'botDailyDigestHours',
                 formatBotHours(data.daily_digest_hours, data.daily_digest_hour, 8)
@@ -11097,6 +11150,80 @@
                 refreshBotStatus();
             } else {
                 showAlert('danger', data.error || 'Failed to queue message');
+            }
+        } catch (error) {
+            showAlert('danger', `Error: ${error.message}`);
+        }
+    }
+
+    const MESHCORE_BRIDGE_ANNOUNCE =
+        '📡 MeshCore bridge is live! Add channel "MeshCore" (PSK AQ==) to chat both ways with MeshCore #meshtastic. Bridged msgs use [MT]/[MC] tags.';
+
+    function updateAnnounceCharCount() {
+        const el = document.getElementById('botAnnounceText');
+        const count = document.getElementById('botAnnounceCharCount');
+        if (!el || !count) return;
+        count.textContent = String(el.value.length);
+    }
+
+    function fillMeshCoreBridgeAnnounce() {
+        const el = document.getElementById('botAnnounceText');
+        if (!el) return;
+        el.value = MESHCORE_BRIDGE_ANNOUNCE;
+        updateAnnounceCharCount();
+    }
+
+    function syncAnnounceChannelPlaceholder() {
+        const respond = document.getElementById('botRespondChannelIndex');
+        const announce = document.getElementById('botAnnounceChannelIndex');
+        if (!respond || !announce) return;
+        if (announce.value === '') {
+            announce.placeholder = `Response ch ${respond.value || 0}`;
+        }
+    }
+
+    async function sendLongFastAnnounce() {
+        const textEl = document.getElementById('botAnnounceText');
+        const text = (textEl?.value || '').trim();
+        if (!text) {
+            showAlert('warning', 'Please enter an announcement');
+            return;
+        }
+        if (text.length > 230) {
+            showAlert('warning', 'Announcement must be 230 characters or fewer');
+            return;
+        }
+
+        const channelInput = document.getElementById('botAnnounceChannelIndex');
+        const respondEl = document.getElementById('botRespondChannelIndex');
+        let channelIndex = channelInput?.value !== ''
+            ? parseInt(channelInput.value, 10)
+            : parseInt(respondEl?.value || '0', 10);
+        if (Number.isNaN(channelIndex)) {
+            channelIndex = 0;
+        }
+
+        const preview = text.length > 80 ? `${text.substring(0, 80)}…` : text;
+        if (!confirm(`Broadcast this announcement on channel index ${channelIndex} (LongFast / response channel)?\n\n${preview}`)) {
+            return;
+        }
+
+        try {
+            const response = await fetch('/api/bot/announce', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                    text,
+                    channel_index: channelIndex,
+                    priority: 'high',
+                })
+            });
+            const data = await response.json();
+            if (data.success) {
+                showAlert('success', `Announcement queued on channel ${data.channel_index} (queue: ${data.queue_size})`);
+                refreshBotStatus();
+            } else {
+                showAlert('danger', data.error || 'Failed to queue announcement');
             }
         } catch (error) {
             showAlert('danger', `Error: ${error.message}`);
