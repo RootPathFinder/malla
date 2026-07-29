@@ -478,6 +478,65 @@ def api_bot_send_message():
         return jsonify({"error": str(e)}), 500
 
 
+@bot_bp.route("/api/bot/announce", methods=["POST"])
+def api_bot_announce():
+    """Broadcast an announcement on LongFast (bot response channel).
+
+    Request body:
+        text: Announcement text (required)
+        channel_index: Optional override (default: configured respond channel)
+        priority: 'high', 'normal', or 'low' (default: high)
+    """
+    try:
+        bot = get_bot_service()
+        if not bot.is_running:
+            return jsonify({"error": "Bot is not running"}), 400
+
+        data = request.get_json() or {}
+        text = (data.get("text") or "").strip()
+        if not text:
+            return jsonify({"error": "text is required"}), 400
+        if len(text) > 230:
+            return jsonify({"error": "text must be 230 characters or fewer"}), 400
+
+        channel_index = data.get("channel_index")
+        if channel_index is None:
+            channel_index = bot._respond_channel_index
+        else:
+            channel_index = int(channel_index)
+
+        priority_str = str(data.get("priority", "high")).lower()
+        priority_map = {
+            "high": BotMessagePriority.HIGH,
+            "normal": BotMessagePriority.NORMAL,
+            "low": BotMessagePriority.LOW,
+        }
+        priority = priority_map.get(priority_str, BotMessagePriority.HIGH)
+
+        bot.queue_message(
+            text=text,
+            destination=0xFFFFFFFF,
+            channel_index=channel_index,
+            priority=priority,
+        )
+        logger.info(
+            "Queued LongFast announcement on channel_index=%s (%d chars)",
+            channel_index,
+            len(text),
+        )
+        return jsonify(
+            {
+                "success": True,
+                "message": "Announcement queued",
+                "channel_index": channel_index,
+                "queue_size": bot.get_queue_size(),
+            }
+        )
+    except Exception as e:
+        logger.error(f"Error announcing via bot: {e}")
+        return jsonify({"error": str(e)}), 500
+
+
 @bot_bp.route("/api/bot/queue")
 def api_bot_queue():
     """Get current message queue status."""

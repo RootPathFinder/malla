@@ -60,6 +60,17 @@ def test_bot_config_uses_accordion_and_run_notices():
 
 
 @pytest.mark.unit
+def test_bot_admin_has_longfast_announce():
+    html = MESH_ADMIN.read_text(encoding="utf-8")
+    assert "Announce on LongFast" in html
+    assert 'id="botAnnounceText"' in html
+    assert "fillMeshCoreBridgeAnnounce" in html
+    assert "sendLongFastAnnounce" in html
+    assert "/api/bot/announce" in html
+    assert "MESHCORE_BRIDGE_ANNOUNCE" in html
+
+
+@pytest.mark.unit
 def test_save_bot_config_applies_traceroute_format_from_response():
     html = MESH_ADMIN.read_text(encoding="utf-8")
     assert "botTracerouteFormat" in html
