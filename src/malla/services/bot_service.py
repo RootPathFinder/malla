@@ -549,7 +549,7 @@ class BotService:
         self.register_command("addchannel", self._cmd_addchannel, "Register a channel")
         self.register_command("rmchannel", self._cmd_rmchannel, "Remove your channel")
         self.register_command("channelinfo", self._cmd_channelinfo, "Channel details")
-        self.register_command("chanurl", self._cmd_chanurl, "Get add-channel link")
+        self.register_command("chanurl", self._cmd_chanurl, "Get channel name + key")
 
     @property
     def is_enabled(self) -> bool:
@@ -4531,6 +4531,7 @@ class BotService:
             if not channels:
                 return "📻 No channels registered. Use !addchannel <name> <key> [desc]"
 
+            prefix = self._command_prefix
             lines = [f"📻 Channels ({len(channels)}):"]
             for i, ch in enumerate(channels, 1):
                 name = ch["channel_name"]
@@ -4542,7 +4543,7 @@ class BotService:
                 else:
                     lines.append(f"{i}. {name}")
 
-            lines.append("!chanurl # for add-link")
+            lines.append(f"{prefix}chanurl # for name+key")
 
             # Truncate to fit Meshtastic payload (~230 bytes)
             result = "\n".join(lines)
@@ -4637,20 +4638,26 @@ class BotService:
             return "Failed to remove channel"
 
     def _cmd_chanurl(self, ctx: CommandContext) -> str:
-        """Handle !chanurl <number> - return an add-mode channel URL.
+        """Handle !chanurl <number> - return channel name + key.
 
         The number corresponds to the position shown by !channels.
-        The URL uses Meshtastic ``?add=true`` so clients append the
-        channel without replacing LongFast / existing channels.
+        We intentionally avoid Meshtastic share links: on some clients
+        (notably iOS) those links have wiped existing channels.
         """
         try:
             if not ctx.args:
-                return "Usage: !chanurl <#>\nAdds channel (keeps LongFast)"
+                return (
+                    f"Usage: {self._command_prefix}chanurl <#>\n"
+                    "Replies with channel name + key"
+                )
 
             try:
                 idx = int(ctx.args[0])
             except ValueError:
-                return "Please provide a channel number (e.g. !chanurl 1)"
+                return (
+                    f"Please provide a channel number "
+                    f"(e.g. {self._command_prefix}chanurl 1)"
+                )
 
             from ..database.channel_directory_repository import (
                 ChannelDirectoryRepository,
@@ -4666,17 +4673,14 @@ class BotService:
             ch = channels[idx - 1]
             name = ch["channel_name"]
             psk = ch.get("psk", "AQ==")
-
-            from ..utils.channel_url import generate_channel_url
-
-            url = generate_channel_url(name, psk)
-            if not url:
-                return f"📻 {name}\nKey: {psk}\n(URL generation unavailable)"
-
-            return f"📻 Add {name}\n{url}"
+            return (
+                f"📻 {name}\n"
+                f"Key: {psk}\n"
+                "Add manually in app (name + key)"
+            )
         except Exception as e:
             logger.error(f"Error in chanurl command: {e}", exc_info=True)
-            return "Channel URL unavailable"
+            return "Channel info unavailable"
 
     def _cmd_channelinfo(self, ctx: CommandContext) -> str:
         """Handle !channelinfo <name> command - show channel details."""
@@ -4702,11 +4706,9 @@ class BotService:
                     desc = desc[:57] + "..."
                 lines.append(desc)
 
-            # Keep PSKs off public LongFast; share via DM or !chanurl add-link
-            if ctx.is_dm:
-                lines.append(f"Key: {ch['psk']}")
-            else:
-                lines.append(f"DM for key, or {self._command_prefix}chanurl #")
+            # Share name + key only (no Meshtastic links — they can wipe iOS channels)
+            lines.append(f"Key: {ch['psk']}")
+            lines.append("Add manually in app")
 
             if ch.get("registered_by_name"):
                 lines.append(f"By: {ch['registered_by_name']}")
@@ -4771,7 +4773,7 @@ class BotService:
         logger.info("Channel directory broadcast thread stopped")
 
     def _broadcast_channel_directory(self) -> None:
-        """Build and send a quiet channel directory ad (no PSKs on LongFast)."""
+        """Build and send a channel directory ad with name + key (no share links)."""
         try:
             from ..database.channel_directory_repository import (
                 ChannelDirectoryRepository,
@@ -4782,33 +4784,35 @@ class BotService:
                 logger.debug("No channels to broadcast")
                 return
 
-            prefix = self._command_prefix
-            # Compact numbered names only — keys/links via !chanurl
-            names: list[str] = []
-            for i, ch in enumerate(channels, 1):
-                name = str(ch["channel_name"] or "")[:12]
-                if name:
-                    names.append(f"{i}.{name}")
+            # Name + key only — Meshtastic share links can wipe channels on iOS.
+            entries: list[str] = []
+            for ch in channels:
+                name = str(ch["channel_name"] or "").strip()
+                if not name:
+                    continue
+                psk = str(ch.get("psk") or "AQ==").strip() or "AQ=="
+                # Keep each entry compact for the LoRa budget
+                entries.append(f"{name[:16]} {psk}")
 
-            if not names:
+            if not entries:
                 return
 
-            header = f"📻 Channels ({len(names)}):"
-            footer = f"{prefix}chanurl # to add"
-            # Fit as many names as possible under the LoRa budget
-            message = header + "\n" + " ".join(names) + "\n" + footer
+            header = f"📻 Channels ({len(entries)}):"
+            footer = "Add manually: name + key"
+            # Prefer one entry per line; fall back to packing if needed
+            message = header + "\n" + "\n".join(entries) + "\n" + footer
             if len(message.encode("utf-8")) > 220:
                 kept: list[str] = []
-                for entry in names:
-                    candidate = header + "\n" + " ".join([*kept, entry]) + "\n" + footer
+                for entry in entries:
+                    candidate = header + "\n" + "\n".join([*kept, entry]) + "\n" + footer
                     if len(candidate.encode("utf-8")) > 220:
                         break
                     kept.append(entry)
                 if kept:
-                    omitted = len(names) - len(kept)
-                    message = header + "\n" + " ".join(kept)
+                    omitted = len(entries) - len(kept)
+                    message = header + "\n" + "\n".join(kept)
                     if omitted:
-                        message += f" +{omitted}"
+                        message += f"\n+{omitted} more"
                     message += "\n" + footer
                 else:
                     message = f"{header}\n{footer}"

@@ -2315,9 +2315,9 @@
                                                    onchange="loadChannelDirectory()">
                                             <label class="form-check-label small" for="channelDirShowInactive">Show inactive</label>
                                         </div>
-                                        <span class="badge bg-success-subtle text-success border border-success-subtle ms-2"
-                                              title="Generated links use ?add=true so clients append the channel without wiping LongFast">
-                                            add-mode links
+                                        <span class="badge bg-secondary-subtle text-secondary border border-secondary-subtle ms-2"
+                                              title="Directory shares channel name + key only. Meshtastic share links are disabled (they can wipe channels on iOS).">
+                                            name + key
                                         </span>
                                         <button class="btn btn-outline-primary btn-sm" onclick="loadChannelDirectory()" title="Refresh">
                                             <i class="bi bi-arrow-clockwise"></i>
@@ -11212,22 +11212,13 @@
                     ? escapeHtml(ch.description)
                     : '<span class="text-muted">—</span>';
 
-                // Meshtastic URL link (clickable channel name)
-                const channelNameDisplay = ch.url
-                    ? `<a href="${escapeHtml(ch.url)}" target="_blank" rel="noopener"
-                          class="text-decoration-none" title="Open in Meshtastic app to add this channel">
-                          <strong>${escapeHtml(ch.channel_name)}</strong>
-                          <i class="bi bi-box-arrow-up-right ms-1" style="font-size: 0.7em;"></i>
-                       </a>`
-                    : `<strong>${escapeHtml(ch.channel_name)}</strong>`;
-
-                // Copy URL button
-                const copyUrlBtn = ch.url
-                    ? `<button class="btn btn-outline-info" onclick="copyChannelUrl('${escapeHtml(ch.url)}', this)"
-                              title="Copy channel link">
-                          <i class="bi bi-link-45deg"></i>
-                       </button>`
-                    : '';
+                const channelNameDisplay = `<strong>${escapeHtml(ch.channel_name)}</strong>`;
+                const copyCredsBtn = `
+                    <button class="btn btn-outline-info"
+                            onclick="copyChannelCredentials('${escapeHtml(ch.channel_name)}', '${escapeHtml(ch.psk || 'AQ==')}', this)"
+                            title="Copy channel name + key">
+                        <i class="bi bi-clipboard"></i>
+                    </button>`;
 
                 return `
                     <tr>
@@ -11238,7 +11229,7 @@
                         <td>${statusBadge}</td>
                         <td>
                             <div class="btn-group btn-group-sm">
-                                ${copyUrlBtn}
+                                ${copyCredsBtn}
                                 <button class="btn btn-outline-primary" onclick="showEditChannelModal('${escapeHtml(ch.channel_name)}')"
                                         title="Edit channel">
                                     <i class="bi bi-pencil"></i>
@@ -11432,8 +11423,9 @@
         }
     }
 
-    function copyChannelUrl(url, btn) {
-        navigator.clipboard.writeText(url).then(() => {
+    function copyChannelCredentials(name, psk, btn) {
+        const text = `Channel: ${name}\nKey: ${psk}\nAdd manually in Meshtastic (name + key)`;
+        const markCopied = () => {
             const origHTML = btn.innerHTML;
             btn.innerHTML = '<i class="bi bi-check-lg"></i>';
             btn.classList.replace('btn-outline-info', 'btn-success');
@@ -11441,16 +11433,16 @@
                 btn.innerHTML = origHTML;
                 btn.classList.replace('btn-success', 'btn-outline-info');
             }, 1500);
-            showAlert('success', 'Channel link copied to clipboard');
-        }).catch(() => {
-            // Fallback: select text in a temporary input
-            const tmp = document.createElement('input');
-            tmp.value = url;
+            showAlert('success', 'Channel name + key copied');
+        };
+        navigator.clipboard.writeText(text).then(markCopied).catch(() => {
+            const tmp = document.createElement('textarea');
+            tmp.value = text;
             document.body.appendChild(tmp);
             tmp.select();
             document.execCommand('copy');
             document.body.removeChild(tmp);
-            showAlert('success', 'Channel link copied');
+            markCopied();
         });
     }
 

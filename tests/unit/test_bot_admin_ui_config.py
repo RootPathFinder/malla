@@ -66,3 +66,12 @@ def test_save_bot_config_applies_traceroute_format_from_response():
     assert "traceroute_format" in html
     # Saved format is written back from the PUT response config payload.
     assert "data.config.traceroute_format" in html
+
+
+@pytest.mark.unit
+def test_channel_directory_ui_shares_name_and_key_not_links():
+    html = MESH_ADMIN.read_text(encoding="utf-8")
+    assert "name + key" in html
+    assert "copyChannelCredentials" in html
+    assert "copyChannelUrl" not in html
+    assert "add-mode links" not in html
