@@ -4539,7 +4539,7 @@ class BotService:
 
         prefix = self._command_prefix
         header = "📻 Community channels\nAdd in Meshtastic with name + key:"
-        footer = f"Skip share links · {prefix}channelinfo <name>"
+        footer = f"{prefix}channelinfo <name> for details"
 
         blocks: list[str] = []
         for i, ch in enumerate(channels, 1):
@@ -4786,7 +4786,7 @@ class BotService:
                     desc = desc[:77] + "..."
                 lines.append(desc)
             lines.append("Add in Meshtastic → Channels → +")
-            lines.append("Enter name + key manually (skip share links)")
+            lines.append("Enter name + key manually")
             result = "\n".join(lines)
             if len(result.encode("utf-8")) > self._CHANNEL_DIR_MAX_BYTES:
                 result = result.encode("utf-8")[: self._CHANNEL_DIR_MAX_BYTES - 3].decode(
@@ -4824,7 +4824,7 @@ class BotService:
             # Share name + key only (no Meshtastic links — they can wipe iOS channels)
             lines.append(f"Key: {ch['psk']}")
             lines.append("Add in Meshtastic → Channels → +")
-            lines.append("Enter name + key (skip share links)")
+            lines.append("Enter name + key")
 
             if ch.get("registered_by_name"):
                 lines.append(f"By: {ch['registered_by_name']}")

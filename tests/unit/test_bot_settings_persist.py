@@ -160,7 +160,8 @@ class TestQuietChannelDirectory:
         assert "secret2" in text
         assert "meshtastic.org" not in text
         assert "Add in Meshtastic" in text
-        assert "Skip share links" in text
+        assert "channelinfo" in text
+        assert "Skip share links" not in text
         for call in bot_service.queue_message.call_args_list:
             assert len(call.kwargs["text"].encode("utf-8")) <= 220
 
@@ -206,7 +207,7 @@ class TestQuietChannelDirectory:
         assert "Key: supersecret" in public
         assert "meshtastic.org" not in public
         assert "Add in Meshtastic" in public
-        assert "skip share links" in public.lower()
+        assert "skip share links" not in public.lower()
 
     @pytest.mark.unit
     def test_chanurl_returns_verbose_name_and_key(self, bot_service: BotService):
@@ -231,4 +232,4 @@ class TestQuietChannelDirectory:
         assert "Bridge MT to MeshCore" in text
         assert "meshtastic.org" not in text
         assert "Add in Meshtastic" in text
-        assert "skip share links" in text.lower()
+        assert "skip share links" not in text.lower()
