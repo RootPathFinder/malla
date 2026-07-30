@@ -2,6 +2,11 @@
 
 {% block title %}Mesh Topology - {{ APP_NAME }}{% endblock %}
 
+{% block head_libs %}
+<link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"
+      integrity="sha256-p4NxAoJBhIIN+hmNHrzRCf9tD/miZyoHS5obTRR9BMY=" crossorigin="">
+{% endblock head_libs %}
+
 {% block extra_css %}
 <style>
     .topology-container {
@@ -121,6 +126,43 @@
     .sort-icon.active {
         opacity: 1;
     }
+
+    #router-reach-map {
+        height: 560px;
+        width: 100%;
+        border-radius: 0.5rem;
+        border: 1px solid var(--bs-border-color);
+        background: var(--bs-tertiary-bg);
+    }
+
+    .router-reach-layer-list {
+        max-height: 560px;
+        overflow-y: auto;
+    }
+
+    .router-reach-swatch {
+        display: inline-block;
+        width: 0.75rem;
+        height: 0.75rem;
+        border-radius: 50%;
+        margin-right: 0.4rem;
+        vertical-align: middle;
+        border: 1px solid rgba(0, 0, 0, 0.15);
+    }
+
+    .router-reach-item {
+        border-bottom: 1px solid var(--bs-border-color);
+        padding: 0.55rem 0.25rem;
+    }
+
+    .router-reach-item:last-child {
+        border-bottom: none;
+    }
+
+    .router-reach-meta {
+        font-size: 0.75rem;
+        color: var(--bs-secondary-color);
+    }
 </style>
 {% endblock %}
 
@@ -239,6 +281,11 @@
         <li class="nav-item" role="presentation">
             <button class="nav-link" id="hops-tab" data-bs-toggle="tab" data-bs-target="#hops-pane" type="button" role="tab">
                 <i class="bi bi-signpost-split"></i> Mesh Hops
+            </button>
+        </li>
+        <li class="nav-item" role="presentation">
+            <button class="nav-link" id="router-reach-tab" data-bs-toggle="tab" data-bs-target="#router-reach-pane" type="button" role="tab">
+                <i class="bi bi-broadcast-pin"></i> Router Reach
             </button>
         </li>
     </ul>
@@ -477,6 +524,51 @@
                 </div>
             </div>
         </div>
+
+        <!-- Router Reach Map -->
+        <div class="tab-pane fade" id="router-reach-pane" role="tabpanel">
+            <div class="card mb-3">
+                <div class="card-body py-3">
+                    <div class="d-flex flex-wrap justify-content-between align-items-start gap-2">
+                        <div>
+                            <h5 class="mb-1"><i class="bi bi-broadcast-pin"></i> Router Reach Layers</h5>
+                            <p class="text-muted small mb-0">
+                                Same direct-RF Reach method as node detail, overlaid for every located router.
+                                Solid spokes = both-ways; dashed = one-way. Toggle layers on the right.
+                            </p>
+                        </div>
+                        <div class="text-end small text-muted" id="routerReachStats">
+                            Loading…
+                        </div>
+                    </div>
+                </div>
+            </div>
+            <div class="row g-3">
+                <div class="col-lg-8">
+                    <div id="router-reach-map"></div>
+                    <div id="router-reach-empty" class="alert alert-info mt-3 d-none mb-0">
+                        No located routers with Reach data for this period.
+                    </div>
+                </div>
+                <div class="col-lg-4">
+                    <div class="card h-100">
+                        <div class="card-header d-flex justify-content-between align-items-center">
+                            <span><i class="bi bi-layers"></i> Layers</span>
+                            <div class="btn-group btn-group-sm">
+                                <button type="button" class="btn btn-outline-secondary" id="routerReachSelectAll">All</button>
+                                <button type="button" class="btn btn-outline-secondary" id="routerReachSelectNone">None</button>
+                            </div>
+                        </div>
+                        <div class="card-body router-reach-layer-list p-2" id="routerReachLayerList">
+                            <div class="text-center text-muted py-4">
+                                <div class="spinner-border spinner-border-sm" role="status"></div>
+                                <div class="small mt-2">Loading router layers…</div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
     </div>
 </div>
 
@@ -499,11 +591,17 @@
 {% endblock %}
 
 {% block extra_js %}
+<script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"
+        integrity="sha256-20nQCchB9co0qIjJZRGuk2/Z9VM+kNiyxNV1lvTlZBo=" crossorigin=""></script>
 <script>
 (function() {
     let topologyData = null;
     let stabilityData = null;
     let hopData = null;
+    let routerReachData = null;
+    let routerReachMap = null;
+    let routerReachLayers = {};
+    let routerReachVisible = new Set();
     let currentSort = { column: 'avg_snr', direction: 'desc' };
 
     // Initialize
@@ -515,16 +613,24 @@
             loadTopology();
             loadStability();
             hopData = null;  // Force reload on next tab view
+            routerReachData = null;
             if (document.getElementById('hops-tab').classList.contains('active')) {
                 loadHopStats();
+            }
+            if (document.getElementById('router-reach-tab').classList.contains('active')) {
+                loadRouterReach(true);
             }
         });
 
         document.getElementById('hoursFilter').addEventListener('change', function() {
             loadTopology();
             hopData = null;  // Reset hop data when hours change
+            routerReachData = null;
             if (document.getElementById('hops-tab').classList.contains('active')) {
                 loadHopStats();
+            }
+            if (document.getElementById('router-reach-tab').classList.contains('active')) {
+                loadRouterReach(true);
             }
         });
         document.getElementById('qualityFilter').addEventListener('change', renderLinks);
@@ -537,6 +643,20 @@
 
         document.getElementById('hops-tab').addEventListener('shown.bs.tab', function() {
             if (!hopData) loadHopStats();
+        });
+
+        document.getElementById('router-reach-tab').addEventListener('shown.bs.tab', function() {
+            loadRouterReach(false);
+            setTimeout(() => {
+                if (routerReachMap) routerReachMap.invalidateSize();
+            }, 150);
+        });
+
+        document.getElementById('routerReachSelectAll')?.addEventListener('click', () => {
+            setAllRouterReachVisible(true);
+        });
+        document.getElementById('routerReachSelectNone')?.addEventListener('click', () => {
+            setAllRouterReachVisible(false);
         });
 
         // Sortable table headers
@@ -1038,6 +1158,240 @@
                 </tr>
             `;
         }).join('');
+    }
+
+    function escapeHtml(value) {
+        return String(value ?? '')
+            .replace(/&/g, '&amp;')
+            .replace(/</g, '&lt;')
+            .replace(/>/g, '&gt;')
+            .replace(/"/g, '&quot;')
+            .replace(/'/g, '&#39;');
+    }
+
+    async function loadRouterReach(force) {
+        if (routerReachData && !force) {
+            ensureRouterReachMap();
+            renderRouterReachLayers();
+            return;
+        }
+
+        const hours = document.getElementById('hoursFilter').value;
+        const listEl = document.getElementById('routerReachLayerList');
+        const statsEl = document.getElementById('routerReachStats');
+        if (listEl) {
+            listEl.innerHTML = `
+                <div class="text-center text-muted py-4">
+                    <div class="spinner-border spinner-border-sm" role="status"></div>
+                    <div class="small mt-2">Loading router layers…</div>
+                </div>`;
+        }
+        if (statsEl) statsEl.textContent = 'Loading…';
+
+        try {
+            const response = await fetch(`/mesh/api/router-reach?hours=${hours}`);
+            routerReachData = await response.json();
+            if (routerReachData.error) {
+                throw new Error(routerReachData.error);
+            }
+            routerReachVisible = new Set(
+                (routerReachData.routers || []).map((r) => String(r.node_id))
+            );
+            ensureRouterReachMap();
+            renderRouterReachLayers();
+        } catch (error) {
+            console.error('Failed to load router reach:', error);
+            if (listEl) {
+                listEl.innerHTML = '<div class="alert alert-danger mb-0">Failed to load router reach.</div>';
+            }
+            if (statsEl) statsEl.textContent = 'Failed to load';
+        }
+    }
+
+    function ensureRouterReachMap() {
+        const mapEl = document.getElementById('router-reach-map');
+        if (!mapEl || typeof L === 'undefined') return;
+
+        if (!routerReachMap) {
+            const isDark = document.documentElement.getAttribute('data-bs-theme') === 'dark';
+            const tileUrl = isDark
+                ? 'https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png'
+                : 'https://{s}.basemaps.cartocdn.com/light_all/{z}/{x}/{y}{r}.png';
+            routerReachMap = L.map(mapEl, { zoomControl: true }).setView([39.5, -98.35], 4);
+            L.tileLayer(tileUrl, {
+                attribution: '© OpenStreetMap © CARTO',
+                subdomains: 'abcd',
+                maxZoom: 18
+            }).addTo(routerReachMap);
+        }
+        setTimeout(() => routerReachMap && routerReachMap.invalidateSize(), 100);
+    }
+
+    function clearRouterReachMapLayers() {
+        Object.values(routerReachLayers).forEach((group) => {
+            if (routerReachMap && group) routerReachMap.removeLayer(group);
+        });
+        routerReachLayers = {};
+    }
+
+    function buildRouterReachLayer(router) {
+        const group = L.layerGroup();
+        const color = router.color || '#0d6efd';
+        const center = L.circleMarker([router.latitude, router.longitude], {
+            radius: 9,
+            color,
+            weight: 3,
+            fillColor: color,
+            fillOpacity: 0.95
+        });
+        center.bindPopup(
+            `<strong><a href="/node/${router.node_id}">${escapeHtml(router.node_name)}</a></strong><br>` +
+            `${escapeHtml(router.role)} · ${router.neighbor_count} neighbors`
+        );
+        group.addLayer(center);
+
+        (router.neighbors || []).forEach((peer) => {
+            if (peer.latitude == null || peer.longitude == null) return;
+            const both = !!peer.is_bidirectional;
+            L.polyline(
+                [[router.latitude, router.longitude], [peer.latitude, peer.longitude]],
+                {
+                    color,
+                    weight: both ? 2.5 : 1.5,
+                    opacity: both ? 0.8 : 0.55,
+                    dashArray: both ? null : '5,5'
+                }
+            ).addTo(group);
+
+            const marker = L.circleMarker([peer.latitude, peer.longitude], {
+                radius: 5,
+                color,
+                weight: 1.5,
+                fillColor: color,
+                fillOpacity: 0.75
+            });
+            const snrText = peer.snr != null ? `${Number(peer.snr).toFixed(1)} dB` : 'SNR —';
+            const distText = peer.distance_display || '';
+            marker.bindPopup(
+                `<strong><a href="/node/${peer.node_id}">${escapeHtml(peer.node_name || peer.hex_id || '')}</a></strong><br>` +
+                `via ${escapeHtml(router.node_name)}<br>${snrText}` +
+                `${distText ? ' · ' + escapeHtml(distText) : ''}` +
+                `<br><small>${both ? 'Both-ways' : 'One-way'}</small>`
+            );
+            group.addLayer(marker);
+        });
+        return group;
+    }
+
+    function renderRouterReachLayers() {
+        const listEl = document.getElementById('routerReachLayerList');
+        const statsEl = document.getElementById('routerReachStats');
+        const emptyEl = document.getElementById('router-reach-empty');
+        const mapEl = document.getElementById('router-reach-map');
+        if (!routerReachData) return;
+
+        const routers = routerReachData.routers || [];
+        const stats = routerReachData.statistics || {};
+        if (statsEl) {
+            statsEl.innerHTML =
+                `<div><strong>${stats.routers_mapped || 0}</strong> routers mapped</div>` +
+                `<div>${stats.mapped_reach_links || 0} geo links · ${stats.total_reach_links || 0} total</div>`;
+        }
+
+        clearRouterReachMapLayers();
+
+        if (!routers.length) {
+            if (listEl) {
+                listEl.innerHTML = '<div class="text-muted small p-2">No located routers found.</div>';
+            }
+            if (emptyEl) emptyEl.classList.remove('d-none');
+            if (mapEl) mapEl.classList.add('d-none');
+            return;
+        }
+
+        if (emptyEl) emptyEl.classList.add('d-none');
+        if (mapEl) mapEl.classList.remove('d-none');
+        ensureRouterReachMap();
+
+        const bounds = L.latLngBounds([]);
+        routers.forEach((router) => {
+            const key = String(router.node_id);
+            const group = buildRouterReachLayer(router);
+            routerReachLayers[key] = group;
+            if (routerReachVisible.has(key) && routerReachMap) {
+                group.addTo(routerReachMap);
+            }
+            bounds.extend([router.latitude, router.longitude]);
+            (router.neighbors || []).forEach((peer) => {
+                if (peer.latitude != null && peer.longitude != null) {
+                    bounds.extend([peer.latitude, peer.longitude]);
+                }
+            });
+        });
+
+        if (routerReachMap && bounds.isValid()) {
+            routerReachMap.fitBounds(bounds.pad(0.2));
+        }
+
+        if (listEl) {
+            listEl.innerHTML = routers.map((router) => {
+                const key = String(router.node_id);
+                const checked = routerReachVisible.has(key) ? 'checked' : '';
+                const maxDist = router.summary && router.summary.max_distance_km != null
+                    ? `${router.summary.max_distance_km} km max`
+                    : 'no geo dist';
+                return `
+                    <div class="router-reach-item">
+                        <div class="form-check mb-0">
+                            <input class="form-check-input router-reach-toggle" type="checkbox"
+                                   id="routerReach_${key}" data-node-id="${key}" ${checked}>
+                            <label class="form-check-label" for="routerReach_${key}">
+                                <span class="router-reach-swatch" style="background:${escapeHtml(router.color)}"></span>
+                                <a href="/node/${router.node_id}" class="node-link">${escapeHtml(router.node_name)}</a>
+                            </label>
+                        </div>
+                        <div class="router-reach-meta ms-4">
+                            ${escapeHtml(router.role)} · ${router.neighbor_count} neighbors
+                            (${router.mapped_neighbor_count} mapped) · ${escapeHtml(maxDist)}
+                        </div>
+                    </div>`;
+            }).join('');
+
+            listEl.querySelectorAll('.router-reach-toggle').forEach((input) => {
+                input.addEventListener('change', (event) => {
+                    const nodeId = event.target.dataset.nodeId;
+                    setRouterReachVisible(nodeId, event.target.checked);
+                });
+            });
+        }
+
+        setTimeout(() => routerReachMap && routerReachMap.invalidateSize(), 120);
+    }
+
+    function setRouterReachVisible(nodeId, visible) {
+        const key = String(nodeId);
+        const group = routerReachLayers[key];
+        if (visible) {
+            routerReachVisible.add(key);
+            if (group && routerReachMap && !routerReachMap.hasLayer(group)) {
+                group.addTo(routerReachMap);
+            }
+        } else {
+            routerReachVisible.delete(key);
+            if (group && routerReachMap && routerReachMap.hasLayer(group)) {
+                routerReachMap.removeLayer(group);
+            }
+        }
+    }
+
+    function setAllRouterReachVisible(visible) {
+        if (!routerReachData) return;
+        (routerReachData.routers || []).forEach((router) => {
+            setRouterReachVisible(router.node_id, visible);
+        });
+        document.querySelectorAll('.router-reach-toggle').forEach((input) => {
+            input.checked = visible;
+        });
     }
 })();
 </script>
