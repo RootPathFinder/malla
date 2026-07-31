@@ -11,9 +11,15 @@ def _clear_reach_cache():
     NeighborService._topology_cache.clear()
 
 
-def _locs_for(ids, catalog):
-    id_set = {int(i) for i in ids}
-    return [loc for loc in catalog if int(loc["node_id"]) in id_set]
+def _fake_reach(node_id, *, limit=50, hours=168):
+    return {
+        "node_id": node_id,
+        "node_name": f"Node-{node_id}",
+        "neighbor_count": 0,
+        "center": None,
+        "summary": {"neighbor_count": 0, "with_location": 0},
+        "neighbors": [],
+    }
 
 
 class TestRoleNormalization:
@@ -42,21 +48,20 @@ class TestRouterCandidateDiscovery:
         )
 
         positioned = NeighborService._list_positioned_reach_role_ids(limit=50)
-        # Fixture includes position packets for some routers.
         assert isinstance(positioned, list)
 
         located, stats = NeighborService._resolve_located_routers(
             max_routers=10, topology={"nodes": [], "edges": []}
         )
         assert stats["router_candidates"] > 0
-        # At least one fixture router should decode a GPS position.
         assert stats["routers_with_location"] >= 1 or stats["locations_total"] >= 1
         assert isinstance(located, list)
 
 
 class TestRouterReachLayers:
     @pytest.mark.unit
-    def test_builds_layers_for_located_routers(self):
+    def test_builds_layers_via_zero_hop_neighbors(self):
+        """Router Reach must reuse node-detail get_zero_hop_neighbors."""
         _clear_reach_cache()
         candidates = [
             {
@@ -81,7 +86,7 @@ class TestRouterReachLayers:
                 "last_seen": 1_700_000_200.0,
             },
         ]
-        location_catalog = [
+        locations = [
             {
                 "node_id": 0x11111111,
                 "latitude": 34.1,
@@ -94,33 +99,52 @@ class TestRouterReachLayers:
                 "longitude": -118.3,
                 "role": "ROUTER_CLIENT",
             },
-            {
-                "node_id": 0xABCDEF01,
-                "latitude": 34.12,
-                "longitude": -118.22,
-                "role": "CLIENT",
-            },
         ]
 
-        def fake_locations(filters=None):
-            if filters and filters.get("node_ids"):
-                return _locs_for(filters["node_ids"], location_catalog)
-            return []
-
-        topology = {
-            "nodes": [],
-            "edges": [
-                {
-                    "node_a": 0x11111111,
-                    "node_b": 0xABCDEF01,
-                    "snr_a_to_b": 8.0,
-                    "snr_b_to_a": 7.5,
-                    "confirmed_both_ways": True,
-                    "avg_snr": 7.75,
-                    "last_seen": 1_700_000_050.0,
+        def fake_reach(node_id, *, limit=50, hours=168):
+            if node_id == 0x11111111:
+                return {
+                    "node_id": node_id,
+                    "node_name": "HillTop",
+                    "neighbor_count": 1,
+                    "center": {"latitude": 34.1, "longitude": -118.2},
+                    "summary": {
+                        "max_distance_km": 2.5,
+                        "neighbor_count": 1,
+                        "with_location": 1,
+                        "both_ways": 1,
+                        "one_way": 0,
+                    },
+                    "neighbors": [
+                        {
+                            "node_id": 0xABCDEF01,
+                            "hex_id": "!abcdef01",
+                            "node_name": "ClientA",
+                            "snr": 8.0,
+                            "quality": "good",
+                            "confirmed_both_ways": True,
+                            "is_bidirectional": True,
+                            "distance_km": 2.5,
+                            "distance_display": "2.5 km",
+                            "latitude": 34.12,
+                            "longitude": -118.22,
+                            "source_label": "NeighborInfo + Observed",
+                            "sources": ["neighborinfo", "observed"],
+                        }
+                    ],
                 }
-            ],
-        }
+            return {
+                "node_id": node_id,
+                "node_name": "Bridge",
+                "neighbor_count": 0,
+                "center": {"latitude": 34.2, "longitude": -118.3},
+                "summary": {
+                    "max_distance_km": None,
+                    "neighbor_count": 0,
+                    "with_location": 0,
+                },
+                "neighbors": [],
+            }
 
         with (
             patch.object(
@@ -131,24 +155,20 @@ class TestRouterReachLayers:
             ),
             patch(
                 "src.malla.database.repositories.LocationRepository.get_node_locations",
-                side_effect=fake_locations,
-            ),
-            patch.object(
-                NeighborService, "get_mesh_topology", return_value=topology
+                return_value=locations,
             ),
             patch.object(
                 NeighborService,
-                "_load_observed_zero_hop_peers_batch",
-                return_value={0x11111111: {}, 0x22222222: {}},
+                "get_mesh_topology",
+                return_value={"nodes": [], "edges": []},
             ),
             patch(
-                "src.malla.services.neighbor_service.get_bulk_node_names",
-                side_effect=lambda ids: {
-                    0x11111111: "HillTop",
-                    0x22222222: "Bridge",
-                    0xABCDEF01: "ClientA",
-                },
+                "src.malla.services.traceroute_service.TracerouteService.get_network_graph_data",
+                return_value={"links": []},
             ),
+            patch.object(
+                NeighborService, "get_zero_hop_neighbors", side_effect=fake_reach
+            ) as zh,
         ):
             result = NeighborService.get_router_reach_layers(hours=24, max_routers=10)
 
@@ -158,6 +178,9 @@ class TestRouterReachLayers:
         assert result["statistics"]["routers_mapped"] == 2
         assert result["statistics"]["mapped_reach_links"] == 1
 
+        called_ids = sorted(c.args[0] for c in zh.call_args_list)
+        assert called_ids == [0x11111111, 0x22222222]
+
         by_id = {r["node_id"]: r for r in result["routers"]}
         assert 0x33333333 not in by_id
         hill = by_id[0x11111111]
@@ -166,6 +189,7 @@ class TestRouterReachLayers:
         assert hill["mapped_neighbor_count"] == 1
         assert hill["neighbors"][0]["is_bidirectional"] is True
         assert hill["neighbors"][0]["latitude"] == 34.12
+        assert hill["neighbors"][0]["source_label"] == "NeighborInfo + Observed"
 
     @pytest.mark.unit
     def test_positioned_role_ids_find_router_outside_candidate_window(self):
@@ -193,16 +217,16 @@ class TestRouterReachLayers:
                 return_value=locations,
             ),
             patch.object(
-                NeighborService, "get_mesh_topology", return_value={"nodes": [], "edges": []}
-            ),
-            patch.object(
                 NeighborService,
-                "_load_observed_zero_hop_peers_batch",
-                return_value={0xABCDEF01: {}},
+                "get_mesh_topology",
+                return_value={"nodes": [], "edges": []},
             ),
             patch(
-                "src.malla.services.neighbor_service.get_bulk_node_names",
-                return_value={0xABCDEF01: "OldRouter"},
+                "src.malla.services.traceroute_service.TracerouteService.get_network_graph_data",
+                return_value={"links": []},
+            ),
+            patch.object(
+                NeighborService, "get_zero_hop_neighbors", side_effect=_fake_reach
             ),
         ):
             result = NeighborService.get_router_reach_layers(max_routers=10)
@@ -255,14 +279,12 @@ class TestRouterReachLayers:
                     "edges": [],
                 },
             ),
-            patch.object(
-                NeighborService,
-                "_load_observed_zero_hop_peers_batch",
-                return_value={0x10101010: {}},
-            ),
             patch(
-                "src.malla.services.neighbor_service.get_bulk_node_names",
-                return_value={0x10101010: "TopoRouter"},
+                "src.malla.services.traceroute_service.TracerouteService.get_network_graph_data",
+                return_value={"links": []},
+            ),
+            patch.object(
+                NeighborService, "get_zero_hop_neighbors", side_effect=_fake_reach
             ),
         ):
             result = NeighborService.get_router_reach_layers(max_routers=10)
@@ -333,14 +355,12 @@ class TestRouterReachLayers:
                 "get_mesh_topology",
                 return_value={"nodes": [], "edges": []},
             ),
-            patch.object(
-                NeighborService,
-                "_load_observed_zero_hop_peers_batch",
-                return_value={i: {} for i in range(1, 8)},
-            ),
             patch(
-                "src.malla.services.neighbor_service.get_bulk_node_names",
-                side_effect=lambda ids: {i: f"R{i}" for i in ids},
+                "src.malla.services.traceroute_service.TracerouteService.get_network_graph_data",
+                return_value={"links": []},
+            ),
+            patch.object(
+                NeighborService, "get_zero_hop_neighbors", side_effect=_fake_reach
             ),
         ):
             result = NeighborService.get_router_reach_layers(max_routers=3)
@@ -426,6 +446,8 @@ class TestRouterReachUi:
         assert "loadRouterReach" in html
         assert "leaflet" in html.lower()
         assert "with GPS" in html
+        assert "direct (0-hop)" in html
+        assert 'value="168" selected' in html
         # Node-detail Reach palette
         assert "#0d6efd" in html
         assert "#198754" in html

@@ -750,8 +750,9 @@ def api_router_reach():
     """
     Multi-router Reach layers for the Mesh Topology map.
 
-    Same Reach sources as node detail (NeighborInfo + observed 0-hop), batched
-    for all located routers so layers can be toggled on one map.
+    Builds each layer with the same ``get_zero_hop_neighbors`` Reach method as
+    node detail (NeighborInfo + observed 0-hop + traceroute RF peers), then
+    overlays located routers so layers can be toggled on one map.
 
     Query parameters:
         hours: Analysis window (default: 168)

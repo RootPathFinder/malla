@@ -802,7 +802,15 @@ class NeighborService:
         try:
             from .traceroute_service import TracerouteService
 
-            graph = TracerouteService.get_network_graph_data(hours=max(hours, 1))
+            topo_hours = max(int(hours), 1)
+            cache_key = f"traceroute_graph:{topo_hours}"
+            now = time.time()
+            cached = NeighborService._topology_cache.get(cache_key)
+            if cached and now - cached[0] < NeighborService._CACHE_TTL:
+                graph = cached[1]
+            else:
+                graph = TracerouteService.get_network_graph_data(hours=topo_hours)
+                NeighborService._topology_cache[cache_key] = (now, graph)
             for link in graph.get("links") or []:
                 source = link.get("source")
                 target = link.get("target")
@@ -1503,226 +1511,32 @@ class NeighborService:
         return located[:max_routers], stats
 
     @staticmethod
-    def _load_observed_zero_hop_peers_batch(
-        router_ids: list[int],
-        *,
-        hours: int | None = 168,
-        limit_per_router: int = 40,
-    ) -> dict[int, dict[int, dict[str, Any]]]:
-        """Batch 0-hop observed peers for many routers (2 SQL queries total)."""
-        result: dict[int, dict[int, dict[str, Any]]] = {int(r): {} for r in router_ids}
-        if not router_ids:
-            return result
-
-        router_ids = [int(r) for r in router_ids]
-        gateway_hexes = [f"!{nid:08x}" for nid in router_ids]
-        hex_to_id = {f"!{nid:08x}".lower(): nid for nid in router_ids}
-        cutoff = (time.time() - hours * 3600) if hours and hours > 0 else None
-        limit_per_router = max(5, min(int(limit_per_router), 80))
-
-        try:
-            conn = get_db_connection()
-            cursor = conn.cursor()
-            time_clause = ""
-            time_params: list[Any] = []
-            if cutoff is not None:
-                time_clause = "AND p.timestamp >= ?"
-                time_params = [cutoff]
-
-            gw_placeholders = ",".join("?" * len(gateway_hexes))
-            cursor.execute(
-                f"""
-                SELECT
-                    p.gateway_id AS gateway_id,
-                    p.from_node_id AS peer_id,
-                    COUNT(*) AS packet_count,
-                    AVG(CAST(p.snr AS FLOAT)) AS snr_avg,
-                    MAX(p.timestamp) AS last_seen
-                FROM packet_history p
-                WHERE p.gateway_id IN ({gw_placeholders})
-                  AND p.from_node_id IS NOT NULL
-                  AND p.hop_start IS NOT NULL
-                  AND p.hop_limit IS NOT NULL
-                  AND p.hop_start = p.hop_limit
-                  {time_clause}
-                GROUP BY p.gateway_id, p.from_node_id
-                """,
-                (*gateway_hexes, *time_params),
-            )
-            for row in cursor.fetchall():
-                router_id = hex_to_id.get(str(row["gateway_id"] or "").lower())
-                if router_id is None:
-                    # gateway_id may differ by case
-                    router_id = hex_to_id.get(str(row["gateway_id"] or ""))
-                if router_id is None:
-                    parsed = NeighborService._parse_gateway_node_id(row["gateway_id"])
-                    if parsed in result:
-                        router_id = parsed
-                if router_id is None:
-                    continue
-                try:
-                    peer_id = int(row["peer_id"])
-                except (TypeError, ValueError):
-                    continue
-                if peer_id == router_id:
-                    continue
-                result[router_id][peer_id] = {
-                    "node_id": peer_id,
-                    "packet_count": int(row["packet_count"] or 0),
-                    "snr_avg": round(row["snr_avg"], 1)
-                    if row["snr_avg"] is not None
-                    else None,
-                    "last_seen": row["last_seen"],
-                    "heard_from": True,
-                    "heard_by": False,
-                }
-
-            id_placeholders = ",".join("?" * len(router_ids))
-            cursor.execute(
-                f"""
-                SELECT
-                    p.from_node_id AS router_id,
-                    p.gateway_id AS gateway_id,
-                    COUNT(*) AS packet_count,
-                    AVG(CAST(p.snr AS FLOAT)) AS snr_avg,
-                    MAX(p.timestamp) AS last_seen
-                FROM packet_history p
-                WHERE p.from_node_id IN ({id_placeholders})
-                  AND p.gateway_id IS NOT NULL
-                  AND p.hop_start IS NOT NULL
-                  AND p.hop_limit IS NOT NULL
-                  AND p.hop_start = p.hop_limit
-                  {time_clause}
-                GROUP BY p.from_node_id, p.gateway_id
-                """,
-                (*router_ids, *time_params),
-            )
-            for row in cursor.fetchall():
-                try:
-                    router_id = int(row["router_id"])
-                except (TypeError, ValueError):
-                    continue
-                if router_id not in result:
-                    continue
-                peer_id = NeighborService._parse_gateway_node_id(row["gateway_id"])
-                if peer_id is None or peer_id == router_id:
-                    continue
-                existing = result[router_id].get(peer_id)
-                if existing is None:
-                    result[router_id][peer_id] = {
-                        "node_id": peer_id,
-                        "packet_count": int(row["packet_count"] or 0),
-                        "snr_avg": round(row["snr_avg"], 1)
-                        if row["snr_avg"] is not None
-                        else None,
-                        "last_seen": row["last_seen"],
-                        "heard_from": False,
-                        "heard_by": True,
-                    }
-                else:
-                    existing["heard_by"] = True
-                    existing["packet_count"] = int(existing["packet_count"] or 0) + int(
-                        row["packet_count"] or 0
-                    )
-                    if row["snr_avg"] is not None:
-                        snr = round(row["snr_avg"], 1)
-                        if existing["snr_avg"] is None or snr > existing["snr_avg"]:
-                            existing["snr_avg"] = snr
-                    if row["last_seen"] and (
-                        existing["last_seen"] is None
-                        or row["last_seen"] > existing["last_seen"]
-                    ):
-                        existing["last_seen"] = row["last_seen"]
-
-            conn.close()
-        except Exception as e:
-            logger.warning("Batch observed zero-hop load failed: %s", e)
-            return {int(r): {} for r in router_ids}
-
-        # Keep strongest peers per router.
-        trimmed: dict[int, dict[int, dict[str, Any]]] = {}
-        for router_id, peers in result.items():
-            ranked = sorted(
-                peers.values(),
-                key=lambda p: (
-                    p.get("packet_count") or 0,
-                    p.get("snr_avg") if p.get("snr_avg") is not None else -999,
-                ),
-                reverse=True,
-            )[:limit_per_router]
-            trimmed[router_id] = {int(p["node_id"]): p for p in ranked}
-        return trimmed
-
-    @staticmethod
-    def _neighbors_from_topology_edges(
-        router_ids: list[int], topology: dict[str, Any] | None
-    ) -> dict[int, dict[int, dict[str, Any]]]:
-        """Project NeighborInfo topology edges onto each router."""
-        out: dict[int, dict[int, dict[str, Any]]] = {int(r): {} for r in router_ids}
-        if not topology:
-            return out
-        router_set = set(out.keys())
-        for edge in topology.get("edges") or []:
-            try:
-                node_a = int(edge["node_a"])
-                node_b = int(edge["node_b"])
-            except (TypeError, ValueError, KeyError):
-                continue
-            both = bool(edge.get("confirmed_both_ways"))
-            for router_id, peer_id, snr in (
-                (node_a, node_b, edge.get("snr_a_to_b")),
-                (node_b, node_a, edge.get("snr_b_to_a")),
-            ):
-                if router_id not in router_set:
-                    continue
-                try:
-                    snr_f = float(snr) if snr is not None else None
-                except (TypeError, ValueError):
-                    snr_f = None
-                # Prefer avg when directional missing
-                if snr_f is None and edge.get("avg_snr") is not None:
-                    try:
-                        snr_f = float(edge["avg_snr"])
-                    except (TypeError, ValueError):
-                        snr_f = None
-                out[router_id][peer_id] = {
-                    "node_id": peer_id,
-                    "snr": snr_f,
-                    "confirmed_both_ways": both,
-                    "heard_from": True,
-                    "heard_by": both,
-                    "sources": ["neighborinfo"],
-                    "last_seen": edge.get("last_seen"),
-                }
-        return out
-
-    @staticmethod
     def get_router_reach_layers(
         *,
         hours: int | None = 168,
         max_routers: int = 20,
-        neighbors_per_router: int = 40,
+        neighbors_per_router: int = 50,
     ) -> dict[str, Any]:
-        """Build multi-router Reach overlays for the topology map.
+        """Overlay node-detail Reach for every located router on one map.
 
-        Same Reach sources as node detail (NeighborInfo + observed 0-hop), but
-        batched into a few queries instead of one full Reach build per router.
+        Uses ``get_zero_hop_neighbors`` per router (NeighborInfo + observed 0-hop
+        + traceroute RF peers) so Router Reach matches a node's Reach tab.
         """
-        from ..database.repositories import LocationRepository
-        from ..utils.geo_utils import calculate_distance
-
         max_routers = max(1, min(int(max_routers), 40))
-        neighbors_per_router = max(5, min(int(neighbors_per_router), 60))
-        window_hours = hours if hours and hours > 0 else 168
+        neighbors_per_router = max(5, min(int(neighbors_per_router), 80))
+        # Match node-detail hours: 0 / None => unscoped observed window.
+        window_hours = hours if hours and hours > 0 else None
+        cache_hours = window_hours if window_hours is not None else 0
 
-        cache_key = f"router_reach:{window_hours}:{max_routers}:{neighbors_per_router}"
+        cache_key = f"router_reach:{cache_hours}:{max_routers}:{neighbors_per_router}"
         now = time.time()
         cached = NeighborService._topology_cache.get(cache_key)
         if cached and now - cached[0] < NeighborService._CACHE_TTL:
             return cached[1]
 
+        topo_hours = window_hours or 168
         try:
-            topology = NeighborService.get_mesh_topology(hours=window_hours)
+            topology = NeighborService.get_mesh_topology(hours=topo_hours)
         except Exception as e:
             logger.warning("Router reach topology unavailable: %s", e)
             topology = None
@@ -1732,7 +1546,7 @@ class NeighborService:
         )
         if not located:
             empty = {
-                "hours": window_hours,
+                "hours": cache_hours if cache_hours else topo_hours,
                 "routers": [],
                 "statistics": {
                     **discovery_stats,
@@ -1744,216 +1558,122 @@ class NeighborService:
             NeighborService._topology_cache[cache_key] = (now, empty)
             return empty
 
-        router_ids = [int(r["node_id"]) for r in located]
-        ni_by_router = NeighborService._neighbors_from_topology_edges(
-            router_ids, topology
-        )
-        observed_by_router = NeighborService._load_observed_zero_hop_peers_batch(
-            router_ids, hours=window_hours, limit_per_router=neighbors_per_router
-        )
-
-        # Merge NeighborInfo + observed into per-router peer maps.
-        merged: dict[int, dict[int, dict[str, Any]]] = {}
-        all_peer_ids: set[int] = set(router_ids)
-        for router_id in router_ids:
-            peers: dict[int, dict[str, Any]] = {}
-            for peer_id, ni in (ni_by_router.get(router_id) or {}).items():
-                peers[peer_id] = {
-                    "node_id": peer_id,
-                    "snr": ni.get("snr"),
-                    "confirmed_both_ways": bool(ni.get("confirmed_both_ways")),
-                    "heard_from": bool(ni.get("heard_from")),
-                    "heard_by": bool(ni.get("heard_by")),
-                    "is_bidirectional": bool(ni.get("confirmed_both_ways")),
-                    "sources": list(ni.get("sources") or ["neighborinfo"]),
-                    "last_seen": ni.get("last_seen"),
-                    "packet_count": None,
-                }
-            for peer_id, obs in (observed_by_router.get(router_id) or {}).items():
-                entry = peers.get(peer_id)
-                if entry is None:
-                    peers[peer_id] = {
-                        "node_id": peer_id,
-                        "snr": obs.get("snr_avg"),
-                        "confirmed_both_ways": False,
-                        "heard_from": bool(obs.get("heard_from")),
-                        "heard_by": bool(obs.get("heard_by")),
-                        "is_bidirectional": bool(
-                            obs.get("heard_from") and obs.get("heard_by")
-                        ),
-                        "sources": ["observed"],
-                        "last_seen": obs.get("last_seen"),
-                        "packet_count": obs.get("packet_count"),
-                    }
-                else:
-                    if "observed" not in entry["sources"]:
-                        entry["sources"].append("observed")
-                    entry["heard_from"] = entry["heard_from"] or bool(
-                        obs.get("heard_from")
-                    )
-                    entry["heard_by"] = entry["heard_by"] or bool(obs.get("heard_by"))
-                    entry["is_bidirectional"] = bool(
-                        entry.get("confirmed_both_ways")
-                        or (entry["heard_from"] and entry["heard_by"])
-                    )
-                    entry["packet_count"] = obs.get("packet_count")
-                    if obs.get("snr_avg") is not None and (
-                        entry["snr"] is None or obs["snr_avg"] > entry["snr"]
-                    ):
-                        entry["snr"] = obs["snr_avg"]
-                    if obs.get("last_seen") and (
-                        entry["last_seen"] is None
-                        or obs["last_seen"] > entry["last_seen"]
-                    ):
-                        entry["last_seen"] = obs["last_seen"]
-            # Cap peers
-            ranked = sorted(
-                peers.values(),
-                key=lambda p: (
-                    p.get("snr") is not None,
-                    p.get("snr") if p.get("snr") is not None else -999,
-                    p.get("packet_count") or 0,
-                ),
-                reverse=True,
-            )[:neighbors_per_router]
-            merged[router_id] = {int(p["node_id"]): p for p in ranked}
-            all_peer_ids.update(merged[router_id].keys())
-
-        names = get_bulk_node_names(list(all_peer_ids)) if all_peer_ids else {}
+        # Warm shared topology/traceroute caches once before per-router Reach.
         try:
-            locations = LocationRepository.get_node_locations(
-                {"node_ids": list(all_peer_ids)}
-            )
+            from .traceroute_service import TracerouteService
+
+            TracerouteService.get_network_graph_data(hours=topo_hours)
         except Exception as e:
-            logger.warning("Router reach peer locations failed: %s", e)
-            locations = []
-        by_loc = {
-            int(loc["node_id"]): loc
-            for loc in locations
-            if loc.get("latitude") is not None and loc.get("longitude") is not None
-        }
+            logger.debug("Router reach traceroute warm-up skipped: %s", e)
 
         routers_out: list[dict[str, Any]] = []
         total_links = 0
         mapped_links = 0
         for idx, router in enumerate(located):
             router_id = int(router["node_id"])
-            router_loc = by_loc.get(router_id)
-            latitude = (
-                float(router_loc["latitude"])
-                if router_loc
-                else float(router["latitude"])
-            )
-            longitude = (
-                float(router_loc["longitude"])
-                if router_loc
-                else float(router["longitude"])
-            )
+            try:
+                zh = NeighborService.get_zero_hop_neighbors(
+                    router_id,
+                    limit=neighbors_per_router,
+                    hours=window_hours,
+                )
+            except Exception as e:
+                logger.warning("Reach build failed for router %s: %s", router_id, e)
+                zh = {
+                    "node_name": router.get("node_name"),
+                    "neighbors": [],
+                    "summary": {},
+                    "center": None,
+                }
+
+            center = zh.get("center") or {}
+            try:
+                latitude = float(
+                    center["latitude"]
+                    if center.get("latitude") is not None
+                    else router["latitude"]
+                )
+                longitude = float(
+                    center["longitude"]
+                    if center.get("longitude") is not None
+                    else router["longitude"]
+                )
+            except (TypeError, ValueError, KeyError):
+                latitude = float(router["latitude"])
+                longitude = float(router["longitude"])
 
             neighbors_out: list[dict[str, Any]] = []
-            for peer_id, peer in (merged.get(router_id) or {}).items():
+            for peer in zh.get("neighbors") or []:
+                peer_id = peer.get("node_id")
+                if peer_id is None:
+                    continue
+                peer_id = int(peer_id)
                 total_links += 1
-                peer_loc = by_loc.get(peer_id)
-                lat: float | None = None
-                lon: float | None = None
-                dist_km = None
-                dist_display = None
-                if (
-                    peer_loc
-                    and peer_loc.get("latitude") is not None
-                    and peer_loc.get("longitude") is not None
-                ):
-                    lat = float(peer_loc["latitude"])
-                    lon = float(peer_loc["longitude"])
+                lat = peer.get("latitude")
+                lon = peer.get("longitude")
+                if lat is not None and lon is not None:
                     mapped_links += 1
-                    dist_km = round(
-                        calculate_distance(latitude, longitude, lat, lon), 2
-                    )
-                    dist_display = (
-                        f"{int(round(dist_km * 1000))} m"
-                        if dist_km < 1
-                        else f"{dist_km:.1f} km"
-                    )
-                snr = peer.get("snr")
                 both = bool(
                     peer.get("confirmed_both_ways") or peer.get("is_bidirectional")
                 )
                 neighbors_out.append(
                     {
                         "node_id": peer_id,
-                        "hex_id": f"!{peer_id:08x}",
-                        "node_name": names.get(peer_id, f"!{peer_id:08x}"),
-                        "snr": snr,
-                        "quality": NeighborService._classify_snr_quality(
-                            float(snr) if snr is not None else None
-                        ),
+                        "hex_id": peer.get("hex_id") or f"!{peer_id:08x}",
+                        "node_name": peer.get("node_name"),
+                        "snr": peer.get("snr"),
+                        "quality": peer.get("quality"),
                         "is_bidirectional": both,
                         "confirmed_both_ways": bool(peer.get("confirmed_both_ways")),
-                        "distance_km": dist_km,
-                        "distance_display": dist_display,
+                        "distance_km": peer.get("distance_km"),
+                        "distance_display": peer.get("distance_display"),
                         "latitude": lat,
                         "longitude": lon,
-                        "source_label": NeighborService._source_label(
-                            peer.get("sources") or []
-                        ),
+                        "source_label": peer.get("source_label")
+                        or NeighborService._source_label(peer.get("sources") or []),
                     }
                 )
 
-            # Prefer geo peers first for the map payload.
-            neighbors_out.sort(
-                key=lambda n: (
-                    n.get("latitude") is not None,
-                    n.get("snr") is not None,
-                    n.get("snr") if n.get("snr") is not None else -999,
-                ),
-                reverse=True,
-            )
-            snr_vals = [
-                float(n["snr"]) for n in neighbors_out if n.get("snr") is not None
-            ]
-            dist_vals = [
-                float(n["distance_km"])
-                for n in neighbors_out
-                if n.get("distance_km") is not None
-            ]
-            both_ways = sum(1 for n in neighbors_out if n.get("is_bidirectional"))
-            summary = {
-                "neighbor_count": len(neighbors_out),
-                "both_ways": both_ways,
-                "one_way": max(0, len(neighbors_out) - both_ways),
-                "with_location": sum(
+            summary = zh.get("summary") or {}
+            summary_with_loc = summary.get("with_location")
+            if summary_with_loc is not None:
+                with_location = int(summary_with_loc)
+            else:
+                with_location = sum(
                     1
                     for n in neighbors_out
                     if n.get("latitude") is not None and n.get("longitude") is not None
-                ),
-                "avg_snr": round(sum(snr_vals) / len(snr_vals), 1) if snr_vals else None,
-                "best_snr": round(max(snr_vals), 1) if snr_vals else None,
-                "avg_distance_km": (
-                    round(sum(dist_vals) / len(dist_vals), 2) if dist_vals else None
-                ),
-                "max_distance_km": round(max(dist_vals), 2) if dist_vals else None,
-            }
+                )
             routers_out.append(
                 {
                     "node_id": router_id,
                     "hex_id": router.get("hex_id") or f"!{router_id:08x}",
-                    "node_name": names.get(router_id) or router["node_name"],
+                    "node_name": zh.get("node_name") or router["node_name"],
                     "role": router["role"],
-                    # Sidebar identity only; map uses node-Reach colors.
+                    # Sidebar identity only; map uses node-Reach spoke colors.
                     "color": NeighborService._ROUTER_REACH_COLORS[
                         idx % len(NeighborService._ROUTER_REACH_COLORS)
                     ],
                     "latitude": latitude,
                     "longitude": longitude,
                     "neighbor_count": len(neighbors_out),
-                    "mapped_neighbor_count": summary["with_location"],
-                    "summary": summary,
+                    "mapped_neighbor_count": with_location,
+                    "summary": {
+                        "neighbor_count": len(neighbors_out),
+                        "both_ways": summary.get("both_ways"),
+                        "one_way": summary.get("one_way"),
+                        "with_location": with_location,
+                        "avg_snr": summary.get("avg_snr"),
+                        "best_snr": summary.get("best_snr"),
+                        "avg_distance_km": summary.get("avg_distance_km"),
+                        "max_distance_km": summary.get("max_distance_km"),
+                    },
                     "neighbors": neighbors_out,
                 }
             )
 
         payload = {
-            "hours": window_hours,
+            "hours": window_hours if window_hours is not None else topo_hours,
             "routers": routers_out,
             "statistics": {
                 **discovery_stats,
