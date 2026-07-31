@@ -1228,3 +1228,191 @@ class NeighborService:
             "summary": summary,
             "neighbors": neighbors,
         }
+
+    # Distinct palette for overlaying many router reach layers on one map.
+    _ROUTER_REACH_COLORS = (
+        "#0d6efd",
+        "#198754",
+        "#fd7e14",
+        "#6f42c1",
+        "#d63384",
+        "#20c997",
+        "#dc3545",
+        "#0dcaf0",
+        "#ffc107",
+        "#6610f2",
+        "#e83e8c",
+        "#17a2b8",
+    )
+
+    @staticmethod
+    def _list_router_candidates(limit: int = 80) -> list[dict[str, Any]]:
+        """Return non-archived router-role nodes, newest first."""
+        roles = sorted(ROUTER_ROLES)
+        placeholders = ",".join("?" * len(roles))
+        try:
+            conn = get_db_connection()
+            cursor = conn.cursor()
+            cursor.execute(
+                f"""
+                SELECT node_id, long_name, short_name, role, last_seen
+                FROM node_info
+                WHERE COALESCE(archived, 0) = 0
+                  AND role IN ({placeholders})
+                ORDER BY (last_seen IS NULL), last_seen DESC
+                LIMIT ?
+                """,
+                (*roles, int(limit)),
+            )
+            rows = cursor.fetchall()
+            conn.close()
+            return [dict(row) for row in rows]
+        except Exception as e:
+            logger.warning("Failed listing router candidates: %s", e)
+            return []
+
+    @staticmethod
+    def get_router_reach_layers(
+        *,
+        hours: int | None = 168,
+        max_routers: int = 30,
+        neighbors_per_router: int = 40,
+    ) -> dict[str, Any]:
+        """Build multi-router Reach overlays for the topology map.
+
+        Uses the same zero-hop / direct-RF method as node-detail Reach, once
+        per router that has a known location. Returns compact geo layers that
+        the Mesh Topology UI can toggle independently.
+        """
+        from ..database.repositories import LocationRepository
+
+        max_routers = max(1, min(int(max_routers), 60))
+        neighbors_per_router = max(5, min(int(neighbors_per_router), 80))
+        window_hours = hours if hours and hours > 0 else 168
+
+        candidates = NeighborService._list_router_candidates(limit=max_routers * 3)
+        if not candidates:
+            return {
+                "hours": window_hours,
+                "routers": [],
+                "statistics": {
+                    "router_candidates": 0,
+                    "routers_with_location": 0,
+                    "routers_mapped": 0,
+                    "total_reach_links": 0,
+                    "mapped_reach_links": 0,
+                },
+            }
+
+        candidate_ids = [int(row["node_id"]) for row in candidates]
+        locations = LocationRepository.get_node_locations({"node_ids": candidate_ids})
+        by_loc = {
+            int(loc["node_id"]): loc
+            for loc in locations
+            if loc.get("latitude") is not None and loc.get("longitude") is not None
+        }
+
+        located: list[dict[str, Any]] = []
+        for row in candidates:
+            node_id = int(row["node_id"])
+            loc = by_loc.get(node_id)
+            if not loc:
+                continue
+            located.append(
+                {
+                    "node_id": node_id,
+                    "hex_id": f"!{node_id:08x}",
+                    "node_name": row.get("long_name")
+                    or row.get("short_name")
+                    or f"!{node_id:08x}",
+                    "role": row.get("role") or "ROUTER",
+                    "last_seen": row.get("last_seen"),
+                    "latitude": float(loc["latitude"]),
+                    "longitude": float(loc["longitude"]),
+                }
+            )
+            if len(located) >= max_routers:
+                break
+
+        routers: list[dict[str, Any]] = []
+        total_links = 0
+        mapped_links = 0
+        for idx, router in enumerate(located):
+            try:
+                reach = NeighborService.get_zero_hop_neighbors(
+                    router["node_id"],
+                    limit=neighbors_per_router,
+                    hours=window_hours,
+                )
+            except Exception as e:
+                logger.warning(
+                    "Router reach failed for %s: %s", router["hex_id"], e
+                )
+                continue
+
+            neighbors_out: list[dict[str, Any]] = []
+            for n in reach.get("neighbors") or []:
+                total_links += 1
+                lat = n.get("latitude")
+                lon = n.get("longitude")
+                has_geo = lat is not None and lon is not None
+                if has_geo:
+                    mapped_links += 1
+                neighbors_out.append(
+                    {
+                        "node_id": n.get("node_id"),
+                        "hex_id": n.get("hex_id"),
+                        "node_name": n.get("node_name"),
+                        "snr": n.get("snr"),
+                        "quality": n.get("quality"),
+                        "is_bidirectional": bool(
+                            n.get("confirmed_both_ways") or n.get("is_bidirectional")
+                        ),
+                        "distance_km": n.get("distance_km"),
+                        "distance_display": n.get("distance_display"),
+                        "latitude": float(lat) if has_geo else None,
+                        "longitude": float(lon) if has_geo else None,
+                        "source_label": n.get("source_label"),
+                    }
+                )
+
+            # Prefer center from reach enrichment when available.
+            center = reach.get("center") or {}
+            latitude = center.get("latitude", router["latitude"])
+            longitude = center.get("longitude", router["longitude"])
+            color = NeighborService._ROUTER_REACH_COLORS[
+                idx % len(NeighborService._ROUTER_REACH_COLORS)
+            ]
+            summary = reach.get("summary") or {}
+            routers.append(
+                {
+                    "node_id": router["node_id"],
+                    "hex_id": router["hex_id"],
+                    "node_name": reach.get("node_name") or router["node_name"],
+                    "role": router["role"],
+                    "color": color,
+                    "latitude": float(latitude),
+                    "longitude": float(longitude),
+                    "neighbor_count": int(reach.get("neighbor_count") or 0),
+                    "mapped_neighbor_count": sum(
+                        1
+                        for n in neighbors_out
+                        if n.get("latitude") is not None
+                        and n.get("longitude") is not None
+                    ),
+                    "summary": summary,
+                    "neighbors": neighbors_out,
+                }
+            )
+
+        return {
+            "hours": window_hours,
+            "routers": routers,
+            "statistics": {
+                "router_candidates": len(candidates),
+                "routers_with_location": len(located),
+                "routers_mapped": len(routers),
+                "total_reach_links": total_links,
+                "mapped_reach_links": mapped_links,
+            },
+        }

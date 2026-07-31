@@ -743,3 +743,30 @@ def api_hop_stats():
     except Exception as e:
         logger.error(f"Error getting hop stats: {e}", exc_info=True)
         return jsonify({"error": str(e)}), 500
+
+
+@mesh_bp.route("/api/router-reach")
+def api_router_reach():
+    """
+    Multi-router Reach layers for the Mesh Topology map.
+
+    Uses the same zero-hop / direct-RF neighbor method as node-detail Reach,
+    once for each located router, so all router reach can be overlaid together.
+
+    Query parameters:
+        hours: Analysis window (default: 168)
+        max_routers: Cap on routers to include (default: 30, max: 60)
+    """
+    try:
+        hours = request.args.get("hours", 168, type=int)
+        hours = min(max(hours, 1), 720)
+        max_routers = request.args.get("max_routers", 30, type=int)
+        max_routers = min(max(max_routers, 1), 60)
+
+        data = NeighborService.get_router_reach_layers(
+            hours=hours, max_routers=max_routers
+        )
+        return jsonify(data)
+    except Exception as e:
+        logger.error(f"Error building router reach layers: {e}", exc_info=True)
+        return jsonify({"error": str(e)}), 500
