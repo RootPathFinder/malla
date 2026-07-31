@@ -2640,26 +2640,21 @@ class NodeRepository:
                                 metrics.pm100_environmental
                             )
 
-                    # Extract host metrics (Linux-node uptime, memory, load)
+                    # Extract host metrics (Linux-node uptime, memory, load).
+                    # HostMetrics scalars have no protobuf presence; do not call HasField.
                     if telemetry_data.HasField("host_metrics") and not host_metrics:
                         metrics = telemetry_data.host_metrics
-                        if (
-                            metrics.HasField("uptime_seconds")
-                            or metrics.uptime_seconds > 0
-                        ):
+                        if metrics.uptime_seconds > 0:
                             host_metrics["uptime_seconds"] = metrics.uptime_seconds
-                        if metrics.HasField("freemem_bytes") or metrics.freemem_bytes > 0:
+                        if metrics.freemem_bytes > 0:
                             host_metrics["freemem_bytes"] = metrics.freemem_bytes
-                        if (
-                            metrics.HasField("diskfree1_bytes")
-                            or metrics.diskfree1_bytes > 0
-                        ):
+                        if metrics.diskfree1_bytes > 0:
                             host_metrics["diskfree1_bytes"] = metrics.diskfree1_bytes
-                        if metrics.HasField("load1") or metrics.load1 > 0:
+                        if metrics.load1 > 0:
                             host_metrics["load1"] = metrics.load1
-                        if metrics.HasField("load5") or metrics.load5 > 0:
+                        if metrics.load5 > 0:
                             host_metrics["load5"] = metrics.load5
-                        if metrics.HasField("load15") or metrics.load15 > 0:
+                        if metrics.load15 > 0:
                             host_metrics["load15"] = metrics.load15
 
                 except Exception:
