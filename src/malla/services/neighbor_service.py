@@ -1295,11 +1295,12 @@ class NeighborService:
             placeholders = ",".join("?" * len(role_values))
             cursor.execute(
                 f"""
-                SELECT node_id, long_name, short_name, role, last_seen
+                SELECT node_id, long_name, short_name, role,
+                       last_updated AS last_seen
                 FROM node_info
                 WHERE COALESCE(archived, 0) = 0
                   AND role IN ({placeholders})
-                ORDER BY (last_seen IS NULL), last_seen DESC
+                ORDER BY (last_updated IS NULL), last_updated DESC
                 LIMIT ?
                 """,
                 (*role_values, int(limit)),
@@ -1347,7 +1348,7 @@ class NeighborService:
                         AND ph.portnum = 3
                         AND ph.raw_payload IS NOT NULL
                   )
-                ORDER BY (ni.last_seen IS NULL), ni.last_seen DESC
+                ORDER BY (ni.last_updated IS NULL), ni.last_updated DESC
                 LIMIT ?
                 """,
                 (*role_values, int(limit)),

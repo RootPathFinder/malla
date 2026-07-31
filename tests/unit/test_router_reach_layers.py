@@ -26,6 +26,34 @@ class TestRoleNormalization:
         assert not NeighborService._is_reach_layer_role("CLIENT")
 
 
+class TestRouterCandidateDiscovery:
+    @pytest.mark.unit
+    def test_list_router_candidates_uses_last_updated_column(
+        self, temp_database, monkeypatch
+    ):
+        """node_info has last_updated, not last_seen — discovery must not crash empty."""
+        monkeypatch.setenv("MALLA_DATABASE_FILE", temp_database)
+        _clear_reach_cache()
+        candidates = NeighborService._list_router_candidates(limit=50)
+        assert candidates, "Expected router-role nodes from fixture DB"
+        assert all("node_id" in c and "role" in c for c in candidates)
+        assert any(
+            NeighborService._is_reach_layer_role(c.get("role")) for c in candidates
+        )
+
+        positioned = NeighborService._list_positioned_reach_role_ids(limit=50)
+        # Fixture includes position packets for some routers.
+        assert isinstance(positioned, list)
+
+        located, stats = NeighborService._resolve_located_routers(
+            max_routers=10, topology={"nodes": [], "edges": []}
+        )
+        assert stats["router_candidates"] > 0
+        # At least one fixture router should decode a GPS position.
+        assert stats["routers_with_location"] >= 1 or stats["locations_total"] >= 1
+        assert isinstance(located, list)
+
+
 class TestRouterReachLayers:
     @pytest.mark.unit
     def test_builds_layers_for_located_routers(self):
