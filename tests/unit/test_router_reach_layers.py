@@ -7,6 +7,27 @@ import pytest
 from src.malla.services.neighbor_service import NeighborService
 
 
+def _fake_reach(node_id, *, limit=40, hours=168):
+    return {
+        "node_id": node_id,
+        "node_name": f"Node-{node_id}",
+        "neighbor_count": 0,
+        "center": None,
+        "summary": {},
+        "neighbors": [],
+    }
+
+
+class TestRoleNormalization:
+    @pytest.mark.unit
+    def test_normalize_role_names_and_ids(self):
+        assert NeighborService._normalize_device_role("router_client") == "ROUTER_CLIENT"
+        assert NeighborService._normalize_device_role(2) == "ROUTER"
+        assert NeighborService._normalize_device_role("4") == "REPEATER"
+        assert NeighborService._is_reach_layer_role("CLIENT_BASE")
+        assert not NeighborService._is_reach_layer_role("CLIENT")
+
+
 class TestRouterReachLayers:
     @pytest.mark.unit
     def test_builds_layers_for_located_routers(self):
@@ -34,8 +55,8 @@ class TestRouterReachLayers:
             },
         ]
         locations = [
-            {"node_id": 0x11111111, "latitude": 34.1, "longitude": -118.2},
-            {"node_id": 0x22222222, "latitude": 34.2, "longitude": -118.3},
+            {"node_id": 0x11111111, "latitude": 34.1, "longitude": -118.2, "role": "ROUTER"},
+            {"node_id": 0x22222222, "latitude": 34.2, "longitude": -118.3, "role": "ROUTER_CLIENT"},
         ]
 
         def fake_reach(node_id, *, limit=40, hours=168):
@@ -102,11 +123,102 @@ class TestRouterReachLayers:
         assert hill["neighbors"][0]["latitude"] == 34.12
 
     @pytest.mark.unit
+    def test_location_first_finds_router_outside_candidate_window(self):
+        """GPS routers must not be dropped just because last_seen ranking omitted them."""
+        locations = [
+            {
+                "node_id": 0xABCDEF01,
+                "latitude": 40.0,
+                "longitude": -105.0,
+                "role": "ROUTER",
+                "display_name": "OldRouter",
+                "timestamp": 1_600_000_000.0,
+            }
+        ]
+        with (
+            patch.object(NeighborService, "_list_router_candidates", return_value=[]),
+            patch(
+                "src.malla.database.repositories.LocationRepository.get_node_locations",
+                return_value=locations,
+            ),
+            patch.object(
+                NeighborService, "get_mesh_topology", return_value={"nodes": []}
+            ),
+            patch.object(
+                NeighborService, "get_zero_hop_neighbors", side_effect=_fake_reach
+            ),
+        ):
+            result = NeighborService.get_router_reach_layers(max_routers=10)
+
+        assert len(result["routers"]) == 1
+        assert result["routers"][0]["node_id"] == 0xABCDEF01
+        assert result["routers"][0]["role"] == "ROUTER"
+
+    @pytest.mark.unit
+    def test_topology_fallback_for_is_router_nodes(self):
+        locations_calls = []
+
+        def fake_locations(filters=None):
+            locations_calls.append(filters)
+            if filters and filters.get("node_ids"):
+                return [
+                    {
+                        "node_id": 0x10101010,
+                        "latitude": 41.0,
+                        "longitude": -74.0,
+                        "role": None,
+                    }
+                ]
+            return []  # location-first scan empty
+
+        with (
+            patch.object(NeighborService, "_list_router_candidates", return_value=[]),
+            patch(
+                "src.malla.database.repositories.LocationRepository.get_node_locations",
+                side_effect=fake_locations,
+            ),
+            patch.object(
+                NeighborService,
+                "get_mesh_topology",
+                return_value={
+                    "nodes": [
+                        {
+                            "node_id": 0x10101010,
+                            "name": "TopoRouter",
+                            "hex_id": "!10101010",
+                            "role": "CLIENT",
+                            "is_router": True,
+                            "last_seen": 1_700_000_000.0,
+                        }
+                    ]
+                },
+            ),
+            patch.object(
+                NeighborService, "get_zero_hop_neighbors", side_effect=_fake_reach
+            ),
+        ):
+            result = NeighborService.get_router_reach_layers(max_routers=10)
+
+        assert len(result["routers"]) == 1
+        assert result["routers"][0]["node_id"] == 0x10101010
+        assert any(c and c.get("node_ids") for c in locations_calls)
+
+    @pytest.mark.unit
     def test_empty_when_no_routers(self):
-        with patch.object(NeighborService, "_list_router_candidates", return_value=[]):
+        with (
+            patch.object(NeighborService, "_list_router_candidates", return_value=[]),
+            patch(
+                "src.malla.database.repositories.LocationRepository.get_node_locations",
+                return_value=[],
+            ),
+            patch.object(
+                NeighborService, "get_mesh_topology", return_value={"nodes": []}
+            ),
+        ):
             result = NeighborService.get_router_reach_layers()
         assert result["routers"] == []
         assert result["statistics"]["routers_mapped"] == 0
+        assert result["statistics"]["locations_total"] == 0
 
     @pytest.mark.unit
     def test_respects_max_routers(self):
@@ -121,7 +233,12 @@ class TestRouterReachLayers:
             for i in range(1, 8)
         ]
         locations = [
-            {"node_id": i, "latitude": 34.0 + i * 0.01, "longitude": -118.0}
+            {
+                "node_id": i,
+                "latitude": 34.0 + i * 0.01,
+                "longitude": -118.0,
+                "role": "ROUTER",
+            }
             for i in range(1, 8)
         ]
 
@@ -136,20 +253,13 @@ class TestRouterReachLayers:
             patch.object(
                 NeighborService,
                 "get_zero_hop_neighbors",
-                return_value={
-                    "node_id": 1,
-                    "node_name": "R",
-                    "neighbor_count": 0,
-                    "center": None,
-                    "summary": {},
-                    "neighbors": [],
-                },
+                side_effect=_fake_reach,
             ),
         ):
             result = NeighborService.get_router_reach_layers(max_routers=3)
 
         assert len(result["routers"]) == 3
-        assert result["statistics"]["routers_with_location"] == 3
+        assert result["statistics"]["routers_with_location"] == 7
 
 
 class TestRouterReachApi:
@@ -205,3 +315,4 @@ class TestRouterReachUi:
         assert "/mesh/api/router-reach" in html
         assert "loadRouterReach" in html
         assert "leaflet" in html.lower()
+        assert "with GPS" in html

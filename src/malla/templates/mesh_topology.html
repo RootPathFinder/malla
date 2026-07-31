@@ -547,7 +547,9 @@
                 <div class="col-lg-8">
                     <div id="router-reach-map"></div>
                     <div id="router-reach-empty" class="alert alert-info mt-3 d-none mb-0">
-                        No located routers with Reach data for this period.
+                        No routers with GPS positions found.
+                        Router Reach needs nodes with role ROUTER / ROUTER_CLIENT / ROUTER_LATE / REPEATER / CLIENT_BASE
+                        and a position packet on the map.
                     </div>
                 </div>
                 <div class="col-lg-4">
@@ -1295,16 +1297,31 @@
         if (statsEl) {
             statsEl.innerHTML =
                 `<div><strong>${stats.routers_mapped || 0}</strong> routers mapped</div>` +
-                `<div>${stats.mapped_reach_links || 0} geo links · ${stats.total_reach_links || 0} total</div>`;
+                `<div>${stats.mapped_reach_links || 0} geo links · ${stats.total_reach_links || 0} total</div>` +
+                `<div class="text-muted">${stats.router_candidates || 0} router-role · ${stats.routers_with_location || 0} with GPS</div>`;
         }
 
         clearRouterReachMapLayers();
 
         if (!routers.length) {
+            const candidates = stats.router_candidates || 0;
+            const withGps = stats.routers_with_location || 0;
+            const locationsTotal = stats.locations_total || 0;
             if (listEl) {
-                listEl.innerHTML = '<div class="text-muted small p-2">No located routers found.</div>';
+                listEl.innerHTML =
+                    `<div class="text-muted small p-2">` +
+                    `No mappable routers.<br>` +
+                    `${candidates} router-role node(s), ${withGps} with GPS, ` +
+                    `${locationsTotal} located node(s) total.` +
+                    `</div>`;
             }
-            if (emptyEl) emptyEl.classList.remove('d-none');
+            if (emptyEl) {
+                emptyEl.classList.remove('d-none');
+                emptyEl.innerHTML =
+                    `<strong>No routers with GPS positions found.</strong><br>` +
+                    `Found ${candidates} router/base-station role node(s) and ${locationsTotal} located node(s) overall; ` +
+                    `${withGps} overlap. Nodes need both an infrastructure role and a position packet.`;
+            }
             if (mapEl) mapEl.classList.add('d-none');
             return;
         }
