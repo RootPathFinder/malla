@@ -26,6 +26,9 @@ class TestMainRoutes:
         assert b"Decode Success" in response.data
         assert b"last24hHourlyChart" in response.data
         assert b"last24h-hourly-chart-wrap" in response.data
+        assert b"formatActivityBucketLabel" in response.data
+        assert b"Active nodes" in response.data
+        assert b"formatNowLabel" in response.data
         assert b"Also notable" in response.data
 
     @pytest.mark.integration
@@ -222,6 +225,11 @@ class TestAPIStatsEndpoints:
         assert response.status_code == 200
         data = response.get_json()
         assert isinstance(data, dict)
+        hourly = data["temporal_patterns"]["hourly_breakdown"]
+        assert hourly is not None
+        assert len(hourly) == 24
+        assert "bucket_ts" in hourly[0]
+        assert "active_nodes" in hourly[0]
 
     @pytest.mark.integration
     @pytest.mark.api
@@ -246,6 +254,10 @@ class TestAPIStatsEndpoints:
         assert "temporal_patterns" in data
         assert data["temporal_patterns"]["daily_breakdown"] is not None
         assert data["temporal_patterns"]["hourly_breakdown"] is None
+        daily = data["temporal_patterns"]["daily_breakdown"]
+        assert len(daily) == 7
+        assert "bucket_ts" in daily[0]
+        assert "active_nodes" in daily[0]
 
 
 class TestAPIPacketEndpoints:
