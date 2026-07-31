@@ -533,8 +533,9 @@
                         <div>
                             <h5 class="mb-1"><i class="bi bi-broadcast-pin"></i> Router Reach Layers</h5>
                             <p class="text-muted small mb-0">
-                                Same direct-RF Reach method as node detail, overlaid for every located router.
-                                Solid spokes = both-ways; dashed = one-way. Toggle layers on the right.
+                                Same Reach styling and direct-RF method as node detail, for every located router.
+                                Blue = router center · green solid = both-ways · orange dashed = one-way.
+                                Sidebar colors identify which layer is toggled.
                             </p>
                         </div>
                         <div class="text-end small text-muted" id="routerReachStats">
@@ -1237,43 +1238,50 @@
     }
 
     function buildRouterReachLayer(router) {
+        // Match node-detail Reach colors (sidebar swatch stays router.color).
         const group = L.layerGroup();
-        const color = router.color || '#0d6efd';
+        const centerColor = '#0d6efd';
         const center = L.circleMarker([router.latitude, router.longitude], {
-            radius: 9,
-            color,
-            weight: 3,
-            fillColor: color,
-            fillOpacity: 0.95
+            radius: 8,
+            color: centerColor,
+            weight: 2,
+            fillColor: centerColor,
+            fillOpacity: 0.9
         });
         center.bindPopup(
             `<strong><a href="/node/${router.node_id}">${escapeHtml(router.node_name)}</a></strong><br>` +
-            `${escapeHtml(router.role)} · ${router.neighbor_count} neighbors`
+            `${escapeHtml(router.role)} · ${router.neighbor_count} neighbors<br><small>Center</small>`
         );
         group.addLayer(center);
 
         (router.neighbors || []).forEach((peer) => {
             if (peer.latitude == null || peer.longitude == null) return;
-            const both = !!peer.is_bidirectional;
+            const both = !!(peer.confirmed_both_ways || peer.is_bidirectional);
+            const color = both ? '#198754' : '#fd7e14';
             L.polyline(
                 [[router.latitude, router.longitude], [peer.latitude, peer.longitude]],
                 {
                     color,
                     weight: both ? 2.5 : 1.5,
-                    opacity: both ? 0.8 : 0.55,
-                    dashArray: both ? null : '5,5'
+                    opacity: 0.75,
+                    dashArray: both ? null : '4,4'
                 }
             ).addTo(group);
 
             const marker = L.circleMarker([peer.latitude, peer.longitude], {
-                radius: 5,
+                radius: 6,
                 color,
-                weight: 1.5,
+                weight: 2,
                 fillColor: color,
-                fillOpacity: 0.75
+                fillOpacity: 0.85
             });
             const snrText = peer.snr != null ? `${Number(peer.snr).toFixed(1)} dB` : 'SNR —';
-            const distText = peer.distance_display || '';
+            let distText = '';
+            if (peer.distance_km != null && typeof TemperatureToggle !== 'undefined' && TemperatureToggle.formatDistance) {
+                distText = TemperatureToggle.formatDistance(peer.distance_km, 1);
+            } else if (peer.distance_display) {
+                distText = peer.distance_display;
+            }
             marker.bindPopup(
                 `<strong><a href="/node/${peer.node_id}">${escapeHtml(peer.node_name || peer.hex_id || '')}</a></strong><br>` +
                 `via ${escapeHtml(router.node_name)}<br>${snrText}` +
