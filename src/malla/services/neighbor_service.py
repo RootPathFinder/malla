@@ -1853,14 +1853,18 @@ class NeighborService:
             for peer_id, peer in (merged.get(router_id) or {}).items():
                 total_links += 1
                 peer_loc = by_loc.get(peer_id)
-                lat = float(peer_loc["latitude"]) if peer_loc else None
-                lon = float(peer_loc["longitude"]) if peer_loc else None
-                has_geo = lat is not None and lon is not None
-                if has_geo:
-                    mapped_links += 1
+                lat: float | None = None
+                lon: float | None = None
                 dist_km = None
                 dist_display = None
-                if has_geo:
+                if (
+                    peer_loc
+                    and peer_loc.get("latitude") is not None
+                    and peer_loc.get("longitude") is not None
+                ):
+                    lat = float(peer_loc["latitude"])
+                    lon = float(peer_loc["longitude"])
+                    mapped_links += 1
                     dist_km = round(
                         calculate_distance(latitude, longitude, lat, lon), 2
                     )
