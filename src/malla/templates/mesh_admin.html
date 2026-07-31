@@ -1751,13 +1751,18 @@
                                     <div class="mb-3">
                                         <label class="form-label">Telemetry type</label>
                                         <div class="text-muted small mb-1">
-                                            Schedules always solicit <strong>device / battery</strong> metrics
-                                            so node health and “last telemetry” stay in sync.
+                                            Schedules solicit <strong>device / battery / uptime</strong> metrics
+                                            (and optionally host uptime) so node health stays in sync.
                                         </div>
                                         <div class="form-check">
                                             <input class="form-check-input telemetry-schedule-type" type="checkbox"
                                                    value="device_metrics" id="tsTypeDevice" checked disabled>
-                                            <label class="form-check-label small" for="tsTypeDevice">Device / battery</label>
+                                            <label class="form-check-label small" for="tsTypeDevice">Device / battery / uptime</label>
+                                        </div>
+                                        <div class="form-check">
+                                            <input class="form-check-input telemetry-schedule-type" type="checkbox"
+                                                   value="host_metrics" id="tsTypeHost" checked>
+                                            <label class="form-check-label small" for="tsTypeHost">Host uptime (Linux nodes)</label>
                                         </div>
                                     </div>
                                     <div class="form-check form-switch mb-3">
@@ -11746,7 +11751,16 @@
     }
 
     function getSelectedTelemetryScheduleTypes() {
-        return ['device_metrics'];
+        // Device metrics (battery + radio uptime) is always included; host_metrics
+        // is optional for Linux-node host uptime.
+        const types = [];
+        document.querySelectorAll('.telemetry-schedule-type:checked').forEach((el) => {
+            if (el.value && !types.includes(el.value)) types.push(el.value);
+        });
+        if (!types.includes('device_metrics')) {
+            types.unshift('device_metrics');
+        }
+        return types;
     }
 
     function setTelemetryScheduleForm(schedule) {
@@ -11763,8 +11777,12 @@
         }
         const enabledEl = document.getElementById('telemetryScheduleEnabled');
         if (enabledEl) enabledEl.checked = !!schedule.enabled;
-        const types = new Set(schedule.telemetry_types || ['device_metrics']);
+        const types = new Set(schedule.telemetry_types || ['device_metrics', 'host_metrics']);
         document.querySelectorAll('.telemetry-schedule-type').forEach((el) => {
+            if (el.id === 'tsTypeDevice') {
+                el.checked = true;
+                return;
+            }
             el.checked = types.has(el.value);
         });
     }

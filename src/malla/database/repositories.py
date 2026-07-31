@@ -2528,6 +2528,7 @@ class NodeRepository:
             environment_metrics: dict[str, Any] = {}
             power_metrics: dict[str, Any] = {}
             air_quality_metrics: dict[str, Any] = {}
+            host_metrics: dict[str, Any] = {}
             latest_timestamp = None
 
             for result in results:
@@ -2639,6 +2640,23 @@ class NodeRepository:
                                 metrics.pm100_environmental
                             )
 
+                    # Extract host metrics (Linux-node uptime, memory, load).
+                    # HostMetrics scalars have no protobuf presence; do not call HasField.
+                    if telemetry_data.HasField("host_metrics") and not host_metrics:
+                        metrics = telemetry_data.host_metrics
+                        if metrics.uptime_seconds > 0:
+                            host_metrics["uptime_seconds"] = metrics.uptime_seconds
+                        if metrics.freemem_bytes > 0:
+                            host_metrics["freemem_bytes"] = metrics.freemem_bytes
+                        if metrics.diskfree1_bytes > 0:
+                            host_metrics["diskfree1_bytes"] = metrics.diskfree1_bytes
+                        if metrics.load1 > 0:
+                            host_metrics["load1"] = metrics.load1
+                        if metrics.load5 > 0:
+                            host_metrics["load5"] = metrics.load5
+                        if metrics.load15 > 0:
+                            host_metrics["load15"] = metrics.load15
+
                 except Exception:
                     continue  # Skip malformed packets
 
@@ -2671,6 +2689,13 @@ class NodeRepository:
             telemetry_dict["timestamp_unix"] = latest_timestamp
             telemetry_dict["timestamp_relative"] = format_time_ago(timestamp)
 
+            # Prefer device uptime; fall back to host uptime for display.
+            if (
+                "uptime_seconds" not in device_metrics
+                and host_metrics.get("uptime_seconds") is not None
+            ):
+                device_metrics["uptime_seconds"] = host_metrics["uptime_seconds"]
+
             if device_metrics:
                 telemetry_dict["device_metrics"] = device_metrics
             if environment_metrics:
@@ -2679,6 +2704,8 @@ class NodeRepository:
                 telemetry_dict["power_metrics"] = power_metrics
             if air_quality_metrics:
                 telemetry_dict["air_quality_metrics"] = air_quality_metrics
+            if host_metrics:
+                telemetry_dict["host_metrics"] = host_metrics
 
             try:
                 from ..power_analysis import analyze_node_power

@@ -212,6 +212,10 @@
                 <div class="vital-value" id="vital-battery">--</div>
                 <div class="vital-label">Battery</div>
             </div>
+            <div class="vital-item" id="vital-uptime-item" style="display: none;">
+                <div class="vital-value" id="vital-uptime">--</div>
+                <div class="vital-label">Uptime</div>
+            </div>
             <div class="vital-item">
                 <div class="vital-value" id="vital-channel-util">--</div>
                 <div class="vital-label">Channel util</div>
@@ -2273,7 +2277,10 @@ function formatTelemetryAge(timestampUnix) {
 
 function updateHeroVitals(telemetry) {
     const dm = (telemetry && telemetry.device_metrics) || {};
+    const hm = (telemetry && telemetry.host_metrics) || {};
     const batteryEl = document.getElementById('vital-battery');
+    const uptimeEl = document.getElementById('vital-uptime');
+    const uptimeItem = document.getElementById('vital-uptime-item');
     const channelEl = document.getElementById('vital-channel-util');
     const ageEl = document.getElementById('vital-telemetry-age');
     const signalsEl = document.getElementById('vital-signals');
@@ -2288,6 +2295,18 @@ function updateHeroVitals(telemetry) {
         } else {
             batteryEl.textContent = '--';
             batteryEl.className = 'vital-value';
+        }
+    }
+    const uptimeSeconds = dm.uptime_seconds != null
+        ? dm.uptime_seconds
+        : (hm.uptime_seconds != null ? hm.uptime_seconds : null);
+    if (uptimeEl && uptimeItem) {
+        if (uptimeSeconds != null && uptimeSeconds !== undefined) {
+            uptimeEl.textContent = formatUptime(Number(uptimeSeconds));
+            uptimeItem.style.display = '';
+        } else {
+            uptimeEl.textContent = '--';
+            uptimeItem.style.display = 'none';
         }
     }
     if (channelEl) {
@@ -2911,6 +2930,12 @@ async function loadTelemetryData() {
                 html += '<td class="text-end fw-bold">' + uptime + '</td>';
                 html += '</tr>';
             }
+        } else if (telemetry.host_metrics && telemetry.host_metrics.uptime_seconds !== undefined) {
+            const uptime = formatUptime(telemetry.host_metrics.uptime_seconds);
+            html += '<tr>';
+            html += '<td class="text-muted">Uptime</td>';
+            html += '<td class="text-end fw-bold">' + uptime + '</td>';
+            html += '</tr>';
         }
 
         html += '</table>';

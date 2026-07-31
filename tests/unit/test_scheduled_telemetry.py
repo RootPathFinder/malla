@@ -66,7 +66,7 @@ class TestScheduledTelemetryNormalization:
             normalize_interval_seconds(1799)
 
     def test_telemetry_types_default_and_filter(self):
-        assert normalize_telemetry_types(None) == ["device_metrics"]
+        assert normalize_telemetry_types(None) == ["device_metrics", "host_metrics"]
         assert normalize_telemetry_types(
             ["device_metrics", "bogus", "environment_metrics", "device_metrics"]
         ) == ["device_metrics", "environment_metrics"]
@@ -206,6 +206,7 @@ class TestScheduledTelemetryRunner:
 class TestSolicitHardening:
     def test_persist_writes_packet_history_and_telemetry_data(self, scheduled_db):
         from malla.database.connection import get_db_connection
+        from malla.database.repositories import NodeRepository
         from malla.services.live_telemetry import persist_solicited_telemetry
 
         info = persist_solicited_telemetry(
@@ -234,7 +235,7 @@ class TestSolicitHardening:
         ).fetchone()
         row = conn.execute(
             """
-            SELECT battery_level, voltage
+            SELECT battery_level, voltage, uptime_seconds
             FROM telemetry_data
             WHERE node_id = ?
             ORDER BY timestamp DESC LIMIT 1
@@ -246,6 +247,84 @@ class TestSolicitHardening:
         assert pkt["raw_payload"] is not None
         assert row is not None
         assert row["battery_level"] == 77
+        assert row["uptime_seconds"] == 123
+
+        latest = NodeRepository.get_latest_telemetry(0x0A11C001)
+        assert latest is not None
+        assert latest["device_metrics"]["uptime_seconds"] == 123
+
+    def test_persist_host_metrics_uptime_into_telemetry_data(self, scheduled_db):
+        """Host-only replies still persist uptime for node-detail vitals."""
+        from malla.database.connection import get_db_connection
+        from malla.database.repositories import NodeRepository
+        from malla.services.live_telemetry import persist_solicited_telemetry
+
+        info = persist_solicited_telemetry(
+            0x0A11C001,
+            {"host_metrics": {"uptime_seconds": 86400, "freemem_bytes": 1024}},
+            timestamp=1_700_000_050.0,
+        )
+        assert info["packet_history"] is True
+        assert info["telemetry_data"] is True
+
+        conn = get_db_connection()
+        row = conn.execute(
+            """
+            SELECT uptime_seconds, battery_level
+            FROM telemetry_data
+            WHERE node_id = ?
+            ORDER BY timestamp DESC LIMIT 1
+            """,
+            (0x0A11C001,),
+        ).fetchone()
+        conn.close()
+        assert row is not None
+        assert row["uptime_seconds"] == 86400
+
+        latest = NodeRepository.get_latest_telemetry(0x0A11C001)
+        assert latest is not None
+        assert latest["host_metrics"]["uptime_seconds"] == 86400
+        # Display fallback: host uptime surfaces on device_metrics too.
+        assert latest["device_metrics"]["uptime_seconds"] == 86400
+
+    def test_run_due_rotates_to_host_metrics(self, scheduled_db):
+        """Default schedules rotate device_metrics -> host_metrics."""
+        schedule = ScheduledTelemetryRepository.upsert_schedule(
+            0x0A11C001, interval_seconds=1800, enabled=True
+        )
+        assert schedule["telemetry_types"] == ["device_metrics", "host_metrics"]
+        assert ScheduledTelemetryRepository.pick_next_type(schedule) == "device_metrics"
+
+        fake_publisher = object()
+        with (
+            patch(
+                "malla.services.scheduled_telemetry_service.get_connected_mesh_publisher",
+                return_value=(fake_publisher, "tcp"),
+            ),
+            patch(
+                "malla.services.scheduled_telemetry_service.request_live_node_telemetry",
+                return_value={
+                    "success": True,
+                    "fresh": True,
+                    "telemetry": {"device_metrics": {"uptime_seconds": 99}},
+                    "source": "live",
+                    "telemetry_type": "device_metrics",
+                    "persisted_packet_history": True,
+                    "persisted": True,
+                },
+            ) as solicit,
+        ):
+            summary = run_due_schedules_once(limit=1)
+
+        assert summary["succeeded"] == 1
+        assert solicit.call_args[0][1] == "device_metrics"
+
+        updated = ScheduledTelemetryRepository.get_schedule(0x0A11C001)
+        assert updated is not None
+        assert updated["next_type_index"] == 1
+        assert (
+            ScheduledTelemetryRepository.pick_next_type(updated) == "host_metrics"
+        )
 
     def test_schedule_success_requires_persisted_reply(self, scheduled_db):
         ScheduledTelemetryRepository.upsert_schedule(
@@ -517,3 +596,15 @@ class TestSolicitHardening:
         assert schedule["last_success_at"] is None
         assert "persist" in (schedule["last_error"] or "").lower()
         assert schedule["last_run_detail"]["persisted_packet_history"] is False
+
+
+@pytest.mark.unit
+class TestNodeDetailUptimeMarkup:
+    def test_node_detail_has_uptime_vital(self):
+        from pathlib import Path
+
+        html = Path("src/malla/templates/node_detail.html").read_text(encoding="utf-8")
+        assert 'id="vital-uptime-item"' in html
+        assert 'id="vital-uptime"' in html
+        assert "formatUptime" in html
+        assert "host_metrics" in html
