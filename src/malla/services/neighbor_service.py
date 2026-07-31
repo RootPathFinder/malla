@@ -21,6 +21,8 @@ logger = logging.getLogger(__name__)
 
 # Router roles that should be highlighted in the dependency dashboard
 ROUTER_ROLES = {"ROUTER", "ROUTER_CLIENT", "ROUTER_LATE", "REPEATER"}
+# Roles shown on the Mesh Topology Router Reach map (includes base stations).
+REACH_LAYER_ROLES = ROUTER_ROLES | {"CLIENT_BASE"}
 
 
 class NeighborService:
@@ -1246,13 +1248,51 @@ class NeighborService:
     )
 
     @staticmethod
-    def _list_router_candidates(limit: int = 80) -> list[dict[str, Any]]:
-        """Return non-archived router-role nodes, newest first."""
-        roles = sorted(ROUTER_ROLES)
+    def _normalize_device_role(role: Any) -> str:
+        """Normalize node_info / location role values to uppercase role names."""
+        if role is None:
+            return ""
+        if isinstance(role, bool):
+            return ""
+        if isinstance(role, (int, float)) and int(role) == role:
+            from .config_metadata import DEVICE_ROLE_ENUM
+
+            return str(DEVICE_ROLE_ENUM.get(int(role), "")).upper()
+        text = str(role).strip()
+        if not text:
+            return ""
+        if text.isdigit():
+            from .config_metadata import DEVICE_ROLE_ENUM
+
+            return str(DEVICE_ROLE_ENUM.get(int(text), "")).upper()
+        return text.upper().replace(" ", "_")
+
+    @classmethod
+    def _is_reach_layer_role(cls, role: Any) -> bool:
+        return cls._normalize_device_role(role) in REACH_LAYER_ROLES
+
+    @staticmethod
+    def _list_router_candidates(limit: int = 500) -> list[dict[str, Any]]:
+        """Return non-archived router/base-station nodes, newest first."""
+        roles = sorted(REACH_LAYER_ROLES)
         placeholders = ",".join("?" * len(roles))
         try:
             conn = get_db_connection()
             cursor = conn.cursor()
+            # Match both canonical names and numeric role ids used by older data.
+            numeric_roles = []
+            try:
+                from .config_metadata import DEVICE_ROLE_ENUM
+
+                numeric_roles = [
+                    str(num)
+                    for num, name in DEVICE_ROLE_ENUM.items()
+                    if name in REACH_LAYER_ROLES
+                ]
+            except Exception:
+                numeric_roles = []
+            role_values = roles + numeric_roles
+            placeholders = ",".join("?" * len(role_values))
             cursor.execute(
                 f"""
                 SELECT node_id, long_name, short_name, role, last_seen
@@ -1262,7 +1302,7 @@ class NeighborService:
                 ORDER BY (last_seen IS NULL), last_seen DESC
                 LIMIT ?
                 """,
-                (*roles, int(limit)),
+                (*role_values, int(limit)),
             )
             rows = cursor.fetchall()
             conn.close()
@@ -1270,6 +1310,168 @@ class NeighborService:
         except Exception as e:
             logger.warning("Failed listing router candidates: %s", e)
             return []
+
+    @staticmethod
+    def _resolve_located_routers(max_routers: int) -> tuple[list[dict[str, Any]], dict[str, int]]:
+        """Find routers/base stations that have GPS positions.
+
+        Prefer location-first discovery so GPS-equipped routers are not dropped
+        just because they are outside a short "recent last_seen" window.
+        """
+        from ..database.repositories import LocationRepository
+
+        stats = {
+            "router_candidates": 0,
+            "locations_total": 0,
+            "routers_with_location": 0,
+        }
+
+        candidates = NeighborService._list_router_candidates(limit=max(200, max_routers * 10))
+        stats["router_candidates"] = len(candidates)
+        by_candidate = {int(row["node_id"]): row for row in candidates}
+
+        # Location-first: all known positions, keep reach-layer roles.
+        try:
+            all_locations = LocationRepository.get_node_locations()
+        except Exception as e:
+            logger.warning("Failed loading locations for router reach: %s", e)
+            all_locations = []
+        stats["locations_total"] = len(all_locations)
+
+        located_by_id: dict[int, dict[str, Any]] = {}
+        for loc in all_locations:
+            try:
+                node_id = int(loc["node_id"])
+            except (TypeError, ValueError, KeyError):
+                continue
+            if loc.get("latitude") is None or loc.get("longitude") is None:
+                continue
+            role = loc.get("role")
+            candidate = by_candidate.get(node_id)
+            if candidate is not None:
+                role = candidate.get("role") or role
+            if not NeighborService._is_reach_layer_role(role):
+                continue
+            located_by_id[node_id] = {
+                "node_id": node_id,
+                "hex_id": f"!{node_id:08x}",
+                "node_name": (
+                    (candidate or {}).get("long_name")
+                    or (candidate or {}).get("short_name")
+                    or loc.get("display_name")
+                    or loc.get("long_name")
+                    or loc.get("short_name")
+                    or f"!{node_id:08x}"
+                ),
+                "role": NeighborService._normalize_device_role(role) or "ROUTER",
+                "last_seen": (candidate or {}).get("last_seen") or loc.get("timestamp"),
+                "latitude": float(loc["latitude"]),
+                "longitude": float(loc["longitude"]),
+            }
+
+        # Candidate-first backfill: explicit router IDs that location scan missed
+        # (e.g. role join NULL on position packet but role present on node_info).
+        missing_ids = [nid for nid in by_candidate if nid not in located_by_id]
+        if missing_ids:
+            try:
+                extra_locs = LocationRepository.get_node_locations(
+                    {"node_ids": missing_ids}
+                )
+            except Exception as e:
+                logger.debug("Router reach backfill locations failed: %s", e)
+                extra_locs = []
+            for loc in extra_locs:
+                try:
+                    node_id = int(loc["node_id"])
+                except (TypeError, ValueError, KeyError):
+                    continue
+                if node_id in located_by_id:
+                    continue
+                if loc.get("latitude") is None or loc.get("longitude") is None:
+                    continue
+                candidate = by_candidate.get(node_id) or {}
+                located_by_id[node_id] = {
+                    "node_id": node_id,
+                    "hex_id": f"!{node_id:08x}",
+                    "node_name": (
+                        candidate.get("long_name")
+                        or candidate.get("short_name")
+                        or loc.get("display_name")
+                        or f"!{node_id:08x}"
+                    ),
+                    "role": NeighborService._normalize_device_role(
+                        candidate.get("role") or loc.get("role")
+                    )
+                    or "ROUTER",
+                    "last_seen": candidate.get("last_seen") or loc.get("timestamp"),
+                    "latitude": float(loc["latitude"]),
+                    "longitude": float(loc["longitude"]),
+                }
+
+        # Topology fallback: include is_router nodes with coordinates when role
+        # metadata is sparse but NeighborInfo topology knows them as routers.
+        if len(located_by_id) < max_routers:
+            try:
+                topology = NeighborService.get_mesh_topology(hours=168)
+            except Exception:
+                topology = None
+            if topology and topology.get("nodes"):
+                topo_ids = [
+                    int(n["node_id"])
+                    for n in topology["nodes"]
+                    if n.get("node_id") is not None
+                    and (
+                        n.get("is_router")
+                        or NeighborService._is_reach_layer_role(n.get("role"))
+                    )
+                    and int(n["node_id"]) not in located_by_id
+                ]
+                if topo_ids:
+                    try:
+                        topo_locs = LocationRepository.get_node_locations(
+                            {"node_ids": topo_ids}
+                        )
+                    except Exception:
+                        topo_locs = []
+                    topo_by_id = {
+                        int(n["node_id"]): n
+                        for n in topology["nodes"]
+                        if n.get("node_id") is not None
+                    }
+                    for loc in topo_locs:
+                        try:
+                            node_id = int(loc["node_id"])
+                        except (TypeError, ValueError, KeyError):
+                            continue
+                        if node_id in located_by_id:
+                            continue
+                        if loc.get("latitude") is None or loc.get("longitude") is None:
+                            continue
+                        node = topo_by_id.get(node_id) or {}
+                        located_by_id[node_id] = {
+                            "node_id": node_id,
+                            "hex_id": node.get("hex_id") or f"!{node_id:08x}",
+                            "node_name": node.get("name")
+                            or loc.get("display_name")
+                            or f"!{node_id:08x}",
+                            "role": NeighborService._normalize_device_role(
+                                node.get("role") or loc.get("role")
+                            )
+                            or "ROUTER",
+                            "last_seen": node.get("last_seen") or loc.get("timestamp"),
+                            "latitude": float(loc["latitude"]),
+                            "longitude": float(loc["longitude"]),
+                        }
+
+        located = sorted(
+            located_by_id.values(),
+            key=lambda r: (
+                r.get("last_seen") is None,
+                -(r.get("last_seen") or 0),
+            ),
+        )
+        stats["routers_with_location"] = len(located)
+        return located[:max_routers], stats
 
     @staticmethod
     def get_router_reach_layers(
@@ -1284,55 +1486,22 @@ class NeighborService:
         per router that has a known location. Returns compact geo layers that
         the Mesh Topology UI can toggle independently.
         """
-        from ..database.repositories import LocationRepository
-
         max_routers = max(1, min(int(max_routers), 60))
         neighbors_per_router = max(5, min(int(neighbors_per_router), 80))
         window_hours = hours if hours and hours > 0 else 168
 
-        candidates = NeighborService._list_router_candidates(limit=max_routers * 3)
-        if not candidates:
+        located, discovery_stats = NeighborService._resolve_located_routers(max_routers)
+        if not located:
             return {
                 "hours": window_hours,
                 "routers": [],
                 "statistics": {
-                    "router_candidates": 0,
-                    "routers_with_location": 0,
+                    **discovery_stats,
                     "routers_mapped": 0,
                     "total_reach_links": 0,
                     "mapped_reach_links": 0,
                 },
             }
-
-        candidate_ids = [int(row["node_id"]) for row in candidates]
-        locations = LocationRepository.get_node_locations({"node_ids": candidate_ids})
-        by_loc = {
-            int(loc["node_id"]): loc
-            for loc in locations
-            if loc.get("latitude") is not None and loc.get("longitude") is not None
-        }
-
-        located: list[dict[str, Any]] = []
-        for row in candidates:
-            node_id = int(row["node_id"])
-            loc = by_loc.get(node_id)
-            if not loc:
-                continue
-            located.append(
-                {
-                    "node_id": node_id,
-                    "hex_id": f"!{node_id:08x}",
-                    "node_name": row.get("long_name")
-                    or row.get("short_name")
-                    or f"!{node_id:08x}",
-                    "role": row.get("role") or "ROUTER",
-                    "last_seen": row.get("last_seen"),
-                    "latitude": float(loc["latitude"]),
-                    "longitude": float(loc["longitude"]),
-                }
-            )
-            if len(located) >= max_routers:
-                break
 
         routers: list[dict[str, Any]] = []
         total_links = 0
@@ -1409,8 +1578,7 @@ class NeighborService:
             "hours": window_hours,
             "routers": routers,
             "statistics": {
-                "router_candidates": len(candidates),
-                "routers_with_location": len(located),
+                **discovery_stats,
                 "routers_mapped": len(routers),
                 "total_reach_links": total_links,
                 "mapped_reach_links": mapped_links,
