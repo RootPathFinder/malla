@@ -327,20 +327,37 @@ class DashboardRepository:
                     }
                 )
 
-            # Hourly breakdown (UTC)
+            # Absolute hourly buckets (unix hour starts) for local/UTC display.
+            current_hour = int(now // 3600) * 3600
+            hour_starts = [current_hour - (23 - i) * 3600 for i in range(24)]
             cursor.execute(
                 f"""
-                SELECT CAST(strftime('%H', datetime(timestamp, 'unixepoch')) AS INTEGER) as hour,
-                       COUNT(*) as packets
+                SELECT
+                    (CAST(timestamp AS INTEGER) / 3600) * 3600 AS bucket_ts,
+                    COUNT(*) AS packets,
+                    COUNT(DISTINCT from_node_id) AS active_nodes
                 FROM packet_history
-                WHERE timestamp > ?{gateway_filter}
-                GROUP BY hour
-                ORDER BY hour
+                WHERE timestamp >= ? AND timestamp < ?{gateway_filter}
+                GROUP BY bucket_ts
                 """,
-                [since] + gateway_params,
+                [hour_starts[0], current_hour + 3600] + gateway_params,
             )
-            by_hour = {int(r["hour"]): int(r["packets"]) for r in cursor.fetchall()}
-            hourly = [{"hour": h, "packets": by_hour.get(h, 0)} for h in range(24)]
+            by_hour_ts = {
+                int(r["bucket_ts"]): (
+                    int(r["packets"] or 0),
+                    int(r["active_nodes"] or 0),
+                )
+                for r in cursor.fetchall()
+            }
+            hourly = [
+                {
+                    "bucket_ts": ts,
+                    "hour": int((ts % 86400) // 3600),
+                    "packets": by_hour_ts.get(ts, (0, 0))[0],
+                    "active_nodes": by_hour_ts.get(ts, (0, 0))[1],
+                }
+                for ts in hour_starts
+            ]
 
             # Hop mix (direct vs relayed)
             cursor.execute(
@@ -419,7 +436,7 @@ class DashboardRepository:
                 "top_talkers": top_talkers,
                 "farthest_node": farthest_node,
                 "hourly": hourly,
-                "timezone": "UTC",
+                "timezone": "unix",
                 "generated_at": now,
             }
         except Exception as e:

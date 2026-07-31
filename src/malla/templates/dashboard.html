@@ -179,7 +179,7 @@
                         <div class="col-lg-8">
                             <div class="d-flex justify-content-between align-items-center mb-1">
                                 <h6 class="mb-0 small fw-semibold">Hourly packet trend</h6>
-                                <small class="text-muted">UTC hours</small>
+                                <small class="text-muted" id="last24hHourlyTzHint">Local time</small>
                             </div>
                             {# Chart.js needs a sized parent when maintainAspectRatio is false;
                                height on the canvas alone blows up on mobile. #}
@@ -231,7 +231,7 @@
         <div class="col-md-8 mb-4">
             <div class="card h-100">
                 <div class="card-header d-flex align-items-center justify-content-between">
-                    <h5 class="card-title mb-0"><i class="bi bi-graph-up-arrow"></i> <span id="activityChartTitle">Network Activity (24h UTC)</span></h5>
+                    <h5 class="card-title mb-0"><i class="bi bi-graph-up-arrow"></i> <span id="activityChartTitle">Network Activity (24h)</span></h5>
                     <div class="btn-group btn-group-sm" role="group" aria-label="Time range">
                         <button type="button" class="btn btn-outline-secondary activity-range-btn active" data-days="1">24h</button>
                         <button type="button" class="btn btn-outline-secondary activity-range-btn" data-days="7">7d</button>
@@ -729,18 +729,15 @@ document.addEventListener('DOMContentLoaded', function () {
     loadAnalyticsData(1);
     createLast24hHourlyChart();
 
+    updateActivityTimezoneHints(1);
+
     // Time-range toggle buttons
     document.querySelectorAll('.activity-range-btn').forEach(function(btn) {
         btn.addEventListener('click', function() {
             document.querySelectorAll('.activity-range-btn').forEach(b => b.classList.remove('active'));
             this.classList.add('active');
             const days = parseInt(this.dataset.days, 10);
-            const titles = {
-                1: 'Network Activity (24h UTC)',
-                7: 'Network Activity (7d UTC)',
-                30: 'Network Activity (30d UTC)'
-            };
-            document.getElementById('activityChartTitle').textContent = titles[days] || 'Network Activity';
+            updateActivityTimezoneHints(days);
             reloadActivityChart(days);
         });
     });
@@ -870,99 +867,195 @@ function showErrorMessage(message) {
     console.error(message);
 }
 
+function activityTimezoneLabel() {
+    return (typeof getTimezonePreference === 'function' && getTimezonePreference() === 'utc')
+        ? 'UTC'
+        : 'Local';
+}
+
+function updateActivityTimezoneHints(days) {
+    days = days || 1;
+    const tz = activityTimezoneLabel();
+    const titles = {
+        1: `Network Activity (24h · ${tz})`,
+        7: `Network Activity (7d · ${tz})`,
+        30: `Network Activity (30d · ${tz})`
+    };
+    const titleEl = document.getElementById('activityChartTitle');
+    if (titleEl) titleEl.textContent = titles[days] || `Network Activity (${tz})`;
+    const hint = document.getElementById('last24hHourlyTzHint');
+    if (hint) hint.textContent = tz === 'UTC' ? 'UTC hours' : 'Local time';
+}
+
+function formatActivityBucketLabel(bucketTs, isDaily) {
+    if (bucketTs == null) return '';
+    if (typeof formatTimestamp === 'function') {
+        if (isDaily) {
+            const raw = formatTimestamp(bucketTs, 'date');
+            const d = new Date(Number(bucketTs) * 1000);
+            const useUtc = typeof getTimezonePreference === 'function' && getTimezonePreference() === 'utc';
+            return d.toLocaleDateString(undefined, {
+                month: 'short',
+                day: 'numeric',
+                timeZone: useUtc ? 'UTC' : undefined
+            }) || raw;
+        }
+        const full = formatTimestamp(bucketTs, 'time');
+        // HH:MM(+ optional UTC)
+        const match = String(full).match(/^(\d{2}:\d{2})/);
+        if (match) {
+            return activityTimezoneLabel() === 'UTC' ? `${match[1]}z` : match[1];
+        }
+        return full;
+    }
+    const d = new Date(Number(bucketTs) * 1000);
+    if (isDaily) {
+        return d.toLocaleDateString(undefined, { month: 'short', day: 'numeric' });
+    }
+    return String(d.getHours()).padStart(2, '0') + ':00';
+}
+
+function formatNowLabel() {
+    const nowSec = Date.now() / 1000;
+    if (typeof formatTimestamp === 'function') {
+        const full = formatTimestamp(nowSec, 'time');
+        const match = String(full).match(/^(\d{2}:\d{2})/);
+        if (match) {
+            return activityTimezoneLabel() === 'UTC'
+                ? `Now ${match[1]}z`
+                : `Now ${match[1]}`;
+        }
+    }
+    return 'Now';
+}
+
 function createTimeSeriesChart(temporalData, days) {
     days = days || 1;
     const isDaily = days > 1;
     const breakdown = isDaily ? temporalData && temporalData.daily_breakdown : temporalData && temporalData.hourly_breakdown;
-    if (!temporalData || !breakdown) return;
+    if (!temporalData || !breakdown || !breakdown.length) return;
 
     hideLoadingSpinner('timeSeriesChart');
     const ctx = document.getElementById('timeSeriesChart');
     if (!ctx) return;
 
-    const labels = [];
-    const data = [];
+    updateActivityTimezoneHints(days);
 
-    if (isDaily) {
-        breakdown.forEach(item => {
-            // Format date as "Apr 26"
-            const d = new Date(item.date + 'T00:00:00');
-            labels.push(d.toLocaleDateString(undefined, {month: 'short', day: 'numeric'}));
-            data.push(item.total_packets);
-        });
-    } else {
-        breakdown.forEach(item => {
-            // Buckets are UTC hours from SQLite unixepoch
-            const hour24 = item.hour;
-            labels.push(String(hour24).padStart(2, '0') + 'z');
-            data.push(item.total_packets);
-        });
-    }
+    const labels = [];
+    const packetData = [];
+    const activeNodeData = [];
+    const bucketTsList = [];
+
+    breakdown.forEach(item => {
+        const ts = item.bucket_ts != null
+            ? Number(item.bucket_ts)
+            : (isDaily && item.date
+                ? Date.parse(item.date + 'T00:00:00Z') / 1000
+                : null);
+        bucketTsList.push(ts);
+        labels.push(ts != null ? formatActivityBucketLabel(ts, isDaily) : (isDaily ? item.date : String(item.hour)));
+        packetData.push(item.total_packets || 0);
+        activeNodeData.push(item.active_nodes || 0);
+    });
 
     const colors = getChartColors();
     const options = getDefaultChartOptions();
-
-    // For 24h view: draw a "Now" vertical line at the current UTC hour
-    let currentHourIndex = -1;
-    if (!isDaily) {
-        currentHourIndex = new Date().getUTCHours();
-    }
-
-    // Custom plugin to draw current time vertical line
-    const currentTimeLinePlugin = {
-        id: 'currentTimeLine',
-        afterDraw: (chart) => {
-            if (currentHourIndex === -1) return;
-
-            const ctx = chart.ctx;
-            const xAxis = chart.scales.x;
-            const yAxis = chart.scales.y;
-            const x = xAxis.getPixelForValue(currentHourIndex);
-
-            // Draw the dashed vertical line
-            ctx.save();
-            ctx.beginPath();
-            ctx.setLineDash([5, 5]);
-            ctx.strokeStyle = colors.danger || 'rgba(220, 53, 69, 0.8)';
-            ctx.lineWidth = 2;
-            ctx.moveTo(x, yAxis.top);
-            ctx.lineTo(x, yAxis.bottom);
-            ctx.stroke();
-
-            // Draw the "Now" label
-            ctx.setLineDash([]);
-            ctx.fillStyle = colors.danger || 'rgba(220, 53, 69, 0.8)';
-            const labelPadding = 4;
-            const labelText = 'Now';
-            ctx.font = 'bold 11px sans-serif';
-            const textWidth = ctx.measureText(labelText).width;
-            const labelWidth = textWidth + labelPadding * 2;
-            const labelHeight = 16;
-
-            // Draw label background
-            ctx.fillRect(x - labelWidth / 2, yAxis.top - labelHeight - 2, labelWidth, labelHeight);
-
-            // Draw label text
-            ctx.fillStyle = '#fff';
-            ctx.textAlign = 'center';
-            ctx.textBaseline = 'middle';
-            ctx.fillText(labelText, x, yAxis.top - labelHeight / 2 - 2);
-            ctx.restore();
+    options.plugins.legend.display = true;
+    options.scales.y.title = {
+        display: true,
+        text: isDaily ? 'Packets / day' : 'Packets / hour',
+        color: colors.mutedTextColor
+    };
+    options.scales.y1 = {
+        position: 'right',
+        beginAtZero: true,
+        grid: { drawOnChartArea: false },
+        ticks: { color: colors.mutedTextColor, precision: 0 },
+        title: {
+            display: true,
+            text: 'Active nodes',
+            color: colors.mutedTextColor
         }
     };
 
-    const datasetLabel = isDaily ? 'Messages per Day' : 'Messages per Hour';
+    // "Now" marker: interpolate within the current absolute bucket.
+    const nowSec = Date.now() / 1000;
+    const bucketSeconds = isDaily ? 86400 : 3600;
+    let nowIndex = -1;
+    let nowFraction = 0;
+    for (let i = 0; i < bucketTsList.length; i++) {
+        const ts = bucketTsList[i];
+        if (ts == null) continue;
+        if (ts <= nowSec) {
+            nowIndex = i;
+            nowFraction = Math.min(1, Math.max(0, (nowSec - ts) / bucketSeconds));
+        }
+    }
+
+    const nowLabelText = formatNowLabel();
+    const currentTimeLinePlugin = {
+        id: 'currentTimeLine',
+        afterDraw: (chart) => {
+            if (nowIndex === -1) return;
+
+            const c = chart.ctx;
+            const xAxis = chart.scales.x;
+            const yAxis = chart.scales.y;
+            const x0 = xAxis.getPixelForValue(nowIndex);
+            const x1 = nowIndex < bucketTsList.length - 1
+                ? xAxis.getPixelForValue(nowIndex + 1)
+                : x0;
+            const x = x0 + (x1 - x0) * nowFraction;
+
+            c.save();
+            c.beginPath();
+            c.setLineDash([5, 5]);
+            c.strokeStyle = colors.danger || 'rgba(220, 53, 69, 0.8)';
+            c.lineWidth = 2;
+            c.moveTo(x, yAxis.top);
+            c.lineTo(x, yAxis.bottom);
+            c.stroke();
+
+            c.setLineDash([]);
+            c.fillStyle = colors.danger || 'rgba(220, 53, 69, 0.8)';
+            const labelPadding = 4;
+            c.font = 'bold 11px sans-serif';
+            const textWidth = c.measureText(nowLabelText).width;
+            const labelWidth = textWidth + labelPadding * 2;
+            const labelHeight = 16;
+            c.fillRect(x - labelWidth / 2, yAxis.top - labelHeight - 2, labelWidth, labelHeight);
+            c.fillStyle = '#fff';
+            c.textAlign = 'center';
+            c.textBaseline = 'middle';
+            c.fillText(nowLabelText, x, yAxis.top - labelHeight / 2 - 2);
+            c.restore();
+        }
+    };
+
     chartInstances.timeSeriesChart = new Chart(ctx, {
-        type: 'line',
+        type: 'bar',
         data: {
             labels: labels,
-            datasets: [{
-                label: datasetLabel,
-                data: data,
-                borderColor: colors.info,
-                backgroundColor: colors.infoBg,
-                tension: 0.1
-            }]
+            datasets: [
+                {
+                    label: isDaily ? 'Packets / day' : 'Packets / hour',
+                    data: packetData,
+                    backgroundColor: colors.infoBg,
+                    borderColor: colors.info,
+                    borderWidth: 1,
+                    yAxisID: 'y',
+                    order: 2
+                },
+                {
+                    label: 'Active nodes',
+                    data: activeNodeData,
+                    backgroundColor: colors.successBg,
+                    borderColor: colors.success,
+                    borderWidth: 1,
+                    yAxisID: 'y1',
+                    order: 1
+                }
+            ]
         },
         options: options,
         plugins: [currentTimeLinePlugin]
@@ -1138,10 +1231,23 @@ function createLast24hHourlyChart() {
     if (!ctx || !last24hSummary || !Array.isArray(last24hSummary.hourly)) return;
 
     const colors = getChartColors();
-    const labels = last24hSummary.hourly.map(h => String(h.hour).padStart(2, '0') + 'z');
-    const data = last24hSummary.hourly.map(h => h.packets || 0);
-    const nowHour = new Date().getUTCHours();
+    const hourly = last24hSummary.hourly;
+    const labels = hourly.map(h =>
+        h.bucket_ts != null
+            ? formatActivityBucketLabel(h.bucket_ts, false)
+            : String(h.hour).padStart(2, '0') + 'z'
+    );
+    const packetData = hourly.map(h => h.packets || 0);
+    const activeData = hourly.map(h => h.active_nodes || 0);
+    const nowSec = Date.now() / 1000;
+    let nowIndex = -1;
+    hourly.forEach((h, i) => {
+        if (h.bucket_ts != null && h.bucket_ts <= nowSec) nowIndex = i;
+    });
     const isNarrow = window.matchMedia('(max-width: 767.98px)').matches;
+    updateActivityTimezoneHints(
+        parseInt(document.querySelector('.activity-range-btn.active')?.dataset?.days || '1', 10)
+    );
 
     if (chartInstances.last24hHourlyChart) {
         chartInstances.last24hHourlyChart.destroy();
@@ -1150,14 +1256,28 @@ function createLast24hHourlyChart() {
         type: 'bar',
         data: {
             labels: labels,
-            datasets: [{
-                label: 'Packets / hour (UTC)',
-                data: data,
-                backgroundColor: data.map((_, i) => i === nowHour ? colors.danger : colors.info),
-                borderWidth: 0,
-                barPercentage: isNarrow ? 0.9 : 0.8,
-                categoryPercentage: isNarrow ? 0.9 : 0.8
-            }]
+            datasets: [
+                {
+                    label: 'Packets / hour',
+                    data: packetData,
+                    backgroundColor: packetData.map((_, i) =>
+                        i === nowIndex ? colors.danger : colors.info
+                    ),
+                    borderWidth: 0,
+                    yAxisID: 'y',
+                    barPercentage: isNarrow ? 0.9 : 0.8,
+                    categoryPercentage: isNarrow ? 0.9 : 0.8
+                },
+                {
+                    label: 'Active nodes',
+                    data: activeData,
+                    backgroundColor: colors.success,
+                    borderWidth: 0,
+                    yAxisID: 'y1',
+                    barPercentage: isNarrow ? 0.9 : 0.8,
+                    categoryPercentage: isNarrow ? 0.9 : 0.8
+                }
+            ]
         },
         options: {
             responsive: true,
@@ -1166,7 +1286,14 @@ function createLast24hHourlyChart() {
                 padding: { top: 4, right: 4, bottom: 0, left: 0 }
             },
             plugins: {
-                legend: { display: false }
+                legend: {
+                    display: true,
+                    labels: {
+                        color: colors.mutedTextColor,
+                        boxWidth: 10,
+                        font: { size: isNarrow ? 9 : 11 }
+                    }
+                }
             },
             scales: {
                 x: {
@@ -1187,6 +1314,17 @@ function createLast24hHourlyChart() {
                         font: { size: isNarrow ? 9 : 11 }
                     },
                     grid: { color: colors.gridColor }
+                },
+                y1: {
+                    position: 'right',
+                    beginAtZero: true,
+                    grid: { drawOnChartArea: false },
+                    ticks: {
+                        color: colors.mutedTextColor,
+                        maxTicksLimit: isNarrow ? 4 : 6,
+                        precision: 0,
+                        font: { size: isNarrow ? 9 : 11 }
+                    }
                 }
             }
         }

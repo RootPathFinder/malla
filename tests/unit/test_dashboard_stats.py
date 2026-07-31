@@ -169,7 +169,9 @@ def test_last_24h_summary_new_nodes_and_trends(dashboard_db):
     assert summary["packets_24h"] > summary["packets_prior_24h"]
     assert summary["packets_trend_pct"] != 0
     assert len(summary["hourly"]) == 24
-    assert summary["timezone"] == "UTC"
+    assert summary["timezone"] == "unix"
+    assert all("bucket_ts" in h and "active_nodes" in h for h in summary["hourly"])
+    assert summary["hourly"][0]["bucket_ts"] < summary["hourly"][-1]["bucket_ts"]
     assert summary["direct_packets"] + summary["relayed_packets"] > 0
     assert summary["low_battery_nodes"] == 1
     assert len(summary["top_talkers"]) >= 1

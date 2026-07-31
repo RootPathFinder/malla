@@ -61,8 +61,10 @@ class TestStatsEndpoint:
             "timezone",
         ):
             assert key in data, key
-        assert data["timezone"] == "UTC"
+        assert data["timezone"] in {"unix", "UTC"}
         assert len(data["hourly"]) == 24
+        assert "bucket_ts" in data["hourly"][0]
+        assert "active_nodes" in data["hourly"][0]
         assert isinstance(data["new_node_names"], list)
         assert data["farthest_node"] is None or isinstance(data["farthest_node"], dict)
 
