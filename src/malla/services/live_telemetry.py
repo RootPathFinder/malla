@@ -182,20 +182,26 @@ def persist_solicited_device_telemetry(
         return False
 
     metrics = telemetry.get("device_metrics") or telemetry.get("deviceMetrics")
-    if not isinstance(metrics, dict) or not metrics:
-        return False
+    if not isinstance(metrics, dict):
+        metrics = {}
+    host = telemetry.get("host_metrics") or telemetry.get("hostMetrics")
+    if not isinstance(host, dict):
+        host = {}
 
-    def _num(key: str, alt: str | None = None) -> Any:
-        value = metrics.get(key)
+    def _num(source: dict[str, Any], key: str, alt: str | None = None) -> Any:
+        value = source.get(key)
         if value is None and alt:
-            value = metrics.get(alt)
+            value = source.get(alt)
         return value
 
-    battery_level = _num("battery_level", "batteryLevel")
-    voltage = _num("voltage")
-    channel_utilization = _num("channel_utilization", "channelUtilization")
-    air_util_tx = _num("air_util_tx", "airUtilTx")
-    uptime_seconds = _num("uptime_seconds", "uptimeSeconds")
+    battery_level = _num(metrics, "battery_level", "batteryLevel")
+    voltage = _num(metrics, "voltage")
+    channel_utilization = _num(metrics, "channel_utilization", "channelUtilization")
+    air_util_tx = _num(metrics, "air_util_tx", "airUtilTx")
+    # Radio DeviceMetrics uptime, else HostMetrics uptime (Linux nodes).
+    uptime_seconds = _num(metrics, "uptime_seconds", "uptimeSeconds")
+    if uptime_seconds is None:
+        uptime_seconds = _num(host, "uptime_seconds", "uptimeSeconds")
 
     if all(
         v is None

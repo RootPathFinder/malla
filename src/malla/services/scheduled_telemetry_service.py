@@ -205,9 +205,9 @@ def run_due_schedules_once(
         if _runner_stop_event.is_set():
             break
         node_id = int(schedule["node_id"])
-        # Identical acquisition to Admin live telemetry; persist so node-detail
-        # "last telemetry" age updates.
-        telemetry_type = "device_metrics"
+        # Rotate schedule types (device_metrics includes radio uptime; host_metrics
+        # for Linux-host uptime). Persist so node-detail "last telemetry" updates.
+        telemetry_type = ScheduledTelemetryRepository.pick_next_type(schedule)
         outcome = request_live_node_telemetry(
             node_id,
             telemetry_type,
@@ -290,8 +290,8 @@ def run_schedule_now(node_id: int) -> dict[str, Any]:
     conn.commit()
     conn.close()
 
-    # Identical acquisition to Admin live telemetry; persist for node details.
-    telemetry_type = "device_metrics"
+    # Rotate schedule types; persist for node details (incl. uptime).
+    telemetry_type = ScheduledTelemetryRepository.pick_next_type(schedule)
     outcome = request_live_node_telemetry(
         node_id,
         telemetry_type,

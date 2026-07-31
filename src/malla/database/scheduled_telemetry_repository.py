@@ -21,7 +21,9 @@ logger = logging.getLogger(__name__)
 
 MIN_INTERVAL_SECONDS = 1800  # 30 minutes
 DEFAULT_INTERVAL_SECONDS = 3600  # 1 hour
-DEFAULT_TELEMETRY_TYPES = ("device_metrics",)
+# device_metrics carries radio battery + uptime_seconds; host_metrics carries
+# Linux-host uptime for nodes that expose HostMetrics.
+DEFAULT_TELEMETRY_TYPES = ("device_metrics", "host_metrics")
 MAX_INTERVAL_SECONDS = 7 * 24 * 3600  # 7 days
 
 
@@ -115,7 +117,7 @@ def normalize_interval_seconds(value: Any) -> int:
 
 
 def normalize_telemetry_types(value: Any) -> list[str]:
-    """Normalize a list of telemetry type keys; defaults to device_metrics."""
+    """Normalize telemetry type keys; defaults to device + host metrics."""
     if value is None:
         return list(DEFAULT_TELEMETRY_TYPES)
     if isinstance(value, str):
