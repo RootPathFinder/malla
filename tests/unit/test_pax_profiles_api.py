@@ -130,6 +130,9 @@ class TestPaxProfilesApi:
         assert any(s.get("rssi") == -62 for s in body["samples"])
         assert body["presence"]
         assert body["summary"]["present_now"] is True
+        assert body["summary"]["nearest_m"] is not None
+        assert body["summary"]["nearest_label"]
+        assert any(s.get("distance_m") is not None for s in body["samples"])
 
         page = client.get("/paxcounter/id/fp:abcd")
         assert page.status_code == 200
@@ -137,4 +140,6 @@ class TestPaxProfilesApi:
         assert "PAX ID Status" in html
         assert "fp:abcd" in html
         assert "rssiChart" in html
+        assert "distanceChart" in html
         assert "presenceChart" in html
+        assert "Approx distance" in html
