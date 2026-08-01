@@ -14,9 +14,7 @@ from google.protobuf.internal import builder as _builder
 _sym_db = _symbol_database.Default()
 
 
-DESCRIPTOR = _descriptor_pool.Default().AddSerializedFile(
-    b'\n\x1fmalla/meshtastic/paxcount.proto\x12\x10malla.meshtastic\"\x80\x01\n\x0bPaxSighting\x12\x0b\n\x03mac\x18\x01 \x01(\x0c\x12\x30\n\x04kind\x18\x02 \x01(\x0e\x32\".malla.meshtastic.PaxSighting.Kind\x12\x0c\n\x04rssi\x18\x03 \x01(\x11\"$\n\x04Kind\x12\x0f\n\x0bWIFI_CLIENT\x10\x00\x12\x0b\n\x07WIFI_AP\x10\x01\"\xa9\x01\n\x08Paxcount\x12\x0c\n\x04wifi\x18\x01 \x01(\r\x12\x0b\n\x03\x62le\x18\x02 \x01(\r\x12\x0e\n\x06uptime\x18\x03 \x01(\r\x12\x30\n\tsightings\x18\x04 \x03(\x0b\x32\x1d.malla.meshtastic.PaxSighting\x12\x16\n\x0esighting_count\x18\x05 \x01(\r\x12\x13\n\x0b\x63hunk_index\x18\x06 \x01(\r\x12\x13\n\x0b\x63hunk_total\x18\x07 \x01(\rb\x06proto3'
-)
+DESCRIPTOR = _descriptor_pool.Default().AddSerializedFile(b'\n\x1fmalla/meshtastic/paxcount.proto\x12\x10malla.meshtastic\"\x89\x01\n\x0bPaxSighting\x12\x0b\n\x03mac\x18\x01 \x01(\x0c\x12\x30\n\x04kind\x18\x02 \x01(\x0e\x32\".malla.meshtastic.PaxSighting.Kind\x12\x0c\n\x04rssi\x18\x03 \x01(\x11\"-\n\x04Kind\x12\x0f\n\x0bWIFI_CLIENT\x10\x00\x12\x0b\n\x07WIFI_AP\x10\x01\x12\x07\n\x03\x42LE\x10\x02\"\xa9\x01\n\x08Paxcount\x12\x0c\n\x04wifi\x18\x01 \x01(\r\x12\x0b\n\x03\x62le\x18\x02 \x01(\r\x12\x0e\n\x06uptime\x18\x03 \x01(\r\x12\x30\n\tsightings\x18\x04 \x03(\x0b\x32\x1d.malla.meshtastic.PaxSighting\x12\x16\n\x0esighting_count\x18\x05 \x01(\r\x12\x13\n\x0b\x63hunk_index\x18\x06 \x01(\r\x12\x13\n\x0b\x63hunk_total\x18\x07 \x01(\rb\x06proto3')
 
 _globals = globals()
 _builder.BuildMessageAndEnumDescriptors(DESCRIPTOR, _globals)
@@ -26,9 +24,9 @@ _builder.BuildTopDescriptorsAndMessages(
 if not _descriptor._USE_C_DESCRIPTORS:
     DESCRIPTOR._loaded_options = None
     _globals["_PAXSIGHTING"]._serialized_start = 54
-    _globals["_PAXSIGHTING"]._serialized_end = 182
+    _globals["_PAXSIGHTING"]._serialized_end = 191
     _globals["_PAXSIGHTING_KIND"]._serialized_start = 146
-    _globals["_PAXSIGHTING_KIND"]._serialized_end = 182
-    _globals["_PAXCOUNT"]._serialized_start = 185
-    _globals["_PAXCOUNT"]._serialized_end = 354
+    _globals["_PAXSIGHTING_KIND"]._serialized_end = 191
+    _globals["_PAXCOUNT"]._serialized_start = 194
+    _globals["_PAXCOUNT"]._serialized_end = 363
 # @@protoc_insertion_point(module_scope)

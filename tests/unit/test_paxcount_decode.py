@@ -60,28 +60,33 @@ def test_decode_legacy_counts_only():
 
 
 @pytest.mark.unit
-def test_decode_sightings_client_and_ap():
+def test_decode_sightings_client_ap_and_ble():
     raw = _encode_sample(
         wifi=2,
-        ble=0,
+        ble=1,
         sightings=[
             (bytes([1, 2, 3, 4, 5, 6]), paxcount_pb2.PaxSighting.WIFI_CLIENT, -60),
             (bytes([10, 11, 12, 13, 14, 15]), paxcount_pb2.PaxSighting.WIFI_AP, -45),
+            (bytes([0xDE, 0xAD, 0xBE, 0xEF, 0x00, 0x01]), paxcount_pb2.PaxSighting.BLE, -72),
         ],
-        sighting_count=2,
+        sighting_count=3,
         chunk_index=0,
         chunk_total=1,
     )
     decoded = decode_paxcount_payload(raw)
     assert decoded is not None
     assert decoded["wifi"] == 2
-    assert decoded["sighting_count"] == 2
-    assert len(decoded["sightings"]) == 2
+    assert decoded["ble"] == 1
+    assert decoded["sighting_count"] == 3
+    assert len(decoded["sightings"]) == 3
     assert decoded["sightings"][0]["mac"] == "01:02:03:04:05:06"
     assert decoded["sightings"][0]["kind"] == "wifi_client"
     assert decoded["sightings"][0]["rssi"] == -60
     assert decoded["sightings"][1]["kind"] == "wifi_ap"
     assert decoded["sightings"][1]["mac"] == "0a:0b:0c:0d:0e:0f"
+    assert decoded["sightings"][2]["kind"] == "ble"
+    assert decoded["sightings"][2]["mac"] == "de:ad:be:ef:00:01"
+    assert decoded["sightings"][2]["rssi"] == -72
 
 
 @pytest.mark.unit
@@ -99,6 +104,7 @@ def test_aggregate_mac_hits_counts_unique():
             "sightings": [
                 {"mac": "01:02:03:04:05:06", "kind": "wifi_client", "rssi": -70},
                 {"mac": "aa:bb:cc:dd:ee:ff", "kind": "wifi_ap", "rssi": -50},
+                {"mac": "de:ad:be:ef:00:01", "kind": "ble", "rssi": -80},
             ],
         },
         {
@@ -106,15 +112,20 @@ def test_aggregate_mac_hits_counts_unique():
             "from_node_hex": "!aabbccdd",
             "sightings": [
                 {"mac": "01:02:03:04:05:06", "kind": "wifi_client", "rssi": -55},
+                {"mac": "de:ad:be:ef:00:01", "kind": "ble", "rssi": -65},
             ],
         },
     ]
     hits = aggregate_mac_hits(readings)
-    assert len(hits) == 2
+    assert len(hits) == 3
     assert hits[0]["mac"] == "01:02:03:04:05:06"
     assert hits[0]["hits"] == 2
     assert hits[0]["best_rssi"] == -55
     assert hits[0]["last_seen"] == 2000.0
-    assert hits[1]["mac"] == "aa:bb:cc:dd:ee:ff"
-    assert hits[1]["hits"] == 1
-    assert hits[1]["kind"] == "wifi_ap"
+    ble = next(h for h in hits if h["kind"] == "ble")
+    assert ble["mac"] == "de:ad:be:ef:00:01"
+    assert ble["hits"] == 2
+    assert ble["best_rssi"] == -65
+    ap = next(h for h in hits if h["kind"] == "wifi_ap")
+    assert ap["mac"] == "aa:bb:cc:dd:ee:ff"
+    assert ap["hits"] == 1

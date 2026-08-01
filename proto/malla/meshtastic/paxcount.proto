@@ -9,6 +9,7 @@ message PaxSighting {
   enum Kind {
     WIFI_CLIENT = 0;
     WIFI_AP = 1;
+    BLE = 2;
   }
   bytes mac = 1;
   Kind kind = 2;

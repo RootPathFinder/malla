@@ -1,8 +1,9 @@
 """Decode Meshtastic PAXCOUNTER_APP payloads, including optional MAC/BSSID sightings.
 
 Firmware with ``ModuleConfig.paxcounter.report_ids`` may attach ``PaxSighting``
-entries (WiFi client MACs and AP BSSIDs). Stock ``meshtastic`` Python bindings
-do not yet know these fields, so we decode with a vendored protobuf.
+entries (WiFi client MACs, AP BSSIDs, and BLE addresses). Stock ``meshtastic``
+Python bindings do not yet know these fields, so we decode with a vendored
+protobuf.
 """
 
 from __future__ import annotations
@@ -14,10 +15,12 @@ from malla.vendor.meshtastic import paxcount_pb2
 
 KIND_WIFI_CLIENT = "wifi_client"
 KIND_WIFI_AP = "wifi_ap"
+KIND_BLE = "ble"
 
 _KIND_LABELS = {
     paxcount_pb2.PaxSighting.WIFI_CLIENT: KIND_WIFI_CLIENT,
     paxcount_pb2.PaxSighting.WIFI_AP: KIND_WIFI_AP,
+    paxcount_pb2.PaxSighting.BLE: KIND_BLE,
 }
 
 
