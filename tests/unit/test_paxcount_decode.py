@@ -6,9 +6,12 @@ import pytest
 
 from malla.utils.paxcount_decode import (
     aggregate_mac_hits,
+    ble_distance_band,
     build_id_directory,
     build_sighting_history,
     decode_paxcount_payload,
+    estimate_ble_distance_m,
+    format_ble_distance,
     format_fingerprint,
     format_mac,
     normalize_profile_id,
@@ -147,9 +150,34 @@ def test_decode_ble_apple_android_with_fingerprint():
     assert decoded["sightings"][0]["kind"] == "ble_apple"
     assert decoded["sightings"][0]["fingerprint"] == "deadbeef"
     assert decoded["sightings"][0]["stable_id"] == "fp:deadbeef"
+    assert decoded["sightings"][0]["distance_m"] is not None
+    assert decoded["sightings"][0]["distance_label"]
     assert decoded["sightings"][1]["kind"] == "ble_android"
     assert decoded["sightings"][1]["fingerprint"] == "1234"
     assert decoded["sightings"][1]["stable_id"] == "fp:1234"
+    # Stronger RSSI → nearer estimate
+    assert decoded["sightings"][0]["distance_m"] < decoded["sightings"][1]["distance_m"]
+
+
+@pytest.mark.unit
+def test_estimate_ble_distance_from_rssi():
+    assert estimate_ble_distance_m(None) is None
+    assert estimate_ble_distance_m(10) is None
+    near = estimate_ble_distance_m(-45)
+    mid = estimate_ble_distance_m(-65)
+    far = estimate_ble_distance_m(-85)
+    assert near is not None and mid is not None and far is not None
+    assert near < mid < far
+    # ~1 m at calibrated measured power
+    one_m = estimate_ble_distance_m(-59)
+    assert one_m is not None
+    assert 0.8 <= one_m <= 1.2
+    assert ble_distance_band(0.5) == "immediate"
+    assert ble_distance_band(2.0) == "near"
+    assert ble_distance_band(6.0) == "mid"
+    assert ble_distance_band(20.0) == "far"
+    assert format_ble_distance(1.2) == "~1.2 m"
+    assert format_ble_distance(15.0) == "~15 m"
 
 
 @pytest.mark.unit
@@ -290,3 +318,6 @@ def test_build_sighting_history_rssi_and_presence_buckets():
     assert len(history["samples"]) == 3
     # Samples sorted ascending
     assert history["samples"][0]["timestamp"] <= history["samples"][-1]["timestamp"]
+    assert history["summary"]["nearest_m"] is not None
+    assert history["summary"]["nearest_label"]
+    assert history["samples"][-1]["distance_m"] is not None

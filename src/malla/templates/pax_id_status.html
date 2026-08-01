@@ -71,34 +71,51 @@
     <div id="loadError" class="alert alert-danger d-none" role="alert"></div>
 
     <div class="row g-2 mb-3" id="summaryCards">
-        <div class="col-6 col-md-3">
+        <div class="col-6 col-md-4 col-xl-2">
             <div class="pax-stat-box">
                 <div class="text-muted small">Presence</div>
                 <div class="fw-semibold" id="statPresence">—</div>
             </div>
         </div>
-        <div class="col-6 col-md-3">
+        <div class="col-6 col-md-4 col-xl-2">
             <div class="pax-stat-box">
                 <div class="text-muted small">Hits</div>
                 <div class="fw-semibold fs-5" id="statHits">—</div>
             </div>
         </div>
-        <div class="col-6 col-md-3">
+        <div class="col-6 col-md-4 col-xl-2">
             <div class="pax-stat-box">
                 <div class="text-muted small">Best / Avg RSSI</div>
                 <div class="fw-semibold" id="statRssi">—</div>
             </div>
         </div>
-        <div class="col-6 col-md-3">
+        <div class="col-6 col-md-4 col-xl-2">
+            <div class="pax-stat-box">
+                <div class="text-muted small">Approx distance</div>
+                <div class="fw-semibold" id="statDistance">—</div>
+                <div class="text-muted" style="font-size:0.7rem" id="statDistanceBand"></div>
+            </div>
+        </div>
+        <div class="col-6 col-md-4 col-xl-2">
             <div class="pax-stat-box">
                 <div class="text-muted small">Last seen</div>
                 <div class="fw-semibold" id="statLastSeen">—</div>
             </div>
         </div>
+        <div class="col-6 col-md-4 col-xl-2">
+            <div class="pax-stat-box">
+                <div class="text-muted small">Model</div>
+                <div class="small" id="statModel">BLE RSSI log-distance</div>
+            </div>
+        </div>
     </div>
+    <p class="text-muted small mb-3" id="distanceDisclaimer">
+        Distance is an approximate BLE proximity estimate from RSSI (not surveyed accuracy).
+        Use relative changes when walking closer to identify a phone.
+    </p>
 
     <div class="row g-3 mb-3">
-        <div class="col-lg-6">
+        <div class="col-lg-4">
             <div class="card h-100">
                 <div class="card-header py-2">
                     <strong><i class="bi bi-broadcast"></i> RSSI over time</strong>
@@ -108,7 +125,17 @@
                 </div>
             </div>
         </div>
-        <div class="col-lg-6">
+        <div class="col-lg-4">
+            <div class="card h-100">
+                <div class="card-header py-2">
+                    <strong><i class="bi bi-rulers"></i> Approx distance</strong>
+                </div>
+                <div class="card-body">
+                    <div id="distanceChart" class="chart-box"></div>
+                </div>
+            </div>
+        </div>
+        <div class="col-lg-4">
             <div class="card h-100">
                 <div class="card-header py-2">
                     <strong><i class="bi bi-activity"></i> Presence over time</strong>
@@ -132,13 +159,14 @@
                         <tr>
                             <th>Time</th>
                             <th>RSSI</th>
+                            <th>Approx dist</th>
                             <th>Kind</th>
                             <th>MAC</th>
                             <th>Node</th>
                         </tr>
                     </thead>
                     <tbody id="samplesBody">
-                        <tr><td colspan="5" class="text-center text-muted py-3">Loading…</td></tr>
+                        <tr><td colspan="6" class="text-center text-muted py-3">Loading…</td></tr>
                     </tbody>
                 </table>
             </div>
@@ -244,7 +272,7 @@
         }
         const xs = samples.map(s => new Date(s.timestamp * 1000));
         const ys = samples.map(s => s.rssi);
-        const text = samples.map(s => `${kindLabel(s.kind)} · ${s.mac || ''}`);
+        const text = samples.map(s => `${kindLabel(s.kind)} · ${s.mac || ''}${s.distance_label ? ' · ' + s.distance_label : ''}`);
         Plotly.newPlot(el, [{
             x: xs,
             y: ys,
@@ -260,6 +288,38 @@
             yaxis: {
                 ...chartLayout('').yaxis,
                 title: 'dBm',
+                autorange: true,
+            },
+        }, { responsive: true, displayModeBar: false });
+    }
+
+    function renderDistanceChart(samples) {
+        const el = document.getElementById('distanceChart');
+        if (!el) return;
+        const withDist = samples.filter(s => s.distance_m != null);
+        if (!withDist.length) {
+            el.innerHTML = '<div class="text-muted small text-center py-5">No BLE distance estimates in this window</div>';
+            return;
+        }
+        const xs = withDist.map(s => new Date(s.timestamp * 1000));
+        const ys = withDist.map(s => s.distance_m);
+        const text = withDist.map(s => `${s.distance_label || ''} · ${s.rssi} dBm · ${kindLabel(s.kind)}`);
+        Plotly.newPlot(el, [{
+            x: xs,
+            y: ys,
+            text,
+            mode: 'lines+markers',
+            type: 'scatter',
+            line: { color: '#0d6efd', width: 1.5 },
+            marker: { size: 7, color: '#0d6efd' },
+            hovertemplate: '%{x}<br>%{y} m<br>%{text}<extra></extra>',
+            connectgaps: false,
+        }], {
+            ...chartLayout(''),
+            yaxis: {
+                ...chartLayout('').yaxis,
+                title: 'meters (approx)',
+                rangemode: 'tozero',
                 autorange: true,
             },
         }, { responsive: true, displayModeBar: false });
@@ -307,7 +367,7 @@
         if (badge) badge.textContent = String(samples.length);
         if (!body) return;
         if (!samples.length) {
-            body.innerHTML = '<tr><td colspan="5" class="text-center text-muted py-3">No sightings in this window</td></tr>';
+            body.innerHTML = '<tr><td colspan="6" class="text-center text-muted py-3">No sightings in this window</td></tr>';
             return;
         }
         const newestFirst = [...samples].reverse().slice(0, 100);
@@ -315,6 +375,9 @@
             <tr>
                 <td class="small">${escapeHtml(formatTimestamp(s.timestamp))}<div class="text-muted">${escapeHtml(formatRelativeTime(s.timestamp))}</div></td>
                 <td class="fw-semibold">${s.rssi != null ? escapeHtml(s.rssi) + ' dBm' : '—'}</td>
+                <td class="small">${s.distance_label ? escapeHtml(s.distance_label) : '—'}
+                    ${s.distance_band ? `<div class="text-muted">${escapeHtml(s.distance_band)}</div>` : ''}
+                </td>
                 <td><span class="badge bg-secondary">${escapeHtml(kindLabel(s.kind))}</span></td>
                 <td><code class="small">${escapeHtml(s.mac || '—')}</code></td>
                 <td class="small">${escapeHtml(s.from_node_hex || '—')}</td>
@@ -345,6 +408,15 @@
             (best != null || avg != null)
                 ? `${best != null ? best : '—'} / ${avg != null ? avg : '—'} dBm`
                 : '—';
+        document.getElementById('statDistance').textContent = summary.nearest_label || '—';
+        document.getElementById('statDistanceBand').textContent = summary.distance_band
+            ? `${summary.distance_band}${summary.avg_distance_label ? ' · avg ' + summary.avg_distance_label : ''}`
+            : '';
+        const model = summary.distance_model || {};
+        document.getElementById('statModel').textContent =
+            (model.measured_power_dbm != null && model.path_loss_n != null)
+                ? `A=${model.measured_power_dbm} dBm, n=${model.path_loss_n}`
+                : 'BLE RSSI log-distance';
         document.getElementById('statLastSeen').textContent = formatRelativeTime(summary.last_seen);
 
         document.getElementById('nicknameInput').value = profile.nickname || '';
@@ -364,6 +436,7 @@
             latestData = data;
             updateSummary(data);
             renderRssiChart((data.samples || []).filter(s => s.rssi != null));
+            renderDistanceChart(data.samples || []);
             renderPresenceChart(data.presence || []);
             renderSamples(data.samples || []);
         } catch (e) {

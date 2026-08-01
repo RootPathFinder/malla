@@ -813,6 +813,7 @@
                 <div class="col-6"><div class="pax-stat-box"><div class="text-muted">Hits</div><div class="fw-semibold fs-5">${row.hits || 0}</div></div></div>
                 <div class="col-6"><div class="pax-stat-box"><div class="text-muted">Nodes</div><div class="fw-semibold fs-5">${row.node_count || 0}</div></div></div>
                 <div class="col-6"><div class="pax-stat-box"><div class="text-muted">Best RSSI</div><div class="fw-semibold">${row.best_rssi != null ? row.best_rssi + ' dBm' : '—'}</div></div></div>
+                <div class="col-6"><div class="pax-stat-box"><div class="text-muted">Approx dist</div><div class="fw-semibold">${row.distance_label || '—'}</div>${row.distance_band ? `<div class="text-muted" style="font-size:0.7rem">${escapeHtml(row.distance_band)}</div>` : ''}</div></div>
                 <div class="col-6"><div class="pax-stat-box"><div class="text-muted">Last seen</div><div class="fw-semibold">${formatShortAge(row.last_seen)}</div></div></div>
                 <div class="col-12"><div class="pax-stat-box"><div class="text-muted mb-1">First seen</div><div>${row.first_seen ? formatTimestamp(row.first_seen) : '—'}</div></div></div>
             </div>
@@ -1230,6 +1231,7 @@
                                         s.kind || '',
                                         s.fingerprint ? ('fp ' + s.fingerprint) : '',
                                         s.rssi != null ? (s.rssi + ' dBm') : '',
+                                        s.distance_label || '',
                                     ].filter(Boolean).join(' · ');
                                     return `
                                     <span class="badge ${kindClass}" style="cursor:pointer"
@@ -1237,6 +1239,7 @@
                                        onclick="event.stopPropagation(); selectProfile('${escapeHtml(sid)}')">
                                         ${label}
                                         ${s.rssi != null ? ' (' + s.rssi + ')' : ''}
+                                        ${s.distance_label ? ' ' + escapeHtml(s.distance_label) : ''}
                                     </span>`;
                                 }).join('')}
                                 ${reading.sightings.length > 8 ? `<span class="badge bg-secondary">+${reading.sightings.length - 8}</span>` : ''}

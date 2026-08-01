@@ -21,6 +21,14 @@ KIND_BLE = "ble"
 KIND_BLE_APPLE = "ble_apple"
 KIND_BLE_ANDROID = "ble_android"
 
+# Log-distance path-loss defaults for BLE phone advertisements.
+# measured_power ≈ expected RSSI at 1 m (iBeacon-style calibration often ~-59).
+# path_loss_n ≈ 2.0 free space, ~2.2–3.0 typical indoor multipath.
+# These yield coarse proximity bands, not surveyed meter accuracy.
+BLE_RSSI_AT_1M_DBM = -59.0
+BLE_PATH_LOSS_EXPONENT = 2.2
+BLE_DISTANCE_MAX_M = 50.0
+
 _KIND_LABELS = {
     paxcount_pb2.PaxSighting.WIFI_CLIENT: KIND_WIFI_CLIENT,
     paxcount_pb2.PaxSighting.WIFI_AP: KIND_WIFI_AP,
@@ -28,6 +36,80 @@ _KIND_LABELS = {
     paxcount_pb2.PaxSighting.BLE_APPLE: KIND_BLE_APPLE,
     paxcount_pb2.PaxSighting.BLE_ANDROID: KIND_BLE_ANDROID,
 }
+
+
+def is_ble_kind(kind: str | None) -> bool:
+    """True for BLE / BLE_APPLE / BLE_ANDROID kind strings."""
+    if not kind:
+        return False
+    text = str(kind)
+    return text == KIND_BLE or text.startswith("ble_")
+
+
+def estimate_ble_distance_m(
+    rssi: int | float | None,
+    *,
+    measured_power: float = BLE_RSSI_AT_1M_DBM,
+    path_loss_n: float = BLE_PATH_LOSS_EXPONENT,
+) -> float | None:
+    """
+    Approximate BLE distance in meters from RSSI via log-distance path loss.
+
+    ``d = 10 ** ((measured_power - rssi) / (10 * n))``
+
+    Returns ``None`` when RSSI is missing/invalid. Values are clamped to a
+    practical indoor ceiling; treat results as proximity hints only.
+    """
+    if rssi is None:
+        return None
+    try:
+        rssi_f = float(rssi)
+    except (TypeError, ValueError):
+        return None
+    # BLE receive RSSI is negative; reject nonsense positives.
+    if rssi_f > 0 or path_loss_n <= 0:
+        return None
+    distance = 10 ** ((float(measured_power) - rssi_f) / (10.0 * float(path_loss_n)))
+    if distance < 0.1:
+        distance = 0.1
+    if distance > BLE_DISTANCE_MAX_M:
+        distance = BLE_DISTANCE_MAX_M
+    return round(distance, 1)
+
+
+def ble_distance_band(meters: float | None) -> str | None:
+    """Coarse proximity band for UI badges."""
+    if meters is None:
+        return None
+    if meters < 1.0:
+        return "immediate"
+    if meters < 3.0:
+        return "near"
+    if meters < 10.0:
+        return "mid"
+    return "far"
+
+
+def format_ble_distance(meters: float | None) -> str | None:
+    """Human label like ``~1.2 m`` / ``~15 m``."""
+    if meters is None:
+        return None
+    if meters < 10:
+        return f"~{meters:.1f} m"
+    return f"~{int(round(meters))} m"
+
+
+def enrich_ble_distance(sighting: dict[str, Any]) -> dict[str, Any]:
+    """Attach distance_m / distance_band / distance_label for BLE sightings."""
+    if not isinstance(sighting, dict):
+        return sighting
+    if not is_ble_kind(str(sighting.get("kind") or "")):
+        return sighting
+    distance_m = estimate_ble_distance_m(sighting.get("rssi"))
+    sighting["distance_m"] = distance_m
+    sighting["distance_band"] = ble_distance_band(distance_m)
+    sighting["distance_label"] = format_ble_distance(distance_m)
+    return sighting
 
 
 def format_mac(mac: bytes | bytearray | memoryview | str | None) -> str | None:
@@ -167,19 +249,21 @@ def build_sighting_history(
                 rssi_i = int(rssi_val)
             except (TypeError, ValueError):
                 rssi_i = None
-        cleaned.append(
-            {
-                "timestamp": ts,
-                "rssi": rssi_i,
-                "kind": raw.get("kind"),
-                "mac": format_mac(raw.get("mac")) or raw.get("mac"),
-                "fingerprint": format_fingerprint(raw.get("fingerprint")),
-                "stable_id": raw.get("stable_id"),
-                "from_node_id": raw.get("from_node_id"),
-                "from_node_hex": raw.get("from_node_hex"),
-                "packet_id": raw.get("packet_id"),
-            }
-        )
+        kind = raw.get("kind")
+        sample = {
+            "timestamp": ts,
+            "rssi": rssi_i,
+            "kind": kind,
+            "mac": format_mac(raw.get("mac")) or raw.get("mac"),
+            "fingerprint": format_fingerprint(raw.get("fingerprint")),
+            "stable_id": raw.get("stable_id"),
+            "from_node_id": raw.get("from_node_id"),
+            "from_node_hex": raw.get("from_node_hex"),
+            "packet_id": raw.get("packet_id"),
+        }
+        if is_ble_kind(str(kind or "")):
+            enrich_ble_distance(sample)
+        cleaned.append(sample)
 
     cleaned.sort(key=lambda s: s["timestamp"])
 
@@ -225,10 +309,19 @@ def build_sighting_history(
         bucket["avg_rssi"] = round(total / n, 1) if n else None
 
     rssi_values = [s["rssi"] for s in cleaned if s.get("rssi") is not None]
+    distance_values = [
+        float(s["distance_m"])
+        for s in cleaned
+        if s.get("distance_m") is not None
+    ]
     first_seen = cleaned[0]["timestamp"] if cleaned else None
     last_seen = cleaned[-1]["timestamp"] if cleaned else None
     present_now = bool(
         last_seen is not None and (end_ts - last_seen) <= present_within_seconds
+    )
+    nearest_m = min(distance_values) if distance_values else None
+    avg_distance_m = (
+        round(sum(distance_values) / len(distance_values), 1) if distance_values else None
     )
 
     return {
@@ -238,6 +331,16 @@ def build_sighting_history(
             "hit_count": len(cleaned),
             "best_rssi": max(rssi_values) if rssi_values else None,
             "avg_rssi": round(sum(rssi_values) / len(rssi_values), 1) if rssi_values else None,
+            "nearest_m": nearest_m,
+            "avg_distance_m": avg_distance_m,
+            "nearest_label": format_ble_distance(nearest_m),
+            "avg_distance_label": format_ble_distance(avg_distance_m),
+            "distance_band": ble_distance_band(nearest_m),
+            "distance_model": {
+                "measured_power_dbm": BLE_RSSI_AT_1M_DBM,
+                "path_loss_n": BLE_PATH_LOSS_EXPONENT,
+                "note": "Approximate BLE proximity from RSSI; not surveyed accuracy.",
+            },
             "first_seen": first_seen,
             "last_seen": last_seen,
             "present_now": present_now,
@@ -276,16 +379,16 @@ def decode_paxcount_payload(raw_payload: bytes | bytearray | memoryview | None) 
         if not mac:
             continue
         fingerprint = format_fingerprint(s.fingerprint) if s.fingerprint else None
-        sightings.append(
-            {
-                "mac": mac,
-                "kind": _kind_name(s.kind),
-                "kind_value": int(s.kind),
-                "rssi": int(s.rssi),
-                "fingerprint": fingerprint,
-                "stable_id": stable_sighting_id(mac, fingerprint),
-            }
-        )
+        sighting = {
+            "mac": mac,
+            "kind": _kind_name(s.kind),
+            "kind_value": int(s.kind),
+            "rssi": int(s.rssi),
+            "fingerprint": fingerprint,
+            "stable_id": stable_sighting_id(mac, fingerprint),
+        }
+        enrich_ble_distance(sighting)
+        sightings.append(sighting)
 
     return {
         "wifi": int(msg.wifi or 0),
@@ -368,17 +471,22 @@ def aggregate_mac_hits(
 
     rows: list[dict[str, Any]] = []
     for (mac, kind), hits in counts.items():
+        rssi_best = best_rssi.get((mac, kind))
+        distance_m = estimate_ble_distance_m(rssi_best) if is_ble_kind(kind) else None
         rows.append(
             {
                 "mac": mac,
                 "kind": kind,
                 "hits": hits,
-                "best_rssi": best_rssi.get((mac, kind)),
+                "best_rssi": rssi_best,
                 "first_seen": first_seen.get((mac, kind)),
                 "last_seen": last_seen.get((mac, kind)),
                 "node_count": len(nodes.get((mac, kind), ())),
                 "fingerprint": fingerprints.get((mac, kind)),
                 "stable_id": stable_ids.get((mac, kind), mac),
+                "distance_m": distance_m,
+                "distance_band": ble_distance_band(distance_m),
+                "distance_label": format_ble_distance(distance_m),
             }
         )
 
@@ -429,6 +537,9 @@ def build_id_directory(
                 "kinds": [],
                 "kind_hits": {},
                 "best_rssi": None,
+                "distance_m": None,
+                "distance_band": None,
+                "distance_label": None,
                 "first_seen": None,
                 "last_seen": None,
                 "node_count": 0,
@@ -460,6 +571,11 @@ def build_id_directory(
                 entry["best_rssi"] is None or rssi_i > entry["best_rssi"]
             ):
                 entry["best_rssi"] = rssi_i
+                if is_ble_kind(kind) or any(is_ble_kind(k) for k in entry["kinds"]):
+                    dist = estimate_ble_distance_m(rssi_i)
+                    entry["distance_m"] = dist
+                    entry["distance_band"] = ble_distance_band(dist)
+                    entry["distance_label"] = format_ble_distance(dist)
         if first is not None:
             try:
                 first_f = float(first)
