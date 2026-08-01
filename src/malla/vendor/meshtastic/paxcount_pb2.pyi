@@ -7,14 +7,19 @@ class PaxSighting:
         WIFI_CLIENT: int
         WIFI_AP: int
         BLE: int
+        BLE_APPLE: int
+        BLE_ANDROID: int
 
     WIFI_CLIENT: int
     WIFI_AP: int
     BLE: int
+    BLE_APPLE: int
+    BLE_ANDROID: int
 
     mac: bytes
     kind: int
     rssi: int
+    fingerprint: bytes
 
     def __init__(
         self,
@@ -22,6 +27,7 @@ class PaxSighting:
         mac: bytes = ...,
         kind: int = ...,
         rssi: int = ...,
+        fingerprint: bytes = ...,
     ) -> None: ...
     def ClearField(self, field_name: str) -> None: ...
 

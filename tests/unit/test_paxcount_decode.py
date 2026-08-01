@@ -6,8 +6,12 @@ import pytest
 
 from malla.utils.paxcount_decode import (
     aggregate_mac_hits,
+    build_id_directory,
     decode_paxcount_payload,
+    format_fingerprint,
     format_mac,
+    normalize_profile_id,
+    stable_sighting_id,
 )
 from malla.vendor.meshtastic import paxcount_pb2
 
@@ -17,7 +21,7 @@ def _encode_sample(
     wifi: int = 3,
     ble: int = 1,
     uptime: int = 99,
-    sightings: list[tuple[bytes, int, int]] | None = None,
+    sightings: list[tuple] | None = None,
     sighting_count: int | None = None,
     chunk_index: int = 0,
     chunk_total: int = 1,
@@ -29,11 +33,18 @@ def _encode_sample(
         chunk_index=chunk_index,
         chunk_total=chunk_total,
     )
-    for mac, kind, rssi in sightings or []:
+    for item in sightings or []:
+        if len(item) == 3:
+            mac, kind, rssi = item
+            fingerprint = b""
+        else:
+            mac, kind, rssi, fingerprint = item
         s = msg.sightings.add()
         s.mac = mac
         s.kind = kind
         s.rssi = rssi
+        if fingerprint:
+            s.fingerprint = fingerprint
     msg.sighting_count = (
         len(msg.sightings) if sighting_count is None else sighting_count
     )
@@ -45,6 +56,24 @@ def test_format_mac_bytes_and_string():
     assert format_mac(bytes([0xAA, 0xBB, 0xCC, 0xDD, 0xEE, 0xFF])) == "aa:bb:cc:dd:ee:ff"
     assert format_mac("AABBCCDDEEFF") == "aa:bb:cc:dd:ee:ff"
     assert format_mac("aa:bb:cc:dd:ee:ff") == "aa:bb:cc:dd:ee:ff"
+
+
+@pytest.mark.unit
+def test_format_fingerprint_and_stable_id():
+    assert format_fingerprint(bytes([0xAB, 0xCD])) == "abcd"
+    assert format_fingerprint("fp:abcd") == "abcd"
+    assert format_fingerprint(b"") is None
+    assert stable_sighting_id("aa:bb:cc:dd:ee:ff", "abcd") == "fp:abcd"
+    assert stable_sighting_id("aa:bb:cc:dd:ee:ff", None) == "aa:bb:cc:dd:ee:ff"
+
+
+@pytest.mark.unit
+def test_normalize_profile_id_mac_and_fingerprint():
+    assert normalize_profile_id("AA:BB:CC:DD:EE:FF") == "aa:bb:cc:dd:ee:ff"
+    assert normalize_profile_id("fp:ABCD") == "fp:abcd"
+    assert normalize_profile_id("abcd") == "fp:abcd"
+    assert normalize_profile_id("aabbccddeeff") == "aa:bb:cc:dd:ee:ff"
+    assert normalize_profile_id("not-a-mac") is None
 
 
 @pytest.mark.unit
@@ -87,6 +116,38 @@ def test_decode_sightings_client_ap_and_ble():
     assert decoded["sightings"][2]["kind"] == "ble"
     assert decoded["sightings"][2]["mac"] == "de:ad:be:ef:00:01"
     assert decoded["sightings"][2]["rssi"] == -72
+    assert decoded["sightings"][2]["fingerprint"] is None
+    assert decoded["sightings"][2]["stable_id"] == "de:ad:be:ef:00:01"
+
+
+@pytest.mark.unit
+def test_decode_ble_apple_android_with_fingerprint():
+    raw = _encode_sample(
+        wifi=0,
+        ble=2,
+        sightings=[
+            (
+                bytes([0x11, 0x22, 0x33, 0x44, 0x55, 0x66]),
+                paxcount_pb2.PaxSighting.BLE_APPLE,
+                -68,
+                bytes([0xDE, 0xAD, 0xBE, 0xEF]),
+            ),
+            (
+                bytes([0xAA, 0xBB, 0xCC, 0xDD, 0xEE, 0xFF]),
+                paxcount_pb2.PaxSighting.BLE_ANDROID,
+                -75,
+                bytes([0x12, 0x34]),
+            ),
+        ],
+    )
+    decoded = decode_paxcount_payload(raw)
+    assert decoded is not None
+    assert decoded["sightings"][0]["kind"] == "ble_apple"
+    assert decoded["sightings"][0]["fingerprint"] == "deadbeef"
+    assert decoded["sightings"][0]["stable_id"] == "fp:deadbeef"
+    assert decoded["sightings"][1]["kind"] == "ble_android"
+    assert decoded["sightings"][1]["fingerprint"] == "1234"
+    assert decoded["sightings"][1]["stable_id"] == "fp:1234"
 
 
 @pytest.mark.unit
@@ -129,3 +190,55 @@ def test_aggregate_mac_hits_counts_unique():
     ap = next(h for h in hits if h["kind"] == "wifi_ap")
     assert ap["mac"] == "aa:bb:cc:dd:ee:ff"
     assert ap["hits"] == 1
+
+
+@pytest.mark.unit
+def test_build_id_directory_groups_rotating_macs_by_fingerprint():
+    hits = aggregate_mac_hits(
+        [
+            {
+                "timestamp": 1000.0,
+                "from_node_hex": "!aabbccdd",
+                "sightings": [
+                    {
+                        "mac": "11:22:33:44:55:66",
+                        "kind": "ble_apple",
+                        "rssi": -70,
+                        "fingerprint": "abcd",
+                        "stable_id": "fp:abcd",
+                    },
+                ],
+            },
+            {
+                "timestamp": 2000.0,
+                "from_node_hex": "!aabbccdd",
+                "sightings": [
+                    {
+                        "mac": "aa:bb:cc:dd:ee:ff",
+                        "kind": "ble_apple",
+                        "rssi": -60,
+                        "fingerprint": "abcd",
+                        "stable_id": "fp:abcd",
+                    },
+                ],
+            },
+        ]
+    )
+    profiles = {
+        "fp:abcd": {
+            "mac": "fp:abcd",
+            "nickname": "Dave iPhone",
+            "notes": "rotating",
+            "updated_at": 1.0,
+        }
+    }
+    directory = build_id_directory(hits, profiles)
+    assert len(directory) == 1
+    row = directory[0]
+    assert row["id"] == "fp:abcd"
+    assert row["fingerprint"] == "abcd"
+    assert row["hits"] == 2
+    assert set(row["macs"]) == {"11:22:33:44:55:66", "aa:bb:cc:dd:ee:ff"}
+    assert row["nickname"] == "Dave iPhone"
+    assert row["has_profile"] is True
+    assert row["best_rssi"] == -60
