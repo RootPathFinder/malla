@@ -149,17 +149,24 @@ def build_sighting_history(
     for raw in samples or []:
         if not isinstance(raw, dict):
             continue
+        ts_raw = raw.get("timestamp")
+        if ts_raw is None:
+            continue
         try:
-            ts = float(raw.get("timestamp"))
+            ts = float(ts_raw)
         except (TypeError, ValueError):
             continue
         if ts < start_ts or ts > end_ts + 1:
             continue
         rssi_val = raw.get("rssi")
-        try:
-            rssi_i = int(rssi_val) if rssi_val is not None else None
-        except (TypeError, ValueError):
+        rssi_i: int | None
+        if rssi_val is None:
             rssi_i = None
+        else:
+            try:
+                rssi_i = int(rssi_val)
+            except (TypeError, ValueError):
+                rssi_i = None
         cleaned.append(
             {
                 "timestamp": ts,
