@@ -1,0 +1,26 @@
+syntax = "proto3";
+
+package malla.meshtastic;
+
+// Vendored extension of meshtastic Paxcount for report_ids sightings.
+// Field numbers match firmware meshtastic_Paxcount / PaxSighting wire format.
+
+message PaxSighting {
+  enum Kind {
+    WIFI_CLIENT = 0;
+    WIFI_AP = 1;
+  }
+  bytes mac = 1;
+  Kind kind = 2;
+  sint32 rssi = 3;
+}
+
+message Paxcount {
+  uint32 wifi = 1;
+  uint32 ble = 2;
+  uint32 uptime = 3;
+  repeated PaxSighting sightings = 4;
+  uint32 sighting_count = 5;
+  uint32 chunk_index = 6;
+  uint32 chunk_total = 7;
+}

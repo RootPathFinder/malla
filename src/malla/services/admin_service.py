@@ -3457,6 +3457,10 @@ class AdminService:
                 "paxcounter_update_interval": module_config.paxcounter.paxcounter_update_interval,
                 "wifi_threshold": module_config.paxcounter.wifi_threshold,
                 "ble_threshold": module_config.paxcounter.ble_threshold,
+                # Custom firmware field; absent on stock python bindings.
+                "report_ids": bool(
+                    getattr(module_config.paxcounter, "report_ids", False)
+                ),
             }
 
         return result

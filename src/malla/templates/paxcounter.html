@@ -378,6 +378,21 @@
                 </div>
             </div>
 
+            <!-- Detected MACs / BSSIDs (report_ids) -->
+            <div class="card mb-4">
+                <div class="card-header d-flex justify-content-between align-items-center">
+                    <span><i class="bi bi-upc-scan"></i> Detected MACs / BSSIDs</span>
+                    <span class="badge bg-secondary" id="macHitsBadge">0</span>
+                </div>
+                <div class="card-body p-0">
+                    <div id="macHitsList" style="max-height: 280px; overflow-y: auto;">
+                        <div class="text-center p-3 text-muted small">
+                            Enable <code>report_ids</code> on a Paxcounter node to collect WiFi MACs / AP BSSIDs.
+                        </div>
+                    </div>
+                </div>
+            </div>
+
             <!-- Activity Chart -->
             <div class="card mb-4">
                 <div class="card-header">
@@ -536,6 +551,53 @@
         }
     }
 
+    // Update Detected MACs / BSSIDs table
+    function updateMacHits(macHits) {
+        const container = document.getElementById('macHitsList');
+        const badge = document.getElementById('macHitsBadge');
+        const hits = Array.isArray(macHits) ? macHits : [];
+        if (badge) badge.textContent = String(hits.length);
+
+        if (!container) return;
+        if (!hits.length) {
+            container.innerHTML = `
+                <div class="text-center p-3 text-muted small">
+                    Enable <code>report_ids</code> on a Paxcounter node to collect WiFi MACs / AP BSSIDs.
+                </div>
+            `;
+            return;
+        }
+
+        container.innerHTML = `
+            <div class="table-responsive">
+                <table class="table table-sm table-hover mb-0">
+                    <thead>
+                        <tr>
+                            <th>MAC / BSSID</th>
+                            <th>Kind</th>
+                            <th class="text-end">Hits</th>
+                            <th class="text-end">RSSI</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        ${hits.map(row => `
+                            <tr>
+                                <td><code class="small">${row.mac}</code></td>
+                                <td>
+                                    <span class="badge ${row.kind === 'wifi_ap' ? 'bg-info text-dark' : 'bg-secondary'}">
+                                        ${row.kind === 'wifi_ap' ? 'AP' : 'Client'}
+                                    </span>
+                                </td>
+                                <td class="text-end fw-semibold">${row.hits}</td>
+                                <td class="text-end text-muted small">${row.best_rssi != null ? row.best_rssi + ' dBm' : '—'}</td>
+                            </tr>
+                        `).join('')}
+                    </tbody>
+                </table>
+            </div>
+        `;
+    }
+
     // Update all UI elements
     function updateUI(data) {
         // Update summary cards
@@ -547,6 +609,8 @@
         // Update reading count badge
         document.getElementById('readingCountBadge').textContent =
             `${data.total_readings || 0} readings`;
+
+        updateMacHits(data.mac_hits || []);
 
         // Show live dot if recent data
         const liveDot = document.getElementById('liveDot');
@@ -742,7 +806,19 @@
                                 <span class="badge bg-secondary">
                                     Total: ${totalPax}
                                 </span>
+                                ${reading.sightings && reading.sightings.length
+                                    ? `<span class="badge bg-info text-dark ms-1"><i class="bi bi-upc-scan"></i> ${reading.sightings.length} IDs</span>`
+                                    : ''}
                             </div>
+                            ${reading.sightings && reading.sightings.length ? `
+                            <div class="mt-2 d-flex flex-wrap gap-1">
+                                ${reading.sightings.slice(0, 8).map(s => `
+                                    <span class="badge ${s.kind === 'wifi_ap' ? 'bg-info text-dark' : 'bg-light text-dark border'}" title="${s.kind}${s.rssi != null ? ' @ ' + s.rssi + ' dBm' : ''}">
+                                        ${s.mac}${s.rssi != null ? ' (' + s.rssi + ')' : ''}
+                                    </span>
+                                `).join('')}
+                                ${reading.sightings.length > 8 ? `<span class="badge bg-secondary">+${reading.sightings.length - 8}</span>` : ''}
+                            </div>` : ''}
                             <div class="pax-meta mt-1">
                                 ${reading.uptime ? `<span class="me-2"><i class="bi bi-clock"></i> Uptime: ${formatUptime(reading.uptime)}</span>` : ''}
                                 ${reading.gateway_id ? `<span class="me-2"><i class="bi bi-broadcast"></i> ${reading.gateway_id}</span>` : ''}

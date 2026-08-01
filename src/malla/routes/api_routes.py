@@ -3337,19 +3337,27 @@ def api_paxcounter():
             latitude = loc.get("latitude")
             longitude = loc.get("longitude")
 
-            # Parse paxcounter payload
+            # Parse paxcounter payload (vendored decoder supports MAC/BSSID sightings)
             wifi_count = 0
             ble_count = 0
             uptime = 0
+            sightings: list[dict] = []
+            sighting_count = 0
+            chunk_index = 0
+            chunk_total = 0
             if raw_payload:
                 try:
-                    from meshtastic import paxcount_pb2
+                    from ..utils.paxcount_decode import decode_paxcount_payload
 
-                    pax = paxcount_pb2.Paxcount()
-                    pax.ParseFromString(raw_payload)
-                    wifi_count = pax.wifi if pax.wifi else 0
-                    ble_count = pax.ble if pax.ble else 0
-                    uptime = pax.uptime if pax.uptime else 0
+                    decoded = decode_paxcount_payload(raw_payload)
+                    if decoded:
+                        wifi_count = decoded.get("wifi") or 0
+                        ble_count = decoded.get("ble") or 0
+                        uptime = decoded.get("uptime") or 0
+                        sightings = decoded.get("sightings") or []
+                        sighting_count = decoded.get("sighting_count") or 0
+                        chunk_index = decoded.get("chunk_index") or 0
+                        chunk_total = decoded.get("chunk_total") or 0
                 except Exception:
                     pass
 
@@ -3385,6 +3393,10 @@ def api_paxcounter():
                     "wifi": wifi_count,
                     "ble": ble_count,
                     "uptime": uptime,
+                    "sightings": sightings,
+                    "sighting_count": sighting_count,
+                    "chunk_index": chunk_index,
+                    "chunk_total": chunk_total,
                     "latitude": latitude,
                     "longitude": longitude,
                     "has_location": latitude is not None and longitude is not None,
@@ -3437,6 +3449,10 @@ def api_paxcounter():
         avg_wifi = round(total_wifi / total_readings) if total_readings > 0 else 0
         avg_ble = round(total_ble / total_readings) if total_readings > 0 else 0
 
+        from ..utils.paxcount_decode import aggregate_mac_hits
+
+        mac_hits = aggregate_mac_hits(readings)
+
         return safe_jsonify(
             {
                 "readings": readings,
@@ -3447,6 +3463,8 @@ def api_paxcounter():
                 "hours_analyzed": hours,
                 "avg_wifi": avg_wifi,
                 "avg_ble": avg_ble,
+                "mac_hits": mac_hits,
+                "unique_macs": len(mac_hits),
             }
         )
 
@@ -3462,6 +3480,8 @@ def api_paxcounter():
                     "hours_analyzed": 24,
                     "avg_wifi": 0,
                     "avg_ble": 0,
+                    "mac_hits": [],
+                    "unique_macs": 0,
                 }
             )
         logger.error(f"Error in API paxcounter: {e}", exc_info=True)

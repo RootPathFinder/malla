@@ -394,6 +394,56 @@
                                         {% endif %}
                                     </table>
                                 {% endif %}
+                            {% elif payload_info.portnum == 'PAXCOUNTER_APP' %}
+                                <h6><i class="bi bi-person-walking"></i> Paxcounter</h6>
+                                <table class="table table-sm mb-3">
+                                    <tr><th>WiFi devices:</th><td>{{ payload_info.data.wifi or 0 }}</td></tr>
+                                    <tr><th>BLE devices:</th><td>{{ payload_info.data.ble or 0 }}</td></tr>
+                                    {% if payload_info.data.uptime %}
+                                        <tr><th>Uptime:</th><td>{{ payload_info.data.uptime }} s</td></tr>
+                                    {% endif %}
+                                    {% if payload_info.data.sighting_count %}
+                                        <tr><th>Sighting count:</th><td>{{ payload_info.data.sighting_count }}</td></tr>
+                                    {% endif %}
+                                    {% if payload_info.data.chunk_total and payload_info.data.chunk_total > 1 %}
+                                        <tr><th>Chunk:</th><td>{{ (payload_info.data.chunk_index or 0) + 1 }} / {{ payload_info.data.chunk_total }}</td></tr>
+                                    {% endif %}
+                                </table>
+                                {% if payload_info.data.sightings %}
+                                    <h6><i class="bi bi-wifi"></i> Paxcounter Sightings</h6>
+                                    <div class="table-responsive">
+                                        <table class="table table-sm table-striped">
+                                            <thead>
+                                                <tr>
+                                                    <th>MAC / BSSID</th>
+                                                    <th>Kind</th>
+                                                    <th>RSSI</th>
+                                                </tr>
+                                            </thead>
+                                            <tbody>
+                                                {% for s in payload_info.data.sightings %}
+                                                <tr>
+                                                    <td><code>{{ s.mac }}</code></td>
+                                                    <td>
+                                                        {% if s.kind == 'wifi_ap' %}
+                                                            <span class="badge bg-info text-dark">AP BSSID</span>
+                                                        {% else %}
+                                                            <span class="badge bg-secondary">WiFi client</span>
+                                                        {% endif %}
+                                                    </td>
+                                                    <td>
+                                                        {% if s.rssi is not none %}
+                                                            {{ s.rssi }} dBm
+                                                        {% else %}
+                                                            <span class="text-muted">—</span>
+                                                        {% endif %}
+                                                    </td>
+                                                </tr>
+                                                {% endfor %}
+                                            </tbody>
+                                        </table>
+                                    </div>
+                                {% endif %}
                             {% elif payload_info.portnum == 'NEIGHBORINFO_APP' %}
                                 <h6><i class="bi bi-diagram-3"></i> Neighbor Information Report</h6>
                                 <div class="row mb-3">

@@ -505,6 +505,18 @@ def decode_packet_payload(packet: dict[str, Any]) -> dict[str, Any] | None:
 
                 payload_info["data"] = data
 
+            elif packet["portnum_name"] == "PAXCOUNTER_APP":
+                raw_data = decoded_payload
+                payload_info["data"] = {
+                    "wifi": raw_data.get("wifi", 0),
+                    "ble": raw_data.get("ble", 0),
+                    "uptime": raw_data.get("uptime", 0),
+                    "sightings": raw_data.get("sightings") or [],
+                    "sighting_count": raw_data.get("sighting_count", 0),
+                    "chunk_index": raw_data.get("chunk_index", 0),
+                    "chunk_total": raw_data.get("chunk_total", 0),
+                }
+
             elif packet["portnum_name"] == "NEIGHBORINFO_APP":
                 # Convert NeighborInfo protobuf to expected format with node name resolution
                 raw_data = decoded_payload
@@ -967,6 +979,26 @@ def decode_protobuf_payload(packet: dict[str, Any]) -> dict[str, Any] | None:
                     "portnum": portnum_name,
                     "decode_error": "Could not decode as UTF-8",
                 }
+
+        # Paxcounter: use vendored decoder so WiFi MAC/BSSID sightings are visible
+        # even when stock meshtastic.paxcount_pb2 lacks PaxSighting fields.
+        if portnum_name == "PAXCOUNTER_APP":
+            from ..utils.paxcount_decode import decode_paxcount_payload
+
+            decoded = decode_paxcount_payload(raw_payload)
+            if decoded is None:
+                return {
+                    "raw_bytes": raw_payload.hex() if raw_payload else None,
+                    "type": "decode_error",
+                    "portnum": portnum_name,
+                    "decode_error": "Failed to decode Paxcount payload",
+                }
+            return {
+                "type": "protobuf",
+                "portnum": portnum_name,
+                "message_class": "Paxcount",
+                **decoded,
+            }
 
         # Get the appropriate protobuf message class
         message_class = get_protobuf_message_class_for_portnum(portnum_name)
