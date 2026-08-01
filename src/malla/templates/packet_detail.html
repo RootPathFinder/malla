@@ -417,6 +417,7 @@
                                                 <tr>
                                                     <th>MAC / BSSID</th>
                                                     <th>Kind</th>
+                                                    <th>Fingerprint</th>
                                                     <th>RSSI</th>
                                                 </tr>
                                             </thead>
@@ -427,10 +428,21 @@
                                                     <td>
                                                         {% if s.kind == 'wifi_ap' %}
                                                             <span class="badge bg-info text-dark">AP BSSID</span>
-                                                        {% elif s.kind == 'ble' %}
+                                                        {% elif s.kind == 'ble_apple' %}
+                                                            <span class="badge bg-dark">BLE Apple</span>
+                                                        {% elif s.kind == 'ble_android' %}
+                                                            <span class="badge bg-success">BLE Android</span>
+                                                        {% elif s.kind == 'ble' or (s.kind and s.kind.startswith('ble')) %}
                                                             <span class="badge bg-primary">BLE</span>
                                                         {% else %}
                                                             <span class="badge bg-secondary">WiFi client</span>
+                                                        {% endif %}
+                                                    </td>
+                                                    <td>
+                                                        {% if s.fingerprint %}
+                                                            <code>{{ s.fingerprint }}</code>
+                                                        {% else %}
+                                                            <span class="text-muted">—</span>
                                                         {% endif %}
                                                     </td>
                                                     <td>

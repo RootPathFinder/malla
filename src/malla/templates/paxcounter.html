@@ -439,7 +439,7 @@
                             <div class="input-group input-group-sm">
                                 <span class="input-group-text"><i class="bi bi-search"></i></span>
                                 <input type="search" class="form-control" id="profileSearch"
-                                       placeholder="Search MAC, nickname, or notes..." autocomplete="off">
+                                       placeholder="Search ID, fingerprint, nickname..." autocomplete="off">
                             </div>
                         </div>
                         <div class="col-md-3">
@@ -447,7 +447,9 @@
                                 <option value="">All kinds</option>
                                 <option value="wifi_client">WiFi client</option>
                                 <option value="wifi_ap">AP BSSID</option>
-                                <option value="ble">BLE</option>
+                                <option value="ble">BLE (all)</option>
+                                <option value="ble_apple">BLE Apple</option>
+                                <option value="ble_android">BLE Android</option>
                             </select>
                         </div>
                         <div class="col-md-3">
@@ -629,17 +631,35 @@
     }
 
     let idDirectory = [];
-    let selectedProfileMac = null;
+    let selectedProfileMac = null; // stores stable id (MAC or fp:…)
+
+    function profileId(row) {
+        if (!row) return '';
+        return row.id || row.stable_id || row.mac || '';
+    }
 
     function kindBadge(kind) {
         if (kind === 'wifi_ap') return '<span class="badge bg-info text-dark">AP</span>';
-        if (kind === 'ble') return '<span class="badge bg-primary">BLE</span>';
+        if (kind === 'ble_apple') return '<span class="badge bg-dark">Apple</span>';
+        if (kind === 'ble_android') return '<span class="badge bg-success">Android</span>';
+        if (kind === 'ble' || (kind && String(kind).startsWith('ble'))) {
+            return '<span class="badge bg-primary">BLE</span>';
+        }
         return '<span class="badge bg-secondary">Client</span>';
     }
 
     function kindBadges(kinds) {
         if (!kinds || !kinds.length) return '<span class="text-muted">—</span>';
         return kinds.map(kindBadge).join(' ');
+    }
+
+    function kindMatchesFilter(kinds, kind) {
+        if (!kind) return true;
+        const list = kinds || [];
+        if (kind === 'ble') {
+            return list.some(k => k === 'ble' || String(k).startsWith('ble_'));
+        }
+        return list.includes(kind);
     }
 
     function formatShortAge(ts) {
@@ -675,16 +695,19 @@
                         </tr>
                     </thead>
                     <tbody>
-                        ${hits.slice(0, 40).map(row => `
-                            <tr style="cursor:pointer" onclick="selectProfile('${row.mac}')">
+                        ${hits.slice(0, 40).map(row => {
+                            const id = profileId(row);
+                            return `
+                            <tr style="cursor:pointer" onclick="selectProfile('${escapeHtml(id)}')">
                                 <td>
                                     ${row.nickname ? `<div class="fw-semibold small">${escapeHtml(row.nickname)}</div>` : ''}
-                                    <code class="small">${row.mac}</code>
+                                    <code class="small">${escapeHtml(id)}</code>
+                                    ${row.fingerprint ? `<div class="text-muted" style="font-size:0.7rem">fp ${escapeHtml(row.fingerprint)}</div>` : ''}
                                 </td>
                                 <td>${kindBadge(row.kind)}</td>
                                 <td class="text-end fw-semibold">${row.hits}</td>
-                            </tr>
-                        `).join('')}
+                            </tr>`;
+                        }).join('')}
                     </tbody>
                 </table>
             </div>
@@ -706,10 +729,13 @@
 
         return idDirectory.filter(row => {
             if (namedOnly && !row.nickname) return false;
-            if (kind && !(row.kinds || []).includes(kind)) return false;
+            if (!kindMatchesFilter(row.kinds, kind)) return false;
             if (!q) return true;
             const hay = [
+                row.id,
                 row.mac,
+                row.fingerprint,
+                ...(row.macs || []),
                 row.nickname,
                 row.notes,
                 ...(row.kinds || []),
@@ -734,20 +760,25 @@
             return;
         }
 
-        body.innerHTML = rows.map(row => `
-            <tr class="${selectedProfileMac === row.mac ? 'table-active' : ''}"
-                style="cursor:pointer" onclick="selectProfile('${row.mac}')">
+        body.innerHTML = rows.map(row => {
+            const id = profileId(row);
+            return `
+            <tr class="${selectedProfileMac === id ? 'table-active' : ''}"
+                style="cursor:pointer" onclick="selectProfile('${escapeHtml(id)}')">
                 <td>
                     ${row.nickname
                         ? `<span class="fw-semibold">${escapeHtml(row.nickname)}</span>`
                         : `<span class="text-muted">—</span>`}
                 </td>
-                <td><code class="small">${row.mac}</code></td>
+                <td>
+                    <code class="small">${escapeHtml(id)}</code>
+                    ${row.fingerprint ? `<div class="text-muted" style="font-size:0.7rem">fp ${escapeHtml(row.fingerprint)}</div>` : ''}
+                </td>
                 <td>${kindBadges(row.kinds)}</td>
                 <td class="text-end fw-semibold">${row.hits || 0}</td>
                 <td class="text-end text-muted small">${formatShortAge(row.last_seen)}</td>
-            </tr>
-        `).join('');
+            </tr>`;
+        }).join('');
     }
 
     function renderProfileDetail(row) {
@@ -762,11 +793,17 @@
             .map(([k, n]) => `<div class="d-flex justify-content-between small"><span>${kindBadge(k)}</span><span>${n} hits</span></div>`)
             .join('') || '<div class="text-muted small">No sightings in this window</div>';
 
+        const id = profileId(row);
+        const macList = (row.macs && row.macs.length)
+            ? row.macs.map(m => `<code class="small me-1">${escapeHtml(m)}</code>`).join('')
+            : '';
         el.innerHTML = `
             <div class="d-flex justify-content-between align-items-start mb-2">
                 <div>
                     <div class="fw-semibold">${row.nickname ? escapeHtml(row.nickname) : 'Unnamed ID'}</div>
-                    <code class="small">${row.mac}</code>
+                    <code class="small">${escapeHtml(id)}</code>
+                    ${row.fingerprint ? `<div class="text-muted small mt-1">Fingerprint <code>${escapeHtml(row.fingerprint)}</code></div>` : ''}
+                    ${macList && String(id).startsWith('fp:') ? `<div class="text-muted small mt-1">Recent MACs: ${macList}</div>` : ''}
                 </div>
                 <div>${kindBadges(row.kinds)}</div>
             </div>
@@ -804,7 +841,7 @@
 
     function selectProfile(mac) {
         selectedProfileMac = mac;
-        const row = idDirectory.find(r => r.mac === mac) || { mac, hits: 0, kinds: [], kind_hits: {} };
+        const row = idDirectory.find(r => profileId(r) === mac) || { id: mac, mac, hits: 0, kinds: [], kind_hits: {} };
         updateProfileTable();
         renderProfileDetail(row);
         // Refresh stats from dedicated endpoint for fuller window
@@ -819,10 +856,11 @@
             const data = await res.json();
             if (data.stats) {
                 // Keep local directory nickname/notes if newer, else merge stats
-                const idx = idDirectory.findIndex(r => r.mac === mac);
+                const idx = idDirectory.findIndex(r => profileId(r) === mac);
                 const merged = {
                     ...(idx >= 0 ? idDirectory[idx] : {}),
                     ...data.stats,
+                    id: data.stats.id || mac,
                     nickname: (idx >= 0 && idDirectory[idx].nickname) || data.stats.nickname || (data.profile && data.profile.nickname) || null,
                     notes: (idx >= 0 && idDirectory[idx].notes) || data.stats.notes || (data.profile && data.profile.notes) || null,
                     has_profile: !!(data.profile || (idx >= 0 && idDirectory[idx].has_profile)),
@@ -862,7 +900,7 @@
                 return;
             }
             const profile = data.profile;
-            const idx = idDirectory.findIndex(r => r.mac === selectedProfileMac);
+            const idx = idDirectory.findIndex(r => profileId(r) === selectedProfileMac);
             if (idx >= 0) {
                 idDirectory[idx].nickname = profile ? profile.nickname : null;
                 idDirectory[idx].notes = profile ? profile.notes : null;
@@ -871,7 +909,7 @@
             // Sync into currentData mac_hits / sightings for chips
             if (currentData) {
                 (currentData.mac_hits || []).forEach(h => {
-                    if (h.mac === selectedProfileMac) {
+                    if (profileId(h) === selectedProfileMac || h.mac === selectedProfileMac) {
                         h.nickname = profile ? profile.nickname : null;
                         h.notes = profile ? profile.notes : null;
                         h.has_profile = !!profile;
@@ -879,7 +917,7 @@
                 });
                 (currentData.readings || []).forEach(r => {
                     (r.sightings || []).forEach(s => {
-                        if (s.mac === selectedProfileMac) {
+                        if ((s.stable_id || s.mac) === selectedProfileMac || s.mac === selectedProfileMac) {
                             s.nickname = profile ? profile.nickname : null;
                         }
                     });
@@ -888,7 +926,7 @@
                 updateTimeline(currentData.readings || []);
             }
             updateProfileTable();
-            renderProfileDetail(idDirectory.find(r => r.mac === selectedProfileMac));
+            renderProfileDetail(idDirectory.find(r => profileId(r) === selectedProfileMac));
             showProfileAlert('success', profile ? 'Profile saved' : 'Profile cleared');
         } catch (e) {
             showProfileAlert('danger', e.message || 'Save failed');
@@ -907,7 +945,7 @@
                 showProfileAlert('danger', data.error || 'Clear failed');
                 return;
             }
-            const idx = idDirectory.findIndex(r => r.mac === selectedProfileMac);
+            const idx = idDirectory.findIndex(r => profileId(r) === selectedProfileMac);
             if (idx >= 0) {
                 idDirectory[idx].nickname = null;
                 idDirectory[idx].notes = null;
@@ -915,20 +953,22 @@
             }
             if (currentData) {
                 (currentData.mac_hits || []).forEach(h => {
-                    if (h.mac === selectedProfileMac) {
+                    if (profileId(h) === selectedProfileMac || h.mac === selectedProfileMac) {
                         h.nickname = null; h.notes = null; h.has_profile = false;
                     }
                 });
                 (currentData.readings || []).forEach(r => {
                     (r.sightings || []).forEach(s => {
-                        if (s.mac === selectedProfileMac) s.nickname = null;
+                        if ((s.stable_id || s.mac) === selectedProfileMac || s.mac === selectedProfileMac) {
+                            s.nickname = null;
+                        }
                     });
                 });
                 updateMacHits(currentData.mac_hits || []);
                 updateTimeline(currentData.readings || []);
             }
             updateProfileTable();
-            renderProfileDetail(idDirectory.find(r => r.mac === selectedProfileMac));
+            renderProfileDetail(idDirectory.find(r => profileId(r) === selectedProfileMac));
             showProfileAlert('success', 'Profile cleared');
         } catch (e) {
             showProfileAlert('danger', e.message || 'Clear failed');
@@ -1166,18 +1206,33 @@
                             </div>
                             ${reading.sightings && reading.sightings.length ? `
                             <div class="mt-2 d-flex flex-wrap gap-1">
-                                ${reading.sightings.slice(0, 8).map(s => `
-                                    <span class="badge ${
-                                        s.kind === 'wifi_ap' ? 'bg-info text-dark'
-                                        : s.kind === 'ble' ? 'bg-primary'
-                                        : 'bg-light text-dark border'
-                                    }" style="cursor:pointer"
-                                       title="${s.nickname ? s.nickname + ' · ' : ''}${s.kind}${s.rssi != null ? ' @ ' + s.rssi + ' dBm' : ''}"
-                                       onclick="event.stopPropagation(); selectProfile('${s.mac}')">
-                                        ${s.nickname ? escapeHtml(s.nickname) : ((s.kind === 'ble' ? 'BLE ' : '') + s.mac)}
+                                ${reading.sightings.slice(0, 8).map(s => {
+                                    const sid = s.stable_id || s.mac;
+                                    const kindClass = s.kind === 'wifi_ap' ? 'bg-info text-dark'
+                                        : s.kind === 'ble_apple' ? 'bg-dark'
+                                        : s.kind === 'ble_android' ? 'bg-success'
+                                        : (s.kind === 'ble' || (s.kind && String(s.kind).startsWith('ble'))) ? 'bg-primary'
+                                        : 'bg-light text-dark border';
+                                    const label = s.nickname
+                                        ? escapeHtml(s.nickname)
+                                        : (s.kind === 'ble_apple' ? 'Apple '
+                                            : s.kind === 'ble_android' ? 'Android '
+                                            : (s.kind && String(s.kind).startsWith('ble') ? 'BLE ' : ''))
+                                          + escapeHtml(sid);
+                                    const tip = [
+                                        s.nickname || '',
+                                        s.kind || '',
+                                        s.fingerprint ? ('fp ' + s.fingerprint) : '',
+                                        s.rssi != null ? (s.rssi + ' dBm') : '',
+                                    ].filter(Boolean).join(' · ');
+                                    return `
+                                    <span class="badge ${kindClass}" style="cursor:pointer"
+                                       title="${escapeHtml(tip)}"
+                                       onclick="event.stopPropagation(); selectProfile('${escapeHtml(sid)}')">
+                                        ${label}
                                         ${s.rssi != null ? ' (' + s.rssi + ')' : ''}
-                                    </span>
-                                `).join('')}
+                                    </span>`;
+                                }).join('')}
                                 ${reading.sightings.length > 8 ? `<span class="badge bg-secondary">+${reading.sightings.length - 8}</span>` : ''}
                             </div>` : ''}
                             <div class="pax-meta mt-1">

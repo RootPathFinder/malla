@@ -10,10 +10,15 @@ message PaxSighting {
     WIFI_CLIENT = 0;
     WIFI_AP = 1;
     BLE = 2;
+    BLE_APPLE = 3;
+    BLE_ANDROID = 4;
   }
   bytes mac = 1;
   Kind kind = 2;
   sint32 rssi = 3;
+  // Soft sticky id from BLE adv payload (up to 4 bytes). Correlates rotating
+  // BLE random addresses when the advertisement stays stable.
+  bytes fingerprint = 4;
 }
 
 message Paxcount {

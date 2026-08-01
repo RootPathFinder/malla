@@ -44,3 +44,25 @@ class TestPaxProfilesApi:
             json={"nickname": "Nope"},
         )
         assert resp.status_code == 400
+
+    def test_fingerprint_profile_roundtrip(self, client):
+        profile_id = "fp:abcd"
+        put = client.put(
+            f"/api/paxcounter/profiles/{profile_id}",
+            json={"nickname": "Rotating BLE", "notes": "soft sticky id"},
+        )
+        assert put.status_code == 200, put.get_data(as_text=True)
+        body = put.get_json()
+        assert body["success"] is True
+        assert body["profile"]["mac"] == profile_id
+        assert body["profile"]["nickname"] == "Rotating BLE"
+
+        detail = client.get(f"/api/paxcounter/profiles/{profile_id}?hours=24")
+        assert detail.status_code == 200
+        detail_body = detail.get_json()
+        assert detail_body["profile"]["nickname"] == "Rotating BLE"
+        assert detail_body["stats"]["id"] == profile_id or detail_body["stats"]["mac"] == profile_id
+
+        deleted = client.delete(f"/api/paxcounter/profiles/{profile_id}")
+        assert deleted.status_code == 200
+        assert deleted.get_json()["deleted"] is True

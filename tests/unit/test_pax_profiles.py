@@ -74,6 +74,23 @@ class TestPaxProfileRepository:
         assert "aa:bb:cc:dd:ee:ff" not in mapping
         assert mapping["11:22:33:44:55:66"]["nickname"] == "A"
 
+    def test_fingerprint_profile_key(self, _temp_db):
+        result = PaxProfileRepository.upsert_profile(
+            "fp:deadbeef",
+            nickname="Sticky phone",
+            notes="BLE5 fingerprint",
+        )
+        assert result["success"] is True
+        assert result["profile"]["mac"] == "fp:deadbeef"
+
+        got = PaxProfileRepository.get_profile("DEADBEEF")
+        assert got is not None
+        assert got["mac"] == "fp:deadbeef"
+        assert got["nickname"] == "Sticky phone"
+
+        mapping = PaxProfileRepository.get_profiles_by_macs(["fp:deadbeef", "abcd"])
+        assert "fp:deadbeef" in mapping
+
 
 @pytest.mark.unit
 class TestIdDirectory:
@@ -109,6 +126,7 @@ class TestIdDirectory:
         assert len(directory) == 1
         row = directory[0]
         assert row["mac"] == "01:02:03:04:05:06"
+        assert row["id"] == "01:02:03:04:05:06"
         assert row["hits"] == 3
         assert set(row["kinds"]) == {"wifi_client", "ble"}
         assert row["kind_hits"]["wifi_client"] == 2

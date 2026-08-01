@@ -3453,11 +3453,16 @@ def api_paxcounter():
         from ..utils.paxcount_decode import aggregate_mac_hits, build_id_directory
 
         mac_hits = aggregate_mac_hits(readings)
-        profile_map = PaxProfileRepository.get_profiles_by_macs(
-            [h["mac"] for h in mac_hits if h.get("mac")]
-        )
+        profile_keys = []
+        for h in mac_hits:
+            if h.get("stable_id"):
+                profile_keys.append(h["stable_id"])
+            if h.get("mac"):
+                profile_keys.append(h["mac"])
+        profile_map = PaxProfileRepository.get_profiles_by_macs(profile_keys)
         for hit in mac_hits:
-            profile = profile_map.get(hit.get("mac") or "")
+            sid = hit.get("stable_id") or hit.get("mac") or ""
+            profile = profile_map.get(sid) or profile_map.get(hit.get("mac") or "")
             if profile:
                 hit["nickname"] = profile.get("nickname")
                 hit["notes"] = profile.get("notes")
@@ -3470,7 +3475,8 @@ def api_paxcounter():
         # Also attach nicknames onto per-reading sightings for timeline chips.
         for reading in readings:
             for sighting in reading.get("sightings") or []:
-                profile = profile_map.get(sighting.get("mac") or "")
+                sid = sighting.get("stable_id") or sighting.get("mac") or ""
+                profile = profile_map.get(sid) or profile_map.get(sighting.get("mac") or "")
                 if profile:
                     sighting["nickname"] = profile.get("nickname")
 
@@ -3545,10 +3551,10 @@ def api_paxcounter_profile_get(mac: str):
             aggregate_mac_hits,
             build_id_directory,
             decode_paxcount_payload,
-            format_mac,
+            normalize_profile_id,
         )
 
-        normalized = format_mac(mac)
+        normalized = normalize_profile_id(mac)
         if not normalized:
             return jsonify({"error": "Invalid MAC / ID"}), 400
 
@@ -3575,15 +3581,21 @@ def api_paxcounter_profile_get(mac: str):
         rows = cursor.fetchall()
         conn.close()
 
+        def _sighting_matches(s: dict) -> bool:
+            if s.get("stable_id") == normalized or s.get("mac") == normalized:
+                return True
+            if normalized.startswith("fp:"):
+                fp = s.get("fingerprint")
+                return bool(fp) and f"fp:{fp}" == normalized
+            return False
+
         readings: list[dict] = []
         for row in rows:
             decoded = decode_paxcount_payload(row["raw_payload"]) if row["raw_payload"] else None
             if not decoded:
                 continue
             sightings = [
-                s
-                for s in (decoded.get("sightings") or [])
-                if s.get("mac") == normalized
+                s for s in (decoded.get("sightings") or []) if _sighting_matches(s)
             ]
             if not sightings:
                 continue
@@ -3603,6 +3615,7 @@ def api_paxcounter_profile_get(mac: str):
             {normalized: profile} if profile else {},
         )
         stats = directory[0] if directory else {
+            "id": normalized,
             "mac": normalized,
             "hits": 0,
             "kinds": [],
@@ -3634,9 +3647,9 @@ def api_paxcounter_profile_upsert(mac: str):
     """Create or update nickname/notes for a PAX ID."""
     try:
         from ..database.pax_profile_repository import PaxProfileRepository
-        from ..utils.paxcount_decode import format_mac
+        from ..utils.paxcount_decode import normalize_profile_id
 
-        normalized = format_mac(mac)
+        normalized = normalize_profile_id(mac)
         if not normalized:
             return jsonify({"error": "Invalid MAC / ID"}), 400
 
@@ -3659,9 +3672,9 @@ def api_paxcounter_profile_delete(mac: str):
     """Delete a PAX ID profile (nickname/notes)."""
     try:
         from ..database.pax_profile_repository import PaxProfileRepository
-        from ..utils.paxcount_decode import format_mac
+        from ..utils.paxcount_decode import normalize_profile_id
 
-        normalized = format_mac(mac)
+        normalized = normalize_profile_id(mac)
         if not normalized:
             return jsonify({"error": "Invalid MAC / ID"}), 400
 

@@ -1,9 +1,12 @@
 """
 PAX ID profile repository — nicknames/notes for WiFi/BLE addresses seen by Paxcounter.
 
-Profiles are keyed by normalized MAC/BSSID/BLE address (aa:bb:cc:dd:ee:ff).
-Kind (wifi_client / wifi_ap / ble) is not part of the key; the same ID can be
-seen under different radio kinds over time.
+Profiles are keyed by a stable id:
+- normalized MAC/BSSID/BLE address (``aa:bb:cc:dd:ee:ff``), or
+- soft BLE fingerprint id (``fp:<hex>``) when firmware reports a sticky adv hash.
+
+The SQLite column remains ``mac`` for backward compatibility; fingerprint keys
+are stored in the same column. Kind is not part of the key.
 """
 
 from __future__ import annotations
@@ -13,7 +16,7 @@ import sqlite3
 import time
 from typing import Any
 
-from ..utils.paxcount_decode import format_mac
+from ..utils.paxcount_decode import normalize_profile_id
 from .connection import get_db_connection
 
 logger = logging.getLogger(__name__)
@@ -108,8 +111,8 @@ class PaxProfileRepository:
 
     @staticmethod
     def get_profiles_by_macs(macs: list[str]) -> dict[str, dict[str, Any]]:
-        """Return ``{mac: profile}`` for the given normalized MAC list."""
-        normalized = [m for m in (format_mac(x) for x in macs) if m]
+        """Return ``{id: profile}`` for the given normalized MAC / ``fp:`` list."""
+        normalized = [m for m in (normalize_profile_id(x) for x in macs) if m]
         if not normalized:
             return {}
         conn = get_db_connection()
@@ -131,7 +134,7 @@ class PaxProfileRepository:
 
     @staticmethod
     def get_profile(mac: str) -> dict[str, Any] | None:
-        normalized = format_mac(mac)
+        normalized = normalize_profile_id(mac)
         if not normalized:
             return None
         conn = get_db_connection()
@@ -163,7 +166,7 @@ class PaxProfileRepository:
 
         Empty nickname + empty notes deletes the profile row.
         """
-        normalized = format_mac(mac)
+        normalized = normalize_profile_id(mac)
         if not normalized:
             return {"success": False, "error": "Invalid MAC / ID"}
 
@@ -204,7 +207,7 @@ class PaxProfileRepository:
 
     @staticmethod
     def delete_profile(mac: str) -> bool:
-        normalized = format_mac(mac)
+        normalized = normalize_profile_id(mac)
         if not normalized:
             return False
         conn = get_db_connection()
