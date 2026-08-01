@@ -3449,9 +3449,32 @@ def api_paxcounter():
         avg_wifi = round(total_wifi / total_readings) if total_readings > 0 else 0
         avg_ble = round(total_ble / total_readings) if total_readings > 0 else 0
 
-        from ..utils.paxcount_decode import aggregate_mac_hits
+        from ..database.pax_profile_repository import PaxProfileRepository
+        from ..utils.paxcount_decode import aggregate_mac_hits, build_id_directory
 
         mac_hits = aggregate_mac_hits(readings)
+        profile_map = PaxProfileRepository.get_profiles_by_macs(
+            [h["mac"] for h in mac_hits if h.get("mac")]
+        )
+        for hit in mac_hits:
+            profile = profile_map.get(hit.get("mac") or "")
+            if profile:
+                hit["nickname"] = profile.get("nickname")
+                hit["notes"] = profile.get("notes")
+                hit["has_profile"] = True
+            else:
+                hit["nickname"] = None
+                hit["notes"] = None
+                hit["has_profile"] = False
+
+        # Also attach nicknames onto per-reading sightings for timeline chips.
+        for reading in readings:
+            for sighting in reading.get("sightings") or []:
+                profile = profile_map.get(sighting.get("mac") or "")
+                if profile:
+                    sighting["nickname"] = profile.get("nickname")
+
+        id_directory = build_id_directory(mac_hits, profile_map)
 
         return safe_jsonify(
             {
@@ -3465,6 +3488,10 @@ def api_paxcounter():
                 "avg_ble": avg_ble,
                 "mac_hits": mac_hits,
                 "unique_macs": len(mac_hits),
+                "id_directory": id_directory,
+                "named_profiles": len(
+                    [p for p in profile_map.values() if p.get("nickname")]
+                ),
             }
         )
 
@@ -3482,9 +3509,166 @@ def api_paxcounter():
                     "avg_ble": 0,
                     "mac_hits": [],
                     "unique_macs": 0,
+                    "id_directory": [],
+                    "named_profiles": 0,
                 }
             )
         logger.error(f"Error in API paxcounter: {e}", exc_info=True)
+        return jsonify({"error": str(e)}), 500
+
+
+@api_bp.route("/paxcounter/profiles", methods=["GET"])
+def api_paxcounter_profiles_list():
+    """
+    List PAX ID profiles (nicknamed addresses), optionally filtered by search.
+
+    Query params:
+        q: search nickname / mac / notes
+    """
+    try:
+        from ..database.pax_profile_repository import PaxProfileRepository
+
+        q = request.args.get("q")
+        profiles = PaxProfileRepository.list_profiles(q=q)
+        return safe_jsonify({"profiles": profiles, "total": len(profiles)})
+    except Exception as e:
+        logger.error(f"Error listing pax profiles: {e}", exc_info=True)
+        return jsonify({"error": str(e)}), 500
+
+
+@api_bp.route("/paxcounter/profiles/<path:mac>", methods=["GET"])
+def api_paxcounter_profile_get(mac: str):
+    """Get one profile plus live sighting stats for the given ID."""
+    try:
+        from ..database.pax_profile_repository import PaxProfileRepository
+        from ..utils.paxcount_decode import (
+            aggregate_mac_hits,
+            build_id_directory,
+            decode_paxcount_payload,
+            format_mac,
+        )
+
+        normalized = format_mac(mac)
+        if not normalized:
+            return jsonify({"error": "Invalid MAC / ID"}), 400
+
+        hours = request.args.get("hours", 168, type=int)
+        hours = min(max(hours, 1), 168)
+        limit = request.args.get("limit", 2000, type=int)
+        limit = min(max(limit, 1), 5000)
+
+        profile = PaxProfileRepository.get_profile(normalized)
+
+        conn = get_db_connection()
+        cursor = conn.cursor()
+        cutoff_time = time.time() - (hours * 3600)
+        cursor.execute(
+            """
+            SELECT timestamp, from_node_id, raw_payload
+            FROM packet_history
+            WHERE portnum = 34 AND timestamp > ?
+            ORDER BY timestamp DESC
+            LIMIT ?
+            """,
+            (cutoff_time, limit),
+        )
+        rows = cursor.fetchall()
+        conn.close()
+
+        readings: list[dict] = []
+        for row in rows:
+            decoded = decode_paxcount_payload(row["raw_payload"]) if row["raw_payload"] else None
+            if not decoded:
+                continue
+            sightings = [
+                s
+                for s in (decoded.get("sightings") or [])
+                if s.get("mac") == normalized
+            ]
+            if not sightings:
+                continue
+            from_node_id = row["from_node_id"]
+            readings.append(
+                {
+                    "timestamp": row["timestamp"],
+                    "from_node_id": from_node_id,
+                    "from_node_hex": f"!{from_node_id:08x}" if from_node_id else None,
+                    "sightings": sightings,
+                }
+            )
+
+        mac_hits = aggregate_mac_hits(readings, limit=50)
+        directory = build_id_directory(
+            mac_hits,
+            {normalized: profile} if profile else {},
+        )
+        stats = directory[0] if directory else {
+            "mac": normalized,
+            "hits": 0,
+            "kinds": [],
+            "kind_hits": {},
+            "best_rssi": None,
+            "first_seen": None,
+            "last_seen": None,
+            "node_count": 0,
+            "nickname": profile.get("nickname") if profile else None,
+            "notes": profile.get("notes") if profile else None,
+            "has_profile": profile is not None,
+        }
+
+        return safe_jsonify(
+            {
+                "profile": profile,
+                "stats": stats,
+                "hours_analyzed": hours,
+                "matching_readings": len(readings),
+            }
+        )
+    except Exception as e:
+        logger.error(f"Error getting pax profile: {e}", exc_info=True)
+        return jsonify({"error": str(e)}), 500
+
+
+@api_bp.route("/paxcounter/profiles/<path:mac>", methods=["PUT"])
+def api_paxcounter_profile_upsert(mac: str):
+    """Create or update nickname/notes for a PAX ID."""
+    try:
+        from ..database.pax_profile_repository import PaxProfileRepository
+        from ..utils.paxcount_decode import format_mac
+
+        normalized = format_mac(mac)
+        if not normalized:
+            return jsonify({"error": "Invalid MAC / ID"}), 400
+
+        data = request.get_json(silent=True) or {}
+        result = PaxProfileRepository.upsert_profile(
+            normalized,
+            nickname=data.get("nickname"),
+            notes=data.get("notes"),
+        )
+        if not result.get("success"):
+            return jsonify({"error": result.get("error", "Failed to save")}), 400
+        return safe_jsonify(result)
+    except Exception as e:
+        logger.error(f"Error upserting pax profile: {e}", exc_info=True)
+        return jsonify({"error": str(e)}), 500
+
+
+@api_bp.route("/paxcounter/profiles/<path:mac>", methods=["DELETE"])
+def api_paxcounter_profile_delete(mac: str):
+    """Delete a PAX ID profile (nickname/notes)."""
+    try:
+        from ..database.pax_profile_repository import PaxProfileRepository
+        from ..utils.paxcount_decode import format_mac
+
+        normalized = format_mac(mac)
+        if not normalized:
+            return jsonify({"error": "Invalid MAC / ID"}), 400
+
+        deleted = PaxProfileRepository.delete_profile(normalized)
+        return safe_jsonify({"success": True, "deleted": deleted, "mac": normalized})
+    except Exception as e:
+        logger.error(f"Error deleting pax profile: {e}", exc_info=True)
         return jsonify({"error": str(e)}), 500
 
 

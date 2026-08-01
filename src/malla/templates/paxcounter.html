@@ -378,10 +378,10 @@
                 </div>
             </div>
 
-            <!-- Detected MACs / BSSIDs (report_ids) -->
+            <!-- Detected MACs / BLE (quick list) -->
             <div class="card mb-4">
                 <div class="card-header d-flex justify-content-between align-items-center">
-                    <span><i class="bi bi-upc-scan"></i> Detected MACs / BLE</span>
+                    <span><i class="bi bi-upc-scan"></i> Detected IDs</span>
                     <span class="badge bg-secondary" id="macHitsBadge">0</span>
                 </div>
                 <div class="card-body p-0">
@@ -410,6 +410,69 @@
 
         <!-- Right column: Map and readings log -->
         <div class="col-lg-8">
+            <!-- PAX ID Profile management -->
+            <div class="card mb-4" id="paxProfilesCard">
+                <div class="card-header d-flex flex-wrap justify-content-between align-items-center gap-2">
+                    <span><i class="bi bi-person-badge"></i> PAX Profiles</span>
+                    <div class="d-flex flex-wrap align-items-center gap-2">
+                        <span class="badge bg-secondary" id="profileNamedBadge" title="Named profiles in current window">0 named</span>
+                        <span class="badge bg-outline-secondary border" id="profileTotalBadge">0 IDs</span>
+                    </div>
+                </div>
+                <div class="card-body">
+                    <div class="row g-2 mb-3">
+                        <div class="col-md-6">
+                            <div class="input-group input-group-sm">
+                                <span class="input-group-text"><i class="bi bi-search"></i></span>
+                                <input type="search" class="form-control" id="profileSearch"
+                                       placeholder="Search MAC, nickname, or notes..." autocomplete="off">
+                            </div>
+                        </div>
+                        <div class="col-md-3">
+                            <select class="form-select form-select-sm" id="profileKindFilter">
+                                <option value="">All kinds</option>
+                                <option value="wifi_client">WiFi client</option>
+                                <option value="wifi_ap">AP BSSID</option>
+                                <option value="ble">BLE</option>
+                            </select>
+                        </div>
+                        <div class="col-md-3">
+                            <div class="form-check form-switch mt-1">
+                                <input class="form-check-input" type="checkbox" id="profileNamedOnly">
+                                <label class="form-check-label small" for="profileNamedOnly">Named only</label>
+                            </div>
+                        </div>
+                    </div>
+                    <div class="row">
+                        <div class="col-lg-7">
+                            <div class="table-responsive" style="max-height: 340px; overflow-y: auto;">
+                                <table class="table table-sm table-hover align-middle mb-0" id="profileTable">
+                                    <thead class="sticky-top bg-body">
+                                        <tr>
+                                            <th>Nickname</th>
+                                            <th>ID</th>
+                                            <th>Kind</th>
+                                            <th class="text-end">Hits</th>
+                                            <th class="text-end">Last</th>
+                                        </tr>
+                                    </thead>
+                                    <tbody id="profileTableBody">
+                                        <tr><td colspan="5" class="text-center text-muted small py-3">Loading…</td></tr>
+                                    </tbody>
+                                </table>
+                            </div>
+                        </div>
+                        <div class="col-lg-5">
+                            <div id="profileDetail" class="border rounded p-3 bg-light h-100">
+                                <div class="text-muted small text-center py-4">
+                                    Select an ID to view stats and set a nickname.
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
             <!-- Zoomable Time-Series Chart -->
             <div class="card mb-4">
                 <div class="card-header d-flex justify-content-between align-items-center">
@@ -551,7 +614,26 @@
         }
     }
 
-    // Update Detected MACs / BSSIDs table
+    let idDirectory = [];
+    let selectedProfileMac = null;
+
+    function kindBadge(kind) {
+        if (kind === 'wifi_ap') return '<span class="badge bg-info text-dark">AP</span>';
+        if (kind === 'ble') return '<span class="badge bg-primary">BLE</span>';
+        return '<span class="badge bg-secondary">Client</span>';
+    }
+
+    function kindBadges(kinds) {
+        if (!kinds || !kinds.length) return '<span class="text-muted">—</span>';
+        return kinds.map(kindBadge).join(' ');
+    }
+
+    function formatShortAge(ts) {
+        if (ts == null) return '—';
+        return formatRelativeTime(ts);
+    }
+
+    // Update Detected IDs quick list
     function updateMacHits(macHits) {
         const container = document.getElementById('macHitsList');
         const badge = document.getElementById('macHitsBadge');
@@ -573,33 +655,280 @@
                 <table class="table table-sm table-hover mb-0">
                     <thead>
                         <tr>
-                            <th>MAC / BSSID</th>
+                            <th>ID</th>
                             <th>Kind</th>
                             <th class="text-end">Hits</th>
-                            <th class="text-end">RSSI</th>
                         </tr>
                     </thead>
                     <tbody>
-                        ${hits.map(row => `
-                            <tr>
-                                <td><code class="small">${row.mac}</code></td>
+                        ${hits.slice(0, 40).map(row => `
+                            <tr style="cursor:pointer" onclick="selectProfile('${row.mac}')">
                                 <td>
-                                    <span class="badge ${
-                                        row.kind === 'wifi_ap' ? 'bg-info text-dark'
-                                        : row.kind === 'ble' ? 'bg-primary'
-                                        : 'bg-secondary'
-                                    }">
-                                        ${row.kind === 'wifi_ap' ? 'AP' : row.kind === 'ble' ? 'BLE' : 'Client'}
-                                    </span>
+                                    ${row.nickname ? `<div class="fw-semibold small">${escapeHtml(row.nickname)}</div>` : ''}
+                                    <code class="small">${row.mac}</code>
                                 </td>
+                                <td>${kindBadge(row.kind)}</td>
                                 <td class="text-end fw-semibold">${row.hits}</td>
-                                <td class="text-end text-muted small">${row.best_rssi != null ? row.best_rssi + ' dBm' : '—'}</td>
                             </tr>
                         `).join('')}
                     </tbody>
                 </table>
             </div>
         `;
+    }
+
+    function escapeHtml(value) {
+        return String(value ?? '')
+            .replace(/&/g, '&amp;')
+            .replace(/</g, '&lt;')
+            .replace(/>/g, '&gt;')
+            .replace(/"/g, '&quot;');
+    }
+
+    function filterIdDirectory() {
+        const q = (document.getElementById('profileSearch')?.value || '').trim().toLowerCase();
+        const kind = document.getElementById('profileKindFilter')?.value || '';
+        const namedOnly = !!document.getElementById('profileNamedOnly')?.checked;
+
+        return idDirectory.filter(row => {
+            if (namedOnly && !row.nickname) return false;
+            if (kind && !(row.kinds || []).includes(kind)) return false;
+            if (!q) return true;
+            const hay = [
+                row.mac,
+                row.nickname,
+                row.notes,
+                ...(row.kinds || []),
+            ].join(' ').toLowerCase();
+            return hay.includes(q);
+        });
+    }
+
+    function updateProfileTable() {
+        const body = document.getElementById('profileTableBody');
+        const namedBadge = document.getElementById('profileNamedBadge');
+        const totalBadge = document.getElementById('profileTotalBadge');
+        if (!body) return;
+
+        const namedCount = idDirectory.filter(r => r.nickname).length;
+        if (namedBadge) namedBadge.textContent = `${namedCount} named`;
+        if (totalBadge) totalBadge.textContent = `${idDirectory.length} IDs`;
+
+        const rows = filterIdDirectory();
+        if (!rows.length) {
+            body.innerHTML = `<tr><td colspan="5" class="text-center text-muted small py-3">No matching IDs</td></tr>`;
+            return;
+        }
+
+        body.innerHTML = rows.map(row => `
+            <tr class="${selectedProfileMac === row.mac ? 'table-active' : ''}"
+                style="cursor:pointer" onclick="selectProfile('${row.mac}')">
+                <td>
+                    ${row.nickname
+                        ? `<span class="fw-semibold">${escapeHtml(row.nickname)}</span>`
+                        : `<span class="text-muted">—</span>`}
+                </td>
+                <td><code class="small">${row.mac}</code></td>
+                <td>${kindBadges(row.kinds)}</td>
+                <td class="text-end fw-semibold">${row.hits || 0}</td>
+                <td class="text-end text-muted small">${formatShortAge(row.last_seen)}</td>
+            </tr>
+        `).join('');
+    }
+
+    function renderProfileDetail(row) {
+        const el = document.getElementById('profileDetail');
+        if (!el) return;
+        if (!row) {
+            el.innerHTML = `<div class="text-muted small text-center py-4">Select an ID to view stats and set a nickname.</div>`;
+            return;
+        }
+
+        const kindHitRows = Object.entries(row.kind_hits || {})
+            .map(([k, n]) => `<div class="d-flex justify-content-between small"><span>${kindBadge(k)}</span><span>${n} hits</span></div>`)
+            .join('') || '<div class="text-muted small">No sightings in this window</div>';
+
+        el.innerHTML = `
+            <div class="d-flex justify-content-between align-items-start mb-2">
+                <div>
+                    <div class="fw-semibold">${row.nickname ? escapeHtml(row.nickname) : 'Unnamed ID'}</div>
+                    <code class="small">${row.mac}</code>
+                </div>
+                <div>${kindBadges(row.kinds)}</div>
+            </div>
+            <div class="row g-2 mb-3 small">
+                <div class="col-6"><div class="border rounded p-2 bg-white"><div class="text-muted">Hits</div><div class="fw-semibold fs-5">${row.hits || 0}</div></div></div>
+                <div class="col-6"><div class="border rounded p-2 bg-white"><div class="text-muted">Nodes</div><div class="fw-semibold fs-5">${row.node_count || 0}</div></div></div>
+                <div class="col-6"><div class="border rounded p-2 bg-white"><div class="text-muted">Best RSSI</div><div class="fw-semibold">${row.best_rssi != null ? row.best_rssi + ' dBm' : '—'}</div></div></div>
+                <div class="col-6"><div class="border rounded p-2 bg-white"><div class="text-muted">Last seen</div><div class="fw-semibold">${formatShortAge(row.last_seen)}</div></div></div>
+                <div class="col-12"><div class="border rounded p-2 bg-white"><div class="text-muted mb-1">First seen</div><div>${row.first_seen ? formatTimestamp(row.first_seen) : '—'}</div></div></div>
+            </div>
+            <div class="mb-3">${kindHitRows}</div>
+            <div class="mb-2">
+                <label class="form-label small mb-1" for="profileNicknameInput">Nickname</label>
+                <input type="text" class="form-control form-control-sm" id="profileNicknameInput"
+                       maxlength="80" placeholder="e.g. Dave's phone"
+                       value="${escapeHtml(row.nickname || '')}">
+            </div>
+            <div class="mb-3">
+                <label class="form-label small mb-1" for="profileNotesInput">Notes</label>
+                <textarea class="form-control form-control-sm" id="profileNotesInput" rows="2"
+                          maxlength="500" placeholder="Optional notes">${escapeHtml(row.notes || '')}</textarea>
+            </div>
+            <div class="d-flex flex-wrap gap-2">
+                <button type="button" class="btn btn-primary btn-sm" onclick="saveSelectedProfile()">
+                    <i class="bi bi-save"></i> Save
+                </button>
+                <button type="button" class="btn btn-outline-danger btn-sm" onclick="clearSelectedProfile()"
+                        ${row.has_profile || row.nickname || row.notes ? '' : 'disabled'}>
+                    <i class="bi bi-trash"></i> Clear
+                </button>
+            </div>
+            <div id="profileSaveAlert" class="alert d-none mt-2 mb-0 py-1 small" role="alert"></div>
+        `;
+    }
+
+    function selectProfile(mac) {
+        selectedProfileMac = mac;
+        const row = idDirectory.find(r => r.mac === mac) || { mac, hits: 0, kinds: [], kind_hits: {} };
+        updateProfileTable();
+        renderProfileDetail(row);
+        // Refresh stats from dedicated endpoint for fuller window
+        refreshProfileStats(mac);
+    }
+
+    async function refreshProfileStats(mac) {
+        try {
+            const hours = document.getElementById('hoursFilter')?.value || 24;
+            const res = await fetch(`/api/paxcounter/profiles/${encodeURIComponent(mac)}?hours=${hours}`);
+            if (!res.ok) return;
+            const data = await res.json();
+            if (data.stats) {
+                // Keep local directory nickname/notes if newer, else merge stats
+                const idx = idDirectory.findIndex(r => r.mac === mac);
+                const merged = {
+                    ...(idx >= 0 ? idDirectory[idx] : {}),
+                    ...data.stats,
+                    nickname: (idx >= 0 && idDirectory[idx].nickname) || data.stats.nickname || (data.profile && data.profile.nickname) || null,
+                    notes: (idx >= 0 && idDirectory[idx].notes) || data.stats.notes || (data.profile && data.profile.notes) || null,
+                    has_profile: !!(data.profile || (idx >= 0 && idDirectory[idx].has_profile)),
+                };
+                if (idx >= 0) idDirectory[idx] = merged;
+                else idDirectory.push(merged);
+                if (selectedProfileMac === mac) {
+                    updateProfileTable();
+                    renderProfileDetail(merged);
+                }
+            }
+        } catch (e) {
+            console.warn('profile stats refresh failed', e);
+        }
+    }
+
+    function showProfileAlert(type, message) {
+        const el = document.getElementById('profileSaveAlert');
+        if (!el) return;
+        el.className = `alert alert-${type} mt-2 mb-0 py-1 small`;
+        el.textContent = message;
+    }
+
+    async function saveSelectedProfile() {
+        if (!selectedProfileMac) return;
+        const nickname = document.getElementById('profileNicknameInput')?.value || '';
+        const notes = document.getElementById('profileNotesInput')?.value || '';
+        try {
+            const res = await fetch(`/api/paxcounter/profiles/${encodeURIComponent(selectedProfileMac)}`, {
+                method: 'PUT',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ nickname, notes }),
+            });
+            const data = await res.json();
+            if (!res.ok || data.error) {
+                showProfileAlert('danger', data.error || 'Save failed');
+                return;
+            }
+            const profile = data.profile;
+            const idx = idDirectory.findIndex(r => r.mac === selectedProfileMac);
+            if (idx >= 0) {
+                idDirectory[idx].nickname = profile ? profile.nickname : null;
+                idDirectory[idx].notes = profile ? profile.notes : null;
+                idDirectory[idx].has_profile = !!profile;
+            }
+            // Sync into currentData mac_hits / sightings for chips
+            if (currentData) {
+                (currentData.mac_hits || []).forEach(h => {
+                    if (h.mac === selectedProfileMac) {
+                        h.nickname = profile ? profile.nickname : null;
+                        h.notes = profile ? profile.notes : null;
+                        h.has_profile = !!profile;
+                    }
+                });
+                (currentData.readings || []).forEach(r => {
+                    (r.sightings || []).forEach(s => {
+                        if (s.mac === selectedProfileMac) {
+                            s.nickname = profile ? profile.nickname : null;
+                        }
+                    });
+                });
+                updateMacHits(currentData.mac_hits || []);
+                updateTimeline(currentData.readings || []);
+            }
+            updateProfileTable();
+            renderProfileDetail(idDirectory.find(r => r.mac === selectedProfileMac));
+            showProfileAlert('success', profile ? 'Profile saved' : 'Profile cleared');
+        } catch (e) {
+            showProfileAlert('danger', e.message || 'Save failed');
+        }
+    }
+
+    async function clearSelectedProfile() {
+        if (!selectedProfileMac) return;
+        if (!confirm('Clear nickname and notes for this ID?')) return;
+        try {
+            const res = await fetch(`/api/paxcounter/profiles/${encodeURIComponent(selectedProfileMac)}`, {
+                method: 'DELETE',
+            });
+            const data = await res.json();
+            if (!res.ok || data.error) {
+                showProfileAlert('danger', data.error || 'Clear failed');
+                return;
+            }
+            const idx = idDirectory.findIndex(r => r.mac === selectedProfileMac);
+            if (idx >= 0) {
+                idDirectory[idx].nickname = null;
+                idDirectory[idx].notes = null;
+                idDirectory[idx].has_profile = false;
+            }
+            if (currentData) {
+                (currentData.mac_hits || []).forEach(h => {
+                    if (h.mac === selectedProfileMac) {
+                        h.nickname = null; h.notes = null; h.has_profile = false;
+                    }
+                });
+                (currentData.readings || []).forEach(r => {
+                    (r.sightings || []).forEach(s => {
+                        if (s.mac === selectedProfileMac) s.nickname = null;
+                    });
+                });
+                updateMacHits(currentData.mac_hits || []);
+                updateTimeline(currentData.readings || []);
+            }
+            updateProfileTable();
+            renderProfileDetail(idDirectory.find(r => r.mac === selectedProfileMac));
+            showProfileAlert('success', 'Profile cleared');
+        } catch (e) {
+            showProfileAlert('danger', e.message || 'Clear failed');
+        }
+    }
+
+    function bindProfileFilters() {
+        ['profileSearch', 'profileKindFilter', 'profileNamedOnly'].forEach(id => {
+            const el = document.getElementById(id);
+            if (!el || el.dataset.bound) return;
+            el.dataset.bound = '1';
+            el.addEventListener('input', updateProfileTable);
+            el.addEventListener('change', updateProfileTable);
+        });
     }
 
     // Update all UI elements
@@ -614,7 +943,14 @@
         document.getElementById('readingCountBadge').textContent =
             `${data.total_readings || 0} readings`;
 
+        idDirectory = Array.isArray(data.id_directory) ? data.id_directory : [];
+        bindProfileFilters();
         updateMacHits(data.mac_hits || []);
+        updateProfileTable();
+        if (selectedProfileMac) {
+            const row = idDirectory.find(r => r.mac === selectedProfileMac);
+            renderProfileDetail(row || { mac: selectedProfileMac, hits: 0, kinds: [], kind_hits: {} });
+        }
 
         // Show live dot if recent data
         const liveDot = document.getElementById('liveDot');
@@ -821,8 +1157,11 @@
                                         s.kind === 'wifi_ap' ? 'bg-info text-dark'
                                         : s.kind === 'ble' ? 'bg-primary'
                                         : 'bg-light text-dark border'
-                                    }" title="${s.kind}${s.rssi != null ? ' @ ' + s.rssi + ' dBm' : ''}">
-                                        ${s.kind === 'ble' ? 'BLE ' : ''}${s.mac}${s.rssi != null ? ' (' + s.rssi + ')' : ''}
+                                    }" style="cursor:pointer"
+                                       title="${s.nickname ? s.nickname + ' · ' : ''}${s.kind}${s.rssi != null ? ' @ ' + s.rssi + ' dBm' : ''}"
+                                       onclick="event.stopPropagation(); selectProfile('${s.mac}')">
+                                        ${s.nickname ? escapeHtml(s.nickname) : ((s.kind === 'ble' ? 'BLE ' : '') + s.mac)}
+                                        ${s.rssi != null ? ' (' + s.rssi + ')' : ''}
                                     </span>
                                 `).join('')}
                                 ${reading.sightings.length > 8 ? `<span class="badge bg-secondary">+${reading.sightings.length - 8}</span>` : ''}
