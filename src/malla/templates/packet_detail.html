@@ -440,7 +440,13 @@
                                                     </td>
                                                     <td>
                                                         {% if s.fingerprint %}
-                                                            <code>{{ s.fingerprint }}</code>
+                                                            <a href="{{ url_for('main.pax_id_status', profile_id='fp:' ~ s.fingerprint) }}">
+                                                                <code>{{ s.fingerprint }}</code>
+                                                            </a>
+                                                        {% elif s.stable_id %}
+                                                            <a href="{{ url_for('main.pax_id_status', profile_id=s.stable_id) }}">
+                                                                <code>{{ s.stable_id }}</code>
+                                                            </a>
                                                         {% else %}
                                                             <span class="text-muted">—</span>
                                                         {% endif %}

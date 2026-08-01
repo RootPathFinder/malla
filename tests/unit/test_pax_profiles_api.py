@@ -2,7 +2,40 @@
 
 from __future__ import annotations
 
+import time
+
 import pytest
+
+
+def _insert_pax_packet(app, *, timestamp: float, payload: bytes, from_node_id: int = 0xAABBCCDD):
+    from malla.database.connection import get_db_connection
+
+    with app.app_context():
+        conn = get_db_connection()
+        cursor = conn.cursor()
+        cursor.execute(
+            """
+            INSERT INTO packet_history (
+                timestamp, topic, from_node_id, to_node_id, portnum, portnum_name,
+                gateway_id, rssi, snr, hop_limit, payload_length, raw_payload,
+                processed_successfully
+            ) VALUES (?, ?, ?, ?, 34, 'PAXCOUNTER_APP', ?, ?, ?, ?, ?, ?, 1)
+            """,
+            (
+                timestamp,
+                "msh/test",
+                from_node_id,
+                0xFFFFFFFF,
+                "!gateway",
+                -90,
+                5.0,
+                3,
+                len(payload),
+                payload,
+            ),
+        )
+        conn.commit()
+        conn.close()
 
 
 @pytest.mark.unit
@@ -66,3 +99,42 @@ class TestPaxProfilesApi:
         deleted = client.delete(f"/api/paxcounter/profiles/{profile_id}")
         assert deleted.status_code == 200
         assert deleted.get_json()["deleted"] is True
+
+    def test_fingerprint_history_and_status_page(self, client, app):
+        from malla.vendor.meshtastic import paxcount_pb2
+
+        now = time.time()
+        msg = paxcount_pb2.Paxcount(wifi=0, ble=1, uptime=10, sighting_count=1)
+        s = msg.sightings.add()
+        s.mac = bytes([0x11, 0x22, 0x33, 0x44, 0x55, 0x66])
+        s.kind = paxcount_pb2.PaxSighting.BLE_APPLE
+        s.rssi = -62
+        s.fingerprint = bytes([0xAB, 0xCD])
+        payload = msg.SerializeToString()
+        _insert_pax_packet(app, timestamp=now - 120, payload=payload)
+
+        client.put(
+            "/api/paxcounter/profiles/fp:abcd",
+            json={"nickname": "Walk-up phone"},
+        )
+
+        hist = client.get(
+            "/api/paxcounter/profiles/fp:abcd/history?hours=24&bucket_minutes=15"
+        )
+        assert hist.status_code == 200, hist.get_data(as_text=True)
+        body = hist.get_json()
+        assert body["id"] == "fp:abcd"
+        assert body["profile"]["nickname"] == "Walk-up phone"
+        assert body["summary"]["hit_count"] >= 1
+        assert body["summary"]["best_rssi"] == -62
+        assert any(s.get("rssi") == -62 for s in body["samples"])
+        assert body["presence"]
+        assert body["summary"]["present_now"] is True
+
+        page = client.get("/paxcounter/id/fp:abcd")
+        assert page.status_code == 200
+        html = page.get_data(as_text=True)
+        assert "PAX ID Status" in html
+        assert "fp:abcd" in html
+        assert "rssiChart" in html
+        assert "presenceChart" in html

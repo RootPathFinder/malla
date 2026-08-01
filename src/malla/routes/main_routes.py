@@ -180,3 +180,22 @@ def paxcounter():
     except Exception as e:
         logger.error(f"Error in paxcounter route: {e}")
         return f"Paxcounter error: {e}", 500
+
+
+@main_bp.route("/paxcounter/id/<path:profile_id>")
+def pax_id_status(profile_id: str):
+    """Per-ID status page: RSSI and presence over time for a fingerprinted/MAC ID."""
+    logger.info("Paxcounter ID status route accessed: %s", profile_id)
+    try:
+        from ..utils.paxcount_decode import normalize_profile_id
+
+        normalized = normalize_profile_id(profile_id)
+        if not normalized:
+            return "Invalid PAX ID", 400
+        return render_template(
+            "pax_id_status.html",
+            profile_id=normalized,
+        )
+    except Exception as e:
+        logger.error(f"Error in paxcounter ID status route: {e}")
+        return f"Paxcounter ID status error: {e}", 500
