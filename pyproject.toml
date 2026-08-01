@@ -179,6 +179,7 @@ ignore = [
 [tool.ruff.lint.per-file-ignores]
 "__init__.py" = ["F401"]
 "tests/*" = ["B011"]
+"src/malla/vendor/**" = ["ALL"]
 
 [tool.ruff.format]
 # Enable the formatter
@@ -202,7 +203,8 @@ exclude = [
     "**/.venv",
     "**/venv",
     "build",
-    "dist"
+    "dist",
+    "src/malla/vendor",
 ]
 
 # Ignore specific modules that have complex typing issues
