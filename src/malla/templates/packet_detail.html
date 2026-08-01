@@ -427,6 +427,8 @@
                                                     <td>
                                                         {% if s.kind == 'wifi_ap' %}
                                                             <span class="badge bg-info text-dark">AP BSSID</span>
+                                                        {% elif s.kind == 'ble' %}
+                                                            <span class="badge bg-primary">BLE</span>
                                                         {% else %}
                                                             <span class="badge bg-secondary">WiFi client</span>
                                                         {% endif %}

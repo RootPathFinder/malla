@@ -381,13 +381,13 @@
             <!-- Detected MACs / BSSIDs (report_ids) -->
             <div class="card mb-4">
                 <div class="card-header d-flex justify-content-between align-items-center">
-                    <span><i class="bi bi-upc-scan"></i> Detected MACs / BSSIDs</span>
+                    <span><i class="bi bi-upc-scan"></i> Detected MACs / BLE</span>
                     <span class="badge bg-secondary" id="macHitsBadge">0</span>
                 </div>
                 <div class="card-body p-0">
                     <div id="macHitsList" style="max-height: 280px; overflow-y: auto;">
                         <div class="text-center p-3 text-muted small">
-                            Enable <code>report_ids</code> on a Paxcounter node to collect WiFi MACs / AP BSSIDs.
+                            Enable <code>report_ids</code> on a Paxcounter node to collect WiFi / BLE addresses.
                         </div>
                     </div>
                 </div>
@@ -562,7 +562,7 @@
         if (!hits.length) {
             container.innerHTML = `
                 <div class="text-center p-3 text-muted small">
-                    Enable <code>report_ids</code> on a Paxcounter node to collect WiFi MACs / AP BSSIDs.
+                    Enable <code>report_ids</code> on a Paxcounter node to collect WiFi / BLE addresses.
                 </div>
             `;
             return;
@@ -584,8 +584,12 @@
                             <tr>
                                 <td><code class="small">${row.mac}</code></td>
                                 <td>
-                                    <span class="badge ${row.kind === 'wifi_ap' ? 'bg-info text-dark' : 'bg-secondary'}">
-                                        ${row.kind === 'wifi_ap' ? 'AP' : 'Client'}
+                                    <span class="badge ${
+                                        row.kind === 'wifi_ap' ? 'bg-info text-dark'
+                                        : row.kind === 'ble' ? 'bg-primary'
+                                        : 'bg-secondary'
+                                    }">
+                                        ${row.kind === 'wifi_ap' ? 'AP' : row.kind === 'ble' ? 'BLE' : 'Client'}
                                     </span>
                                 </td>
                                 <td class="text-end fw-semibold">${row.hits}</td>
@@ -813,8 +817,12 @@
                             ${reading.sightings && reading.sightings.length ? `
                             <div class="mt-2 d-flex flex-wrap gap-1">
                                 ${reading.sightings.slice(0, 8).map(s => `
-                                    <span class="badge ${s.kind === 'wifi_ap' ? 'bg-info text-dark' : 'bg-light text-dark border'}" title="${s.kind}${s.rssi != null ? ' @ ' + s.rssi + ' dBm' : ''}">
-                                        ${s.mac}${s.rssi != null ? ' (' + s.rssi + ')' : ''}
+                                    <span class="badge ${
+                                        s.kind === 'wifi_ap' ? 'bg-info text-dark'
+                                        : s.kind === 'ble' ? 'bg-primary'
+                                        : 'bg-light text-dark border'
+                                    }" title="${s.kind}${s.rssi != null ? ' @ ' + s.rssi + ' dBm' : ''}">
+                                        ${s.kind === 'ble' ? 'BLE ' : ''}${s.mac}${s.rssi != null ? ' (' + s.rssi + ')' : ''}
                                     </span>
                                 `).join('')}
                                 ${reading.sightings.length > 8 ? `<span class="badge bg-secondary">+${reading.sightings.length - 8}</span>` : ''}

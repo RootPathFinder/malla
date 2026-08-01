@@ -6,9 +6,11 @@ class PaxSighting:
     class Kind:
         WIFI_CLIENT: int
         WIFI_AP: int
+        BLE: int
 
     WIFI_CLIENT: int
     WIFI_AP: int
+    BLE: int
 
     mac: bytes
     kind: int

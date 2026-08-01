@@ -1279,11 +1279,12 @@ PAXCOUNTER_MODULE_FIELDS = [
     ),
     FieldMetadata(
         name="report_ids",
-        label="Report MAC / BSSID IDs",
+        label="Report MAC / BSSID / BLE IDs",
         field_type=FieldType.BOOLEAN,
         description=(
-            "When enabled, include unique WiFi client MACs and AP BSSIDs "
-            "in Paxcounter mesh reports (chunked). Requires firmware support."
+            "When enabled, include unique WiFi client MACs, AP BSSIDs, and "
+            "BLE addresses in Paxcounter mesh reports (chunked). "
+            "Requires firmware support."
         ),
     ),
 ]
