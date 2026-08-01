@@ -191,6 +191,13 @@ def init_admin_tables() -> None:
     except Exception as e:
         logger.warning(f"Could not initialize scheduled telemetry tables: {e}")
 
+    try:
+        from .pax_profile_repository import init_pax_profile_tables
+
+        init_pax_profile_tables()
+    except Exception as e:
+        logger.warning(f"Could not initialize pax profile tables: {e}")
+
     logger.info("Admin tables initialized")
 
 
