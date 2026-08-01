@@ -3542,6 +3542,127 @@ def api_paxcounter_profiles_list():
         return jsonify({"error": str(e)}), 500
 
 
+def _collect_pax_profile_sightings(
+    normalized: str,
+    *,
+    hours: int,
+    limit: int,
+) -> tuple[list[dict], list[dict]]:
+    """Scan recent PAXCOUNTER packets for sightings matching ``normalized``.
+
+    Returns ``(readings, samples)`` where readings group sightings by packet
+    and samples are flat per-sighting rows for history charts.
+    """
+    from ..utils.paxcount_decode import (
+        decode_paxcount_payload,
+        sighting_matches_profile,
+    )
+
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    cutoff_time = time.time() - (hours * 3600)
+    cursor.execute(
+        """
+        SELECT id, timestamp, from_node_id, raw_payload
+        FROM packet_history
+        WHERE portnum = 34 AND timestamp > ?
+        ORDER BY timestamp DESC
+        LIMIT ?
+        """,
+        (cutoff_time, limit),
+    )
+    rows = cursor.fetchall()
+    conn.close()
+
+    readings: list[dict] = []
+    samples: list[dict] = []
+    for row in rows:
+        decoded = decode_paxcount_payload(row["raw_payload"]) if row["raw_payload"] else None
+        if not decoded:
+            continue
+        sightings = [
+            s for s in (decoded.get("sightings") or []) if sighting_matches_profile(s, normalized)
+        ]
+        if not sightings:
+            continue
+        from_node_id = row["from_node_id"]
+        from_node_hex = f"!{from_node_id:08x}" if from_node_id else None
+        readings.append(
+            {
+                "timestamp": row["timestamp"],
+                "from_node_id": from_node_id,
+                "from_node_hex": from_node_hex,
+                "sightings": sightings,
+            }
+        )
+        for s in sightings:
+            samples.append(
+                {
+                    "timestamp": row["timestamp"],
+                    "rssi": s.get("rssi"),
+                    "kind": s.get("kind"),
+                    "mac": s.get("mac"),
+                    "fingerprint": s.get("fingerprint"),
+                    "stable_id": s.get("stable_id"),
+                    "from_node_id": from_node_id,
+                    "from_node_hex": from_node_hex,
+                    "packet_id": row["id"],
+                }
+            )
+    return readings, samples
+
+
+@api_bp.route("/paxcounter/profiles/<path:mac>/history", methods=["GET"])
+def api_paxcounter_profile_history(mac: str):
+    """
+    RSSI samples and presence buckets over time for one PAX ID.
+
+    Query params:
+        hours: lookback window (1–168, default 24)
+        limit: max PAXCOUNTER packets to scan (1–5000, default 2000)
+        bucket_minutes: presence bucket size (1–60, default 15)
+    """
+    try:
+        from ..database.pax_profile_repository import PaxProfileRepository
+        from ..utils.paxcount_decode import build_sighting_history, normalize_profile_id
+
+        normalized = normalize_profile_id(mac)
+        if not normalized:
+            return jsonify({"error": "Invalid MAC / ID"}), 400
+
+        hours = request.args.get("hours", 24, type=int)
+        hours = min(max(hours, 1), 168)
+        limit = request.args.get("limit", 2000, type=int)
+        limit = min(max(limit, 1), 5000)
+        bucket_minutes = request.args.get("bucket_minutes", 15, type=int)
+        bucket_minutes = min(max(bucket_minutes, 1), 60)
+
+        profile = PaxProfileRepository.get_profile(normalized)
+        _readings, samples = _collect_pax_profile_sightings(
+            normalized, hours=hours, limit=limit
+        )
+        history = build_sighting_history(
+            samples,
+            hours=hours,
+            bucket_minutes=bucket_minutes,
+        )
+
+        return safe_jsonify(
+            {
+                "id": normalized,
+                "profile": profile,
+                "hours_analyzed": hours,
+                "bucket_minutes": bucket_minutes,
+                "samples": history["samples"],
+                "presence": history["presence"],
+                "summary": history["summary"],
+            }
+        )
+    except Exception as e:
+        logger.error(f"Error getting pax profile history: {e}", exc_info=True)
+        return jsonify({"error": str(e)}), 500
+
+
 @api_bp.route("/paxcounter/profiles/<path:mac>", methods=["GET"])
 def api_paxcounter_profile_get(mac: str):
     """Get one profile plus live sighting stats for the given ID."""
@@ -3550,7 +3671,6 @@ def api_paxcounter_profile_get(mac: str):
         from ..utils.paxcount_decode import (
             aggregate_mac_hits,
             build_id_directory,
-            decode_paxcount_payload,
             normalize_profile_id,
         )
 
@@ -3564,50 +3684,9 @@ def api_paxcounter_profile_get(mac: str):
         limit = min(max(limit, 1), 5000)
 
         profile = PaxProfileRepository.get_profile(normalized)
-
-        conn = get_db_connection()
-        cursor = conn.cursor()
-        cutoff_time = time.time() - (hours * 3600)
-        cursor.execute(
-            """
-            SELECT timestamp, from_node_id, raw_payload
-            FROM packet_history
-            WHERE portnum = 34 AND timestamp > ?
-            ORDER BY timestamp DESC
-            LIMIT ?
-            """,
-            (cutoff_time, limit),
+        readings, _samples = _collect_pax_profile_sightings(
+            normalized, hours=hours, limit=limit
         )
-        rows = cursor.fetchall()
-        conn.close()
-
-        def _sighting_matches(s: dict) -> bool:
-            if s.get("stable_id") == normalized or s.get("mac") == normalized:
-                return True
-            if normalized.startswith("fp:"):
-                fp = s.get("fingerprint")
-                return bool(fp) and f"fp:{fp}" == normalized
-            return False
-
-        readings: list[dict] = []
-        for row in rows:
-            decoded = decode_paxcount_payload(row["raw_payload"]) if row["raw_payload"] else None
-            if not decoded:
-                continue
-            sightings = [
-                s for s in (decoded.get("sightings") or []) if _sighting_matches(s)
-            ]
-            if not sightings:
-                continue
-            from_node_id = row["from_node_id"]
-            readings.append(
-                {
-                    "timestamp": row["timestamp"],
-                    "from_node_id": from_node_id,
-                    "from_node_hex": f"!{from_node_id:08x}" if from_node_id else None,
-                    "sightings": sightings,
-                }
-            )
 
         mac_hits = aggregate_mac_hits(readings, limit=50)
         directory = build_id_directory(

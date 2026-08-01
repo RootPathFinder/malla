@@ -9,6 +9,7 @@ with a vendored protobuf.
 
 from __future__ import annotations
 
+import time
 from collections import Counter
 from typing import Any
 
@@ -107,6 +108,147 @@ def normalize_profile_id(value: str | None) -> str | None:
             if fp:
                 return f"fp:{fp}"
     return format_mac(text)
+
+
+def sighting_matches_profile(sighting: dict[str, Any] | None, profile_id: str | None) -> bool:
+    """Return True when a decoded sighting belongs to the given profile/stable id."""
+    if not sighting or not profile_id:
+        return False
+    normalized = normalize_profile_id(profile_id)
+    if not normalized:
+        return False
+    if sighting.get("stable_id") == normalized or sighting.get("mac") == normalized:
+        return True
+    if normalized.startswith("fp:"):
+        fp = format_fingerprint(sighting.get("fingerprint"))
+        return bool(fp) and f"fp:{fp}" == normalized
+    return False
+
+
+def build_sighting_history(
+    samples: list[dict[str, Any]] | None,
+    *,
+    hours: int = 24,
+    bucket_minutes: int = 15,
+    now: float | None = None,
+    present_within_seconds: float = 900.0,
+) -> dict[str, Any]:
+    """
+    Build RSSI samples + presence buckets for a single stable id.
+
+    ``samples`` items should include at least ``timestamp`` and optionally
+    ``rssi``, ``kind``, ``mac``, ``fingerprint``, node fields, ``packet_id``.
+    """
+    hours = max(1, int(hours or 24))
+    bucket_minutes = max(1, min(int(bucket_minutes or 15), 60))
+    end_ts = float(now if now is not None else time.time())
+    start_ts = end_ts - (hours * 3600)
+    bucket_secs = bucket_minutes * 60
+
+    cleaned: list[dict[str, Any]] = []
+    for raw in samples or []:
+        if not isinstance(raw, dict):
+            continue
+        ts_raw = raw.get("timestamp")
+        if ts_raw is None:
+            continue
+        try:
+            ts = float(ts_raw)
+        except (TypeError, ValueError):
+            continue
+        if ts < start_ts or ts > end_ts + 1:
+            continue
+        rssi_val = raw.get("rssi")
+        rssi_i: int | None
+        if rssi_val is None:
+            rssi_i = None
+        else:
+            try:
+                rssi_i = int(rssi_val)
+            except (TypeError, ValueError):
+                rssi_i = None
+        cleaned.append(
+            {
+                "timestamp": ts,
+                "rssi": rssi_i,
+                "kind": raw.get("kind"),
+                "mac": format_mac(raw.get("mac")) or raw.get("mac"),
+                "fingerprint": format_fingerprint(raw.get("fingerprint")),
+                "stable_id": raw.get("stable_id"),
+                "from_node_id": raw.get("from_node_id"),
+                "from_node_hex": raw.get("from_node_hex"),
+                "packet_id": raw.get("packet_id"),
+            }
+        )
+
+    cleaned.sort(key=lambda s: s["timestamp"])
+
+    # Align buckets to wall-clock multiples of bucket_secs ending at end_ts.
+    bucket_count = max(1, int((hours * 3600 + bucket_secs - 1) // bucket_secs))
+    first_bucket_start = end_ts - (bucket_count * bucket_secs)
+    buckets: list[dict[str, Any]] = []
+    for i in range(bucket_count):
+        b_start = first_bucket_start + (i * bucket_secs)
+        b_end = b_start + bucket_secs
+        buckets.append(
+            {
+                "start": b_start,
+                "end": b_end,
+                "present": False,
+                "hits": 0,
+                "best_rssi": None,
+                "avg_rssi": None,
+                "_rssi_sum": 0,
+                "_rssi_n": 0,
+            }
+        )
+
+    for sample in cleaned:
+        ts = sample["timestamp"]
+        idx = int((ts - first_bucket_start) // bucket_secs)
+        if idx < 0 or idx >= len(buckets):
+            continue
+        bucket = buckets[idx]
+        bucket["present"] = True
+        bucket["hits"] += 1
+        rssi_i = sample.get("rssi")
+        if rssi_i is not None:
+            prev = bucket["best_rssi"]
+            if prev is None or rssi_i > prev:
+                bucket["best_rssi"] = rssi_i
+            bucket["_rssi_sum"] += rssi_i
+            bucket["_rssi_n"] += 1
+
+    for bucket in buckets:
+        n = bucket.pop("_rssi_n")
+        total = bucket.pop("_rssi_sum")
+        bucket["avg_rssi"] = round(total / n, 1) if n else None
+
+    rssi_values = [s["rssi"] for s in cleaned if s.get("rssi") is not None]
+    first_seen = cleaned[0]["timestamp"] if cleaned else None
+    last_seen = cleaned[-1]["timestamp"] if cleaned else None
+    present_now = bool(
+        last_seen is not None and (end_ts - last_seen) <= present_within_seconds
+    )
+
+    return {
+        "samples": cleaned,
+        "presence": buckets,
+        "summary": {
+            "hit_count": len(cleaned),
+            "best_rssi": max(rssi_values) if rssi_values else None,
+            "avg_rssi": round(sum(rssi_values) / len(rssi_values), 1) if rssi_values else None,
+            "first_seen": first_seen,
+            "last_seen": last_seen,
+            "present_now": present_now,
+            "present_buckets": sum(1 for b in buckets if b["present"]),
+            "total_buckets": len(buckets),
+            "bucket_minutes": bucket_minutes,
+            "hours": hours,
+            "window_start": start_ts,
+            "window_end": end_ts,
+        },
+    }
 
 
 def _kind_name(kind: int) -> str:

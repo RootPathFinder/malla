@@ -771,7 +771,9 @@
                         : `<span class="text-muted">—</span>`}
                 </td>
                 <td>
-                    <code class="small">${escapeHtml(id)}</code>
+                    <a href="/paxcounter/id/${encodeURIComponent(id)}" onclick="event.stopPropagation()" class="text-decoration-none">
+                        <code class="small">${escapeHtml(id)}</code>
+                    </a>
                     ${row.fingerprint ? `<div class="text-muted" style="font-size:0.7rem">fp ${escapeHtml(row.fingerprint)}</div>` : ''}
                 </td>
                 <td>${kindBadges(row.kinds)}</td>
@@ -827,6 +829,10 @@
                           maxlength="500" placeholder="Optional notes">${escapeHtml(row.notes || '')}</textarea>
             </div>
             <div class="d-flex flex-wrap gap-2">
+                <a class="btn btn-outline-primary btn-sm"
+                   href="/paxcounter/id/${encodeURIComponent(id)}">
+                    <i class="bi bi-graph-up"></i> Status
+                </a>
                 <button type="button" class="btn btn-primary btn-sm" onclick="saveSelectedProfile()">
                     <i class="bi bi-save"></i> Save
                 </button>

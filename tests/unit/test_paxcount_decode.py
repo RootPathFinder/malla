@@ -7,10 +7,12 @@ import pytest
 from malla.utils.paxcount_decode import (
     aggregate_mac_hits,
     build_id_directory,
+    build_sighting_history,
     decode_paxcount_payload,
     format_fingerprint,
     format_mac,
     normalize_profile_id,
+    sighting_matches_profile,
     stable_sighting_id,
 )
 from malla.vendor.meshtastic import paxcount_pb2
@@ -242,3 +244,49 @@ def test_build_id_directory_groups_rotating_macs_by_fingerprint():
     assert row["nickname"] == "Dave iPhone"
     assert row["has_profile"] is True
     assert row["best_rssi"] == -60
+
+
+@pytest.mark.unit
+def test_sighting_matches_profile_fingerprint_and_mac():
+    assert sighting_matches_profile(
+        {"mac": "11:22:33:44:55:66", "fingerprint": "abcd", "stable_id": "fp:abcd"},
+        "fp:abcd",
+    )
+    assert sighting_matches_profile(
+        {"mac": "aa:bb:cc:dd:ee:ff", "fingerprint": "abcd"},
+        "fp:abcd",
+    )
+    assert sighting_matches_profile(
+        {"mac": "aa:bb:cc:dd:ee:ff", "stable_id": "aa:bb:cc:dd:ee:ff"},
+        "AA:BB:CC:DD:EE:FF",
+    )
+    assert not sighting_matches_profile(
+        {"mac": "aa:bb:cc:dd:ee:ff", "fingerprint": "1234"},
+        "fp:abcd",
+    )
+
+
+@pytest.mark.unit
+def test_build_sighting_history_rssi_and_presence_buckets():
+    now = 1_700_000_000.0
+    samples = [
+        {"timestamp": now - 3500, "rssi": -80, "kind": "ble_apple", "mac": "11:22:33:44:55:66", "fingerprint": "abcd"},
+        {"timestamp": now - 3400, "rssi": -60, "kind": "ble_apple", "mac": "aa:bb:cc:dd:ee:ff", "fingerprint": "abcd"},
+        {"timestamp": now - 100, "rssi": -55, "kind": "ble_apple", "mac": "11:22:33:44:55:66", "fingerprint": "abcd"},
+    ]
+    history = build_sighting_history(
+        samples,
+        hours=1,
+        bucket_minutes=15,
+        now=now,
+        present_within_seconds=900,
+    )
+    assert history["summary"]["hit_count"] == 3
+    assert history["summary"]["best_rssi"] == -55
+    assert history["summary"]["avg_rssi"] == round((-80 + -60 + -55) / 3, 1)
+    assert history["summary"]["present_now"] is True
+    assert history["summary"]["present_buckets"] >= 2
+    assert len(history["presence"]) == 4  # 60 / 15
+    assert len(history["samples"]) == 3
+    # Samples sorted ascending
+    assert history["samples"][0]["timestamp"] <= history["samples"][-1]["timestamp"]

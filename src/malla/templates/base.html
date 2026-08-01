@@ -429,7 +429,7 @@
 
                     <!-- Telemetry dropdown (Sensors, Paxcounter, Weather, Power) -->
                     <li class="nav-item dropdown">
-                        {% set telemetry_active = request.endpoint in ['main.sensor_dashboard', 'main.paxcounter', 'main.weather_map', 'battery.battery_analytics'] %}
+                        {% set telemetry_active = request.endpoint in ['main.sensor_dashboard', 'main.paxcounter', 'main.pax_id_status', 'main.weather_map', 'battery.battery_analytics'] %}
                         <a class="nav-link dropdown-toggle {{ 'active' if telemetry_active }}" href="#" id="telemetryDropdown" role="button" data-bs-toggle="dropdown">
                             Telemetry
                         </a>
@@ -440,7 +440,7 @@
                                 </a>
                             </li>
                             <li>
-                                <a class="dropdown-item {{ 'active' if request.endpoint == 'main.paxcounter' }}" href="{{ url_for('main.paxcounter') }}">
+                                <a class="dropdown-item {{ 'active' if request.endpoint in ['main.paxcounter', 'main.pax_id_status'] }}" href="{{ url_for('main.paxcounter') }}">
                                     <i class="bi bi-person-walking"></i> Paxcounter
                                 </a>
                             </li>
