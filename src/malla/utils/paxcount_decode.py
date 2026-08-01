@@ -55,9 +55,10 @@ def format_fingerprint(
     if fingerprint is None or fingerprint == "":
         return None
     if isinstance(fingerprint, str):
-        cleaned = fingerprint.replace(":", "").replace("-", "").strip().lower()
+        cleaned = fingerprint.strip().lower()
         if cleaned.startswith("fp:"):
             cleaned = cleaned[3:]
+        cleaned = cleaned.replace(":", "").replace("-", "")
         if not cleaned or len(cleaned) > 8 or len(cleaned) % 2:
             return None
         try:
