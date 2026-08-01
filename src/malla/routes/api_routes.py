@@ -3553,7 +3553,10 @@ def _collect_pax_profile_sightings(
     Returns ``(readings, samples)`` where readings group sightings by packet
     and samples are flat per-sighting rows for history charts.
     """
-    from ..utils.paxcount_decode import decode_paxcount_payload, sighting_matches_profile
+    from ..utils.paxcount_decode import (
+        decode_paxcount_payload,
+        sighting_matches_profile,
+    )
 
     conn = get_db_connection()
     cursor = conn.cursor()
