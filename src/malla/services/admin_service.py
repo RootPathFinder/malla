@@ -3440,16 +3440,11 @@ class AdminService:
             }
 
         if module_config.HasField("detection_sensor"):
-            result["detectionsensor"] = {
-                "enabled": module_config.detection_sensor.enabled,
-                "minimum_broadcast_secs": module_config.detection_sensor.minimum_broadcast_secs,
-                "state_broadcast_secs": module_config.detection_sensor.state_broadcast_secs,
-                "send_bell": module_config.detection_sensor.send_bell,
-                "name": module_config.detection_sensor.name,
-                "monitor_pin": module_config.detection_sensor.monitor_pin,
-                "detection_trigger_type": module_config.detection_sensor.detection_trigger_type,
-                "use_pullup": module_config.detection_sensor.use_pullup,
-            }
+            from ..utils.detection_sensor_config import detection_sensor_to_dict
+
+            result["detectionsensor"] = detection_sensor_to_dict(
+                module_config.detection_sensor
+            )
 
         if module_config.HasField("paxcounter"):
             result["paxcounter"] = {

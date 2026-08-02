@@ -1241,9 +1241,16 @@ class SerialPublisher:
         module_attr = module_map[module_type_lower]
         module_obj = getattr(module_config, module_attr)
 
-        for key, value in module_data.items():
-            if hasattr(module_obj, key):
-                setattr(module_obj, key, value)
+        if module_type_lower == "detectionsensor":
+            from ..utils.detection_sensor_config import (
+                apply_detection_sensor_module_data,
+            )
+
+            apply_detection_sensor_module_data(module_config, module_data)
+        else:
+            for key, value in module_data.items():
+                if hasattr(module_obj, key):
+                    setattr(module_obj, key, value)
 
         admin_msg.set_module_config.CopyFrom(module_config)
 

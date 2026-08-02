@@ -1198,17 +1198,33 @@ DETECTIONSENSOR_MODULE_FIELDS = [
         description="Enable detection sensor module",
     ),
     FieldMetadata(
+        name="minimum_detect_secs",
+        label="Detection Dwell",
+        field_type=FieldType.NUMBER,
+        description=(
+            "Seconds the monitor pin must stay continuously active before a "
+            "detection is accepted. 0 = immediate (legacy). Useful for filtering "
+            "brief radar/PIR glitches (custom firmware)."
+        ),
+        unit="seconds",
+        min_value=0,
+        max_value=3600,
+    ),
+    FieldMetadata(
         name="minimum_broadcast_secs",
         label="Minimum Broadcast Interval",
         field_type=FieldType.NUMBER,
-        description="Minimum seconds between broadcasts",
+        description="Minimum seconds between detection alert broadcasts",
         unit="seconds",
     ),
     FieldMetadata(
         name="state_broadcast_secs",
         label="State Broadcast Interval",
         field_type=FieldType.NUMBER,
-        description="Seconds between state broadcasts",
+        description=(
+            "Seconds between raw pin state broadcasts (heartbeat). "
+            "Reports the pin even when dwell has not confirmed a trip. 0 disables."
+        ),
         unit="seconds",
     ),
     FieldMetadata(
