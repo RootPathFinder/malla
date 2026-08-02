@@ -624,10 +624,13 @@
 
         if (reading.sensor_type === 'detection') {
             if (data.detection_name) {
-                const kindLabel = data.event_kind === 'cleared'
-                    ? 'cleared'
-                    : (data.event_kind === 'state' ? 'state' : 'detected');
-                metrics.push(`<span class="metric-pill"><span class="label">Event:</span><span class="value">${escapeHtml(data.detection_name)} ${kindLabel}</span></span>`);
+                const kindLabel = data.event_kind === 'complete'
+                    ? ''
+                    : (data.event_kind === 'cleared'
+                        ? 'cleared'
+                        : (data.event_kind === 'state' ? 'state' : (data.event_kind === 'trip' ? 'in progress' : 'detected')));
+                const kindSuffix = kindLabel ? ` ${kindLabel}` : '';
+                metrics.push(`<span class="metric-pill"><span class="label">Event:</span><span class="value">${escapeHtml(data.detection_name)}${kindSuffix}</span></span>`);
             }
             const fmtMs = (value) => {
                 const ms = Number(value);
@@ -637,7 +640,7 @@
                 if (Math.abs(secs - Math.round(secs)) < 0.05) return `${Math.round(secs)}s`;
                 return `${secs.toFixed(1)}s`;
             };
-            if (data.event_kind === 'cleared') {
+            if (data.event_kind === 'cleared' || data.event_kind === 'complete') {
                 const activeLabel = fmtMs(data.active_ms);
                 const burstLabel = fmtMs(data.burst_ms);
                 if (activeLabel) metrics.push(`<span class="metric-pill"><span class="label">Active:</span><span class="value">${activeLabel}</span></span>`);

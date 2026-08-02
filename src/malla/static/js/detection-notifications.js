@@ -324,6 +324,10 @@
 
         for (const event of fresh) {
             if (!eventMatches(event, subscriptions)) continue;
+            // Immediate motion alert only. Cleared/complete carry duration for the log
+            // (trip+cleared are joined server-side into one record when the burst ends).
+            const kind = event.event_kind || 'trip';
+            if (kind !== 'trip') continue;
             const sensor = event.detection_name || 'Sensor';
             const longName = (event.long_name || '').trim();
             const shortName = (event.short_name || '').trim();
@@ -334,25 +338,15 @@
                 else if (!String(node).includes(shortName)) node = `${node} ${shortName}`;
             }
             let body = `${node} · ${sensor}`;
-            const kind = event.event_kind || 'trip';
             const dwellLabel = formatDurationMs(event.dwell_ms);
             const burstLabel = formatDurationMs(event.burst_ms);
-            const activeLabel = formatDurationMs(event.active_ms);
-            if (kind === 'cleared') {
-                if (activeLabel) body += ` · active ${activeLabel}`;
-                if (burstLabel) body += ` · burst ${burstLabel}`;
-            } else if (burstLabel) {
+            if (burstLabel) {
                 body += ` · burst ${burstLabel}`;
             } else if (dwellLabel) {
                 body += ` · dwell ${dwellLabel}`;
             }
-            const title = kind === 'cleared'
-                ? `${sensor} cleared`
-                : kind === 'state'
-                    ? `${sensor} state`
-                    : `${sensor} detection`;
             await showNotification(
-                title,
+                `${sensor} detection`,
                 body,
                 {
                     id: event.id,

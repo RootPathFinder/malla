@@ -25,6 +25,7 @@ from ..services.meshtastic_service import MeshtasticService
 from ..services.node_service import NodeService
 from ..services.traceroute_service import TracerouteService
 from ..utils.cache_utils import cache_response
+from ..utils.detection_events import join_detection_events
 from ..utils.detection_payload import parse_detection_payload
 from ..utils.export import (
     export_analytics_to_json,
@@ -3046,6 +3047,8 @@ def api_detection_sensors():
         hours = min(max(hours, 1), 168)  # Clamp between 1 hour and 7 days
         limit = request.args.get("limit", 500, type=int)
         limit = min(max(limit, 1), 2000)
+        # Fetch extra raw packets so trip+cleared pairs survive LIMIT before join.
+        fetch_limit = min(limit * 2, 2000)
         node_id_filter = request.args.get("node_id", None)
 
         conn = get_db_connection()
@@ -3070,7 +3073,7 @@ def api_detection_sensors():
                 ORDER BY ph.timestamp DESC
                 LIMIT ?
                 """,
-                (detection_portnum, cutoff_time, node_id_int, limit),
+                (detection_portnum, cutoff_time, node_id_int, fetch_limit),
             )
         else:
             cursor.execute(
@@ -3084,7 +3087,7 @@ def api_detection_sensors():
                 ORDER BY ph.timestamp DESC
                 LIMIT ?
                 """,
-                (detection_portnum, cutoff_time, limit),
+                (detection_portnum, cutoff_time, fetch_limit),
             )
 
         rows = cursor.fetchall()
@@ -3114,10 +3117,9 @@ def api_detection_sensors():
 
         conn.close()
 
-        # Process events
+        # Process raw packets, then join trip+cleared into one logical event.
         events = []
         nodes_with_detections = set()
-        hourly_counts = {}
 
         for row in rows:
             packet_id = row["id"]
@@ -3141,12 +3143,6 @@ def api_detection_sensors():
 
             node_id_hex = f"!{from_node_id:08x}" if from_node_id else None
             nodes_with_detections.add(from_node_id)
-
-            # Track hourly counts for charts
-            hour_key = datetime.fromtimestamp(timestamp, tz=UTC).strftime(
-                "%Y-%m-%d %H:00"
-            )
-            hourly_counts[hour_key] = hourly_counts.get(hour_key, 0) + 1
 
             ts_iso = datetime.fromtimestamp(timestamp, tz=UTC).isoformat()
             events.append(
@@ -3181,6 +3177,19 @@ def api_detection_sensors():
                 }
             )
 
+        events = join_detection_events(events)[:limit]
+
+        hourly_counts: dict[str, int] = {}
+        for event in events:
+            # Heartbeats are not "detections" for the chart / totals.
+            if event.get("event_kind") == "state":
+                continue
+            ts = event.get("timestamp")
+            if ts is None:
+                continue
+            hour_key = datetime.fromtimestamp(ts, tz=UTC).strftime("%Y-%m-%d %H:00")
+            hourly_counts[hour_key] = hourly_counts.get(hour_key, 0) + 1
+
         # Get unique sensor nodes with their info
         sensor_nodes = []
         if nodes_with_detections:
@@ -3205,7 +3214,11 @@ def api_detection_sensors():
                 }
             for node_id in nodes_with_detections:
                 node_hex = f"!{node_id:08x}" if node_id else None
-                event_count = sum(1 for e in events if e["from_node_id"] == node_id)
+                event_count = sum(
+                    1
+                    for e in events
+                    if e["from_node_id"] == node_id and e.get("event_kind") != "state"
+                )
                 identity = node_identity.get(node_id, {})
                 long_name = identity.get("long_name")
                 short_name = identity.get("short_name") or short_names.get(node_id)
@@ -3238,10 +3251,11 @@ def api_detection_sensors():
             {"hour": k, "count": v} for k, v in sorted(hourly_counts.items())
         ]
 
+        detection_event_count = sum(1 for e in events if e.get("event_kind") != "state")
         return safe_jsonify(
             {
                 "events": events,
-                "total_events": len(events),
+                "total_events": detection_event_count,
                 "unique_sensors": len(nodes_with_detections),
                 "sensor_nodes": sensor_nodes,
                 "hourly_chart": hourly_chart,
