@@ -172,10 +172,11 @@
                     <span class="badge bg-secondary" id="notifyPermissionBadge">Permission: unknown</span>
                 </div>
                 <div class="card-body">
-                    <p class="text-muted small">
-                        Get browser notifications when subscribed detection sensors trip.
-                        Works in this browser tab and, on supporting mobile browsers, when the app is installed to your home screen.
+                    <p class="text-muted small mb-2">
+                        Get alerts when subscribed detection sensors trip. Supporting browsers can show system notifications;
+                        otherwise Malla shows in-app alerts while this tab stays open.
                     </p>
+                    <div id="notifyCapabilityHint" class="alert alert-info py-2 small d-none" role="note"></div>
 
                     <div class="form-check form-switch mb-3">
                         <input class="form-check-input" type="checkbox" id="pref-detection-notifications-enabled">
@@ -208,7 +209,8 @@
                         <div class="text-muted small text-center py-3">Loading sensors…</div>
                     </div>
                     <div class="form-text mt-2">
-                        Select specific node + sensor name pairs. On iPhone/iPad, add Malla to your Home Screen for notification support.
+                        Select specific node + sensor name pairs.
+                        On iPhone/iPad, Chrome cannot show system notifications — use Safari → Share → Add to Home Screen for background alerts.
                     </div>
                 </div>
             </div>
@@ -267,19 +269,57 @@
         el.textContent = message;
     }
 
+    function getNotifyCapability() {
+        if (window.DetectionNotifications && typeof DetectionNotifications.getCapability === 'function') {
+            return DetectionNotifications.getCapability();
+        }
+        const systemAvailable = typeof Notification !== 'undefined';
+        return {
+            mode: systemAvailable ? 'system' : 'in_app',
+            systemAvailable,
+            permission: systemAvailable ? Notification.permission : 'unsupported',
+            ios: false,
+            iosAltBrowser: false,
+            standalone: false,
+            guidance: systemAvailable ? null : 'This browser cannot show system notifications. In-app alerts still work while this tab stays open.',
+        };
+    }
+
+    function updateCapabilityHint() {
+        const hint = document.getElementById('notifyCapabilityHint');
+        if (!hint) return;
+        const cap = getNotifyCapability();
+        if (cap.guidance) {
+            hint.textContent = cap.guidance;
+            hint.classList.remove('d-none');
+            hint.className = 'alert alert-info py-2 small';
+        } else {
+            hint.textContent = '';
+            hint.classList.add('d-none');
+        }
+    }
+
     function updatePermissionBadge() {
         const badge = document.getElementById('notifyPermissionBadge');
-        if (!badge || typeof Notification === 'undefined') {
-            if (badge) badge.textContent = 'Unsupported';
+        if (!badge) return;
+        const cap = getNotifyCapability();
+        if (!cap.systemAvailable) {
+            badge.textContent = 'In-app alerts';
+            badge.className = 'badge bg-info text-dark';
             return;
         }
-        const perm = Notification.permission;
+        const perm = cap.permission;
         badge.textContent = 'Permission: ' + perm;
         badge.className = 'badge ' + (
             perm === 'granted' ? 'bg-success'
             : perm === 'denied' ? 'bg-danger'
             : 'bg-secondary'
         );
+    }
+
+    function normalizePermissionResult(result) {
+        if (result && typeof result === 'object') return result;
+        return { status: result || 'unsupported', mode: 'in_app', guidance: null };
     }
 
     async function saveEnabled(enabled) {
@@ -405,6 +445,7 @@
 
     async function initDetectionNotifyUI() {
         updatePermissionBadge();
+        updateCapabilityHint();
         // Load prefs
         try {
             const res = await fetch('/api/preferences');
@@ -418,40 +459,72 @@
 
         document.getElementById('pref-detection-notifications-enabled')?.addEventListener('change', async (e) => {
             const enabled = e.target.checked;
-            if (enabled && typeof Notification !== 'undefined' && Notification.permission !== 'granted') {
-                const perm = window.DetectionNotifications
-                    ? await DetectionNotifications.requestPermission()
-                    : await Notification.requestPermission();
+            const cap = getNotifyCapability();
+            let statusType = 'success';
+            let statusMsg = enabled ? 'Notifications enabled' : 'Notifications disabled';
+
+            if (enabled && cap.systemAvailable && Notification.permission !== 'granted') {
+                const result = normalizePermissionResult(
+                    window.DetectionNotifications
+                        ? await DetectionNotifications.requestPermission()
+                        : await Notification.requestPermission()
+                );
                 updatePermissionBadge();
-                if (perm !== 'granted') {
-                    e.target.checked = false;
-                    await saveEnabled(false);
-                    showNotifyStatus('warning', 'Notification permission is required.');
-                    return;
+                updateCapabilityHint();
+                if (result.status === 'granted') {
+                    statusMsg = 'Notifications enabled';
+                } else if (result.status === 'denied') {
+                    statusType = 'warning';
+                    statusMsg = 'System notifications are blocked. In-app alerts will still show while this tab stays open.';
+                } else {
+                    statusType = 'info';
+                    statusMsg = 'Using in-app alerts until notification permission is granted.';
                 }
+            } else if (enabled && !cap.systemAvailable) {
+                statusType = 'info';
+                statusMsg = cap.guidance || 'In-app detection alerts enabled (keep this tab open).';
+            } else if (enabled) {
+                statusMsg = 'Notifications enabled';
             }
+
             await saveEnabled(enabled);
-            showNotifyStatus('success', enabled ? 'Notifications enabled' : 'Notifications disabled');
+            showNotifyStatus(statusType, statusMsg);
         });
 
         document.getElementById('notifyRequestPermissionBtn')?.addEventListener('click', async () => {
-            const perm = window.DetectionNotifications
-                ? await DetectionNotifications.requestPermission()
-                : (typeof Notification !== 'undefined' ? await Notification.requestPermission() : 'unsupported');
+            const result = normalizePermissionResult(
+                window.DetectionNotifications
+                    ? await DetectionNotifications.requestPermission()
+                    : (typeof Notification !== 'undefined' ? await Notification.requestPermission() : 'unsupported')
+            );
             updatePermissionBadge();
-            if (perm === 'granted') showNotifyStatus('success', 'Notifications allowed');
-            else if (perm === 'denied') showNotifyStatus('danger', 'Notifications blocked by the browser. Enable them in site settings.');
-            else if (perm === 'unsupported') showNotifyStatus('warning', 'This browser does not support notifications.');
-            else showNotifyStatus('info', 'Permission: ' + perm);
+            updateCapabilityHint();
+            if (result.status === 'granted') {
+                showNotifyStatus('success', 'Notifications allowed');
+            } else if (result.status === 'denied') {
+                showNotifyStatus(
+                    'danger',
+                    'System notifications are blocked. Enable them in site settings, or use in-app alerts while this tab is open.'
+                );
+            } else if (result.status === 'unsupported') {
+                showNotifyStatus(
+                    'warning',
+                    result.guidance ||
+                    'This browser cannot show system notifications. Use Safari → Add to Home Screen on iPhone for background alerts, or enable in-app alerts here.'
+                );
+            } else {
+                showNotifyStatus('info', 'Permission: ' + result.status);
+            }
         });
 
         document.getElementById('notifyTestBtn')?.addEventListener('click', async () => {
-            if (typeof Notification !== 'undefined' && Notification.permission !== 'granted') {
-                showNotifyStatus('warning', 'Allow notifications first.');
-                return;
-            }
             if (window.DetectionNotifications) await DetectionNotifications.sendTestNotification();
-            showNotifyStatus('success', 'Test notification sent');
+            const cap = getNotifyCapability();
+            if (cap.systemAvailable && Notification.permission === 'granted') {
+                showNotifyStatus('success', 'Test notification sent');
+            } else {
+                showNotifyStatus('success', 'Test in-app alert shown (keep this tab open for live alerts)');
+            }
         });
 
         document.getElementById('notifyRefreshCatalogBtn')?.addEventListener('click', loadCatalog);

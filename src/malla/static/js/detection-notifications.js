@@ -1,7 +1,13 @@
 /**
  * Browser notifications for detection-sensor alerts.
  * Polls recent DETECTION_SENSOR_APP packets and notifies for subscribed node/sensor pairs.
- * Uses the Notification API + service worker showNotification for mobile/background tabs.
+ *
+ * Modes:
+ * - system: Notification API (+ service worker) when available
+ * - in_app: toast banners while the tab is open (Chrome/Firefox on iOS, etc.)
+ *
+ * On iOS, system notifications require Safari with the site added to the Home Screen
+ * (iOS 16.4+). Chrome/Firefox on iOS cannot show Web Notifications.
  */
 (function () {
     'use strict';
@@ -11,13 +17,88 @@
     const STORAGE_LAST_ID = 'malla-detection-notify-last-id';
     const POLL_MS = 15000;
     const LOOKBACK_HOURS = 6;
+    const TOAST_MS = 8000;
 
     let pollTimer = null;
     let started = false;
     let swRegistration = null;
+    let toastRoot = null;
 
     function isAuthenticated() {
         return document.getElementById('userDropdown') !== null;
+    }
+
+    function isIOS() {
+        const ua = navigator.userAgent || '';
+        if (/iPad|iPhone|iPod/.test(ua)) return true;
+        // iPadOS 13+ can report as MacIntel with touch
+        return navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1;
+    }
+
+    function isIOSChromeOrFirefox() {
+        if (!isIOS()) return false;
+        const ua = navigator.userAgent || '';
+        // Chrome iOS: CriOS; Firefox iOS: FxiOS; Edge iOS: EdgiOS
+        return /CriOS|FxiOS|EdgiOS|OPiOS/.test(ua);
+    }
+
+    function isStandalonePwa() {
+        if (window.matchMedia && window.matchMedia('(display-mode: standalone)').matches) {
+            return true;
+        }
+        // iOS Safari home-screen
+        return !!(navigator.standalone);
+    }
+
+    function supportsSystemNotifications() {
+        return typeof Notification !== 'undefined';
+    }
+
+    /**
+     * @returns {{
+     *   mode: 'system'|'in_app',
+     *   systemAvailable: boolean,
+     *   permission: string,
+     *   ios: boolean,
+     *   iosAltBrowser: boolean,
+     *   standalone: boolean,
+     *   guidance: string|null
+     * }}
+     */
+    function getCapability() {
+        const ios = isIOS();
+        const iosAltBrowser = isIOSChromeOrFirefox();
+        const standalone = isStandalonePwa();
+        const systemAvailable = supportsSystemNotifications();
+        const permission = systemAvailable ? Notification.permission : 'unsupported';
+
+        let guidance = null;
+        if (ios && iosAltBrowser) {
+            guidance =
+                'Chrome and other App Store browsers on iPhone/iPad cannot show system notifications. ' +
+                'Open this site in Safari, then Share → Add to Home Screen. Alerts work from the home-screen app. ' +
+                'Meanwhile you can enable in-app alerts while this tab stays open.';
+        } else if (ios && !systemAvailable && !standalone) {
+            guidance =
+                'On iPhone/iPad, open this site in Safari and use Share → Add to Home Screen, then open Malla from your home screen to allow system notifications. ' +
+                'You can still enable in-app alerts while this tab stays open.';
+        } else if (ios && systemAvailable && !standalone && permission !== 'granted') {
+            guidance =
+                'For background alerts on iPhone/iPad, add Malla to your Home Screen (Safari → Share → Add to Home Screen) and open it from there.';
+        } else if (!systemAvailable) {
+            guidance =
+                'This browser cannot show system notifications. You can still enable in-app alerts while this tab stays open.';
+        }
+
+        return {
+            mode: systemAvailable ? 'system' : 'in_app',
+            systemAvailable,
+            permission,
+            ios,
+            iosAltBrowser,
+            standalone,
+            guidance,
+        };
     }
 
     function parseStored(value, fallback) {
@@ -81,6 +162,67 @@
         });
     }
 
+    function ensureToastRoot() {
+        if (toastRoot && document.body.contains(toastRoot)) return toastRoot;
+        toastRoot = document.createElement('div');
+        toastRoot.id = 'malla-detection-toast-root';
+        toastRoot.setAttribute('aria-live', 'polite');
+        toastRoot.setAttribute('aria-relevant', 'additions');
+        Object.assign(toastRoot.style, {
+            position: 'fixed',
+            left: '50%',
+            bottom: '1.25rem',
+            transform: 'translateX(-50%)',
+            zIndex: '1080',
+            display: 'flex',
+            flexDirection: 'column',
+            gap: '0.5rem',
+            width: 'min(420px, calc(100vw - 1.5rem))',
+            pointerEvents: 'none',
+        });
+        document.body.appendChild(toastRoot);
+        return toastRoot;
+    }
+
+    function showInAppToast(title, body, data) {
+        const root = ensureToastRoot();
+        const toast = document.createElement('div');
+        toast.className = 'malla-detection-toast';
+        Object.assign(toast.style, {
+            pointerEvents: 'auto',
+            background: 'var(--bs-body-bg, #fff)',
+            color: 'var(--bs-body-color, #212529)',
+            border: '1px solid var(--bs-border-color, #dee2e6)',
+            borderLeft: '4px solid var(--bs-warning, #ffc107)',
+            borderRadius: '0.5rem',
+            boxShadow: '0 0.5rem 1.25rem rgba(0,0,0,0.18)',
+            padding: '0.75rem 0.9rem',
+            cursor: 'pointer',
+        });
+
+        const titleEl = document.createElement('div');
+        titleEl.style.fontWeight = '600';
+        titleEl.textContent = title;
+        const bodyEl = document.createElement('div');
+        bodyEl.style.fontSize = '0.875rem';
+        bodyEl.style.opacity = '0.85';
+        bodyEl.textContent = body || '';
+        toast.appendChild(titleEl);
+        if (body) toast.appendChild(bodyEl);
+
+        const url = data && data.url ? data.url : '/sensor-dashboard';
+        toast.addEventListener('click', () => {
+            window.location.href = url;
+        });
+
+        root.appendChild(toast);
+        window.setTimeout(() => {
+            toast.style.opacity = '0';
+            toast.style.transition = 'opacity 0.25s ease';
+            window.setTimeout(() => toast.remove(), 280);
+        }, TOAST_MS);
+    }
+
     async function ensureServiceWorker() {
         if (!('serviceWorker' in navigator)) return null;
         try {
@@ -103,6 +245,12 @@
             badge: '/static/img/notification-badge.png',
         };
 
+        const cap = getCapability();
+        if (!cap.systemAvailable || (cap.systemAvailable && Notification.permission !== 'granted')) {
+            showInAppToast(title, body, data);
+            return;
+        }
+
         if (swRegistration && swRegistration.active) {
             swRegistration.active.postMessage({
                 type: 'SHOW_NOTIFICATION',
@@ -116,16 +264,18 @@
             return;
         }
 
-        if (typeof Notification !== 'undefined' && Notification.permission === 'granted') {
-            try {
-                // eslint-disable-next-line no-new
-                new Notification(title, options);
-            } catch (e) {
-                // Some mobile browsers require SW showNotification only
-                if (swRegistration) {
+        try {
+            // eslint-disable-next-line no-new
+            new Notification(title, options);
+        } catch (e) {
+            // Some mobile browsers require SW showNotification only
+            if (swRegistration) {
+                try {
                     await swRegistration.showNotification(title, options);
-                }
+                    return;
+                } catch (e2) { /* fall through */ }
             }
+            showInAppToast(title, body, data);
         }
     }
 
@@ -171,22 +321,25 @@
     }
 
     async function start() {
-        if (!isAuthenticated() || typeof Notification === 'undefined') return;
+        if (!isAuthenticated()) return;
         const prefs = await loadPrefs();
         if (!prefs.enabled || !prefs.subscriptions.length) {
             stop();
             return;
         }
-        if (Notification.permission !== 'granted') {
-            stop();
-            return;
+        const cap = getCapability();
+        // System permission required only when we can request it; otherwise in-app mode is fine
+        if (cap.systemAvailable && Notification.permission === 'denied') {
+            // Still allow in-app while tab is open
         }
-        await ensureServiceWorker();
+        if (cap.systemAvailable && Notification.permission === 'granted') {
+            await ensureServiceWorker();
+        }
         if (pollTimer) clearInterval(pollTimer);
         const tick = async () => {
             try {
                 const latest = await loadPrefs();
-                if (!latest.enabled || !latest.subscriptions.length || Notification.permission !== 'granted') {
+                if (!latest.enabled || !latest.subscriptions.length) {
                     stop();
                     return;
                 }
@@ -209,23 +362,43 @@
     }
 
     async function requestPermission() {
-        if (typeof Notification === 'undefined') {
-            return 'unsupported';
+        const cap = getCapability();
+        if (!cap.systemAvailable) {
+            return {
+                status: 'unsupported',
+                mode: 'in_app',
+                guidance: cap.guidance,
+            };
         }
         await ensureServiceWorker();
-        if (Notification.permission === 'granted') return 'granted';
-        if (Notification.permission === 'denied') return 'denied';
+        if (Notification.permission === 'granted') {
+            return { status: 'granted', mode: 'system', guidance: cap.guidance };
+        }
+        if (Notification.permission === 'denied') {
+            return { status: 'denied', mode: 'in_app', guidance: cap.guidance };
+        }
         const result = await Notification.requestPermission();
-        return result;
+        const next = getCapability();
+        return {
+            status: result,
+            mode: result === 'granted' ? 'system' : 'in_app',
+            guidance: next.guidance,
+        };
     }
 
     async function sendTestNotification() {
-        await ensureServiceWorker();
+        const cap = getCapability();
+        if (cap.systemAvailable && Notification.permission === 'granted') {
+            await ensureServiceWorker();
+        }
         await showNotification(
             'Test detection alert',
-            'Browser notifications are working for Malla detection sensors.',
+            cap.systemAvailable && Notification.permission === 'granted'
+                ? 'Browser notifications are working for Malla detection sensors.'
+                : 'In-app alert (tab must stay open). For background alerts on iPhone, use Safari → Add to Home Screen.',
             { url: '/sensor-dashboard', tag: 'detection-test' }
         );
+        return getCapability();
     }
 
     window.DetectionNotifications = {
@@ -234,6 +407,8 @@
         requestPermission,
         sendTestNotification,
         ensureServiceWorker,
+        getCapability,
+        supportsSystemNotifications,
         PREF_ENABLED,
         PREF_SUBSCRIPTIONS,
         isStarted: () => started,
