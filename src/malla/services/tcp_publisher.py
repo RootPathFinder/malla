@@ -2072,9 +2072,11 @@ class TCPPublisher:
             admin_msg.set_module_config.CopyFrom(module_config)
 
         elif module_type_lower == "detectionsensor":
-            for key, value in module_data.items():
-                if hasattr(module_config.detection_sensor, key):
-                    setattr(module_config.detection_sensor, key, value)
+            from ..utils.detection_sensor_config import (
+                apply_detection_sensor_module_data,
+            )
+
+            apply_detection_sensor_module_data(module_config, module_data)
             admin_msg.set_module_config.CopyFrom(module_config)
 
         elif module_type_lower == "paxcounter":
