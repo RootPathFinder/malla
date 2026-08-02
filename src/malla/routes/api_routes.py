@@ -3183,14 +3183,38 @@ def api_detection_sensors():
         sensor_nodes = []
         if nodes_with_detections:
             node_names = get_bulk_node_names(list(nodes_with_detections))
+            # Prefer long/short from event rows so the UI can show a small short suffix
+            node_identity: dict[int, dict[str, str | None]] = {}
+            for event in events:
+                nid = event.get("from_node_id")
+                if nid is None or nid in node_identity:
+                    continue
+                node_identity[nid] = {
+                    "long_name": event.get("long_name"),
+                    "short_name": event.get("short_name"),
+                }
             for node_id in nodes_with_detections:
                 node_hex = f"!{node_id:08x}" if node_id else None
                 event_count = sum(1 for e in events if e["from_node_id"] == node_id)
+                identity = node_identity.get(node_id, {})
+                long_name = identity.get("long_name")
+                short_name = identity.get("short_name")
+                primary = (long_name or short_name or node_names.get(node_id) or node_hex or "Unknown")
+                # Strip " (short)" if bulk display name was used as fallback
+                if (
+                    not long_name
+                    and short_name
+                    and isinstance(primary, str)
+                    and primary.endswith(f"({short_name})")
+                ):
+                    primary = primary[: -(len(short_name) + 3)].strip() or primary
                 sensor_nodes.append(
                     {
                         "node_id": node_id,
                         "node_hex": node_hex,
-                        "name": node_names.get(node_id, node_hex or "Unknown"),
+                        "name": primary,
+                        "long_name": long_name,
+                        "short_name": short_name,
                         "event_count": event_count,
                     }
                 )
