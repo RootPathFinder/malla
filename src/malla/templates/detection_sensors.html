@@ -343,6 +343,15 @@
         return new Date(timestamp * 1000).toLocaleString();
     }
 
+    function formatDwell(dwellMs) {
+        const ms = Number(dwellMs);
+        if (!Number.isFinite(ms) || ms < 0) return '';
+        if (ms < 1000) return `${ms}ms`;
+        const secs = ms / 1000;
+        if (Math.abs(secs - Math.round(secs)) < 0.05) return `${Math.round(secs)}s`;
+        return `${secs.toFixed(1)}s`;
+    }
+
     // Load detection data
     async function loadDetectionData() {
         const hours = document.getElementById('hoursFilter').value;
@@ -472,6 +481,10 @@
                                             ? `<span class="text-muted small fw-normal ms-1">${escapeHtml(event.short_name)}</span>`
                                             : ''}
                                         ${event.detection_name ? `<span class="sensor-badge ms-2">${escapeHtml(event.detection_name)}</span>` : ''}
+                                        ${event.event_kind === 'state' ? `<span class="badge bg-secondary ms-2">state ${event.state}</span>` : ''}
+                                        ${event.dwell_ms != null && Number(event.dwell_ms) > 0
+                                            ? `<span class="badge bg-info text-dark ms-2" title="${escapeHtml(event.detection_text || '')}">dwell ${formatDwell(event.dwell_ms)}</span>`
+                                            : ''}
                                     </h6>
                                     <div class="detection-timestamp">
                                         ${formatRelativeTime(event.timestamp)} &bull; ${formatTimestamp(event.timestamp)}

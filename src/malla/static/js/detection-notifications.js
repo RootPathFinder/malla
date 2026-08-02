@@ -149,16 +149,24 @@
         return Number.isFinite(n) ? n : null;
     }
 
+    function normalizeSensorName(value) {
+        let text = String(value || '').trim();
+        if (!text) return '';
+        text = text.replace(/\s+dwell_ms=\d+\s*$/i, '').trim();
+        text = text.replace(/\s+detected\s*$/i, '').trim();
+        return text || String(value || '').trim();
+    }
+
     function eventMatches(event, subscriptions) {
         if (!subscriptions.length) return false;
         const eventNode = normalizeNodeId(event.from_node_id ?? event.from_node_hex);
-        const sensor = (event.detection_name || '').trim();
+        const sensor = normalizeSensorName(event.detection_name || event.detection_text || '');
         return subscriptions.some((sub) => {
             const subNode = normalizeNodeId(sub.node_id ?? sub.node_hex);
             if (subNode === null || eventNode === null || subNode !== eventNode) return false;
             const subSensor = (sub.sensor_name || '*').trim();
             if (!subSensor || subSensor === '*') return true;
-            return sensor === subSensor;
+            return sensor === normalizeSensorName(subSensor);
         });
     }
 
@@ -315,9 +323,20 @@
                 if (longName) node = `${longName} ${shortName}`;
                 else if (!String(node).includes(shortName)) node = `${node} ${shortName}`;
             }
+            let body = `${node} · ${sensor}`;
+            const dwellMs = event.dwell_ms;
+            if (dwellMs != null && Number(dwellMs) > 0) {
+                const ms = Number(dwellMs);
+                const dwellLabel = ms < 1000
+                    ? `${ms}ms`
+                    : (Math.abs(ms / 1000 - Math.round(ms / 1000)) < 0.05
+                        ? `${Math.round(ms / 1000)}s`
+                        : `${(ms / 1000).toFixed(1)}s`);
+                body += ` · dwell ${dwellLabel}`;
+            }
             await showNotification(
                 `${sensor} detection`,
-                `${node} · ${sensor}`,
+                body,
                 {
                     id: event.id,
                     url: '/sensor-dashboard',

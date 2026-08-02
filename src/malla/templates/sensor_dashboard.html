@@ -555,6 +555,17 @@
             if (data.detection_name) {
                 metrics.push(`<span class="metric-pill"><span class="label">Event:</span><span class="value">${data.detection_name}</span></span>`);
             }
+            if (data.dwell_ms != null && Number(data.dwell_ms) > 0) {
+                const ms = Number(data.dwell_ms);
+                const dwellLabel = ms < 1000
+                    ? `${ms}ms`
+                    : (Math.abs(ms / 1000 - Math.round(ms / 1000)) < 0.05
+                        ? `${Math.round(ms / 1000)}s`
+                        : `${(ms / 1000).toFixed(1)}s`);
+                metrics.push(`<span class="metric-pill"><span class="label">Dwell:</span><span class="value">${dwellLabel}</span></span>`);
+            } else if (data.event_kind === 'state' && data.state != null) {
+                metrics.push(`<span class="metric-pill"><span class="label">State:</span><span class="value">${data.state}</span></span>`);
+            }
         } else if (reading.sensor_type === 'environment') {
             if (data.temperature != null) metrics.push(`<span class="metric-pill"><span class="label">Temp:</span><span class="value">${TemperatureToggle.formatTemperature(data.temperature, 1)}</span></span>`);
             if (data.relative_humidity != null) metrics.push(`<span class="metric-pill"><span class="label">Humidity:</span><span class="value">${data.relative_humidity.toFixed(0)}%</span></span>`);

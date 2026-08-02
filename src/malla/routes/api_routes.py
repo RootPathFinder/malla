@@ -25,6 +25,7 @@ from ..services.meshtastic_service import MeshtasticService
 from ..services.node_service import NodeService
 from ..services.traceroute_service import TracerouteService
 from ..utils.cache_utils import cache_response
+from ..utils.detection_payload import parse_detection_payload
 from ..utils.export import (
     export_analytics_to_json,
     export_nodes_to_csv,
@@ -3135,17 +3136,8 @@ def api_detection_sensors():
             latitude = loc.get("latitude")
             longitude = loc.get("longitude")
 
-            # Parse detection sensor payload if available
-            detection_name = None
-            if raw_payload:
-                try:
-                    # Detection sensor payload is typically just a string
-                    if isinstance(raw_payload, bytes):
-                        detection_name = raw_payload.decode("utf-8", errors="replace")
-                    else:
-                        detection_name = str(raw_payload)
-                except Exception:
-                    detection_name = None
+            parsed = parse_detection_payload(raw_payload)
+            detection_name = parsed["sensor_name"] or parsed["raw_text"]
 
             node_id_hex = f"!{from_node_id:08x}" if from_node_id else None
             nodes_with_detections.add(from_node_id)
@@ -3177,6 +3169,10 @@ def api_detection_sensors():
                     "snr": snr,
                     "hop_limit": hop_limit,
                     "detection_name": detection_name,
+                    "detection_text": parsed["raw_text"],
+                    "event_kind": parsed["event_kind"],
+                    "dwell_ms": parsed["dwell_ms"],
+                    "state": parsed["state"],
                     "latitude": latitude,
                     "longitude": longitude,
                     "has_location": latitude is not None and longitude is not None,
@@ -3270,18 +3266,9 @@ def api_detection_sensors_catalog():
             from_node_id = row["from_node_id"]
             if not from_node_id:
                 continue
-            raw_payload = row["raw_payload"]
-            sensor_name = None
-            if raw_payload:
-                try:
-                    if isinstance(raw_payload, bytes):
-                        sensor_name = raw_payload.decode("utf-8", errors="replace").strip()
-                    else:
-                        sensor_name = str(raw_payload).strip()
-                except Exception:
-                    sensor_name = None
-            if not sensor_name:
-                sensor_name = "(unnamed)"
+            parsed = parse_detection_payload(row["raw_payload"])
+            sensor_name = parsed["sensor_name"] or parsed["raw_text"] or "(unnamed)"
+            # Catalog subscriptions by configured sensor name (not dwell suffix)
             key = (int(from_node_id), sensor_name)
             entry = catalog.get(key)
             if entry is None:
@@ -3302,11 +3289,13 @@ def api_detection_sensors_catalog():
                     "sensor_name": sensor_name,
                     "event_count": 1,
                     "last_seen": row["timestamp"],
+                    "last_dwell_ms": parsed["dwell_ms"],
                 }
             else:
                 entry["event_count"] += 1
                 if row["timestamp"] > entry["last_seen"]:
                     entry["last_seen"] = row["timestamp"]
+                    entry["last_dwell_ms"] = parsed["dwell_ms"]
 
         sensors = sorted(
             catalog.values(),
@@ -3970,16 +3959,13 @@ def api_sensors():
 
             if portnum == 10:  # Detection sensor
                 reading_type = "detection"
-                if raw_payload:
-                    try:
-                        if isinstance(raw_payload, bytes):
-                            data["detection_name"] = raw_payload.decode(
-                                "utf-8", errors="replace"
-                            )
-                        else:
-                            data["detection_name"] = str(raw_payload)
-                    except Exception:
-                        pass
+                parsed = parse_detection_payload(raw_payload)
+                if parsed["sensor_name"] or parsed["raw_text"]:
+                    data["detection_name"] = parsed["sensor_name"] or parsed["raw_text"]
+                    data["detection_text"] = parsed["raw_text"]
+                    data["event_kind"] = parsed["event_kind"]
+                    data["dwell_ms"] = parsed["dwell_ms"]
+                    data["state"] = parsed["state"]
 
             elif portnum == 67:  # Telemetry
                 if raw_payload:

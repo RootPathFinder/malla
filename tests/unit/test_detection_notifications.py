@@ -61,6 +61,12 @@ def _insert_detection(
         conn.close()
 
 
+def _clear_api_cache():
+    from malla.utils.cache_utils import clear_cache
+
+    clear_cache()
+
+
 @pytest.mark.unit
 class TestDetectionNotificationCatalog:
     def test_catalog_groups_node_and_sensor(self, client, app):
@@ -79,6 +85,7 @@ class TestDetectionNotificationCatalog:
             app, node_id=node_b, name="driveway", long_name="Gate Sensor", short_name="GS2"
         )
 
+        _clear_api_cache()
         res = client.get("/api/detection-sensors/catalog?hours=24")
         assert res.status_code == 200, res.get_data(as_text=True)
         body = res.get_json()
@@ -105,12 +112,68 @@ class TestDetectionNotificationCatalog:
         assert (node_a, "gate") in names
         assert (node_b, "driveway") in names
 
+    def test_catalog_collapses_dwell_suffix_into_sensor_name(self, client, app):
+        node_id = 0xAABBCC10
+        now = time.time()
+        _insert_detection(app, node_id=node_id, name="driveway detected", ts=now - 30)
+        _insert_detection(
+            app,
+            node_id=node_id,
+            name="driveway detected dwell_ms=2100",
+            ts=now - 10,
+        )
+        _insert_detection(
+            app,
+            node_id=node_id,
+            name="driveway detected dwell_ms=1995",
+            ts=now - 1,
+        )
+
+        _clear_api_cache()
+        # Unique query avoids colliding with other catalog tests' response cache
+        res = client.get("/api/detection-sensors/catalog?hours=23")
+        assert res.status_code == 200
+        sensors = res.get_json()["sensors"]
+        matches = [s for s in sensors if s["node_id"] == node_id]
+        assert matches, f"expected node {node_id} in catalog, got {sensors!r}"
+        driveway = next(
+            (s for s in matches if s["sensor_name"] == "driveway"),
+            None,
+        )
+        assert driveway is not None, f"expected sensor_name=driveway, got {matches!r}"
+        assert driveway["event_count"] == 3
+        assert driveway["last_dwell_ms"] == 1995
+
+    def test_detection_events_expose_dwell_ms(self, client, app):
+        node_id = 0xAABBCC11
+        _insert_detection(
+            app, node_id=node_id, name="driveway detected dwell_ms=2048"
+        )
+        _clear_api_cache()
+        res = client.get("/api/detection-sensors?hours=24&limit=20")
+        assert res.status_code == 200
+        events = res.get_json()["events"]
+        match = next(e for e in events if e["from_node_id"] == node_id)
+        assert match["detection_name"] == "driveway"
+        assert match["detection_text"] == "driveway detected dwell_ms=2048"
+        assert match["event_kind"] == "trip"
+        assert match["dwell_ms"] == 2048
+
     def test_profile_catalog_renders_short_name_helper(self, operator_client):
         res = operator_client.get("/profile")
         assert res.status_code == 200
         html = res.get_data(as_text=True)
         assert "nodeShortName" in html
         assert "nodePrimaryName" in html
+
+    def test_detection_ui_mentions_dwell(self, client):
+        # Page may require auth depending on config; static script always available
+        js = client.get("/static/js/detection-notifications.js")
+        assert js.status_code == 200
+        assert "dwell" in js.get_data(as_text=True).lower()
+        html = client.get("/detection-sensors")
+        if html.status_code == 200:
+            assert "formatDwell" in html.get_data(as_text=True)
 
     def test_service_worker_and_manifest_routes(self, client):
         sw = client.get("/sw.js")
