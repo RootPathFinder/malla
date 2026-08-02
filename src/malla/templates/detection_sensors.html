@@ -352,6 +352,43 @@
         return `${secs.toFixed(1)}s`;
     }
 
+    function nodePrimaryLabel(node) {
+        const longName = (node.long_name || '').trim();
+        if (longName) return longName;
+        const shortName = (node.short_name || '').trim();
+        let name = (node.name || node.node_name || node.node_hex || 'Unknown').trim();
+        if (shortName && name.endsWith(`(${shortName})`)) {
+            name = name.slice(0, -(shortName.length + 3)).trim() || name;
+        }
+        return name || shortName || 'Unknown';
+    }
+
+    function nodeShortLabel(node) {
+        const shortName = (node.short_name || '').trim();
+        if (!shortName) return '';
+        const primary = nodePrimaryLabel(node);
+        if (primary === shortName) return '';
+        return shortName;
+    }
+
+    function formatNodeWithShort(node, { strong = false } = {}) {
+        const primary = nodePrimaryLabel(node);
+        const shortName = nodeShortLabel(node);
+        const primaryHtml = strong
+            ? `<strong>${escapeHtml(primary)}</strong>`
+            : escapeHtml(primary);
+        const shortHtml = shortName
+            ? ` <span class="text-muted small fw-normal">${escapeHtml(shortName)}</span>`
+            : '';
+        return primaryHtml + shortHtml;
+    }
+
+    function formatNodePlain(node) {
+        const primary = nodePrimaryLabel(node);
+        const shortName = nodeShortLabel(node);
+        return shortName ? `${primary} ${shortName}` : primary;
+    }
+
     // Load detection data
     async function loadDetectionData() {
         const hours = document.getElementById('hoursFilter').value;
@@ -426,7 +463,7 @@
         sensors.forEach(sensor => {
             const option = document.createElement('option');
             option.value = sensor.node_hex;
-            option.textContent = `${sensor.name} (${sensor.event_count})`;
+            option.textContent = `${formatNodePlain(sensor)} (${sensor.event_count})`;
             nodeFilter.appendChild(option);
         });
         nodeFilter.value = currentValue;
@@ -435,7 +472,7 @@
             <div class="sensor-list-item ${selectedNode === sensor.node_hex ? 'active' : ''}"
                  onclick="filterByNode('${sensor.node_hex}')">
                 <div>
-                    <strong>${escapeHtml(sensor.name)}</strong>
+                    ${formatNodeWithShort(sensor, { strong: true })}
                     <div class="text-muted small">${sensor.node_hex}</div>
                 </div>
                 <span class="event-count-badge">${sensor.event_count}</span>
@@ -475,11 +512,7 @@
                             <div class="d-flex justify-content-between align-items-start">
                                 <div>
                                     <h6 class="mb-1">
-                                        ${escapeHtml(event.long_name || event.node_name || event.from_node_hex || 'Unknown')}
-                                        ${event.short_name && event.short_name !== event.long_name
-                                            && !(event.long_name || event.node_name || '').endsWith('(' + event.short_name + ')')
-                                            ? `<span class="text-muted small fw-normal ms-1">${escapeHtml(event.short_name)}</span>`
-                                            : ''}
+                                        ${formatNodeWithShort(event, { strong: false })}
                                         ${event.detection_name ? `<span class="sensor-badge ms-2">${escapeHtml(event.detection_name)}</span>` : ''}
                                         ${event.event_kind === 'state' ? `<span class="badge bg-secondary ms-2">state ${event.state}</span>` : ''}
                                         ${event.dwell_ms != null && Number(event.dwell_ms) > 0
@@ -573,7 +606,7 @@
                     locationMap.set(key, {
                         lat: event.latitude,
                         lng: event.longitude,
-                        name: event.node_name,
+                        name: formatNodePlain(event),
                         node_hex: event.from_node_hex,
                         count: 0,
                         lastEvent: event.timestamp

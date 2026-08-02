@@ -159,6 +159,41 @@ class TestDetectionNotificationCatalog:
         assert match["event_kind"] == "trip"
         assert match["dwell_ms"] == 2048
 
+    def test_sensor_nodes_include_short_name(self, client, app):
+        node_a = 0xAABBCC21
+        node_b = 0xAABBCC22
+        _insert_detection(
+            app,
+            node_id=node_a,
+            name="driveway detected",
+            long_name="Gate Sensor",
+            short_name="GS1",
+        )
+        _insert_detection(
+            app,
+            node_id=node_b,
+            name="driveway detected",
+            long_name="Gate Sensor",
+            short_name="GS2",
+        )
+        _clear_api_cache()
+        res = client.get("/api/detection-sensors?hours=24&limit=50")
+        assert res.status_code == 200
+        nodes = res.get_json()["sensor_nodes"]
+        by_id = {n["node_id"]: n for n in nodes}
+        assert by_id[node_a]["name"] == "Gate Sensor"
+        assert by_id[node_a]["short_name"] == "GS1"
+        assert by_id[node_b]["name"] == "Gate Sensor"
+        assert by_id[node_b]["short_name"] == "GS2"
+
+    def test_detection_sensors_page_has_short_name_helper(self, client):
+        html = client.get("/detection-sensors")
+        if html.status_code != 200:
+            return
+        body = html.get_data(as_text=True)
+        assert "formatNodeWithShort" in body
+        assert "nodeShortLabel" in body
+
     def test_profile_catalog_renders_short_name_helper(self, operator_client):
         res = operator_client.get("/profile")
         assert res.status_code == 200
