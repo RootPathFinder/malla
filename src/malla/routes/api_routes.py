@@ -32,6 +32,7 @@ from ..utils.export import (
     export_packets_to_csv,
     get_export_formats,
 )
+from ..utils.formatting import format_node_display_name
 from ..utils.node_utils import (
     convert_node_id,
     get_bulk_node_names,
@@ -3163,7 +3164,13 @@ def api_detection_sensors():
                     "timestamp_iso": ts_iso,
                     "from_node_id": from_node_id,
                     "from_node_hex": node_id_hex,
-                    "node_name": long_name or short_name or node_id_hex or "Unknown",
+                    "node_name": format_node_display_name(
+                        from_node_id or 0,
+                        long_name=long_name,
+                        short_name=short_name,
+                        hex_id=node_id_hex,
+                    ),
+                    "long_name": long_name,
                     "short_name": short_name,
                     "gateway_id": gateway_id,
                     "rssi": rssi,
@@ -3284,7 +3291,14 @@ def api_detection_sensors_catalog():
                 catalog[key] = {
                     "node_id": int(from_node_id),
                     "node_hex": node_hex,
-                    "node_name": long_name or short_name or node_hex,
+                    "long_name": long_name,
+                    "short_name": short_name,
+                    "node_name": format_node_display_name(
+                        from_node_id,
+                        long_name=long_name,
+                        short_name=short_name,
+                        hex_id=node_hex,
+                    ),
                     "sensor_name": sensor_name,
                     "event_count": 1,
                     "last_seen": row["timestamp"],

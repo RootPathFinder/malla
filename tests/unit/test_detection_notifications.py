@@ -7,7 +7,15 @@ import time
 import pytest
 
 
-def _insert_detection(app, *, node_id: int, name: str, ts: float | None = None):
+def _insert_detection(
+    app,
+    *,
+    node_id: int,
+    name: str,
+    ts: float | None = None,
+    long_name: str | None = None,
+    short_name: str | None = None,
+):
     from malla.database.connection import get_db_connection
 
     payload = name.encode("utf-8")
@@ -43,8 +51,8 @@ def _insert_detection(app, *, node_id: int, name: str, ts: float | None = None):
             (
                 node_id,
                 f"!{node_id:08x}",
-                f"Node {node_id:08x}",
-                "N1",
+                long_name or f"Node {node_id:08x}",
+                short_name or f"N{node_id & 0xFF:02X}",
                 time.time(),
                 time.time(),
             ),
@@ -58,10 +66,18 @@ class TestDetectionNotificationCatalog:
     def test_catalog_groups_node_and_sensor(self, client, app):
         node_a = 0xAABBCC01
         node_b = 0xAABBCC02
-        _insert_detection(app, node_id=node_a, name="driveway")
-        _insert_detection(app, node_id=node_a, name="driveway")
-        _insert_detection(app, node_id=node_a, name="gate")
-        _insert_detection(app, node_id=node_b, name="driveway")
+        _insert_detection(
+            app, node_id=node_a, name="driveway", long_name="Gate Sensor", short_name="GS1"
+        )
+        _insert_detection(
+            app, node_id=node_a, name="driveway", long_name="Gate Sensor", short_name="GS1"
+        )
+        _insert_detection(
+            app, node_id=node_a, name="gate", long_name="Gate Sensor", short_name="GS1"
+        )
+        _insert_detection(
+            app, node_id=node_b, name="driveway", long_name="Gate Sensor", short_name="GS2"
+        )
 
         res = client.get("/api/detection-sensors/catalog?hours=24")
         assert res.status_code == 200, res.get_data(as_text=True)
@@ -75,9 +91,26 @@ class TestDetectionNotificationCatalog:
         )
         assert driveway_a["event_count"] == 2
         assert driveway_a["node_hex"] == "!aabbcc01"
+        assert driveway_a["long_name"] == "Gate Sensor"
+        assert driveway_a["short_name"] == "GS1"
+        assert driveway_a["node_name"] == "Gate Sensor (GS1)"
+        driveway_b = next(
+            s
+            for s in sensors
+            if s["node_id"] == node_b and s["sensor_name"] == "driveway"
+        )
+        assert driveway_b["short_name"] == "GS2"
+        assert driveway_b["node_name"] == "Gate Sensor (GS2)"
         names = {(s["node_id"], s["sensor_name"]) for s in sensors}
         assert (node_a, "gate") in names
         assert (node_b, "driveway") in names
+
+    def test_profile_catalog_renders_short_name_helper(self, operator_client):
+        res = operator_client.get("/profile")
+        assert res.status_code == 200
+        html = res.get_data(as_text=True)
+        assert "nodeShortName" in html
+        assert "nodePrimaryName" in html
 
     def test_service_worker_and_manifest_routes(self, client):
         sw = client.get("/sw.js")

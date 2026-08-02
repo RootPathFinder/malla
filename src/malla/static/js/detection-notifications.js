@@ -307,7 +307,14 @@
         for (const event of fresh) {
             if (!eventMatches(event, subscriptions)) continue;
             const sensor = event.detection_name || 'Sensor';
-            const node = event.node_name || event.from_node_hex || 'Node';
+            const longName = (event.long_name || '').trim();
+            const shortName = (event.short_name || '').trim();
+            let node = longName || event.node_name || event.from_node_hex || 'Node';
+            if (shortName && shortName !== longName && !String(node).endsWith(`(${shortName})`)) {
+                // Prefer "LongName SHORT" so duplicate long names stay distinguishable
+                if (longName) node = `${longName} ${shortName}`;
+                else if (!String(node).includes(shortName)) node = `${node} ${shortName}`;
+            }
             await showNotification(
                 `${sensor} detection`,
                 `${node} · ${sensor}`,
