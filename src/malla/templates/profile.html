@@ -371,10 +371,34 @@
             byNode.get(s.node_id).push(s);
         }
 
+        function nodePrimaryName(entry) {
+            const longName = (entry.long_name || '').trim();
+            if (longName) return longName;
+            // Prefer uncombined label; strip trailing " (short)" from server display names
+            const display = (entry.node_name || '').trim();
+            const shortName = (entry.short_name || '').trim();
+            if (display && shortName && display.endsWith(`(${shortName})`)) {
+                return display.slice(0, -(shortName.length + 3)).trim();
+            }
+            return display || shortName || entry.node_hex || 'Node';
+        }
+
+        function nodeShortName(entry) {
+            const shortName = (entry.short_name || '').trim();
+            if (!shortName) return '';
+            const primary = nodePrimaryName(entry);
+            if (primary === shortName) return '';
+            return shortName;
+        }
+
         let html = '';
         for (const [nodeId, sensors] of byNode.entries()) {
-            const nodeName = sensors[0].node_name || sensors[0].node_hex;
+            const nodeName = nodePrimaryName(sensors[0]);
             const nodeHex = sensors[0].node_hex;
+            const shortName = nodeShortName(sensors[0]);
+            const shortHtml = shortName
+                ? ` <span class="text-muted small fw-normal">${escapeHtml(shortName)}</span>`
+                : '';
             if (includeNodeAll) {
                 const checked = isChecked(nodeId, '*') ? 'checked' : '';
                 html += `
@@ -382,7 +406,7 @@
                     <input class="form-check-input mt-1 notify-sub-check" type="checkbox" ${checked}
                            data-node-id="${nodeId}" data-node-hex="${nodeHex}" data-sensor-name="*">
                     <span>
-                        <strong>${escapeHtml(nodeName)}</strong>
+                        <strong>${escapeHtml(nodeName)}</strong>${shortHtml}
                         <span class="badge bg-primary ms-1">all sensors</span>
                         <div class="text-muted small">${escapeHtml(nodeHex)}</div>
                     </span>
@@ -390,6 +414,9 @@
             }
             for (const s of sensors) {
                 const checked = isChecked(s.node_id, s.sensor_name) ? 'checked' : '';
+                const sensorNodeName = nodePrimaryName(s);
+                const sensorShort = nodeShortName(s);
+                const sensorShortText = sensorShort ? ` ${escapeHtml(sensorShort)}` : '';
                 html += `
                 <label class="notify-sensor-row">
                     <input class="form-check-input mt-1 notify-sub-check" type="checkbox" ${checked}
@@ -397,7 +424,7 @@
                            data-sensor-name="${escapeHtml(s.sensor_name)}">
                     <span>
                         <strong>${escapeHtml(s.sensor_name)}</strong>
-                        <div class="text-muted small">${escapeHtml(s.node_name)} · ${escapeHtml(s.node_hex)} · ${s.event_count} hits</div>
+                        <div class="text-muted small">${escapeHtml(sensorNodeName)}${sensorShortText} · ${escapeHtml(s.node_hex)} · ${s.event_count} hits</div>
                     </span>
                 </label>`;
             }
