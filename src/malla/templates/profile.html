@@ -250,6 +250,21 @@
         border-bottom: 1px solid var(--bs-border-color);
     }
     .notify-sensor-row:last-child { border-bottom: 0; }
+    .node-short-badge {
+        display: inline-block;
+        font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace;
+        font-size: 0.7rem;
+        font-weight: 600;
+        letter-spacing: 0.02em;
+        padding: 0.1rem 0.4rem;
+        margin-left: 0.35rem;
+        border-radius: 0.25rem;
+        vertical-align: middle;
+        color: var(--bs-body-color);
+        background-color: var(--bs-secondary-bg);
+        border: 1px solid var(--bs-border-color);
+        white-space: nowrap;
+    }
 </style>
 <script>
 (function () {
@@ -385,20 +400,26 @@
 
         function nodeShortName(entry) {
             const shortName = (entry.short_name || '').trim();
+            if (shortName) return shortName;
+            const hex = String(entry.node_hex || '').replace(/^!/, '');
+            if (hex.length >= 4) return hex.slice(-4);
+            if (entry.node_id != null) {
+                return Number(entry.node_id).toString(16).padStart(8, '0').slice(-4);
+            }
+            return '';
+        }
+
+        function shortBadgeHtml(entry) {
+            const shortName = nodeShortName(entry);
             if (!shortName) return '';
-            const primary = nodePrimaryName(entry);
-            if (primary === shortName) return '';
-            return shortName;
+            return `<span class="node-short-badge" title="Short name">${escapeHtml(shortName)}</span>`;
         }
 
         let html = '';
         for (const [nodeId, sensors] of byNode.entries()) {
             const nodeName = nodePrimaryName(sensors[0]);
             const nodeHex = sensors[0].node_hex;
-            const shortName = nodeShortName(sensors[0]);
-            const shortHtml = shortName
-                ? ` <span class="text-muted small fw-normal">${escapeHtml(shortName)}</span>`
-                : '';
+            const shortHtml = shortBadgeHtml(sensors[0]);
             if (includeNodeAll) {
                 const checked = isChecked(nodeId, '*') ? 'checked' : '';
                 html += `
@@ -415,16 +436,15 @@
             for (const s of sensors) {
                 const checked = isChecked(s.node_id, s.sensor_name) ? 'checked' : '';
                 const sensorNodeName = nodePrimaryName(s);
-                const sensorShort = nodeShortName(s);
-                const sensorShortText = sensorShort ? ` ${escapeHtml(sensorShort)}` : '';
+                const sensorShort = shortBadgeHtml(s);
                 html += `
                 <label class="notify-sensor-row">
                     <input class="form-check-input mt-1 notify-sub-check" type="checkbox" ${checked}
                            data-node-id="${s.node_id}" data-node-hex="${s.node_hex}"
                            data-sensor-name="${escapeHtml(s.sensor_name)}">
                     <span>
-                        <strong>${escapeHtml(s.sensor_name)}</strong>
-                        <div class="text-muted small">${escapeHtml(sensorNodeName)}${sensorShortText} · ${escapeHtml(s.node_hex)} · ${s.event_count} hits</div>
+                        <strong>${escapeHtml(s.sensor_name)}</strong>${sensorShort}
+                        <div class="text-muted small">${escapeHtml(sensorNodeName)} · ${escapeHtml(s.node_hex)} · ${s.event_count} hits</div>
                     </span>
                 </label>`;
             }

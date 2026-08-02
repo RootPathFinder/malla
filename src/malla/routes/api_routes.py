@@ -3182,8 +3182,16 @@ def api_detection_sensors():
         # Get unique sensor nodes with their info
         sensor_nodes = []
         if nodes_with_detections:
-            node_names = get_bulk_node_names(list(nodes_with_detections))
-            # Prefer long/short from event rows so the UI can show a small short suffix
+            node_ids = list(nodes_with_detections)
+            node_names = get_bulk_node_names(node_ids)
+            # Always resolve short names (falls back to last-4 hex) so UI can disambiguate
+            short_names = get_bulk_node_short_names(node_ids)
+            for event in events:
+                nid = event.get("from_node_id")
+                if nid is None:
+                    continue
+                if not event.get("short_name"):
+                    event["short_name"] = short_names.get(nid)
             node_identity: dict[int, dict[str, str | None]] = {}
             for event in events:
                 nid = event.get("from_node_id")
@@ -3191,15 +3199,17 @@ def api_detection_sensors():
                     continue
                 node_identity[nid] = {
                     "long_name": event.get("long_name"),
-                    "short_name": event.get("short_name"),
+                    "short_name": event.get("short_name") or short_names.get(nid),
                 }
             for node_id in nodes_with_detections:
                 node_hex = f"!{node_id:08x}" if node_id else None
                 event_count = sum(1 for e in events if e["from_node_id"] == node_id)
                 identity = node_identity.get(node_id, {})
                 long_name = identity.get("long_name")
-                short_name = identity.get("short_name")
-                primary = (long_name or short_name or node_names.get(node_id) or node_hex or "Unknown")
+                short_name = identity.get("short_name") or short_names.get(node_id)
+                primary = (
+                    long_name or short_name or node_names.get(node_id) or node_hex or "Unknown"
+                )
                 # Strip " (short)" if bulk display name was used as fallback
                 if (
                     not long_name
@@ -3299,6 +3309,8 @@ def api_detection_sensors_catalog():
                 node_hex = f"!{from_node_id:08x}"
                 long_name = row["long_name"]
                 short_name = row["short_name"]
+                if not (short_name and str(short_name).strip()):
+                    short_name = f"{int(from_node_id):08x}"[-4:]
                 catalog[key] = {
                     "node_id": int(from_node_id),
                     "node_hex": node_hex,
