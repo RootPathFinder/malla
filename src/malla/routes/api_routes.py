@@ -25,6 +25,7 @@ from ..services.meshtastic_service import MeshtasticService
 from ..services.node_service import NodeService
 from ..services.traceroute_service import TracerouteService
 from ..utils.cache_utils import cache_response
+from ..utils.detection_payload import parse_detection_payload
 from ..utils.export import (
     export_analytics_to_json,
     export_nodes_to_csv,
@@ -32,7 +33,6 @@ from ..utils.export import (
     export_packets_to_csv,
     get_export_formats,
 )
-from ..utils.detection_payload import parse_detection_payload
 from ..utils.formatting import format_node_display_name
 from ..utils.node_utils import (
     convert_node_id,

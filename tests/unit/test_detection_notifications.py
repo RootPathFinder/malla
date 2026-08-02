@@ -167,7 +167,6 @@ class TestDetectionNotificationCatalog:
         assert "nodePrimaryName" in html
 
     def test_detection_ui_mentions_dwell(self, client):
-        page = client.get("/detection-sensors")
         # Page may require auth depending on config; static script always available
         js = client.get("/static/js/detection-notifications.js")
         assert js.status_code == 200
