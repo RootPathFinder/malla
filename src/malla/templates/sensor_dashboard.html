@@ -48,6 +48,26 @@
     .sensor-type-badge.power { background-color: #fd7e14; color: white; }
     .sensor-type-badge.device { background-color: #0d6efd; color: white; }
 
+    .node-short-badge {
+        display: inline-block;
+        font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace;
+        font-size: 0.7rem;
+        font-weight: 600;
+        letter-spacing: 0.02em;
+        padding: 0.1rem 0.4rem;
+        margin-left: 0.35rem;
+        border-radius: 0.25rem;
+        vertical-align: middle;
+        color: var(--bs-body-color);
+        background-color: var(--bs-secondary-bg);
+        border: 1px solid var(--bs-border-color);
+        white-space: nowrap;
+    }
+
+    .sensor-card.detection .metric-pill .value {
+        word-break: break-word;
+    }
+
     .summary-card {
         text-align: center;
         padding: 1.25rem;
@@ -491,6 +511,57 @@
         updateMap(data.readings || []);
     }
 
+    function escapeHtml(value) {
+        return String(value ?? '')
+            .replace(/&/g, '&amp;')
+            .replace(/</g, '&lt;')
+            .replace(/>/g, '&gt;')
+            .replace(/"/g, '&quot;');
+    }
+
+    function nodePrimaryLabel(node) {
+        const longName = (node.long_name || '').trim();
+        if (longName) return longName;
+        const shortName = (node.short_name || '').trim();
+        let name = (node.name || node.node_name || '').trim();
+        if (shortName && name.endsWith(`(${shortName})`)) {
+            name = name.slice(0, -(shortName.length + 3)).trim() || name;
+        }
+        if (name && shortName && name === shortName) return '';
+        return name || node.node_hex || node.from_node_hex || 'Unknown';
+    }
+
+    function nodeShortLabel(node) {
+        const shortName = (node.short_name || '').trim();
+        if (shortName) return shortName;
+        const hex = (node.node_hex || node.from_node_hex || '').replace(/^!/, '');
+        if (hex.length >= 4) return hex.slice(-4);
+        const id = node.node_id ?? node.from_node_id;
+        if (id != null && Number.isFinite(Number(id))) {
+            return Number(id).toString(16).padStart(8, '0').slice(-4);
+        }
+        return '';
+    }
+
+    function formatNodeWithShort(node, { strong = false } = {}) {
+        const primary = nodePrimaryLabel(node);
+        const shortName = nodeShortLabel(node);
+        const primaryHtml = primary ? `<strong>${escapeHtml(primary)}</strong>` : '';
+        const shortHtml = shortName
+            ? `<span class="node-short-badge" title="Short name">${escapeHtml(shortName)}</span>`
+            : '';
+        if (primaryHtml && shortHtml) return primaryHtml + shortHtml;
+        if (shortHtml) return `<strong>${escapeHtml(shortName)}</strong>`;
+        return primaryHtml || 'Unknown';
+    }
+
+    function formatNodePlain(node) {
+        const primary = nodePrimaryLabel(node);
+        const shortName = nodeShortLabel(node);
+        if (primary && shortName && primary !== shortName) return `${primary} (${shortName})`;
+        return primary || shortName || 'Unknown';
+    }
+
     // Update nodes list
     function updateNodesList(nodes) {
         const container = document.getElementById('nodesList');
@@ -515,7 +586,7 @@
                 <div class="node-list-item ${selectedNode === node.node_hex ? 'active' : ''}"
                      onclick="filterByNode('${node.node_hex || node.node_id}')">
                     <div>
-                        <div class="fw-semibold">${node.name || node.node_hex || 'Unknown'}</div>
+                        <div class="fw-semibold">${formatNodeWithShort(node)}</div>
                         <div class="sensor-meta">${typeBadges}</div>
                     </div>
                     <span class="reading-count-badge">${node.reading_count}</span>
@@ -533,7 +604,7 @@
         nodes.forEach(node => {
             const option = document.createElement('option');
             option.value = node.node_hex || node.node_id;
-            option.textContent = node.name || node.node_hex || `Node ${node.node_id}`;
+            option.textContent = formatNodePlain(node);
             if (option.value === currentValue) option.selected = true;
             select.appendChild(option);
         });
@@ -553,7 +624,7 @@
 
         if (reading.sensor_type === 'detection') {
             if (data.detection_name) {
-                metrics.push(`<span class="metric-pill"><span class="label">Event:</span><span class="value">${data.detection_name}</span></span>`);
+                metrics.push(`<span class="metric-pill"><span class="label">Event:</span><span class="value">${escapeHtml(data.detection_name)}</span></span>`);
             }
             if (data.dwell_ms != null && Number(data.dwell_ms) > 0) {
                 const ms = Number(data.dwell_ms);
@@ -615,7 +686,7 @@
                         <div class="flex-grow-1">
                             <div class="d-flex justify-content-between align-items-start">
                                 <div>
-                                    <strong>${reading.node_name || reading.from_node_hex || 'Unknown'}</strong>
+                                    ${formatNodeWithShort(reading)}
                                     <span class="sensor-type-badge ${sensorType} ms-2">${typeInfo.name}</span>
                                     ${reading.has_location ? '<span class="badge bg-success location-badge ms-1"><i class="bi bi-geo-alt-fill"></i></span>' : ''}
                                 </div>
@@ -625,9 +696,9 @@
                                 ${formatMetrics(reading)}
                             </div>
                             <div class="sensor-meta mt-1">
-                                ${reading.gateway_id ? `<span class="me-2"><i class="bi bi-broadcast"></i> ${reading.gateway_id}</span>` : ''}
+                                ${reading.from_node_hex ? `<span class="me-2"><i class="bi bi-broadcast"></i> ${escapeHtml(reading.from_node_hex)}</span>` : ''}
                                 ${reading.rssi ? `<span class="me-2">RSSI: ${reading.rssi} dBm</span>` : ''}
-                                ${reading.snr ? `<span class="me-2">SNR: ${reading.snr.toFixed(1)} dB</span>` : ''}
+                                ${reading.snr != null ? `<span class="me-2">SNR: ${Number(reading.snr).toFixed(1)} dB</span>` : ''}
                             </div>
                         </div>
                     </div>

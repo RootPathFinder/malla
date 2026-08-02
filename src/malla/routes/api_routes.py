@@ -4088,12 +4088,19 @@ def api_sensors():
             hourly_stats[hour_key][reading_type] += 1
             hourly_stats[hour_key]["count"] += 1
 
+            long_name = row["long_name"]
+            short_name = row["short_name"]
+            if not (short_name and str(short_name).strip()) and from_node_id:
+                short_name = f"{int(from_node_id):08x}"[-4:]
+
             # Track node stats
             if from_node_id not in node_stats:
                 node_stats[from_node_id] = {
                     "node_id": from_node_id,
                     "node_hex": node_id_hex,
-                    "name": row["long_name"] or row["short_name"] or node_id_hex,
+                    "name": long_name or short_name or node_id_hex,
+                    "long_name": long_name,
+                    "short_name": short_name,
                     "sensor_types": set(),
                     "reading_count": 0,
                 }
@@ -4106,10 +4113,9 @@ def api_sensors():
                     "timestamp": timestamp,
                     "from_node_id": from_node_id,
                     "from_node_hex": node_id_hex,
-                    "node_name": row["long_name"]
-                    or row["short_name"]
-                    or node_id_hex
-                    or "Unknown",
+                    "node_name": long_name or short_name or node_id_hex or "Unknown",
+                    "long_name": long_name,
+                    "short_name": short_name,
                     "gateway_id": row["gateway_id"],
                     "rssi": row["rssi"],
                     "snr": row["snr"],
@@ -4124,11 +4130,16 @@ def api_sensors():
         # Build sensor nodes list
         sensor_nodes = []
         for _node_id, stats in node_stats.items():
+            short_name = stats.get("short_name")
+            if not (short_name and str(short_name).strip()) and stats["node_id"]:
+                short_name = f"{int(stats['node_id']):08x}"[-4:]
             sensor_nodes.append(
                 {
                     "node_id": stats["node_id"],
                     "node_hex": stats["node_hex"],
-                    "name": stats["name"],
+                    "name": stats["long_name"] or short_name or stats["name"],
+                    "long_name": stats.get("long_name"),
+                    "short_name": short_name,
                     "sensor_types": list(stats["sensor_types"]),
                     "reading_count": stats["reading_count"],
                 }
