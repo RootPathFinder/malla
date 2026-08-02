@@ -72,6 +72,20 @@ def test_parse_detection_payload(raw, expected):
 
 
 @pytest.mark.unit
+def test_parse_strips_trailing_nul_bytes():
+    # Firmware C-string payloads often include a trailing NUL, which used to
+    # break the `… detected` match and show a junk character in the UI.
+    parsed = parse_detection_payload(b"Driveway detected\x00")
+    assert parsed["event_kind"] == "trip"
+    assert parsed["sensor_name"] == "Driveway"
+    assert parsed["raw_text"] == "Driveway detected"
+
+    parsed_dwell = parse_detection_payload(b"Driveway detected dwell_ms=2048\x00\x00")
+    assert parsed_dwell["sensor_name"] == "Driveway"
+    assert parsed_dwell["dwell_ms"] == 2048
+
+
+@pytest.mark.unit
 def test_normalize_detection_sensor_name():
     assert normalize_detection_sensor_name("driveway") == "driveway"
     assert normalize_detection_sensor_name("driveway detected") == "driveway"

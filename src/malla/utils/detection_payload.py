@@ -24,16 +24,25 @@ _DETECTED_SUFFIX_RE = re.compile(r"\s+detected\s*$", re.IGNORECASE)
 
 
 def decode_detection_text(raw_payload: Any) -> str | None:
-    """Decode bytes/str payload to text, or None if empty/unusable."""
+    """Decode bytes/str payload to text, or None if empty/unusable.
+
+    Firmware C strings are often stored with a trailing NUL; strip NULs and
+    other control characters so parsers can match `… detected`.
+    """
     if raw_payload is None:
         return None
     try:
-        if isinstance(raw_payload, bytes):
-            text = raw_payload.decode("utf-8", errors="replace")
+        if isinstance(raw_payload, (bytes, bytearray, memoryview)):
+            # Drop NULs before decode so they never become U+FFFD / boxes
+            raw = bytes(raw_payload).replace(b"\x00", b"")
+            text = raw.decode("utf-8", errors="replace")
         else:
             text = str(raw_payload)
     except Exception:
         return None
+    # Remove leftover NULs / replacement chars / other controls (keep \\t \\n)
+    text = text.replace("\x00", "").replace("\ufffd", "")
+    text = re.sub(r"[\x00-\x08\x0b\x0c\x0e-\x1f\x7f]", "", text)
     text = text.strip()
     return text or None
 

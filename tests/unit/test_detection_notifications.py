@@ -195,6 +195,36 @@ class TestDetectionNotificationCatalog:
         assert "nodeShortLabel" in body
         assert "node-short-badge" in body
 
+    def test_sensors_api_shortens_nul_terminated_detection(self, client, app):
+        node_id = 0x75E19E20
+        _insert_detection(
+            app,
+            node_id=node_id,
+            name="Driveway detected\x00",
+            long_name="New Radar",
+            short_name="NR1",
+        )
+        _clear_api_cache()
+        res = client.get("/api/sensors?hours=19&limit=50&sensor_type=detection")
+        assert res.status_code == 200
+        body = res.get_json()
+        reading = next(r for r in body["readings"] if r["from_node_id"] == node_id)
+        assert reading["long_name"] == "New Radar"
+        assert reading["short_name"] == "NR1"
+        assert reading["data"]["detection_name"] == "Driveway"
+        assert reading["data"]["event_kind"] == "trip"
+        assert "\x00" not in (reading["data"].get("detection_text") or "")
+        node = next(n for n in body["sensor_nodes"] if n["node_id"] == node_id)
+        assert node["short_name"] == "NR1"
+
+    def test_sensor_dashboard_page_has_short_name_helper(self, client):
+        html = client.get("/sensor-dashboard")
+        if html.status_code != 200:
+            return
+        body = html.get_data(as_text=True)
+        assert "formatNodeWithShort" in body
+        assert "node-short-badge" in body
+
     def test_sensor_nodes_short_name_falls_back_to_hex(self, client, app):
         node_id = 0xAABBCC33
         _insert_detection(
