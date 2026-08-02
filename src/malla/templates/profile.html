@@ -116,7 +116,7 @@
                 </div>
                 <div class="card-body">
                     <p class="text-muted small mb-4">
-                        These settings are stored locally in your browser and will persist across sessions.
+                        These settings sync to your account when signed in, and also stay in this browser.
                     </p>
 
                     <div class="row">
@@ -165,6 +165,54 @@
                 </div>
             </div>
 
+            <!-- Detection browser notifications -->
+            <div class="card mt-4">
+                <div class="card-header d-flex justify-content-between align-items-center">
+                    <h5 class="mb-0"><i class="bi bi-bell me-2"></i>Detection Alerts</h5>
+                    <span class="badge bg-secondary" id="notifyPermissionBadge">Permission: unknown</span>
+                </div>
+                <div class="card-body">
+                    <p class="text-muted small">
+                        Get browser notifications when subscribed detection sensors trip.
+                        Works in this browser tab and, on supporting mobile browsers, when the app is installed to your home screen.
+                    </p>
+
+                    <div class="form-check form-switch mb-3">
+                        <input class="form-check-input" type="checkbox" id="pref-detection-notifications-enabled">
+                        <label class="form-check-label" for="pref-detection-notifications-enabled">
+                            Enable detection notifications
+                        </label>
+                    </div>
+
+                    <div class="d-flex flex-wrap gap-2 mb-3">
+                        <button type="button" class="btn btn-outline-primary btn-sm" id="notifyRequestPermissionBtn">
+                            <i class="bi bi-shield-check"></i> Allow notifications
+                        </button>
+                        <button type="button" class="btn btn-outline-secondary btn-sm" id="notifyTestBtn">
+                            <i class="bi bi-bell"></i> Send test
+                        </button>
+                        <button type="button" class="btn btn-outline-secondary btn-sm" id="notifyRefreshCatalogBtn">
+                            <i class="bi bi-arrow-clockwise"></i> Refresh sensors
+                        </button>
+                    </div>
+                    <div id="notifyStatusAlert" class="alert d-none py-2 small" role="alert"></div>
+
+                    <div class="mb-2 d-flex justify-content-between align-items-center">
+                        <label class="form-label mb-0">Subscribe to sensors</label>
+                        <div class="form-check">
+                            <input class="form-check-input" type="checkbox" id="notifySelectAllNodeSensors">
+                            <label class="form-check-label small" for="notifySelectAllNodeSensors">Also offer “all sensors on node”</label>
+                        </div>
+                    </div>
+                    <div id="notifySensorCatalog" class="border rounded p-2" style="max-height: 320px; overflow-y: auto;">
+                        <div class="text-muted small text-center py-3">Loading sensors…</div>
+                    </div>
+                    <div class="form-text mt-2">
+                        Select specific node + sensor name pairs. On iPhone/iPad, add Malla to your Home Screen for notification support.
+                    </div>
+                </div>
+            </div>
+
             {% if user.is_admin() %}
             <!-- Admin Quick Links -->
             <div class="card mt-4">
@@ -187,11 +235,235 @@
 {% endblock %}
 
 {% block extra_js %}
-<script src="{{ url_for('static', filename='js/user-preferences.js') }}"></script>
 <style>
     .pref-saved-indicator {
         transition: opacity 0.3s ease;
         opacity: 0;
     }
+    .notify-sensor-row {
+        display: flex;
+        gap: 0.5rem;
+        align-items: flex-start;
+        padding: 0.4rem 0.25rem;
+        border-bottom: 1px solid var(--bs-border-color);
+    }
+    .notify-sensor-row:last-child { border-bottom: 0; }
 </style>
+<script>
+(function () {
+    const PREF_ENABLED = 'detection_notifications_enabled';
+    const PREF_SUBS = 'detection_notification_subscriptions';
+    let catalog = [];
+    let subscriptions = [];
+
+    function subKey(sub) {
+        return `${sub.node_id}::${sub.sensor_name || '*'}`;
+    }
+
+    function showNotifyStatus(type, message) {
+        const el = document.getElementById('notifyStatusAlert');
+        if (!el) return;
+        el.className = `alert alert-${type} py-2 small`;
+        el.textContent = message;
+    }
+
+    function updatePermissionBadge() {
+        const badge = document.getElementById('notifyPermissionBadge');
+        if (!badge || typeof Notification === 'undefined') {
+            if (badge) badge.textContent = 'Unsupported';
+            return;
+        }
+        const perm = Notification.permission;
+        badge.textContent = 'Permission: ' + perm;
+        badge.className = 'badge ' + (
+            perm === 'granted' ? 'bg-success'
+            : perm === 'denied' ? 'bg-danger'
+            : 'bg-secondary'
+        );
+    }
+
+    async function saveEnabled(enabled) {
+        if (window.UserPreferences && UserPreferences.setJsonPreference) {
+            await UserPreferences.setJsonPreference(PREF_ENABLED, !!enabled);
+        } else {
+            await fetch(`/api/preferences/${PREF_ENABLED}`, {
+                method: 'PUT',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ value: !!enabled }),
+            });
+        }
+        if (window.DetectionNotifications) {
+            if (enabled) DetectionNotifications.start();
+            else DetectionNotifications.stop();
+        }
+    }
+
+    async function saveSubscriptions(subs) {
+        subscriptions = subs;
+        if (window.UserPreferences && UserPreferences.setJsonPreference) {
+            await UserPreferences.setJsonPreference(PREF_SUBS, subs);
+        } else {
+            await fetch(`/api/preferences/${PREF_SUBS}`, {
+                method: 'PUT',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ value: subs }),
+            });
+        }
+        if (window.DetectionNotifications) DetectionNotifications.start();
+    }
+
+    function isChecked(nodeId, sensorName) {
+        const key = subKey({ node_id: nodeId, sensor_name: sensorName });
+        return subscriptions.some(s => subKey(s) === key);
+    }
+
+    function renderCatalog() {
+        const box = document.getElementById('notifySensorCatalog');
+        if (!box) return;
+        if (!catalog.length) {
+            box.innerHTML = '<div class="text-muted small text-center py-3">No detection sensors seen in the last 7 days.</div>';
+            return;
+        }
+        const includeNodeAll = !!document.getElementById('notifySelectAllNodeSensors')?.checked;
+        const byNode = new Map();
+        for (const s of catalog) {
+            if (!byNode.has(s.node_id)) byNode.set(s.node_id, []);
+            byNode.get(s.node_id).push(s);
+        }
+
+        let html = '';
+        for (const [nodeId, sensors] of byNode.entries()) {
+            const nodeName = sensors[0].node_name || sensors[0].node_hex;
+            const nodeHex = sensors[0].node_hex;
+            if (includeNodeAll) {
+                const checked = isChecked(nodeId, '*') ? 'checked' : '';
+                html += `
+                <label class="notify-sensor-row">
+                    <input class="form-check-input mt-1 notify-sub-check" type="checkbox" ${checked}
+                           data-node-id="${nodeId}" data-node-hex="${nodeHex}" data-sensor-name="*">
+                    <span>
+                        <strong>${escapeHtml(nodeName)}</strong>
+                        <span class="badge bg-primary ms-1">all sensors</span>
+                        <div class="text-muted small">${escapeHtml(nodeHex)}</div>
+                    </span>
+                </label>`;
+            }
+            for (const s of sensors) {
+                const checked = isChecked(s.node_id, s.sensor_name) ? 'checked' : '';
+                html += `
+                <label class="notify-sensor-row">
+                    <input class="form-check-input mt-1 notify-sub-check" type="checkbox" ${checked}
+                           data-node-id="${s.node_id}" data-node-hex="${s.node_hex}"
+                           data-sensor-name="${escapeHtml(s.sensor_name)}">
+                    <span>
+                        <strong>${escapeHtml(s.sensor_name)}</strong>
+                        <div class="text-muted small">${escapeHtml(s.node_name)} · ${escapeHtml(s.node_hex)} · ${s.event_count} hits</div>
+                    </span>
+                </label>`;
+            }
+        }
+        box.innerHTML = html;
+        box.querySelectorAll('.notify-sub-check').forEach(el => {
+            el.addEventListener('change', onSubscriptionToggle);
+        });
+    }
+
+    function escapeHtml(value) {
+        return String(value ?? '')
+            .replace(/&/g, '&amp;')
+            .replace(/</g, '&lt;')
+            .replace(/>/g, '&gt;')
+            .replace(/"/g, '&quot;');
+    }
+
+    async function onSubscriptionToggle() {
+        const checks = document.querySelectorAll('.notify-sub-check:checked');
+        const next = [];
+        checks.forEach(el => {
+            next.push({
+                node_id: Number(el.dataset.nodeId),
+                node_hex: el.dataset.nodeHex,
+                sensor_name: el.dataset.sensorName || '*',
+            });
+        });
+        await saveSubscriptions(next);
+        showNotifyStatus('success', `${next.length} subscription(s) saved`);
+    }
+
+    async function loadCatalog() {
+        const box = document.getElementById('notifySensorCatalog');
+        if (box) box.innerHTML = '<div class="text-muted small text-center py-3">Loading sensors…</div>';
+        try {
+            const res = await fetch('/api/detection-sensors/catalog?hours=168');
+            const data = await res.json();
+            catalog = data.sensors || [];
+            renderCatalog();
+        } catch (e) {
+            if (box) box.innerHTML = `<div class="text-danger small text-center py-3">${escapeHtml(e.message)}</div>`;
+        }
+    }
+
+    async function initDetectionNotifyUI() {
+        updatePermissionBadge();
+        // Load prefs
+        try {
+            const res = await fetch('/api/preferences');
+            if (res.ok) {
+                const data = await res.json();
+                const prefs = data.preferences || {};
+                document.getElementById('pref-detection-notifications-enabled').checked = !!prefs[PREF_ENABLED];
+                subscriptions = Array.isArray(prefs[PREF_SUBS]) ? prefs[PREF_SUBS] : [];
+            }
+        } catch (e) { /* ignore */ }
+
+        document.getElementById('pref-detection-notifications-enabled')?.addEventListener('change', async (e) => {
+            const enabled = e.target.checked;
+            if (enabled && typeof Notification !== 'undefined' && Notification.permission !== 'granted') {
+                const perm = window.DetectionNotifications
+                    ? await DetectionNotifications.requestPermission()
+                    : await Notification.requestPermission();
+                updatePermissionBadge();
+                if (perm !== 'granted') {
+                    e.target.checked = false;
+                    await saveEnabled(false);
+                    showNotifyStatus('warning', 'Notification permission is required.');
+                    return;
+                }
+            }
+            await saveEnabled(enabled);
+            showNotifyStatus('success', enabled ? 'Notifications enabled' : 'Notifications disabled');
+        });
+
+        document.getElementById('notifyRequestPermissionBtn')?.addEventListener('click', async () => {
+            const perm = window.DetectionNotifications
+                ? await DetectionNotifications.requestPermission()
+                : (typeof Notification !== 'undefined' ? await Notification.requestPermission() : 'unsupported');
+            updatePermissionBadge();
+            if (perm === 'granted') showNotifyStatus('success', 'Notifications allowed');
+            else if (perm === 'denied') showNotifyStatus('danger', 'Notifications blocked by the browser. Enable them in site settings.');
+            else if (perm === 'unsupported') showNotifyStatus('warning', 'This browser does not support notifications.');
+            else showNotifyStatus('info', 'Permission: ' + perm);
+        });
+
+        document.getElementById('notifyTestBtn')?.addEventListener('click', async () => {
+            if (typeof Notification !== 'undefined' && Notification.permission !== 'granted') {
+                showNotifyStatus('warning', 'Allow notifications first.');
+                return;
+            }
+            if (window.DetectionNotifications) await DetectionNotifications.sendTestNotification();
+            showNotifyStatus('success', 'Test notification sent');
+        });
+
+        document.getElementById('notifyRefreshCatalogBtn')?.addEventListener('click', loadCatalog);
+        document.getElementById('notifySelectAllNodeSensors')?.addEventListener('change', renderCatalog);
+        await loadCatalog();
+    }
+
+    if (document.readyState === 'loading') {
+        document.addEventListener('DOMContentLoaded', initDetectionNotifyUI);
+    } else {
+        initDetectionNotifyUI();
+    }
+})();
+</script>
 {% endblock %}

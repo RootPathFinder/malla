@@ -3227,6 +3227,91 @@ def api_detection_sensors():
         return jsonify({"error": str(e)}), 500
 
 
+@api_bp.route("/detection-sensors/catalog")
+@cache_response(ttl_seconds=30)
+def api_detection_sensors_catalog():
+    """
+    Catalog of known detection sensors (node + sensor name) for notification subscriptions.
+
+    Query parameters:
+        hours: Lookback window (default 168 / 7 days, max 720)
+    """
+    try:
+        hours = request.args.get("hours", 168, type=int)
+        hours = min(max(hours, 1), 720)
+        cutoff_time = time.time() - (hours * 3600)
+
+        conn = get_db_connection()
+        cursor = conn.cursor()
+        cursor.execute(
+            """
+            SELECT ph.from_node_id, ph.raw_payload, ph.timestamp,
+                   ni.long_name, ni.short_name
+            FROM packet_history ph
+            LEFT JOIN node_info ni ON ph.from_node_id = ni.node_id
+            WHERE ph.portnum = 10 AND ph.timestamp > ?
+            ORDER BY ph.timestamp DESC
+            LIMIT 5000
+            """,
+            (cutoff_time,),
+        )
+        rows = cursor.fetchall()
+        conn.close()
+
+        catalog: dict[tuple[int, str], dict] = {}
+        for row in rows:
+            from_node_id = row["from_node_id"]
+            if not from_node_id:
+                continue
+            raw_payload = row["raw_payload"]
+            sensor_name = None
+            if raw_payload:
+                try:
+                    if isinstance(raw_payload, bytes):
+                        sensor_name = raw_payload.decode("utf-8", errors="replace").strip()
+                    else:
+                        sensor_name = str(raw_payload).strip()
+                except Exception:
+                    sensor_name = None
+            if not sensor_name:
+                sensor_name = "(unnamed)"
+            key = (int(from_node_id), sensor_name)
+            entry = catalog.get(key)
+            if entry is None:
+                node_hex = f"!{from_node_id:08x}"
+                long_name = row["long_name"]
+                short_name = row["short_name"]
+                catalog[key] = {
+                    "node_id": int(from_node_id),
+                    "node_hex": node_hex,
+                    "node_name": long_name or short_name or node_hex,
+                    "sensor_name": sensor_name,
+                    "event_count": 1,
+                    "last_seen": row["timestamp"],
+                }
+            else:
+                entry["event_count"] += 1
+                if row["timestamp"] > entry["last_seen"]:
+                    entry["last_seen"] = row["timestamp"]
+
+        sensors = sorted(
+            catalog.values(),
+            key=lambda s: (-int(s["event_count"]), str(s["node_name"]), str(s["sensor_name"])),
+        )
+        return safe_jsonify(
+            {
+                "sensors": sensors,
+                "total": len(sensors),
+                "hours_analyzed": hours,
+            }
+        )
+    except Exception as e:
+        if "no such table" in str(e):
+            return safe_jsonify({"sensors": [], "total": 0, "hours_analyzed": 168})
+        logger.error(f"Error in detection sensors catalog: {e}", exc_info=True)
+        return jsonify({"error": str(e)}), 500
+
+
 @api_bp.route("/paxcounter")
 @cache_response(ttl_seconds=10)
 def api_paxcounter():
