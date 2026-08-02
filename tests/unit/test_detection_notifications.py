@@ -96,3 +96,16 @@ class TestDetectionNotificationCatalog:
         assert "Detection Alerts" in html
         assert "pref-detection-notifications-enabled" in html
         assert "notifySensorCatalog" in html
+        assert "notifyCapabilityHint" in html
+        assert "Add to Home Screen" in html
+        assert "Chrome cannot show system notifications" in html
+
+    def test_detection_notifications_js_has_ios_in_app_fallback(self, client):
+        res = client.get("/static/js/detection-notifications.js")
+        assert res.status_code == 200
+        js = res.get_data(as_text=True)
+        assert "getCapability" in js
+        assert "showInAppToast" in js
+        assert "CriOS" in js
+        assert "in_app" in js
+        assert "Add to Home Screen" in js
