@@ -197,30 +197,32 @@ class TestDetectionNotificationCatalog:
 
     def test_sensor_nodes_short_name_falls_back_to_hex(self, client, app):
         node_id = 0xAABBCC33
-        # Insert detection without node_info short_name row (OR IGNORE empty names)
+        _insert_detection(
+            app,
+            node_id=node_id,
+            name="orphan detected",
+            long_name="Orphan Node",
+            short_name="",  # empty short name should fall back to hex suffix
+        )
+        # Force empty short_name in DB (helper may still write a default)
         from malla.database.connection import get_db_connection
 
         with app.app_context():
             conn = get_db_connection()
             cur = conn.cursor()
             cur.execute(
-                """
-                INSERT INTO packet_history (
-                    timestamp, topic, from_node_id, to_node_id, portnum, portnum_name,
-                    gateway_id, rssi, snr, hop_limit, payload_length, raw_payload,
-                    processed_successfully
-                ) VALUES (?, 'msh/test', ?, 4294967295, 10, 'DETECTION_SENSOR_APP',
-                          '!gw', -80, 4.0, 3, 3, ?, 1)
-                """,
-                (time.time(), node_id, b"x"),
+                "UPDATE node_info SET short_name = '' WHERE node_id = ?",
+                (node_id,),
             )
             conn.commit()
             conn.close()
         _clear_api_cache()
-        res = client.get("/api/detection-sensors?hours=24&limit=50")
+        # Unique hours avoids colliding with other detection-sensors response caches
+        res = client.get("/api/detection-sensors?hours=17&limit=50")
         assert res.status_code == 200
         nodes = res.get_json()["sensor_nodes"]
-        match = next(n for n in nodes if n["node_id"] == node_id)
+        match = next((n for n in nodes if n["node_id"] == node_id), None)
+        assert match is not None, f"expected node {node_id} in {nodes!r}"
         # get_bulk_node_short_names falls back to last 4 hex digits
         assert match["short_name"] == "cc33"
 
