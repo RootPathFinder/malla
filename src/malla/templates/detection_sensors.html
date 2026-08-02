@@ -39,6 +39,22 @@
         color: white;
     }
 
+    .node-short-badge {
+        display: inline-block;
+        font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace;
+        font-size: 0.7rem;
+        font-weight: 600;
+        letter-spacing: 0.02em;
+        padding: 0.1rem 0.4rem;
+        margin-left: 0.35rem;
+        border-radius: 0.25rem;
+        vertical-align: middle;
+        color: var(--bs-body-color);
+        background-color: var(--bs-secondary-bg);
+        border: 1px solid var(--bs-border-color);
+        white-space: nowrap;
+    }
+
     .summary-card {
         text-align: center;
         padding: 1.5rem;
@@ -356,37 +372,51 @@
         const longName = (node.long_name || '').trim();
         if (longName) return longName;
         const shortName = (node.short_name || '').trim();
-        let name = (node.name || node.node_name || node.node_hex || 'Unknown').trim();
+        let name = (node.name || node.node_name || '').trim();
         if (shortName && name.endsWith(`(${shortName})`)) {
             name = name.slice(0, -(shortName.length + 3)).trim() || name;
         }
-        return name || shortName || 'Unknown';
+        // If the only name we have is the short name, keep primary empty so badge owns it
+        if (name && shortName && name === shortName) return '';
+        return name || node.node_hex || node.from_node_hex || 'Unknown';
     }
 
     function nodeShortLabel(node) {
         const shortName = (node.short_name || '').trim();
-        if (!shortName) return '';
-        const primary = nodePrimaryLabel(node);
-        if (primary === shortName) return '';
-        return shortName;
+        if (shortName) return shortName;
+        // Always disambiguate: last 4 of node id / hex
+        const hex = (node.node_hex || node.from_node_hex || '').replace(/^!/, '');
+        if (hex.length >= 4) return hex.slice(-4);
+        const id = node.node_id ?? node.from_node_id;
+        if (id != null && Number.isFinite(Number(id))) {
+            return Number(id).toString(16).padStart(8, '0').slice(-4);
+        }
+        return '';
     }
 
     function formatNodeWithShort(node, { strong = false } = {}) {
         const primary = nodePrimaryLabel(node);
         const shortName = nodeShortLabel(node);
-        const primaryHtml = strong
-            ? `<strong>${escapeHtml(primary)}</strong>`
-            : escapeHtml(primary);
-        const shortHtml = shortName
-            ? ` <span class="text-muted small fw-normal">${escapeHtml(shortName)}</span>`
+        const primaryHtml = primary
+            ? (strong ? `<strong>${escapeHtml(primary)}</strong>` : escapeHtml(primary))
             : '';
-        return primaryHtml + shortHtml;
+        const shortHtml = shortName
+            ? `<span class="node-short-badge" title="Short name">${escapeHtml(shortName)}</span>`
+            : '';
+        if (primaryHtml && shortHtml) return primaryHtml + shortHtml;
+        if (shortHtml) {
+            return strong
+                ? `<strong>${escapeHtml(shortName)}</strong>`
+                : escapeHtml(shortName);
+        }
+        return primaryHtml || 'Unknown';
     }
 
     function formatNodePlain(node) {
         const primary = nodePrimaryLabel(node);
         const shortName = nodeShortLabel(node);
-        return shortName ? `${primary} ${shortName}` : primary;
+        if (primary && shortName && primary !== shortName) return `${primary} (${shortName})`;
+        return primary || shortName || 'Unknown';
     }
 
     // Load detection data
