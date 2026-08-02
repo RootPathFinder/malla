@@ -10,20 +10,26 @@
     const PREFERENCES_KEYS = {
         TEMPERATURE_UNIT: 'temperature_unit',
         TIMEZONE: 'timezone',
-        PINNED_POLL_INTERVAL: 'pinned_poll_interval'
+        PINNED_POLL_INTERVAL: 'pinned_poll_interval',
+        DETECTION_NOTIFICATIONS_ENABLED: 'detection_notifications_enabled',
+        DETECTION_NOTIFICATION_SUBSCRIPTIONS: 'detection_notification_subscriptions'
     };
 
     // Legacy localStorage keys for backwards compatibility
     const LEGACY_KEYS = {
         TEMPERATURE_UNIT: 'malla-temperature-unit',
         TIMEZONE: 'malla-timezone-preference',
-        PINNED_POLL_INTERVAL: 'malla-pinned-poll-interval'
+        PINNED_POLL_INTERVAL: 'malla-pinned-poll-interval',
+        DETECTION_NOTIFICATIONS_ENABLED: 'malla-detection_notifications_enabled',
+        DETECTION_NOTIFICATION_SUBSCRIPTIONS: 'malla-detection_notification_subscriptions'
     };
 
     const DEFAULT_VALUES = {
         TEMPERATURE_UNIT: 'C',
         TIMEZONE: 'local',
-        PINNED_POLL_INTERVAL: 5
+        PINNED_POLL_INTERVAL: 5,
+        DETECTION_NOTIFICATIONS_ENABLED: false,
+        DETECTION_NOTIFICATION_SUBSCRIPTIONS: []
     };
 
     // Cache for preferences loaded from server
@@ -113,6 +119,27 @@
      * @param {string} legacyKey - Legacy localStorage key
      * @param {any} value - Value to set
      */
+    function serializePreferenceValue(value) {
+        if (typeof value === 'string') return value;
+        try {
+            return JSON.stringify(value);
+        } catch (e) {
+            return String(value);
+        }
+    }
+
+    function deserializePreferenceValue(raw, fallback) {
+        if (raw === null || raw === undefined) return fallback;
+        if (typeof fallback !== 'string') {
+            try {
+                return JSON.parse(raw);
+            } catch (e) {
+                return fallback;
+            }
+        }
+        return raw;
+    }
+
     async function setPreference(key, legacyKey, value) {
         // Update cache immediately
         if (preferencesCache) {
@@ -121,7 +148,7 @@
 
         // Always update localStorage for immediate effect and backwards compatibility
         try {
-            localStorage.setItem(legacyKey, value.toString());
+            localStorage.setItem(legacyKey, serializePreferenceValue(value));
         } catch (e) {
             console.error('Error saving to localStorage:', e);
         }
@@ -135,6 +162,26 @@
         window.dispatchEvent(new CustomEvent('preferenceChanged', {
             detail: { key, value }
         }));
+    }
+
+    /**
+     * Set an arbitrary JSON-capable preference (bool/object/array/number/string).
+     */
+    async function setJsonPreference(key, value) {
+        const legacyKey = 'malla-' + key;
+        isAuthenticated = checkAuthentication();
+        await setPreference(key, legacyKey, value);
+    }
+
+    function getJsonPreference(key, fallback) {
+        if (preferencesCache && preferencesCache[key] !== undefined) {
+            return preferencesCache[key];
+        }
+        try {
+            return deserializePreferenceValue(localStorage.getItem('malla-' + key), fallback);
+        } catch (e) {
+            return fallback;
+        }
     }
 
     /**
@@ -340,6 +387,8 @@
         setTimezone,
         getPinnedPollInterval,
         setPinnedPollInterval,
+        setJsonPreference,
+        getJsonPreference,
         initPreferencesUI,
         loadPreferencesFromServer
     };

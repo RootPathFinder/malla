@@ -51,7 +51,12 @@ class UserPreferences:
             "low_battery_alerts": True,
             "new_node_alerts": True,
             "critical_alerts_only": False,
+            "detection_alerts": False,
+            "detection_subscriptions": [],
         },
+        # Flat keys used by profile UI / detection-notifications.js
+        "detection_notifications_enabled": False,
+        "detection_notification_subscriptions": [],
         "charts": {
             "animation_enabled": True,
             "color_scheme": "default",

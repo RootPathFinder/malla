@@ -3,8 +3,9 @@ Main routes for the Meshtastic Mesh Health Web UI
 """
 
 import logging
+from pathlib import Path
 
-from flask import Blueprint, render_template, request
+from flask import Blueprint, current_app, render_template, request, send_from_directory
 
 # Import from the new modular architecture
 from ..database.repositories import (
@@ -13,6 +14,26 @@ from ..database.repositories import (
 
 logger = logging.getLogger(__name__)
 main_bp = Blueprint("main", __name__)
+
+
+@main_bp.route("/sw.js")
+def service_worker():
+    """Serve the service worker from root scope for browser notifications."""
+    static_folder = Path(current_app.static_folder or "")
+    response = send_from_directory(static_folder, "sw.js")
+    response.headers["Content-Type"] = "application/javascript; charset=utf-8"
+    response.headers["Service-Worker-Allowed"] = "/"
+    response.headers["Cache-Control"] = "no-cache"
+    return response
+
+
+@main_bp.route("/manifest.webmanifest")
+def web_manifest():
+    """PWA manifest (helps mobile install / notification support)."""
+    static_folder = Path(current_app.static_folder or "")
+    response = send_from_directory(static_folder, "manifest.webmanifest")
+    response.headers["Content-Type"] = "application/manifest+json"
+    return response
 
 
 @main_bp.route("/")
