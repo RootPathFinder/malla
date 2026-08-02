@@ -152,9 +152,19 @@
     function normalizeSensorName(value) {
         let text = String(value || '').trim();
         if (!text) return '';
-        text = text.replace(/\s+dwell_ms=\d+\s*$/i, '').trim();
+        text = text.replace(/\s+(?:dwell_ms|burst_ms|active_ms)=\d+/gi, '').trim();
         text = text.replace(/\s+detected\s*$/i, '').trim();
+        text = text.replace(/\s+cleared\s*$/i, '').trim();
         return text || String(value || '').trim();
+    }
+
+    function formatDurationMs(ms) {
+        const n = Number(ms);
+        if (!Number.isFinite(n) || n < 0) return null;
+        if (n < 1000) return `${n}ms`;
+        const secs = n / 1000;
+        if (Math.abs(secs - Math.round(secs)) < 0.05) return `${Math.round(secs)}s`;
+        return `${secs.toFixed(1)}s`;
     }
 
     function eventMatches(event, subscriptions) {
@@ -324,18 +334,25 @@
                 else if (!String(node).includes(shortName)) node = `${node} ${shortName}`;
             }
             let body = `${node} · ${sensor}`;
-            const dwellMs = event.dwell_ms;
-            if (dwellMs != null && Number(dwellMs) > 0) {
-                const ms = Number(dwellMs);
-                const dwellLabel = ms < 1000
-                    ? `${ms}ms`
-                    : (Math.abs(ms / 1000 - Math.round(ms / 1000)) < 0.05
-                        ? `${Math.round(ms / 1000)}s`
-                        : `${(ms / 1000).toFixed(1)}s`);
+            const kind = event.event_kind || 'trip';
+            const dwellLabel = formatDurationMs(event.dwell_ms);
+            const burstLabel = formatDurationMs(event.burst_ms);
+            const activeLabel = formatDurationMs(event.active_ms);
+            if (kind === 'cleared') {
+                if (activeLabel) body += ` · active ${activeLabel}`;
+                if (burstLabel) body += ` · burst ${burstLabel}`;
+            } else if (burstLabel) {
+                body += ` · burst ${burstLabel}`;
+            } else if (dwellLabel) {
                 body += ` · dwell ${dwellLabel}`;
             }
+            const title = kind === 'cleared'
+                ? `${sensor} cleared`
+                : kind === 'state'
+                    ? `${sensor} state`
+                    : `${sensor} detection`;
             await showNotification(
-                `${sensor} detection`,
+                title,
                 body,
                 {
                     id: event.id,

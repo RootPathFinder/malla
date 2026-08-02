@@ -359,13 +359,34 @@
         return new Date(timestamp * 1000).toLocaleString();
     }
 
-    function formatDwell(dwellMs) {
-        const ms = Number(dwellMs);
+    function formatDurationMs(value) {
+        const ms = Number(value);
         if (!Number.isFinite(ms) || ms < 0) return '';
         if (ms < 1000) return `${ms}ms`;
         const secs = ms / 1000;
         if (Math.abs(secs - Math.round(secs)) < 0.05) return `${Math.round(secs)}s`;
         return `${secs.toFixed(1)}s`;
+    }
+
+    function detectionTimingBadges(event) {
+        const title = escapeHtml(event.detection_text || '');
+        const badges = [];
+        if (event.event_kind === 'cleared') {
+            badges.push(`<span class="badge bg-secondary ms-2">cleared</span>`);
+            if (event.active_ms != null && Number(event.active_ms) > 0) {
+                badges.push(`<span class="badge bg-info text-dark ms-2" title="${title}">active ${formatDurationMs(event.active_ms)}</span>`);
+            }
+            if (event.burst_ms != null && Number(event.burst_ms) > 0) {
+                badges.push(`<span class="badge bg-info text-dark ms-2" title="${title}">burst ${formatDurationMs(event.burst_ms)}</span>`);
+            }
+            return badges.join('');
+        }
+        if (event.burst_ms != null && Number(event.burst_ms) > 0) {
+            badges.push(`<span class="badge bg-info text-dark ms-2" title="${title}">burst ${formatDurationMs(event.burst_ms)}</span>`);
+        } else if (event.dwell_ms != null && Number(event.dwell_ms) > 0) {
+            badges.push(`<span class="badge bg-info text-dark ms-2" title="${title}">dwell ${formatDurationMs(event.dwell_ms)}</span>`);
+        }
+        return badges.join('');
     }
 
     function nodePrimaryLabel(node) {
@@ -545,9 +566,7 @@
                                         ${formatNodeWithShort(event, { strong: false })}
                                         ${event.detection_name ? `<span class="sensor-badge ms-2">${escapeHtml(event.detection_name)}</span>` : ''}
                                         ${event.event_kind === 'state' ? `<span class="badge bg-secondary ms-2">state ${event.state}</span>` : ''}
-                                        ${event.dwell_ms != null && Number(event.dwell_ms) > 0
-                                            ? `<span class="badge bg-info text-dark ms-2" title="${escapeHtml(event.detection_text || '')}">dwell ${formatDwell(event.dwell_ms)}</span>`
-                                            : ''}
+                                        ${detectionTimingBadges(event)}
                                     </h6>
                                     <div class="detection-timestamp">
                                         ${formatRelativeTime(event.timestamp)} &bull; ${formatTimestamp(event.timestamp)}

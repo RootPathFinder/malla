@@ -1203,8 +1203,34 @@ DETECTIONSENSOR_MODULE_FIELDS = [
         field_type=FieldType.NUMBER,
         description=(
             "Seconds the monitor pin must stay continuously active before a "
-            "detection is accepted. 0 = immediate (legacy). Useful for filtering "
-            "brief radar/PIR glitches (custom firmware)."
+            "sample counts toward a motion burst. 0 = immediate (legacy). "
+            "Filters brief radar/PIR glitches (custom firmware)."
+        ),
+        unit="seconds",
+        min_value=0,
+        max_value=3600,
+    ),
+    FieldMetadata(
+        name="burst_gap_secs",
+        label="Burst Gap",
+        field_type=FieldType.NUMBER,
+        description=(
+            "Seconds the pin may go inactive before a motion burst ends. "
+            "Merges Doppler radar OUT retrigger gaps into one episode. "
+            "0 = end on first inactive sample (legacy). Custom firmware."
+        ),
+        unit="seconds",
+        min_value=0,
+        max_value=3600,
+    ),
+    FieldMetadata(
+        name="minimum_alert_secs",
+        label="Minimum Alert",
+        field_type=FieldType.NUMBER,
+        description=(
+            "Wall-clock seconds of persistent motion required before broadcasting "
+            "a mesh alert. 0 = alert when the burst first confirms (legacy). "
+            "Use with Burst Gap to ignore short leaf/blip episodes. Custom firmware."
         ),
         unit="seconds",
         min_value=0,
@@ -1249,9 +1275,13 @@ DETECTIONSENSOR_MODULE_FIELDS = [
         name="detection_trigger_type",
         label="Trigger Type",
         field_type=FieldType.NUMBER,
-        description="Detection trigger type (0=low, 1=high, 2=either)",
+        description=(
+            "Pin polarity / edge: 0=LOGIC_LOW, 1=LOGIC_HIGH, 2=FALLING_EDGE, "
+            "3=RISING_EDGE, 4=EITHER_EDGE_ACTIVE_LOW, 5=EITHER_EDGE_ACTIVE_HIGH. "
+            "Odd values are active-high."
+        ),
         min_value=0,
-        max_value=2,
+        max_value=5,
     ),
     FieldMetadata(
         name="use_pullup",

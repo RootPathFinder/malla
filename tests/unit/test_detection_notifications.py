@@ -159,6 +159,62 @@ class TestDetectionNotificationCatalog:
         assert match["event_kind"] == "trip"
         assert match["dwell_ms"] == 2048
 
+    def test_detection_events_expose_burst_and_cleared(self, client, app):
+        node_id = 0xAABBCC12
+        now = time.time()
+        _insert_detection(
+            app,
+            node_id=node_id,
+            name="driveway detected burst_ms=8120",
+            ts=now - 5,
+        )
+        _insert_detection(
+            app,
+            node_id=node_id,
+            name="driveway cleared active_ms=9400 burst_ms=8120",
+            ts=now - 1,
+        )
+        _clear_api_cache()
+        res = client.get("/api/detection-sensors?hours=22&limit=50")
+        assert res.status_code == 200
+        events = [e for e in res.get_json()["events"] if e["from_node_id"] == node_id]
+        by_kind = {e["event_kind"]: e for e in events}
+        assert by_kind["trip"]["detection_name"] == "driveway"
+        assert by_kind["trip"]["burst_ms"] == 8120
+        assert by_kind["trip"]["dwell_ms"] is None
+        assert by_kind["cleared"]["active_ms"] == 9400
+        assert by_kind["cleared"]["burst_ms"] == 8120
+
+        catalog = client.get("/api/detection-sensors/catalog?hours=22")
+        assert catalog.status_code == 200
+        driveway = next(
+            s
+            for s in catalog.get_json()["sensors"]
+            if s["node_id"] == node_id and s["sensor_name"] == "driveway"
+        )
+        assert driveway["event_count"] == 2
+        assert driveway["last_event_kind"] == "cleared"
+        assert driveway["last_active_ms"] == 9400
+        assert driveway["last_burst_ms"] == 8120
+
+    def test_sensors_api_exposes_burst_cleared_fields(self, client, app):
+        node_id = 0xAABBCC13
+        _insert_detection(
+            app,
+            node_id=node_id,
+            name="driveway cleared active_ms=1500 burst_ms=1200",
+        )
+        _clear_api_cache()
+        res = client.get("/api/sensors?hours=21&limit=50&sensor_type=detection")
+        assert res.status_code == 200
+        reading = next(
+            r for r in res.get_json()["readings"] if r["from_node_id"] == node_id
+        )
+        assert reading["data"]["detection_name"] == "driveway"
+        assert reading["data"]["event_kind"] == "cleared"
+        assert reading["data"]["active_ms"] == 1500
+        assert reading["data"]["burst_ms"] == 1200
+
     def test_sensor_nodes_include_short_name(self, client, app):
         node_a = 0xAABBCC21
         node_b = 0xAABBCC22

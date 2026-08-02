@@ -1,4 +1,4 @@
-"""Tests for DETECTION_SENSOR_APP payload parsing (including dwell_ms)."""
+"""Tests for DETECTION_SENSOR_APP payload parsing (dwell/burst/cleared)."""
 
 from __future__ import annotations
 
@@ -22,6 +22,8 @@ from malla.utils.detection_payload import (
                 "sensor_name": "driveway",
                 "event_kind": "trip",
                 "dwell_ms": None,
+                "burst_ms": None,
+                "active_ms": None,
                 "state": None,
             },
         ),
@@ -32,6 +34,32 @@ from malla.utils.detection_payload import (
                 "sensor_name": "driveway",
                 "event_kind": "trip",
                 "dwell_ms": 2048,
+                "burst_ms": None,
+                "active_ms": None,
+                "state": None,
+            },
+        ),
+        (
+            "driveway detected burst_ms=8120",
+            {
+                "raw_text": "driveway detected burst_ms=8120",
+                "sensor_name": "driveway",
+                "event_kind": "trip",
+                "dwell_ms": None,
+                "burst_ms": 8120,
+                "active_ms": None,
+                "state": None,
+            },
+        ),
+        (
+            "driveway cleared active_ms=9400 burst_ms=8120",
+            {
+                "raw_text": "driveway cleared active_ms=9400 burst_ms=8120",
+                "sensor_name": "driveway",
+                "event_kind": "cleared",
+                "dwell_ms": None,
+                "burst_ms": 8120,
+                "active_ms": 9400,
                 "state": None,
             },
         ),
@@ -42,6 +70,8 @@ from malla.utils.detection_payload import (
                 "sensor_name": "gate",
                 "event_kind": "state",
                 "dwell_ms": None,
+                "burst_ms": None,
+                "active_ms": None,
                 "state": 1,
             },
         ),
@@ -52,6 +82,8 @@ from malla.utils.detection_payload import (
                 "sensor_name": "custom text",
                 "event_kind": "unknown",
                 "dwell_ms": None,
+                "burst_ms": None,
+                "active_ms": None,
                 "state": None,
             },
         ),
@@ -62,6 +94,8 @@ from malla.utils.detection_payload import (
                 "sensor_name": None,
                 "event_kind": "unknown",
                 "dwell_ms": None,
+                "burst_ms": None,
+                "active_ms": None,
                 "state": None,
             },
         ),
@@ -84,6 +118,14 @@ def test_parse_strips_trailing_nul_bytes():
     assert parsed_dwell["sensor_name"] == "Driveway"
     assert parsed_dwell["dwell_ms"] == 2048
 
+    parsed_clear = parse_detection_payload(
+        b"Driveway cleared active_ms=1200 burst_ms=900\x00"
+    )
+    assert parsed_clear["event_kind"] == "cleared"
+    assert parsed_clear["sensor_name"] == "Driveway"
+    assert parsed_clear["active_ms"] == 1200
+    assert parsed_clear["burst_ms"] == 900
+
 
 @pytest.mark.unit
 def test_normalize_detection_sensor_name():
@@ -91,6 +133,13 @@ def test_normalize_detection_sensor_name():
     assert normalize_detection_sensor_name("driveway detected") == "driveway"
     assert (
         normalize_detection_sensor_name("driveway detected dwell_ms=2000") == "driveway"
+    )
+    assert (
+        normalize_detection_sensor_name("driveway detected burst_ms=8000") == "driveway"
+    )
+    assert (
+        normalize_detection_sensor_name("driveway cleared active_ms=9 burst_ms=8")
+        == "driveway"
     )
     assert normalize_detection_sensor_name("*") == "*"
 

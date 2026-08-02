@@ -3172,6 +3172,8 @@ def api_detection_sensors():
                     "detection_text": parsed["raw_text"],
                     "event_kind": parsed["event_kind"],
                     "dwell_ms": parsed["dwell_ms"],
+                    "burst_ms": parsed["burst_ms"],
+                    "active_ms": parsed["active_ms"],
                     "state": parsed["state"],
                     "latitude": latitude,
                     "longitude": longitude,
@@ -3325,13 +3327,19 @@ def api_detection_sensors_catalog():
                     "sensor_name": sensor_name,
                     "event_count": 1,
                     "last_seen": row["timestamp"],
+                    "last_event_kind": parsed["event_kind"],
                     "last_dwell_ms": parsed["dwell_ms"],
+                    "last_burst_ms": parsed["burst_ms"],
+                    "last_active_ms": parsed["active_ms"],
                 }
             else:
                 entry["event_count"] += 1
                 if row["timestamp"] > entry["last_seen"]:
                     entry["last_seen"] = row["timestamp"]
+                    entry["last_event_kind"] = parsed["event_kind"]
                     entry["last_dwell_ms"] = parsed["dwell_ms"]
+                    entry["last_burst_ms"] = parsed["burst_ms"]
+                    entry["last_active_ms"] = parsed["active_ms"]
 
         sensors = sorted(
             catalog.values(),
@@ -4001,6 +4009,8 @@ def api_sensors():
                     data["detection_text"] = parsed["raw_text"]
                     data["event_kind"] = parsed["event_kind"]
                     data["dwell_ms"] = parsed["dwell_ms"]
+                    data["burst_ms"] = parsed["burst_ms"]
+                    data["active_ms"] = parsed["active_ms"]
                     data["state"] = parsed["state"]
 
             elif portnum == 67:  # Telemetry
