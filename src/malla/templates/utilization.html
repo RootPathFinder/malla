@@ -1,0 +1,412 @@
+{% extends "base.html" %}
+
+{% block title %}Channel Utilization - {{ APP_NAME }}{% endblock %}
+
+{% block head_libs %}
+<script src="https://cdn.plot.ly/plotly-2.30.0.min.js" integrity="sha384-H7GB7Kme/VbPI/0S4LNq7OixFNVRgRGE8kyqTntBuiXle1KBm8KWLQh/Ah6bXCYW" crossorigin="anonymous"></script>
+{% endblock head_libs %}
+
+{% block extra_css %}
+<style>
+    .util-stat .value { font-size: 1.75rem; font-weight: 600; line-height: 1.2; }
+    .util-stat .label { font-size: 0.85rem; color: var(--bs-secondary-color); }
+    .util-hot { color: var(--bs-danger); font-weight: 600; }
+    .util-warn { color: var(--bs-warning); font-weight: 600; }
+    .util-ok { color: var(--bs-success); }
+    .table-util td, .table-util th { white-space: nowrap; vertical-align: middle; }
+    .filter-bar { gap: .75rem; }
+    #timelineChart, #portChart { min-height: 320px; }
+</style>
+{% endblock %}
+
+{% block content %}
+<div class="container-fluid">
+    <div class="row mb-3 align-items-end">
+        <div class="col-lg-7">
+            <h1 class="h2 mb-1">
+                <i class="bi bi-activity"></i> Channel Utilization
+            </h1>
+            <p class="text-muted mb-0">
+                Track down high channel util — compare node reports with packet volume and talkers.
+                Threshold highlight: <strong>{{ high_util_pct|int }}%</strong>.
+            </p>
+        </div>
+        <div class="col-lg-5">
+            <div class="d-flex flex-wrap justify-content-lg-end filter-bar align-items-center">
+                <label class="form-label mb-0 small text-muted" for="hoursSelect">Window</label>
+                <select id="hoursSelect" class="form-select form-select-sm" style="width: auto;">
+                    <option value="6">6 hours</option>
+                    <option value="12">12 hours</option>
+                    <option value="24" selected>24 hours</option>
+                    <option value="48">48 hours</option>
+                    <option value="72">3 days</option>
+                    <option value="168">7 days</option>
+                </select>
+                <div class="form-check mb-0">
+                    <input class="form-check-input" type="checkbox" id="hotOnly" checked>
+                    <label class="form-check-label small" for="hotOnly">Hot nodes only (≥{{ high_util_pct|int }}%)</label>
+                </div>
+                <button type="button" class="btn btn-sm btn-outline-primary" id="refreshBtn">
+                    <i class="bi bi-arrow-clockwise"></i> Refresh
+                </button>
+            </div>
+        </div>
+    </div>
+
+    <div id="loadError" class="alert alert-warning d-none" role="alert"></div>
+
+    <div class="row g-3 mb-4">
+        <div class="col-6 col-md-4 col-xl-2">
+            <div class="border rounded p-3 util-stat h-100">
+                <div class="value" id="avgChutil">—</div>
+                <div class="label">Avg channel util</div>
+            </div>
+        </div>
+        <div class="col-6 col-md-4 col-xl-2">
+            <div class="border rounded p-3 util-stat h-100">
+                <div class="value" id="maxChutil">—</div>
+                <div class="label">Max channel util</div>
+            </div>
+        </div>
+        <div class="col-6 col-md-4 col-xl-2">
+            <div class="border rounded p-3 util-stat h-100">
+                <div class="value" id="avgAirTx">—</div>
+                <div class="label">Avg TX air util</div>
+            </div>
+        </div>
+        <div class="col-6 col-md-4 col-xl-2">
+            <div class="border rounded p-3 util-stat h-100">
+                <div class="value" id="pktRate">—</div>
+                <div class="label">Packets / hour</div>
+            </div>
+        </div>
+        <div class="col-6 col-md-4 col-xl-2">
+            <div class="border rounded p-3 util-stat h-100">
+                <div class="value" id="reportingNodes">—</div>
+                <div class="label">Reporting nodes</div>
+            </div>
+        </div>
+        <div class="col-6 col-md-4 col-xl-2">
+            <div class="border rounded p-3 util-stat h-100">
+                <div class="value text-danger" id="hotNodes">—</div>
+                <div class="label">Nodes ≥ {{ high_util_pct|int }}%</div>
+            </div>
+        </div>
+    </div>
+
+    <div class="row mb-4">
+        <div class="col-12">
+            <div class="border rounded p-3">
+                <div class="d-flex justify-content-between align-items-center mb-2">
+                    <h5 class="mb-0">Utilization vs packet volume</h5>
+                    <small class="text-muted" id="timelineMeta"></small>
+                </div>
+                <div id="timelineChart"></div>
+            </div>
+        </div>
+    </div>
+
+    <div class="row g-4 mb-4">
+        <div class="col-lg-7">
+            <div class="border rounded p-3 h-100">
+                <div class="d-flex justify-content-between align-items-center mb-2">
+                    <h5 class="mb-0">Node channel util</h5>
+                    <small class="text-muted" id="nodeTableMeta"></small>
+                </div>
+                <div class="table-responsive" style="max-height: 480px;">
+                    <table class="table table-sm table-hover table-util mb-0">
+                        <thead class="sticky-top bg-body">
+                            <tr>
+                                <th>Node</th>
+                                <th class="text-end">Latest</th>
+                                <th class="text-end">Avg</th>
+                                <th class="text-end">Max</th>
+                                <th class="text-end">TX air</th>
+                                <th class="text-end">Pkts</th>
+                                <th class="text-end">Samples</th>
+                            </tr>
+                        </thead>
+                        <tbody id="nodeTableBody">
+                            <tr><td colspan="7" class="text-muted text-center py-4">Loading…</td></tr>
+                        </tbody>
+                    </table>
+                </div>
+            </div>
+        </div>
+        <div class="col-lg-5">
+            <div class="border rounded p-3 mb-4">
+                <h5 class="mb-2">Top talkers</h5>
+                <p class="small text-muted mb-2">Highest packet sources in the window — often the first place to look when util spikes.</p>
+                <div class="table-responsive" style="max-height: 240px;">
+                    <table class="table table-sm table-hover table-util mb-0">
+                        <thead class="sticky-top bg-body">
+                            <tr>
+                                <th>Node</th>
+                                <th>Role</th>
+                                <th class="text-end">Packets</th>
+                            </tr>
+                        </thead>
+                        <tbody id="talkerTableBody">
+                            <tr><td colspan="3" class="text-muted text-center py-3">Loading…</td></tr>
+                        </tbody>
+                    </table>
+                </div>
+            </div>
+            <div class="border rounded p-3">
+                <h5 class="mb-2">Traffic by port</h5>
+                <div id="portChart"></div>
+            </div>
+        </div>
+    </div>
+</div>
+{% endblock %}
+
+{% block extra_js %}
+<script>
+(function () {
+    const HIGH_UTIL = {{ high_util_pct|float }};
+    let allNodes = [];
+
+    function hours() {
+        return parseInt(document.getElementById('hoursSelect').value, 10) || 24;
+    }
+
+    function fmtPct(v) {
+        if (v == null || Number.isNaN(Number(v))) return '—';
+        return Number(v).toFixed(1) + '%';
+    }
+
+    function utilClass(v) {
+        if (v == null) return '';
+        if (v >= 50) return 'util-hot';
+        if (v >= HIGH_UTIL) return 'util-warn';
+        return 'util-ok';
+    }
+
+    function escapeHtml(s) {
+        return String(s ?? '').replace(/[&<>"']/g, (c) => ({
+            '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;'
+        }[c]));
+    }
+
+    function showError(msg) {
+        const el = document.getElementById('loadError');
+        if (!msg) {
+            el.classList.add('d-none');
+            el.textContent = '';
+            return;
+        }
+        el.textContent = msg;
+        el.classList.remove('d-none');
+    }
+
+    async function fetchJson(url) {
+        const res = await fetch(url, { credentials: 'same-origin' });
+        if (!res.ok) throw new Error(`${url} → ${res.status}`);
+        return res.json();
+    }
+
+    function renderSummary(s) {
+        const avgEl = document.getElementById('avgChutil');
+        avgEl.textContent = fmtPct(s.avg_channel_utilization);
+        avgEl.className = 'value ' + utilClass(s.avg_channel_utilization);
+
+        const maxEl = document.getElementById('maxChutil');
+        maxEl.textContent = fmtPct(s.max_channel_utilization);
+        maxEl.className = 'value ' + utilClass(s.max_channel_utilization);
+
+        document.getElementById('avgAirTx').textContent = fmtPct(s.avg_air_util_tx);
+        document.getElementById('pktRate').textContent =
+            s.packets_per_hour != null ? Number(s.packets_per_hour).toLocaleString() : '—';
+        document.getElementById('reportingNodes').textContent =
+            s.reporting_nodes != null ? s.reporting_nodes : '—';
+        document.getElementById('hotNodes').textContent =
+            s.nodes_over_threshold != null ? s.nodes_over_threshold : '—';
+
+        if (!s.has_telemetry) {
+            showError('No telemetry_data table / samples yet. DeviceMetrics channel_utilization will appear once nodes report.');
+        } else {
+            showError('');
+        }
+    }
+
+    function renderTimeline(data) {
+        const buckets = data.buckets || [];
+        document.getElementById('timelineMeta').textContent =
+            buckets.length ? `${buckets.length} buckets · ${data.bucket_mins} min` : 'No samples';
+
+        if (!buckets.length) {
+            Plotly.purge('timelineChart');
+            document.getElementById('timelineChart').innerHTML =
+                '<div class="text-muted text-center py-5">No utilization timeline in this window</div>';
+            return;
+        }
+
+        const xs = buckets.map((b) => new Date(b.timestamp * 1000));
+        const traces = [
+            {
+                x: xs,
+                y: buckets.map((b) => b.avg_channel_utilization),
+                name: 'Avg ch util %',
+                type: 'scatter',
+                mode: 'lines',
+                line: { color: '#0d6efd', width: 2 },
+            },
+            {
+                x: xs,
+                y: buckets.map((b) => b.max_channel_utilization),
+                name: 'Max ch util %',
+                type: 'scatter',
+                mode: 'lines',
+                line: { color: '#dc3545', width: 1, dash: 'dot' },
+            },
+            {
+                x: xs,
+                y: buckets.map((b) => b.packet_count),
+                name: 'Packets / bucket',
+                type: 'bar',
+                yaxis: 'y2',
+                marker: { color: 'rgba(108,117,125,0.35)' },
+            },
+        ];
+
+        const layout = {
+            margin: { t: 20, r: 55, b: 40, l: 50 },
+            height: 340,
+            legend: { orientation: 'h', y: 1.12 },
+            xaxis: { type: 'date' },
+            yaxis: {
+                title: 'Channel util %',
+                range: [0, Math.max(40, ...buckets.map((b) => b.max_channel_utilization || 0), HIGH_UTIL + 5)],
+                ticksuffix: '%',
+            },
+            yaxis2: {
+                title: 'Packets',
+                overlaying: 'y',
+                side: 'right',
+                showgrid: false,
+            },
+            shapes: [{
+                type: 'line',
+                xref: 'paper', x0: 0, x1: 1,
+                y0: HIGH_UTIL, y1: HIGH_UTIL,
+                line: { color: '#ffc107', width: 1, dash: 'dash' },
+            }],
+            annotations: [{
+                xref: 'paper', x: 1, y: HIGH_UTIL,
+                xanchor: 'left', text: `${HIGH_UTIL}%`,
+                showarrow: false, font: { size: 11, color: '#856404' },
+            }],
+            paper_bgcolor: 'rgba(0,0,0,0)',
+            plot_bgcolor: 'rgba(0,0,0,0)',
+        };
+
+        const dark = document.documentElement.getAttribute('data-bs-theme') === 'dark';
+        if (dark) {
+            layout.font = { color: '#dee2e6' };
+            layout.xaxis.gridcolor = '#343a40';
+            layout.yaxis.gridcolor = '#343a40';
+        }
+
+        Plotly.newPlot('timelineChart', traces, layout, { responsive: true, displayModeBar: false });
+    }
+
+    function renderNodes() {
+        const hotOnly = document.getElementById('hotOnly').checked;
+        const rows = hotOnly ? allNodes.filter((n) => n.over_threshold) : allNodes;
+        document.getElementById('nodeTableMeta').textContent =
+            `${rows.length} shown · ${allNodes.length} reporting`;
+
+        const tbody = document.getElementById('nodeTableBody');
+        if (!rows.length) {
+            tbody.innerHTML = `<tr><td colspan="7" class="text-muted text-center py-4">${
+                hotOnly ? 'No nodes over threshold in this window' : 'No channel util telemetry yet'
+            }</td></tr>`;
+            return;
+        }
+
+        tbody.innerHTML = rows.map((n) => {
+            const latest = n.latest_channel_utilization;
+            const avg = n.avg_channel_utilization;
+            const max = n.max_channel_utilization;
+            return `<tr>
+                <td>
+                    <a href="/node/${n.node_id}">${escapeHtml(n.name)}</a>
+                    <div class="small text-muted">${escapeHtml(n.node_hex)}${n.role ? ' · ' + escapeHtml(n.role) : ''}</div>
+                </td>
+                <td class="text-end ${utilClass(latest)}">${fmtPct(latest)}</td>
+                <td class="text-end ${utilClass(avg)}">${fmtPct(avg)}</td>
+                <td class="text-end ${utilClass(max)}">${fmtPct(max)}</td>
+                <td class="text-end">${fmtPct(n.latest_air_util_tx ?? n.avg_air_util_tx)}</td>
+                <td class="text-end">${Number(n.packet_count || 0).toLocaleString()}</td>
+                <td class="text-end">${n.sample_count || 0}</td>
+            </tr>`;
+        }).join('');
+    }
+
+    function renderTalkers(data) {
+        const tbody = document.getElementById('talkerTableBody');
+        const nodes = data.top_nodes || [];
+        if (!nodes.length) {
+            tbody.innerHTML = '<tr><td colspan="3" class="text-muted text-center py-3">No packet history in window</td></tr>';
+        } else {
+            tbody.innerHTML = nodes.slice(0, 15).map((n) => `<tr>
+                <td><a href="/node/${n.node_id}">${escapeHtml(n.name)}</a></td>
+                <td class="small text-muted">${escapeHtml(n.role || '—')}</td>
+                <td class="text-end">${Number(n.packet_count).toLocaleString()}</td>
+            </tr>`).join('');
+        }
+
+        const ports = data.by_portnum || [];
+        if (!ports.length) {
+            Plotly.purge('portChart');
+            document.getElementById('portChart').innerHTML =
+                '<div class="text-muted text-center py-4">No port breakdown</div>';
+            return;
+        }
+
+        const labels = ports.map((p) => String(p.portnum_name || 'UNKNOWN').replace(/_APP$/, ''));
+        const values = ports.map((p) => p.packet_count);
+        Plotly.newPlot('portChart', [{
+            type: 'bar',
+            orientation: 'h',
+            y: labels.slice().reverse(),
+            x: values.slice().reverse(),
+            marker: { color: '#0d6efd' },
+        }], {
+            margin: { t: 10, r: 20, b: 30, l: 120 },
+            height: Math.max(280, labels.length * 22 + 60),
+            xaxis: { title: 'Packets' },
+            paper_bgcolor: 'rgba(0,0,0,0)',
+            plot_bgcolor: 'rgba(0,0,0,0)',
+        }, { responsive: true, displayModeBar: false });
+    }
+
+    async function loadAll() {
+        const h = hours();
+        const q = `hours=${h}&threshold=${HIGH_UTIL}`;
+        try {
+            const [summary, nodes, timeline, talkers] = await Promise.all([
+                fetchJson(`/api/utilization/summary?${q}`),
+                fetchJson(`/api/utilization/nodes?${q}`),
+                fetchJson(`/api/utilization/timeline?hours=${h}`),
+                fetchJson(`/api/utilization/talkers?hours=${h}&limit=25`),
+            ]);
+            renderSummary(summary);
+            allNodes = nodes.nodes || [];
+            renderNodes();
+            renderTimeline(timeline);
+            renderTalkers(talkers);
+        } catch (err) {
+            console.error(err);
+            showError('Failed to load utilization data: ' + err.message);
+        }
+    }
+
+    document.getElementById('hoursSelect').addEventListener('change', loadAll);
+    document.getElementById('hotOnly').addEventListener('change', renderNodes);
+    document.getElementById('refreshBtn').addEventListener('click', loadAll);
+    loadAll();
+})();
+</script>
+{% endblock %}
