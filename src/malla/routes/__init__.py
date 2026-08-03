@@ -19,6 +19,7 @@ from .mesh_routes import mesh_bp
 from .node_routes import node_bp
 from .packet_routes import packet_bp
 from .traceroute_routes import traceroute_bp
+from .utilization_routes import utilization_bp
 
 
 def register_routes(app):
@@ -31,6 +32,7 @@ def register_routes(app):
     app.register_blueprint(api_bp)
     app.register_blueprint(gateway_bp)
     app.register_blueprint(battery_bp)
+    app.register_blueprint(utilization_bp)
     app.register_blueprint(mesh_bp)
     app.register_blueprint(alert_bp)
     app.register_blueprint(admin_bp)

@@ -431,9 +431,9 @@
                         </ul>
                     </li>
 
-                    <!-- Telemetry dropdown (Sensors, Paxcounter, Weather, Power) -->
+                    <!-- Telemetry dropdown (Sensors, Paxcounter, Weather, Power, Utilization) -->
                     <li class="nav-item dropdown">
-                        {% set telemetry_active = request.endpoint in ['main.sensor_dashboard', 'main.paxcounter', 'main.pax_id_status', 'main.weather_map', 'battery.battery_analytics'] %}
+                        {% set telemetry_active = request.endpoint in ['main.sensor_dashboard', 'main.paxcounter', 'main.pax_id_status', 'main.weather_map', 'battery.battery_analytics', 'utilization.utilization_page'] %}
                         <a class="nav-link dropdown-toggle {{ 'active' if telemetry_active }}" href="#" id="telemetryDropdown" role="button" data-bs-toggle="dropdown">
                             Telemetry
                         </a>
@@ -456,6 +456,11 @@
                             <li>
                                 <a class="dropdown-item {{ 'active' if request.endpoint == 'battery.battery_analytics' }}" href="{{ url_for('battery.battery_analytics') }}">
                                     <i class="bi bi-battery-charging"></i> Power Analytics
+                                </a>
+                            </li>
+                            <li>
+                                <a class="dropdown-item {{ 'active' if request.endpoint == 'utilization.utilization_page' }}" href="{{ url_for('utilization.utilization_page') }}">
+                                    <i class="bi bi-activity"></i> Channel Utilization
                                 </a>
                             </li>
                         </ul>
