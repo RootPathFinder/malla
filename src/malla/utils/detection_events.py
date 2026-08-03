@@ -87,3 +87,70 @@ def join_detection_events(
         reverse=True,
     )
     return out
+
+
+def join_detection_readings(
+    readings: list[dict[str, Any]],
+    *,
+    max_pair_secs: float = 120.0,
+) -> list[dict[str, Any]]:
+    """Join trip+cleared detection readings; leave other sensor types untouched.
+
+    Detection readings carry event fields under ``data``. Result is newest-first.
+    """
+    if not readings:
+        return []
+
+    others = [r for r in readings if r.get("sensor_type") != "detection"]
+    detections = [r for r in readings if r.get("sensor_type") == "detection"]
+    if not detections:
+        return readings
+
+    by_id = {r.get("id"): r for r in detections}
+    flat: list[dict[str, Any]] = []
+    for reading in detections:
+        data = reading.get("data") or {}
+        flat.append(
+            {
+                "id": reading.get("id"),
+                "timestamp": reading.get("timestamp"),
+                "timestamp_iso": reading.get("timestamp_iso"),
+                "from_node_id": reading.get("from_node_id"),
+                "detection_name": data.get("detection_name"),
+                "event_kind": data.get("event_kind"),
+                "dwell_ms": data.get("dwell_ms"),
+                "burst_ms": data.get("burst_ms"),
+                "active_ms": data.get("active_ms"),
+                "state": data.get("state"),
+            }
+        )
+
+    joined_events = join_detection_events(flat, max_pair_secs=max_pair_secs)
+    joined_detections: list[dict[str, Any]] = []
+    for ev in joined_events:
+        # Prefer clear packet as the surviving row when the pair completed.
+        source_id = ev.get("clear_id") or ev.get("id") or ev.get("trip_id")
+        base = by_id.get(source_id)
+        if base is None:
+            continue
+        reading = dict(base)
+        data = dict(reading.get("data") or {})
+        data["event_kind"] = ev.get("event_kind")
+        data["dwell_ms"] = ev.get("dwell_ms")
+        data["burst_ms"] = ev.get("burst_ms")
+        data["active_ms"] = ev.get("active_ms")
+        data["state"] = ev.get("state")
+        data["trip_id"] = ev.get("trip_id")
+        data["clear_id"] = ev.get("clear_id")
+        data["started_at"] = ev.get("started_at")
+        reading["data"] = data
+        reading["id"] = ev.get("id")
+        reading["timestamp"] = ev.get("timestamp")
+        joined_detections.append(reading)
+
+    out = others + joined_detections
+    out.sort(
+        key=lambda r: (float(r.get("timestamp") or 0), int(r.get("id") or 0)),
+        reverse=True,
+    )
+    return out
