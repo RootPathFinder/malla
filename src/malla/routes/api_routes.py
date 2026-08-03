@@ -25,7 +25,7 @@ from ..services.meshtastic_service import MeshtasticService
 from ..services.node_service import NodeService
 from ..services.traceroute_service import TracerouteService
 from ..utils.cache_utils import cache_response
-from ..utils.detection_events import join_detection_events
+from ..utils.detection_events import join_detection_events, join_detection_readings
 from ..utils.detection_payload import parse_detection_payload
 from ..utils.export import (
     export_analytics_to_json,
@@ -3968,8 +3968,10 @@ def api_sensors():
             query += " AND ph.from_node_id = ?"
             params.append(node_id_int)
 
+        # Fetch extra when detections are included so trip+cleared pairs survive LIMIT.
+        fetch_limit = min(limit * 2, 2000) if 10 in portnums else limit
         query += " ORDER BY ph.timestamp DESC LIMIT ?"
-        params.append(limit)
+        params.append(fetch_limit)
 
         cursor.execute(query, params)
         rows = cursor.fetchall()
@@ -4001,9 +4003,6 @@ def api_sensors():
 
         # Process readings
         readings = []
-        type_counts = {"detection": 0, "environment": 0, "air_quality": 0, "power": 0}
-        hourly_stats = {}
-        node_stats = {}
 
         for row in rows:
             from_node_id = row["from_node_id"]
@@ -4087,9 +4086,6 @@ def api_sensors():
             if sensor_type != "all" and reading_type != sensor_type:
                 continue
 
-            # Update counts
-            type_counts[reading_type] = type_counts.get(reading_type, 0) + 1
-
             # Get location
             loc = node_locations.get(from_node_id, {})
             latitude = loc.get("latitude")
@@ -4097,39 +4093,10 @@ def api_sensors():
 
             node_id_hex = f"!{from_node_id:08x}" if from_node_id else None
 
-            # Track hourly stats
-            hour_key = datetime.fromtimestamp(timestamp, tz=UTC).strftime(
-                "%Y-%m-%d %H:00"
-            )
-            if hour_key not in hourly_stats:
-                hourly_stats[hour_key] = {
-                    "detection": 0,
-                    "environment": 0,
-                    "air_quality": 0,
-                    "power": 0,
-                    "count": 0,
-                }
-            hourly_stats[hour_key][reading_type] += 1
-            hourly_stats[hour_key]["count"] += 1
-
             long_name = row["long_name"]
             short_name = row["short_name"]
             if not (short_name and str(short_name).strip()) and from_node_id:
                 short_name = f"{int(from_node_id):08x}"[-4:]
-
-            # Track node stats
-            if from_node_id not in node_stats:
-                node_stats[from_node_id] = {
-                    "node_id": from_node_id,
-                    "node_hex": node_id_hex,
-                    "name": long_name or short_name or node_id_hex,
-                    "long_name": long_name,
-                    "short_name": short_name,
-                    "sensor_types": set(),
-                    "reading_count": 0,
-                }
-            node_stats[from_node_id]["sensor_types"].add(reading_type)
-            node_stats[from_node_id]["reading_count"] += 1
 
             readings.append(
                 {
@@ -4150,6 +4117,54 @@ def api_sensors():
                     "has_location": latitude is not None and longitude is not None,
                 }
             )
+
+        # Coalesce firmware trip+cleared detection pairs into one reading.
+        readings = join_detection_readings(readings)[:limit]
+
+        # Summaries after join (detection totals drop when pairs merge).
+        type_counts = {"detection": 0, "environment": 0, "air_quality": 0, "power": 0}
+        hourly_stats = {}
+        node_stats = {}
+        for reading in readings:
+            reading_type = reading.get("sensor_type")
+            if not reading_type:
+                continue
+            type_counts[reading_type] = type_counts.get(reading_type, 0) + 1
+            ts = reading.get("timestamp")
+            if ts is not None:
+                hour_key = datetime.fromtimestamp(ts, tz=UTC).strftime("%Y-%m-%d %H:00")
+                if hour_key not in hourly_stats:
+                    hourly_stats[hour_key] = {
+                        "detection": 0,
+                        "environment": 0,
+                        "air_quality": 0,
+                        "power": 0,
+                        "count": 0,
+                    }
+                # Heartbeat state packets are not detection episodes.
+                data = reading.get("data") or {}
+                if not (
+                    reading_type == "detection" and data.get("event_kind") == "state"
+                ):
+                    hourly_stats[hour_key][reading_type] += 1
+                    hourly_stats[hour_key]["count"] += 1
+            from_node_id = reading.get("from_node_id")
+            if from_node_id is None:
+                continue
+            if from_node_id not in node_stats:
+                node_stats[from_node_id] = {
+                    "node_id": from_node_id,
+                    "node_hex": reading.get("from_node_hex"),
+                    "name": reading.get("long_name")
+                    or reading.get("short_name")
+                    or reading.get("from_node_hex"),
+                    "long_name": reading.get("long_name"),
+                    "short_name": reading.get("short_name"),
+                    "sensor_types": set(),
+                    "reading_count": 0,
+                }
+            node_stats[from_node_id]["sensor_types"].add(reading_type)
+            node_stats[from_node_id]["reading_count"] += 1
 
         # Build sensor nodes list
         sensor_nodes = []

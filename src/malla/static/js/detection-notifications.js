@@ -324,10 +324,15 @@
 
         for (const event of fresh) {
             if (!eventMatches(event, subscriptions)) continue;
-            // Immediate motion alert only. Cleared/complete carry duration for the log
-            // (trip+cleared are joined server-side into one record when the burst ends).
+            // Alert on in-progress trips, or on complete pairs whose trip was never
+            // seen (poll missed the trip). Skip orphan clears (no trip_id = below
+            // minimum_alert_secs) and skip complete if we already notified the trip.
             const kind = event.event_kind || 'trip';
-            if (kind !== 'trip') continue;
+            const tripId = event.trip_id != null ? Number(event.trip_id) : null;
+            const shouldNotify =
+                kind === 'trip'
+                || (kind === 'complete' && tripId != null && tripId > lastId);
+            if (!shouldNotify) continue;
             const sensor = event.detection_name || 'Sensor';
             const longName = (event.long_name || '').trim();
             const shortName = (event.short_name || '').trim();
@@ -340,7 +345,11 @@
             let body = `${node} · ${sensor}`;
             const dwellLabel = formatDurationMs(event.dwell_ms);
             const burstLabel = formatDurationMs(event.burst_ms);
-            if (burstLabel) {
+            const activeLabel = formatDurationMs(event.active_ms);
+            if (kind === 'complete') {
+                if (activeLabel) body += ` · active ${activeLabel}`;
+                if (burstLabel) body += ` · burst ${burstLabel}`;
+            } else if (burstLabel) {
                 body += ` · burst ${burstLabel}`;
             } else if (dwellLabel) {
                 body += ` · dwell ${dwellLabel}`;

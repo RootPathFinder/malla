@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import pytest
 
-from malla.utils.detection_events import join_detection_events
+from malla.utils.detection_events import join_detection_events, join_detection_readings
 
 
 def _ev(
@@ -89,3 +89,52 @@ def test_rejects_pairing_when_gap_too_large():
     assert "trip" in kinds
     assert "complete" in kinds  # orphan clear
     assert len(out) == 2
+
+
+@pytest.mark.unit
+def test_join_detection_readings_merges_pairs_keeps_other_types():
+    trip = {
+        "id": 1,
+        "timestamp": 1000.0,
+        "from_node_id": 1,
+        "sensor_type": "detection",
+        "data": {
+            "detection_name": "Driveway",
+            "event_kind": "trip",
+            "burst_ms": 2000,
+            "active_ms": None,
+            "dwell_ms": None,
+            "state": None,
+        },
+    }
+    cleared = {
+        "id": 2,
+        "timestamp": 1005.0,
+        "from_node_id": 1,
+        "sensor_type": "detection",
+        "data": {
+            "detection_name": "Driveway",
+            "event_kind": "cleared",
+            "burst_ms": 5000,
+            "active_ms": 2700,
+            "dwell_ms": None,
+            "state": None,
+        },
+    }
+    env = {
+        "id": 3,
+        "timestamp": 1006.0,
+        "from_node_id": 2,
+        "sensor_type": "environment",
+        "data": {"temperature": 20.0},
+    }
+    out = join_detection_readings([env, cleared, trip])
+    assert len(out) == 2
+    assert out[0]["sensor_type"] == "environment"
+    det = out[1]
+    assert det["sensor_type"] == "detection"
+    assert det["data"]["event_kind"] == "complete"
+    assert det["data"]["active_ms"] == 2700
+    assert det["data"]["burst_ms"] == 5000
+    assert det["data"]["trip_id"] == 1
+    assert det["data"]["clear_id"] == 2
