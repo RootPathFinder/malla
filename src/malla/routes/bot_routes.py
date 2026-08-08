@@ -424,6 +424,10 @@ def api_bot_send_message():
         destination: Node ID or 'broadcast' (default: broadcast)
         channel_index: Channel index (default: configured respond channel)
         priority: 'high', 'normal', or 'low' (default: normal)
+
+    MeshCore bridge: when ``text`` is ``[MC] {sender}: {body}`` and ``body`` is
+    a bot command (``!ping``, bare ``ping``, etc.), the command is executed and
+    a reply is queued on the same channel after the chat line is sent.
     """
     try:
         bot = get_bot_service()
@@ -465,11 +469,21 @@ def api_bot_send_message():
             priority=priority,
         )
 
+        # Bridge path: MeshCore→Meshtastic posts here and never hits
+        # meshtastic.receive. Detect [MC] … command bodies and reply.
+        command_response = None
+        if bot._enabled:
+            command_response = bot.handle_bridged_send_text(
+                text, channel_index=channel_index
+            )
+
         return jsonify(
             {
                 "message": "Message queued",
                 "success": True,
                 "queue_size": bot.get_queue_size(),
+                "command_handled": command_response is not None,
+                "command_response": command_response,
             }
         )
 

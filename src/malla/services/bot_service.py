@@ -8,6 +8,7 @@ to ensure responses don't interfere with active admin operations.
 
 import logging
 import queue
+import re
 import threading
 import time
 from collections.abc import Callable
@@ -21,6 +22,12 @@ from ..config import get_config
 from ..database.job_repository import JobRepository, JobStatus
 
 logger = logging.getLogger(__name__)
+
+# meshbridge formats: "[MC] alice: !ping" / "[MT] ABCD: hello"
+_BRIDGE_ENVELOPE_RE = re.compile(
+    r"^\[(?P<tag>MC|MT)\]\s+(?P<sender>[^:]+):\s*(?P<body>.*)$",
+    re.IGNORECASE | re.DOTALL,
+)
 
 
 class BotMessagePriority(Enum):
@@ -779,6 +786,26 @@ class BotService:
         """Get the current message queue size."""
         return self._message_queue.qsize()
 
+    @staticmethod
+    def unwrap_bridge_envelope(text: str) -> tuple[str, str | None, str | None]:
+        """Strip meshbridge ``[MC]`` / ``[MT]`` envelopes if present.
+
+        Returns:
+            ``(body, bridge_sender, tag)`` where ``tag`` is ``"MC"`` / ``"MT"``
+            or ``None`` when the text is not bridge-formatted. ``body`` is the
+            original text when no envelope matches.
+        """
+        stripped = (text or "").strip()
+        if not stripped:
+            return "", None, None
+        match = _BRIDGE_ENVELOPE_RE.match(stripped)
+        if not match:
+            return stripped, None, None
+        body = (match.group("body") or "").strip()
+        sender = (match.group("sender") or "").strip() or None
+        tag = (match.group("tag") or "").upper() or None
+        return body, sender, tag
+
     def _parse_command_text(self, text: str) -> tuple[str, list[str]] | None:
         """Parse inbound text into (command, args), or None if not a bot command.
 
@@ -786,11 +813,13 @@ class BotService:
         - Prefixed commands: ``!ping``, ``!wx 90210`` (prefix from config)
         - Bare commands whose first word matches a registered name: ``ping``,
           ``wx 90210``, ``traceroute ABCD``
+        - Bridge-enveloped forms: ``[MC] alice: !ping`` (body parsed after unwrap)
 
         Messages whose first word is not a registered command are ignored so
         normal chat is not treated as a command.
         """
-        stripped = (text or "").strip()
+        body, _sender, _tag = self.unwrap_bridge_envelope(text)
+        stripped = (body or "").strip()
         if not stripped:
             return None
 
@@ -807,6 +836,196 @@ class BotService:
         if command not in self._commands:
             return None
         return command, parts[1:]
+
+    def handle_inbound_command(
+        self,
+        text: str,
+        *,
+        sender_id: int = 0,
+        sender_name: str | None = None,
+        channel_index: int = 0,
+        is_dm: bool = False,
+        packet: dict[str, Any] | None = None,
+        source: str = "meshtastic",
+        queue_response: bool = True,
+    ) -> str | None:
+        """Parse and execute a bot command from free-form text.
+
+        Used by the Meshtastic pubsub receive path and by ``/api/bot/send`` for
+        MeshCore→Meshtastic bridged chat (``[MC] sender: !cmd``).
+
+        Returns the handler response text, or ``None`` if ignored / no reply.
+        """
+        if not self._enabled:
+            return None
+
+        body, bridge_sender, bridge_tag = self.unwrap_bridge_envelope(text)
+        parsed = self._parse_command_text(body)
+        if parsed is None:
+            return None
+
+        command, args = parsed
+
+        if command not in self._commands:
+            logger.debug(f"Unknown command: {command}")
+            self._stats["commands_ignored"] += 1
+            self._log_activity(
+                "unknown_command",
+                {
+                    "command": command,
+                    "sender": f"!{sender_id:08x}",
+                    "source": source,
+                },
+                level="warning",
+            )
+            return None
+
+        if command in self._disabled_commands:
+            logger.debug(f"Command disabled: {command}")
+            self._stats["commands_ignored"] += 1
+            self._log_activity(
+                "command_disabled_ignored",
+                {
+                    "command": command,
+                    "sender": f"!{sender_id:08x}",
+                    "source": source,
+                },
+                level="info",
+            )
+            return None
+
+        self._stats["commands_received"] += 1
+
+        resolved_name = sender_name or bridge_sender or self._get_node_name(sender_id)
+        channel_name = self._get_channel_name(channel_index)
+        packet = dict(packet or {})
+        if bridge_tag == "MC":
+            packet.setdefault("via_bridge", "meshcore")
+            packet.setdefault("bridge_sender", bridge_sender)
+
+        context = CommandContext(
+            command=command,
+            args=args,
+            raw_message=body,
+            sender_id=sender_id,
+            sender_name=resolved_name,
+            channel_index=channel_index,
+            channel_name=channel_name or "Unknown",
+            received_at=time.time(),
+            packet=packet,
+            is_dm=is_dm,
+        )
+
+        dm_indicator = " (DM)" if is_dm else ""
+        source_indicator = f" via {source}" if source != "meshtastic" else ""
+        logger.info(
+            f"Bot command received: {self._command_prefix}{command} "
+            f"from {context.sender_name or f'!{sender_id:08x}'}"
+            f"{dm_indicator}{source_indicator}"
+        )
+
+        self._log_activity(
+            "command_received",
+            {
+                "command": command,
+                "args": args,
+                "sender_id": f"!{sender_id:08x}",
+                "sender_name": context.sender_name,
+                "channel": channel_name or f"ch{channel_index}",
+                "is_dm": is_dm,
+                "source": source,
+                "bridge_tag": bridge_tag,
+            },
+        )
+
+        handler = self._commands[command]
+        try:
+            logger.info(f"Executing handler for command: {command}")
+            response = handler(context)
+            logger.info(
+                f"Command {command} returned: {response[:50] if response else 'None/empty'}..."
+            )
+            if response and queue_response:
+                self._stats["commands_processed"] += 1
+                priority = (
+                    BotMessagePriority.HIGH
+                    if command == "ping"
+                    else BotMessagePriority.NORMAL
+                )
+                # Bridged MeshCore users have no Meshtastic node id — always broadcast.
+                destination = (
+                    sender_id
+                    if context.is_dm and sender_id and source == "meshtastic"
+                    else 0xFFFFFFFF
+                )
+                self.queue_message(
+                    text=response,
+                    destination=destination,
+                    channel_index=channel_index,
+                    priority=priority,
+                    reply_to_node=sender_id or None,
+                )
+                dest_str = (
+                    f"DM to !{sender_id:08x}"
+                    if destination != 0xFFFFFFFF
+                    else "broadcast"
+                )
+                self._log_activity(
+                    "response_queued",
+                    {
+                        "command": command,
+                        "response_preview": response[:100],
+                        "priority": priority.name,
+                        "destination": dest_str,
+                        "channel": channel_name or f"ch{channel_index}",
+                        "is_dm": is_dm,
+                        "source": source,
+                    },
+                )
+            elif response:
+                self._stats["commands_processed"] += 1
+            else:
+                logger.info(
+                    f"Command {command} returned empty/None response, no message queued"
+                )
+            return response
+        except Exception as e:
+            self._stats["errors"] += 1
+            self._log_activity(
+                "command_error",
+                {"command": command, "error": str(e), "source": source},
+                level="error",
+            )
+            logger.error(f"Error executing command {command}: {e}", exc_info=True)
+            return None
+
+    def handle_bridged_send_text(
+        self,
+        text: str,
+        *,
+        channel_index: int | None = None,
+    ) -> str | None:
+        """If ``text`` is a MeshCore bridge envelope containing a command, run it.
+
+        Called from ``/api/bot/send`` after the chat line is queued for TX.
+        Only ``[MC] …`` envelopes are treated as inbound commands (``[MT]`` is
+        the opposite direction and must not loop).
+        """
+        _body, bridge_sender, tag = self.unwrap_bridge_envelope(text)
+        if tag != "MC":
+            return None
+        if channel_index is None:
+            channel_index = self._respond_channel_index
+        return self.handle_inbound_command(
+            text,
+            sender_id=0,
+            sender_name=bridge_sender,
+            channel_index=int(channel_index),
+            is_dm=False,
+            packet={"via_bridge": "meshcore", "bridge_sender": bridge_sender},
+            source="meshcore_bridge",
+            queue_response=True,
+        )
 
     def _on_message_received(
         self, packet: dict[str, Any], interface: Any = None
@@ -865,41 +1084,15 @@ class BotService:
             else:
                 sender_id = 0
 
-            parsed = self._parse_command_text(text)
-            if parsed is None:
+            # Ignore our own TX echoes (bridged [MC] lines we just sent via
+            # /api/bot/send are handled there — avoid double replies).
+            local_node_id = self._get_local_node_id()
+            if local_node_id and sender_id == local_node_id:
+                logger.debug("Ignoring own TX echo for bot command handling")
                 return
-
-            command, args = parsed
-
-            # Check if we have a handler for this command
-            if command not in self._commands:
-                logger.debug(f"Unknown command: {command}")
-                self._stats["commands_ignored"] += 1
-                self._log_activity(
-                    "unknown_command",
-                    {"command": command, "sender": f"!{sender_id:08x}"},
-                    level="warning",
-                )
-                return
-
-            # Check if command is disabled
-            if command in self._disabled_commands:
-                logger.debug(f"Command disabled: {command}")
-                self._stats["commands_ignored"] += 1
-                self._log_activity(
-                    "command_disabled_ignored",
-                    {"command": command, "sender": f"!{sender_id:08x}"},
-                    level="info",
-                )
-                return
-
-            self._stats["commands_received"] += 1
-
-            # sender_id and sender_id_raw already extracted above
 
             # Get channel info
             channel_index = packet.get("channel", 0)
-            channel_name = self._get_channel_name(channel_index)
 
             # Check if this is a direct message to us
             to_id = packet.get("to") or packet.get("toId")
@@ -908,98 +1101,24 @@ class BotService:
             elif not isinstance(to_id, int):
                 to_id = 0xFFFFFFFF  # Assume broadcast if unknown
 
-            # Get our local node ID to check if this is a DM to us
-            local_node_id = self._get_local_node_id()
             is_dm = to_id != 0xFFFFFFFF and to_id == local_node_id
 
             # Bot responds to all channels (no channel filtering)
             # Previously filtered to only _listen_channels but this was too restrictive
 
-            # Build context
-            context = CommandContext(
-                command=command,
-                args=args,
-                raw_message=text,
+            _body, bridge_sender, bridge_tag = self.unwrap_bridge_envelope(text)
+            source = "meshcore_bridge" if bridge_tag == "MC" else "meshtastic"
+
+            self.handle_inbound_command(
+                text,
                 sender_id=sender_id,
-                sender_name=self._get_node_name(sender_id),
+                sender_name=bridge_sender or self._get_node_name(sender_id),
                 channel_index=channel_index,
-                channel_name=channel_name or "Unknown",
-                received_at=time.time(),
-                packet=packet,
                 is_dm=is_dm,
+                packet=packet,
+                source=source,
+                queue_response=True,
             )
-
-            dm_indicator = " (DM)" if is_dm else ""
-            logger.info(
-                f"Bot command received: {self._command_prefix}{command} "
-                f"from {context.sender_name or f'!{sender_id:08x}'}{dm_indicator}"
-            )
-
-            # Log the command received
-            self._log_activity(
-                "command_received",
-                {
-                    "command": command,
-                    "args": args,
-                    "sender_id": f"!{sender_id:08x}",
-                    "sender_name": context.sender_name,
-                    "channel": channel_name or f"ch{channel_index}",
-                    "is_dm": is_dm,
-                },
-            )
-
-            # Execute handler
-            handler = self._commands[command]
-            try:
-                logger.info(f"Executing handler for command: {command}")
-                response = handler(context)
-                logger.info(
-                    f"Command {command} returned: {response[:50] if response else 'None/empty'}..."
-                )
-                if response:
-                    self._stats["commands_processed"] += 1
-                    # Queue the response
-                    priority = (
-                        BotMessagePriority.HIGH
-                        if command == "ping"
-                        else BotMessagePriority.NORMAL
-                    )
-                    # For DMs, respond directly to sender; for channel msgs, broadcast
-                    destination = sender_id if context.is_dm else 0xFFFFFFFF
-                    self.queue_message(
-                        text=response,
-                        destination=destination,
-                        channel_index=channel_index,  # Respond on same channel
-                        priority=priority,
-                        reply_to_node=sender_id,
-                    )
-                    # Log the response
-                    dest_str = (
-                        f"DM to !{sender_id:08x}" if context.is_dm else "broadcast"
-                    )
-                    self._log_activity(
-                        "response_queued",
-                        {
-                            "command": command,
-                            "response_preview": response[:100],
-                            "priority": priority.name,
-                            "destination": dest_str,
-                            "channel": channel_name or f"ch{channel_index}",
-                            "is_dm": is_dm,
-                        },
-                    )
-                else:
-                    logger.info(
-                        f"Command {command} returned empty/None response, no message queued"
-                    )
-            except Exception as e:
-                self._stats["errors"] += 1
-                self._log_activity(
-                    "command_error",
-                    {"command": command, "error": str(e)},
-                    level="error",
-                )
-                logger.error(f"Error executing command {command}: {e}", exc_info=True)
 
         except Exception as e:
             self._stats["errors"] += 1
@@ -1982,7 +2101,9 @@ class BotService:
             except (TypeError, ValueError):
                 pass
 
-        if stats.get("via_mqtt"):
+        if stats.get("via_bridge"):
+            lines.append(f"via: {stats['via_bridge']}")
+        elif stats.get("via_mqtt"):
             lines.append("via: MQTT")
 
         if len(lines) == 1:
@@ -1992,7 +2113,13 @@ class BotService:
 
     def _cmd_ping(self, ctx: CommandContext) -> str:
         """Handle !ping — confirm reachability with inbound RF path stats."""
-        stats = self._extract_ping_rf_stats(ctx.packet or {})
+        packet = ctx.packet or {}
+        stats = self._extract_ping_rf_stats(packet)
+        via_bridge = packet.get("via_bridge")
+        if via_bridge:
+            stats["via_bridge"] = (
+                "MeshCore bridge" if via_bridge == "meshcore" else str(via_bridge)
+            )
         return self._format_ping_reply(stats)
 
     def _cmd_status(self, ctx: CommandContext) -> str:
