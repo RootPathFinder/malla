@@ -1237,6 +1237,16 @@ DETECTIONSENSOR_MODULE_FIELDS = [
         max_value=3600,
     ),
     FieldMetadata(
+        name="send_clear",
+        label="Send Clear Report",
+        field_type=FieldType.BOOLEAN,
+        description=(
+            "When enabled, after a mesh alert was sent for a burst, also send "
+            "\"… cleared active_ms=… burst_ms=…\" when the burst ends. "
+            "Off by default (alert-only). Custom firmware."
+        ),
+    ),
+    FieldMetadata(
         name="minimum_broadcast_secs",
         label="Minimum Broadcast Interval",
         field_type=FieldType.NUMBER,
