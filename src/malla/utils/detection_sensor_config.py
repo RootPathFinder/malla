@@ -65,8 +65,8 @@ def detection_sensor_to_dict(detection_sensor: Any) -> dict[str, Any]:
 def apply_detection_sensor_module_data(module_config: Any, module_data: dict[str, Any]) -> None:
     """Apply flat admin module_data onto ``module_config.detection_sensor``."""
     ds = module_config.detection_sensor
-    custom_uint32 = {name: field_no for name, field_no in _CUSTOM_UINT32_FIELDS}
-    custom_bool = {name: field_no for name, field_no in _CUSTOM_BOOL_FIELDS}
+    custom_uint32 = dict(_CUSTOM_UINT32_FIELDS)
+    custom_bool = dict(_CUSTOM_BOOL_FIELDS)
     for key, value in module_data.items():
         if key in custom_uint32:
             set_message_uint32_field(ds, custom_uint32[key], int(value), key)
