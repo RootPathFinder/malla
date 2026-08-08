@@ -130,9 +130,13 @@ class TestBotSettingsPersistence:
 
 class TestQuietChannelDirectory:
     @pytest.mark.unit
-    def test_broadcast_includes_name_and_key_not_links(self, bot_service: BotService):
+    def test_broadcast_includes_name_key_and_instructions(self, bot_service: BotService):
         channels = [
-            {"channel_name": "Spaces", "psk": "secret1", "description": "chat"},
+            {
+                "channel_name": "MeshCore",
+                "psk": "AQ==",
+                "description": "Bridge to MeshCore #meshtastic",
+            },
             {"channel_name": "Weather", "psk": "secret2", "description": ""},
         ]
         bot_service.queue_message = MagicMock()
@@ -144,14 +148,39 @@ class TestQuietChannelDirectory:
         ):
             bot_service._broadcast_channel_directory()
 
-        bot_service.queue_message.assert_called_once()
-        text = bot_service.queue_message.call_args.kwargs["text"]
-        assert "Spaces" in text
+        assert bot_service.queue_message.call_count >= 1
+        text = "\n".join(
+            call.kwargs["text"] for call in bot_service.queue_message.call_args_list
+        )
+        assert "Community channels" in text
+        assert "MeshCore" in text
+        assert "Key: AQ==" in text
+        assert "Bridge to MeshCore" in text
         assert "Weather" in text
-        assert "secret1" in text
         assert "secret2" in text
         assert "meshtastic.org" not in text
-        assert "Add manually" in text
+        assert "Add in Meshtastic" in text
+        assert "channelinfo" in text
+        assert "Skip share links" not in text
+        for call in bot_service.queue_message.call_args_list:
+            assert len(call.kwargs["text"].encode("utf-8")) <= 220
+
+    @pytest.mark.unit
+    def test_format_splits_when_verbose_overflows(self, bot_service: BotService):
+        channels = [
+            {
+                "channel_name": f"Chan{i}",
+                "psk": "AQ==",
+                "description": f"Description number {i} for testing overflow",
+            }
+            for i in range(1, 8)
+        ]
+        messages = bot_service._format_channel_directory_messages(channels)
+        assert len(messages) >= 2
+        assert all(len(m.encode("utf-8")) <= 220 for m in messages)
+        joined = "\n".join(messages)
+        assert "Chan1" in joined
+        assert "Key: AQ==" in joined
 
     @pytest.mark.unit
     def test_channelinfo_shows_key_without_link(self, bot_service: BotService):
@@ -174,23 +203,20 @@ class TestQuietChannelDirectory:
                     command="channelinfo",
                 )
             )
-            private = bot_service._cmd_channelinfo(
-                SimpleNamespace(
-                    args=["Spaces"],
-                    is_dm=True,
-                    command="channelinfo",
-                )
-            )
 
         assert "Key: supersecret" in public
-        assert "Key: supersecret" in private
         assert "meshtastic.org" not in public
-        assert "Add manually" in public
+        assert "Add in Meshtastic" in public
+        assert "skip share links" not in public.lower()
 
     @pytest.mark.unit
-    def test_chanurl_returns_name_and_key(self, bot_service: BotService):
+    def test_chanurl_returns_verbose_name_and_key(self, bot_service: BotService):
         channels = [
-            {"channel_name": "MeshCore", "psk": "AQ==", "description": "bridge"},
+            {
+                "channel_name": "MeshCore",
+                "psk": "AQ==",
+                "description": "Bridge MT to MeshCore",
+            },
         ]
         with patch(
             "src.malla.database.channel_directory_repository."
@@ -203,5 +229,7 @@ class TestQuietChannelDirectory:
 
         assert "MeshCore" in text
         assert "Key: AQ==" in text
+        assert "Bridge MT to MeshCore" in text
         assert "meshtastic.org" not in text
-        assert "Add manually" in text
+        assert "Add in Meshtastic" in text
+        assert "skip share links" not in text.lower()

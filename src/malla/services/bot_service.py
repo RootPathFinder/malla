@@ -4520,6 +4520,111 @@ class BotService:
     # Channel Directory Commands
     # =========================================================================
 
+    _CHANNEL_DIR_MAX_BYTES = 220
+
+    def _format_channel_directory_messages(
+        self,
+        channels: list[dict[str, Any]],
+        *,
+        include_keys: bool = True,
+        numbered: bool = True,
+    ) -> list[str]:
+        """Build one or more verbose channel-directory ads under the LoRa budget.
+
+        Prefer name + key + short description. Avoid Meshtastic share links —
+        they have wiped existing channels on some iOS clients.
+        """
+        if not channels:
+            return []
+
+        prefix = self._command_prefix
+        header = "📻 Community channels\nAdd in Meshtastic with name + key:"
+        footer = f"{prefix}channelinfo <name> for details"
+
+        blocks: list[str] = []
+        for i, ch in enumerate(channels, 1):
+            name = str(ch.get("channel_name") or "").strip()
+            if not name:
+                continue
+            psk = str(ch.get("psk") or "AQ==").strip() or "AQ=="
+            desc = " ".join(str(ch.get("description") or "").split())
+            if len(desc) > 48:
+                desc = desc[:45] + "..."
+
+            lines = [f"{i}) {name}" if numbered else f"• {name}"]
+            if include_keys:
+                lines.append(f"Key: {psk}")
+            if desc:
+                lines.append(desc)
+            blocks.append("\n".join(lines))
+
+        if not blocks:
+            return []
+
+        def _byte_len(value: str) -> int:
+            return len(value.encode("utf-8"))
+
+        def _build(
+            parts: list[str], *, more: int = 0, with_footer: bool = False
+        ) -> str:
+            body = header + "\n" + "\n".join(parts)
+            if more > 0:
+                body += f"\n(+{more} more)"
+            if with_footer:
+                body += "\n" + footer
+            return body
+
+        messages: list[str] = []
+        page: list[str] = []
+        idx = 0
+        while idx < len(blocks):
+            block = blocks[idx]
+            remaining_after = len(blocks) - idx - 1
+            trial = _build(
+                [*page, block],
+                more=0 if remaining_after == 0 else remaining_after,
+                with_footer=remaining_after == 0,
+            )
+            if _byte_len(trial) <= self._CHANNEL_DIR_MAX_BYTES:
+                page.append(block)
+                idx += 1
+                continue
+
+            if page:
+                left = len(blocks) - idx
+                flushed = _build(page, more=left, with_footer=False)
+                if _byte_len(flushed) > self._CHANNEL_DIR_MAX_BYTES:
+                    flushed = _build(page, more=0, with_footer=False)
+                messages.append(flushed)
+                page = []
+                continue
+
+            # Lone block still too big — drop description, then key if needed.
+            lines = block.split("\n")
+            trimmed = block
+            for cut in range(len(lines) - 1, 0, -1):
+                trimmed = "\n".join(lines[:cut])
+                trial = _build(
+                    [trimmed],
+                    more=remaining_after,
+                    with_footer=remaining_after == 0,
+                )
+                if _byte_len(trial) <= self._CHANNEL_DIR_MAX_BYTES:
+                    break
+            messages.append(
+                _build(
+                    [trimmed],
+                    more=remaining_after,
+                    with_footer=remaining_after == 0,
+                )
+            )
+            idx += 1
+
+        if page:
+            messages.append(_build(page, more=0, with_footer=True))
+
+        return messages
+
     def _cmd_channels(self, ctx: CommandContext) -> str:
         """Handle !channels command - list community channels."""
         try:
@@ -4529,28 +4634,26 @@ class BotService:
 
             channels = ChannelDirectoryRepository.get_all_channels(active_only=True)
             if not channels:
-                return "📻 No channels registered. Use !addchannel <name> <key> [desc]"
+                return (
+                    "📻 No community channels yet.\n"
+                    f"Register with {self._command_prefix}addchannel <name> <key> [desc]"
+                )
+
+            messages = self._format_channel_directory_messages(channels)
+            if not messages:
+                return "📻 No community channels yet."
+
+            # Command replies are a single packet; prefer the first page and
+            # point at channelinfo / chanurl for the rest.
+            if len(messages) == 1:
+                return messages[0]
 
             prefix = self._command_prefix
-            lines = [f"📻 Channels ({len(channels)}):"]
-            for i, ch in enumerate(channels, 1):
-                name = ch["channel_name"]
-                desc = ch.get("description") or ""
-                if desc and len(desc) > 20:
-                    desc = desc[:17] + "..."
-                if desc:
-                    lines.append(f"{i}. {name}: {desc}")
-                else:
-                    lines.append(f"{i}. {name}")
-
-            lines.append(f"{prefix}chanurl # for name+key")
-
-            # Truncate to fit Meshtastic payload (~230 bytes)
-            result = "\n".join(lines)
-            if len(result) > 220:
-                result = result[:217] + "..."
-
-            return result
+            first = messages[0]
+            note = f"\n…more: {prefix}chanurl # or {prefix}channelinfo <name>"
+            if len((first + note).encode("utf-8")) <= self._CHANNEL_DIR_MAX_BYTES:
+                return first + note
+            return first
         except Exception as e:
             logger.error(f"Error in channels command: {e}", exc_info=True)
             return "Channel list unavailable"
@@ -4673,11 +4776,23 @@ class BotService:
             ch = channels[idx - 1]
             name = ch["channel_name"]
             psk = ch.get("psk", "AQ==")
-            return (
-                f"📻 {name}\n"
-                f"Key: {psk}\n"
-                "Add manually in app (name + key)"
-            )
+            desc = " ".join(str(ch.get("description") or "").split())
+            lines = [
+                f"📻 {name}",
+                f"Key: {psk}",
+            ]
+            if desc:
+                if len(desc) > 80:
+                    desc = desc[:77] + "..."
+                lines.append(desc)
+            lines.append("Add in Meshtastic → Channels → +")
+            lines.append("Enter name + key manually")
+            result = "\n".join(lines)
+            if len(result.encode("utf-8")) > self._CHANNEL_DIR_MAX_BYTES:
+                result = result.encode("utf-8")[: self._CHANNEL_DIR_MAX_BYTES - 3].decode(
+                    "utf-8", errors="ignore"
+                ) + "..."
+            return result
         except Exception as e:
             logger.error(f"Error in chanurl command: {e}", exc_info=True)
             return "Channel info unavailable"
@@ -4701,14 +4816,15 @@ class BotService:
             lines = [f"📻 {ch['channel_name']}"]
 
             if ch.get("description"):
-                desc = ch["description"]
-                if len(desc) > 60:
-                    desc = desc[:57] + "..."
+                desc = " ".join(str(ch["description"]).split())
+                if len(desc) > 80:
+                    desc = desc[:77] + "..."
                 lines.append(desc)
 
             # Share name + key only (no Meshtastic links — they can wipe iOS channels)
             lines.append(f"Key: {ch['psk']}")
-            lines.append("Add manually in app")
+            lines.append("Add in Meshtastic → Channels → +")
+            lines.append("Enter name + key")
 
             if ch.get("registered_by_name"):
                 lines.append(f"By: {ch['registered_by_name']}")
@@ -4723,7 +4839,12 @@ class BotService:
                 age_str = f"{int(age / 86400)}d ago"
             lines.append(f"Added: {age_str}")
 
-            return "\n".join(lines)
+            result = "\n".join(lines)
+            if len(result.encode("utf-8")) > self._CHANNEL_DIR_MAX_BYTES:
+                result = result.encode("utf-8")[: self._CHANNEL_DIR_MAX_BYTES - 3].decode(
+                    "utf-8", errors="ignore"
+                ) + "..."
+            return result
         except Exception as e:
             logger.error(f"Error in channelinfo command: {e}", exc_info=True)
             return "Channel info unavailable"
@@ -4773,7 +4894,7 @@ class BotService:
         logger.info("Channel directory broadcast thread stopped")
 
     def _broadcast_channel_directory(self) -> None:
-        """Build and send a channel directory ad with name + key (no share links)."""
+        """Build and send verbose channel directory ads (name + key, no share links)."""
         try:
             from ..database.channel_directory_repository import (
                 ChannelDirectoryRepository,
@@ -4784,51 +4905,27 @@ class BotService:
                 logger.debug("No channels to broadcast")
                 return
 
-            # Name + key only — Meshtastic share links can wipe channels on iOS.
-            entries: list[str] = []
-            for ch in channels:
-                name = str(ch["channel_name"] or "").strip()
-                if not name:
-                    continue
-                psk = str(ch.get("psk") or "AQ==").strip() or "AQ=="
-                # Keep each entry compact for the LoRa budget
-                entries.append(f"{name[:16]} {psk}")
-
-            if not entries:
+            messages = self._format_channel_directory_messages(channels)
+            if not messages:
                 return
 
-            header = f"📻 Channels ({len(entries)}):"
-            footer = "Add manually: name + key"
-            # Prefer one entry per line; fall back to packing if needed
-            message = header + "\n" + "\n".join(entries) + "\n" + footer
-            if len(message.encode("utf-8")) > 220:
-                kept: list[str] = []
-                for entry in entries:
-                    candidate = header + "\n" + "\n".join([*kept, entry]) + "\n" + footer
-                    if len(candidate.encode("utf-8")) > 220:
-                        break
-                    kept.append(entry)
-                if kept:
-                    omitted = len(entries) - len(kept)
-                    message = header + "\n" + "\n".join(kept)
-                    if omitted:
-                        message += f"\n+{omitted} more"
-                    message += "\n" + footer
-                else:
-                    message = f"{header}\n{footer}"
-
-            self.queue_message(
-                text=message,
-                destination=0xFFFFFFFF,  # Broadcast
-                channel_index=self._respond_channel_index,
-                priority=BotMessagePriority.LOW,
-            )
+            for text in messages:
+                self.queue_message(
+                    text=text,
+                    destination=0xFFFFFFFF,  # Broadcast
+                    channel_index=self._respond_channel_index,
+                    priority=BotMessagePriority.LOW,
+                )
 
             self._log_activity(
                 "channel_broadcast",
-                {"channel_count": len(channels)},
+                {"channel_count": len(channels), "message_count": len(messages)},
             )
-            logger.info(f"Broadcast channel directory ({len(channels)} channels)")
+            logger.info(
+                "Broadcast channel directory (%s channels, %s message(s))",
+                len(channels),
+                len(messages),
+            )
 
         except Exception as e:
             logger.error(f"Error broadcasting channel directory: {e}", exc_info=True)
