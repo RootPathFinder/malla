@@ -44,12 +44,24 @@ def test_fingerprint_dedup():
     assert not d.should_forward(m)
 
 
-def test_self_echo_gateway_node():
+def test_gateway_bot_reply_is_forwarded():
+    """Bot replies come from the gateway node and must reach MeshCore."""
+    d = Deduper(gateway_node_id="!aabbccdd")
+    assert d.should_forward(
+        _msg(
+            Direction.MESHTASTIC_TO_MESHCORE,
+            "Pong!\nvia: MeshCore bridge",
+            source_id="!aabbccdd",
+        )
+    )
+
+
+def test_gateway_mc_prefix_still_dropped():
     d = Deduper(gateway_node_id="!aabbccdd")
     assert not d.should_forward(
         _msg(
             Direction.MESHTASTIC_TO_MESHCORE,
-            "ping",
+            "[MC] alice: !ping",
             source_id="!aabbccdd",
         )
     )

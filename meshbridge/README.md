@@ -61,7 +61,8 @@ See [`config.sample.yaml`](config.sample.yaml). Important fields:
 
 - MeshCore → Meshtastic: `[MC] {sender}: {message}`
 - Meshtastic → MeshCore: `[MT] {shortname|nodeid}: {message}`
-- Drops opposite-prefix echoes, gateway/companion self-echo, and short-TTL fingerprints.
+- Drops opposite-prefix echoes (`[MC]` on MT→MC, `[MT]` on MC→MT), companion self-echo, and short-TTL fingerprints.
+- Gateway-node traffic is **not** blanket-dropped so Malla bot replies on the MeshCore channel can reach MeshCore users.
 - Chunks at ~133 chars (MeshCore) and ~228 (Meshtastic).
 
 ## Run
