@@ -45,9 +45,10 @@ class Deduper:
             if _starts_with_prefix(text, self.prefix_from_meshcore):
                 logger.debug("Drop MT inbound already tagged %s", self.prefix_from_meshcore)
                 return False
-            if self.gateway_node_id and _normalize_node_id(msg.source_id) == self.gateway_node_id:
-                logger.debug("Drop self-echo from Meshtastic gateway node %s", msg.source_id)
-                return False
+            # Do NOT drop all traffic from gateway_node_id: Malla bot replies are
+            # sent from that node and must reach MeshCore. Our own bridged [MC]
+            # TX is already suppressed by the prefix check above; fingerprints
+            # catch remaining echoes.
         else:
             if _starts_with_prefix(text, self.prefix_from_meshtastic):
                 logger.debug(
