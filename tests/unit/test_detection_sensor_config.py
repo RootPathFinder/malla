@@ -1,4 +1,4 @@
-"""Tests for Detection Sensor dwell/burst admin support (firmware PR #5)."""
+"""Tests for Detection Sensor dwell/burst/clear admin support (firmware PR #5/#6)."""
 
 from __future__ import annotations
 
@@ -10,11 +10,14 @@ from malla.utils.detection_sensor_config import (
     BURST_GAP_SECS_FIELD,
     MINIMUM_ALERT_SECS_FIELD,
     MINIMUM_DETECT_SECS_FIELD,
+    SEND_CLEAR_FIELD,
     apply_detection_sensor_module_data,
     detection_sensor_to_dict,
 )
 from malla.utils.protobuf_wire import (
+    encode_bool_field,
     encode_uint32_field,
+    read_bool_field,
     read_uint32_field,
     strip_field,
 )
@@ -27,12 +30,17 @@ def test_schema_includes_dwell_burst_fields():
     assert "minimum_detect_secs" in names
     assert "burst_gap_secs" in names
     assert "minimum_alert_secs" in names
+    assert "send_clear" in names
 
     for name in ("minimum_detect_secs", "burst_gap_secs", "minimum_alert_secs"):
         field = next(f for f in schema if f["name"] == name)
         assert field["type"] == "number"
         assert field["unit"] == "seconds"
         assert field["min"] == 0
+
+    send_clear = next(f for f in schema if f["name"] == "send_clear")
+    assert send_clear["type"] == "boolean"
+    assert "cleared" in send_clear["description"].lower()
 
 
 @pytest.mark.unit
@@ -42,6 +50,14 @@ def test_wire_encode_decode_uint32_field():
     stripped = strip_field(raw + encode_uint32_field(1, 1), MINIMUM_DETECT_SECS_FIELD)
     assert read_uint32_field(stripped, MINIMUM_DETECT_SECS_FIELD) is None
     assert read_uint32_field(stripped, 1) == 1
+
+
+@pytest.mark.unit
+def test_wire_encode_decode_bool_field():
+    raw = encode_bool_field(SEND_CLEAR_FIELD, True)
+    assert read_bool_field(raw, SEND_CLEAR_FIELD) is True
+    stripped = strip_field(raw, SEND_CLEAR_FIELD)
+    assert read_bool_field(stripped, SEND_CLEAR_FIELD) is None
 
 
 @pytest.mark.unit
@@ -60,6 +76,7 @@ def test_apply_and_read_dwell_burst_unknown_fields():
             "minimum_detect_secs": 2,
             "burst_gap_secs": 3,
             "minimum_alert_secs": 8,
+            "send_clear": True,
         },
     )
     # Fields must be present on the wire even if stock bindings lack the attrs.
@@ -67,6 +84,7 @@ def test_apply_and_read_dwell_burst_unknown_fields():
     assert read_uint32_field(raw, MINIMUM_DETECT_SECS_FIELD) == 2
     assert read_uint32_field(raw, BURST_GAP_SECS_FIELD) == 3
     assert read_uint32_field(raw, MINIMUM_ALERT_SECS_FIELD) == 8
+    assert read_bool_field(raw, SEND_CLEAR_FIELD) is True
 
     # Round-trip through ModuleConfig serialization (as AdminMessage would).
     mc2 = module_config_pb2.ModuleConfig()
@@ -79,6 +97,18 @@ def test_apply_and_read_dwell_burst_unknown_fields():
     assert parsed["minimum_detect_secs"] == 2
     assert parsed["burst_gap_secs"] == 3
     assert parsed["minimum_alert_secs"] == 8
+    assert parsed["send_clear"] is True
+
+
+@pytest.mark.unit
+def test_apply_send_clear_false_omits_wire_field():
+    mc = module_config_pb2.ModuleConfig()
+    apply_detection_sensor_module_data(mc, {"send_clear": True})
+    assert read_bool_field(mc.detection_sensor.SerializeToString(), SEND_CLEAR_FIELD) is True
+
+    apply_detection_sensor_module_data(mc, {"send_clear": False})
+    assert read_bool_field(mc.detection_sensor.SerializeToString(), SEND_CLEAR_FIELD) is None
+    assert detection_sensor_to_dict(mc.detection_sensor)["send_clear"] is False
 
 
 @pytest.mark.unit
@@ -91,4 +121,5 @@ def test_detection_sensor_to_dict_defaults_custom_fields_zero():
     assert parsed["minimum_detect_secs"] == 0
     assert parsed["burst_gap_secs"] == 0
     assert parsed["minimum_alert_secs"] == 0
+    assert parsed["send_clear"] is False
     assert parsed["enabled"] is True

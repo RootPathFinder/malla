@@ -131,3 +131,51 @@ def set_message_uint32_field(message: Any, field_number: int, value: int, attr_n
     raw += encode_uint32_field(field_number, int(value))
     message.Clear()
     message.ParseFromString(raw)
+
+
+def encode_bool_field(field_number: int, value: bool) -> bytes:
+    """Encode a protobuf bool field (wire type 0 / varint)."""
+    return encode_uint32_field(field_number, 1 if value else 0)
+
+
+def read_bool_field(data: bytes, field_number: int) -> bool | None:
+    """Return the last bool/varint value for ``field_number``, if present."""
+    value = read_uint32_field(data, field_number)
+    if value is None:
+        return None
+    return bool(value)
+
+
+def get_message_bool(message: Any, field_number: int, attr_name: str | None = None) -> bool | None:
+    """Read a bool from a known attr or from serialized unknown field bytes."""
+    if attr_name and hasattr(message, attr_name):
+        try:
+            return bool(getattr(message, attr_name))
+        except (TypeError, ValueError):
+            pass
+    try:
+        raw = message.SerializeToString()
+    except Exception:
+        return None
+    return read_bool_field(raw, field_number)
+
+
+def set_message_bool_field(
+    message: Any, field_number: int, value: bool, attr_name: str | None = None
+) -> None:
+    """
+    Set a bool on ``message``.
+
+    Uses the generated attribute when present; otherwise injects/strips the
+    field in the serialized form so firmware-only keys survive on send.
+    """
+    flag = bool(value)
+    if attr_name and hasattr(message, attr_name):
+        setattr(message, attr_name, flag)
+        return
+    raw = strip_field(message.SerializeToString(), field_number)
+    # Proto3 default is false; omit the field when clearing to keep payloads small.
+    if flag:
+        raw += encode_bool_field(field_number, True)
+    message.Clear()
+    message.ParseFromString(raw)
